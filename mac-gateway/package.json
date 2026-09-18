@@ -1,0 +1,17 @@
+{
+  "name": "dsh-mobile-mac-gateway",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Mac-side DSH plugin: exposes DSH session state to the dsh-mobile iPhone client",
+  "type": "module",
+  "main": "src/index.ts",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test src/*.test.ts"
+  }
+}

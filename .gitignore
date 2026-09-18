@@ -1,0 +1,21 @@
+# 上游 clone（只读地基，不纳入版本库）
+deepseek-harness/
+
+# agent 记忆
+.workbuddy/
+
+# 开发期文档（约束与计划，不随仓库发布）
+docs/
+
+# Node
+node_modules/
+dist/
+*.log
+
+# macOS
+.DS_Store
+
+# Xcode
+ios/build/
+ios/DerivedData/
+xcuserdata/

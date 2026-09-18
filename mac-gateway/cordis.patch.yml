@@ -1,0 +1,20 @@
+# mac-gateway — this package's own patch layer.
+#
+# The dsh loader reads this file whenever this package is installed into a
+# profile as a bundle. It becomes a bundle layer, applied **before** the
+# profile's own patch layer — see docs/plans/M1-lan-mvp.md §4.3 Step 5.
+#
+# `name` is RELATIVE TO THIS FILE, and that is the opposite of what a
+# machine-local profile patch needs. The loader anchors relative paths beside
+# whichever patch file they came from (`anchorInsertedPluginNames`,
+# `packages/boot/app-boot/src/index.ts`), so:
+#
+#   · here, `./src/index.ts` always lands inside this package — wherever the
+#     package is installed. This file therefore carries no absolute path.
+#   · in `$DSH_HOME/profiles/<name>/cordis.patch.yml`, a relative path would be
+#     anchored to the profile directory instead, and silently point nowhere.
+#
+# `id` is the row's name in the composed tree; other layers can target it.
+- insert:
+    - id: mac-gateway
+      name: ./src/index.ts
