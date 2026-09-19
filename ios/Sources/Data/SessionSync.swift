@@ -231,8 +231,11 @@ final class SessionSync: ObservableObject {
     }
 
     private func applyTransient(_ frame: JSONValue) {
-        if transient.apply(frame: frame) == .broken {
+        let before = transient
+        let verdict = transient.apply(frame: frame)
+        if verdict == .broken {
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
+            print("[TransientChannel] broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
             follow.reopenStream()
             return
         }
@@ -250,7 +253,6 @@ final class SessionSync: ObservableObject {
         return TransientBaseline(
             revision: json["revision"]?.int ?? 0,
             active: active == nil ? nil : TransientBaseline.Active(
-                revision: active?["revision"]?.int ?? json["revision"]?.int ?? 0,
                 nextIndex: active?["nextIndex"]?.int ?? 0,
                 stream: active?["stream"]?.array ?? []
             )

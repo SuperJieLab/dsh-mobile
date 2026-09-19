@@ -241,6 +241,7 @@ async function pump(
     }, signal)
 
     let expectedSeq: number | undefined // next event seq, from the opening's cursor
+    let transientCount = 0
 
     for await (const frame of iterable) {
       if (signal.aborted) return
@@ -280,6 +281,10 @@ async function pump(
       }
 
       if (frame.type === 'assistant-stream') {
+        transientCount += 1
+        if (transientCount === 1 || transientCount % 50 === 0) {
+          console.log(`[mac-gateway] transient frames forwarded: ${transientCount}`)
+        }
         sendItem({ type: 'assistant-stream', frame: frame.frame }) // verbatim, cursor-less
         continue
       }

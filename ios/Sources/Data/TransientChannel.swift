@@ -8,22 +8,27 @@
  * 「已读到的位置」。所以它有自己的通道、自己的校验，与 `SessionMirror` 平行，
  * 互不触碰（docs/plans/M2-realtime-transient.md §3.4）。
  *
- * ## 校验什么
+ * ## revision 与 index 是两个不同的序号（真机联调实测校准，2026-09-19）
  *
- * - `revision`：一个 attempt 的代次。断号说明这一段的基线已经丢了 —— 后续
- *   chunk 是**增量**的，干等只会残缺，唯一正确的动作是**重开流取新基线**
- *   （新 opening 的 `assistantStream` 带已累积内容）。这与上游「断号即重连」
- *   （`transport.ts`）同构。
- * - `index`：chunk 的稠密位置。同样断号即 broken。
- * - `end`：`outcome.kind == "committed"` 时内容已作为持久事件进日志
- *   （事件帧会自然把它并进镜像），瞬态副本就此清场。
+ * 上游 `agent.ts` 给每个瞬态帧注入的 `revision` 来自一个 **agent 级全局单调
+ * 计数器**（`() => ++assistantStreamRevision`）—— start、chunk、end **每一帧
+ * 都 +1**，跨 attempt 连续不断；它才是「断号」要校验的对象。`index` 则是
+ * **attempt 内 chunk 的位置**（start 后从 0 起、每 chunk +1，`end` 携带 chunk
+ * 总数）。最初把 revision 当成「attempt 的恒定代次」，第一帧就误判 broken ——
+ * 打字机因此整段出现、不逐字。校验即：
+ *
+ * - 每帧 `revision` 必须**正好等于**期望值（上帧 + 1，或基线 revision + 1）；
+ * - chunk 的 `index` 必须等于 attempt 内已累积的 chunk 数。
+ *
+ * 任一不满足 ⇒ `broken`：后续 chunk 是**增量**，基线已丢，干等只会残缺，唯一
+ * 正确动作是**重开流取新基线**（新 opening 的 `assistantStream` 带已累积内容）——
+ * 与上游「断号即重连」同构。
  *
  * ## 文本从哪来
  *
- * chunk 是上游模型流的 JSON（`StreamChunk`，实测 `llm/src/types.ts:424`）：
- * 打字机只拼 `type == "text-delta"` 的 `.text`；reasoning / tool-call / 块
- * 边界不属于对话文本，原样跳过 —— 与 `SessionEvent.displayMessage` 的取舍
- * 同一条显示规则。
+ * chunk 是上游模型流的 JSON（`StreamChunk`，`llm/src/types.ts:424`）：打字机
+ * 只拼 `type == "text-delta"` 的 `.text`；reasoning / tool-call / 块边界不属于
+ * 对话文本，原样跳过 —— 与 `SessionEvent.displayMessage` 的取舍同一条显示规则。
  *
  * 不碰网络、不碰 UI：与 `SessionMirror` 一样，能被 iOS target 编译，也能被
  * `swiftc` 编成 macOS 命令行程序跑断言。
@@ -32,12 +37,13 @@
 /// opening 里带的瞬态基线（上游 `SessionAssistantStreamBaseline`，形状见
 /// `session-controller/src/types.ts:457-471` —— 本文件只声明用到的字段）。
 struct TransientBaseline {
+    /// 该基线**已用掉**的最后 revision —— 下一帧期望它 + 1。
     let revision: Int
-    /// 进行中的 attempt 的已累积文本与下一个 chunk 位置；没有进行中的 attempt 就是 `nil`。
+    /// 进行中的 attempt 的已累积内容；没有进行中的 attempt 就是 `nil`。
     let active: Active?
 
     struct Active {
-        let revision: Int
+        /// attempt 内下一个 chunk 的位置。
         let nextIndex: Int
         /// 基线里已累积的 chunk 序列（原样的 JSON）。
         let stream: [JSONValue]
@@ -59,11 +65,11 @@ struct TransientChannel {
     /// 当前打字机文本（只含 `text-delta` 的拼接）。
     private(set) var text = ""
 
-    /// 当前 attempt 的 revision；没有进行中的 attempt 就是 `nil`。
-    private var revision: Int?
+    /// 下一帧应带的 revision（全局单调；`nil` 表示尚未见过任何基线或帧）。
+    private var expectedRevision: Int?
 
-    /// 下一个 chunk 应该带的 `index`。
-    private var nextIndex = 0
+    /// 当前 attempt 内下一个 chunk 的位置。
+    private var nextChunkIndex = 0
 
     /// 有没有进行中的 attempt。
     private var active = false
@@ -71,20 +77,24 @@ struct TransientChannel {
     /// 是否有正在显示的瞬态内容。
     var isLive: Bool { active }
 
+    // MARK: - 诊断（只读快照，供日志；不进公开语义）
+
+    var expectedRevisionDescription: Int? { expectedRevision }
+    var nextIndexDescription: Int { nextChunkIndex }
+
     /// 用 opening 的基线恢复（重开流、冷进入都会走这里）。**替换**整个瞬态状态 ——
     /// 基线是服务端此刻的权威，与镜像的 `open(with:)` 同一条规则。
     mutating func apply(baseline: TransientBaseline) {
-        revision = baseline.revision
-        guard let activeAttempt = baseline.active else {
+        expectedRevision = baseline.revision + 1
+        guard let attempt = baseline.active else {
             active = false
-            nextIndex = 0
+            nextChunkIndex = 0
             text = ""
             return
         }
         active = true
-        revision = activeAttempt.revision
-        nextIndex = activeAttempt.nextIndex
-        text = activeAttempt.stream.reduce(into: "") { result, chunk in
+        nextChunkIndex = attempt.nextIndex
+        text = attempt.stream.reduce(into: "") { result, chunk in
             if let delta = Self.textDelta(of: chunk) {
                 result += delta
             }
@@ -94,33 +104,36 @@ struct TransientChannel {
     /// 消化一条瞬态帧。帧是上游 `SessionAssistantStreamFrame`（start/chunk/end），
     /// 这里用 `JSONValue` 原样收 —— 与事件体的容忍策略一致。
     mutating func apply(frame: JSONValue) -> TransientVerdict {
+        let incoming = frame["revision"]?.int
         switch frame["type"]?.string {
         case "start":
-            guard let incoming = frame["revision"]?.int else { return .broken }
-            revision = incoming
-            nextIndex = 0
+            guard incoming != nil, incoming == expectedRevision else { return .broken }
+            expectedRevision! += 1
+            nextChunkIndex = 0
             text = ""
             active = true
             return .consumed
 
         case "chunk":
-            guard active, let incoming = frame["revision"]?.int, let index = frame["index"]?.int else {
-                return .broken
-            }
-            // 两个数都对上才收：基线丢了就是丢了，不自愈。
-            guard incoming == revision, index == nextIndex else { return .broken }
+            guard active,
+                  let revision = incoming,
+                  let index = frame["index"]?.int else { return .broken }
+            // 两个序号都对上才收：revision 全局连续，index 是 attempt 内稠密位置。
+            guard revision == expectedRevision, index == nextChunkIndex else { return .broken }
             if let delta = Self.textDelta(of: frame["chunk"]) {
                 text += delta
             }
-            nextIndex += 1
+            expectedRevision! += 1
+            nextChunkIndex += 1
             return .consumed
 
         case "end":
+            guard incoming != nil, incoming == expectedRevision else { return .broken }
+            expectedRevision! += 1
             // committed 的内容会以持久事件（`assistant/message`）从事件帧再来，
             // 瞬态副本到此退场。
             active = false
-            revision = nil
-            nextIndex = 0
+            nextChunkIndex = 0
             text = ""
             return .ended
 
