@@ -9,6 +9,8 @@
 # 用法：
 #   ./install.sh            只安装
 #   ./install.sh --start    安装后直接启动 dsh
+#   ./install.sh --revoke   撤销全部已配对设备（清空凭证文件，M4）
+#                           撤销后手机的下一次请求即 401，重新走配对流程即恢复
 #
 # 环境变量：
 #   DSH_PROFILE   装进哪个 profile（默认 web）
@@ -31,6 +33,21 @@ die() { printf '❌ %s\n' "$*" >&2; exit 1; }
 # 所以 pnpm 必须在 PATH 上，dsh 自己不带安装器。
 command -v pnpm >/dev/null 2>&1 || die "需要 pnpm —— 装一个：brew install pnpm"
 command -v node >/dev/null 2>&1 || die "需要 node（^22.19.0 或 >=24.0.0）"
+
+# ── --revoke：撤销全部已配对设备（M4）───────────────────────────────────────
+# 凭证文件与插件读的是同一路径；清空成 {version:1} 而不是删文件 ——
+# 撤销是回到「未配对」，不是弄坏插件（~/.dsh 对沙箱是可创不可删，行为一致）。
+if [ "${1:-}" = "--revoke" ]; then
+  CRED_FILE="$DSH_HOME/dsh-mobile/credentials.json"
+  if [ -f "$CRED_FILE" ]; then
+    printf '{\n  "version": 1\n}\n' > "$CRED_FILE"
+    say "✅ 已撤销全部已配对设备（$CRED_FILE 已清空）。"
+    say "   手机的下一次请求会收到 401；重新配对即可恢复。"
+  else
+    say "没有凭证文件（$CRED_FILE）—— 本来就没有已配对的设备。"
+  fi
+  exit 0
+fi
 
 # `add` 要的是「包」，不是「仓库」：包的定义是有 package.json 的那一层。
 [ -f "$PACKAGE/package.json" ] || die "找不到 $PACKAGE/package.json —— 这是仓库的 mac-gateway 目录吗？"
@@ -73,7 +90,8 @@ say "看到 [mac-gateway] listening on http://0.0.0.0:3081 之后，"
 say "手机连同一个 Wi-Fi 打开："
 say "    http://$LAN_IP:3081"
 say ""
-say "⚠️ 那个端口目前没有任何鉴权（鉴权在 M4）—— 同 Wi-Fi 下人人可达，别在公共网络上开着。"
+say "首次使用：启动日志里有 6 位配对码（10 分钟有效），在手机 App 里输入完成配对。"
+say "撤销已配对设备：./install.sh --revoke"
 
 if [ "${1:-}" = "--start" ]; then
   say ""

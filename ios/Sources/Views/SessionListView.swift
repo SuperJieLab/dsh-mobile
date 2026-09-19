@@ -6,7 +6,9 @@ import SwiftUI
 /// 按协议，**排序是服务端的承诺**，所以这里一行排序代码都没有；
 /// 而「显示哪些」是客户端的事，所以过滤留在这里。
 struct SessionListView: View {
-    let client: GatewayClient
+    /// `@ObservedObject`（M4）：`isPaired` 是可变共享状态 —— 被撤销时这一屏
+    /// 要立刻让位给配对屏。
+    @ObservedObject var client: GatewayClient
 
     @State private var sessions: [SessionSummary] = []
     @State private var failure: String?
@@ -15,6 +17,14 @@ struct SessionListView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        if !client.isPaired {
+            PairingView(client: client)
+        } else {
+            pairedList
+        }
+    }
+
+    private var pairedList: some View {
         List {
             if let failure {
                 Section {

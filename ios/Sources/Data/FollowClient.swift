@@ -38,6 +38,8 @@ final class FollowClient: NSObject {
     var onRefused: ((GatewayFailure) -> Void)?
     /// 连接阶段变化（连接态指示器的数据源，M3）。
     var onPhaseChange: ((Phase) -> Void)?
+    /// 取一张有效的访问凭证（M4）—— upgrade 请求带上它，没有就裸连（必被 401 拒）。
+    var authorizationProvider: (() -> String?)?
 
     // MARK: - 状态
 
@@ -130,7 +132,12 @@ final class FollowClient: NSObject {
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = Self.streamPath
 
-        let webSocketTask = URLSession.shared.webSocketTask(with: components.url!)
+        // upgrade 请求带身份（M4）：与 HTTP 同一个头、同一张票。
+        var upgradeRequest = URLRequest(url: components.url!)
+        if let access = authorizationProvider?() {
+            upgradeRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
+        }
+        let webSocketTask = URLSession.shared.webSocketTask(with: upgradeRequest)
         task = webSocketTask
         print("[FollowClient] connect g\(current) → \(components.url!)")
         webSocketTask.resume()

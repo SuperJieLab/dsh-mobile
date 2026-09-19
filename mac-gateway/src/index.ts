@@ -24,9 +24,10 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { DEFAULT_LIMITS, handle, type Limits, type SessionPort } from './seam/rpc.ts'
+import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort } from './seam/rpc.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
 import { attachStreamHandler, type FollowSource, type UpstreamFollowFrame } from './adapters/ws.ts'
+import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
 
 /** Display metadata used by dsh diagnostics. */
 export const name = 'mac-gateway'
@@ -63,6 +64,17 @@ export interface Config {
   maxDeltaEvents?: number
   /** Soft ceiling on one reply's serialized `events`, in bytes. @default 1048576 */
   maxDeltaBytes?: number
+  /**
+   * Where the credentials file lives. Overridable so the assembly smoke tests
+   * never touch the real home directory. @default '~/.dsh/dsh-mobile/credentials.json'
+   */
+  credentialsPath?: string
+  /**
+   * Pre-pair the vault with this device token (tests only). Production pairing
+   * goes through the pairing code; this shortcut exists so an assembly test can
+   * hold a token without parsing console output.
+   */
+  deviceTokenSeed?: string
 }
 
 /** All-interfaces bind: the whole point of M0 (see docs/spec.md §四 M0). */
@@ -99,17 +111,28 @@ export function apply(ctx: Context, config: Config = {}): void {
     maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
   }
 
-  console.log('[mac-gateway] plugin loaded — M2 build, stream channel on /rpc/stream')
+  // The vault owns the three tickets (docs/plans/M4-identity-credentials.md §4.2).
+  // `pair` / `refresh` are answered before the auth gate — the gate exists to
+  // protect everything *else* — and both carry their own credential in the body.
+  const vault = new CredentialVault(config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH)
+  if (config.deviceTokenSeed !== undefined) {
+    // Tests only: pre-pair without walking through the pairing code.
+    vault.seedDeviceToken(config.deviceTokenSeed)
+  }
+  console.log(`[mac-gateway] pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
+
+  console.log('[mac-gateway] plugin loaded — M4 build, auth on both channels')
 
   ctx.effect(() => {
     const server = createServer((request, response) => {
       // `respond` never rejects; a throw here would be an unhandled rejection.
-      void respond(request, response, sessionPort, limits)
+      void respond(request, response, sessionPort, limits, vault)
     })
 
     // The stream channel shares the listener: same port, `POST /rpc` for the
-    // one-way calls, `/rpc/stream` upgrade for the follow stream.
-    attachStreamHandler(server, streamSourceOver(ctx))
+    // one-way calls, `/rpc/stream` upgrade for the follow stream. The upgrade
+    // is gated like any request (M4): no live access token, no 101.
+    attachStreamHandler(server, streamSourceOver(ctx), vault)
 
     // console.* rather than ctx.logger: in our non-TTY verification runs
     // `ctx.logger.info` produced no stdout line at all (dsh's own startup line
@@ -229,6 +252,7 @@ async function respond(
   response: ServerResponse,
   port: SessionPort,
   limits: Limits,
+  vault: CredentialVault,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
 
@@ -236,7 +260,7 @@ async function respond(
     // Liveness, and the answer to any unknown path. Transport-level only: no
     // protocol message is involved, so no envelope is involved either.
     response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
-    response.end(path === '/' ? 'mac-gateway alive — M1, protocol v2, POST /rpc for the protocol\n' : 'not found\n')
+    response.end(path === '/' ? 'mac-gateway alive — M4, protocol v2, POST /rpc for the protocol\n' : 'not found\n')
     return
   }
 
@@ -266,9 +290,68 @@ async function respond(
     return
   }
 
+  // Identity (M4): the auth ops carry their own credential in the body; every
+  // other op needs a live access token. A denial is HTTP 401 with a protocol
+  // envelope — the status codes the client keys its refresh flow on.
+  const op = (message as { op?: unknown } | null)?.op
+  if (op === 'pair' || op === 'refresh') {
+    const answer = await handleAuthOp(op, message, vault)
+    response.writeHead(answer.status, { 'content-type': 'application/json; charset=utf-8' })
+    response.end(`${JSON.stringify(answer.body)}\n`)
+    return
+  }
+
+  if (!vault.authenticate(request.headers.authorization)) {
+    response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    response.end(`${JSON.stringify(refusal('unauthenticated', 'missing or expired access token — pair first, then refresh'))}\n`)
+    return
+  }
+
   const answer = await handle(message, port, Date.now, limits)
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   response.end(`${JSON.stringify(answer)}\n`)
+}
+
+/** Refusal envelope shared by the auth path (the read path builds its own inside `handle`). */
+function refusal(code: string, message: string): { v: number; ok: false; error: { code: string; message: string } } {
+  return { v: PROTOCOL_VERSION, ok: false, error: { code, message } }
+}
+
+/**
+ * Answer `pair` / `refresh` — the two ops that establish and exercise the
+ * relationship. Kept beside the gate rather than inside `handle` on purpose:
+ * the protocol seam stays a pure read protocol, and these two are the only
+ * messages whose authority comes from the body rather than the header.
+ */
+async function handleAuthOp(
+  op: 'pair' | 'refresh',
+  message: unknown,
+  vault: CredentialVault,
+): Promise<{ status: number; body: unknown }> {
+  const payload = message as { code?: unknown; deviceToken?: unknown }
+
+  if (op === 'pair') {
+    const outcome = vault.pair(payload.code)
+    if (!outcome.ok) {
+      return { status: 401, body: refusal('invalid-pairing-code', outcome.reason) }
+    }
+    return {
+      status: 200,
+      body: { v: PROTOCOL_VERSION, ok: true, deviceToken: outcome.deviceToken },
+    }
+  }
+
+  const outcome = vault.refresh(payload.deviceToken)
+  if (!outcome.ok) {
+    return {
+      status: 401,
+      body: refusal('unauthenticated', 'unknown device token — pair again'),
+    }
+  }
+  return {
+    status: 200,
+    body: { v: PROTOCOL_VERSION, ok: true, accessToken: outcome.accessToken, expiresAt: outcome.expiresAt },
+  }
 }
 
 /** Thrown when a request body exceeds {@link MAX_BODY_BYTES}. */

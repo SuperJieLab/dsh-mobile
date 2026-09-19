@@ -88,10 +88,19 @@ export const STREAM_PATH = '/rpc/stream'
  * The handler owns negotiation (verified against the handshake key) and the
  * socket afterwards. Everything a socket does is best-effort with errors
  * swallowed at the socket boundary: a dead client is routine, not a fault.
+ *
+ * `gate` is the M4 auth gate: checked once at upgrade, before the handshake is
+ * answered — no live access token, no 101. A connection that got through stays
+ * up even after its token expires: re-authentication happens on the next
+ * connect, not mid-stream (docs/plans/M4-identity-credentials.md §3.3).
  */
-export function attachStreamHandler(server: Server, source: FollowSource): void {
+export function attachStreamHandler(
+  server: Server,
+  source: FollowSource,
+  gate: { authenticate(authorizationHeader: string | undefined): boolean },
+): void {
   server.on('upgrade', (request, socket, head) => {
-    void handleUpgrade(request, socket, head, source)
+    void handleUpgrade(request, socket, head, source, gate)
   })
 }
 
@@ -100,12 +109,20 @@ async function handleUpgrade(
   socket: Duplex,
   head: Buffer,
   source: FollowSource,
+  gate: { authenticate(authorizationHeader: string | undefined): boolean },
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
   console.log(`[mac-gateway] upgrade request for "${path}"`)
   if (path !== STREAM_PATH) {
     // Not ours — decline without pretending to speak WebSocket.
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
+    socket.destroy()
+    return
+  }
+
+  if (!gate.authenticate(request.headers.authorization)) {
+    console.log('[mac-gateway] upgrade refused: no valid access token')
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
     socket.destroy()
     return
   }

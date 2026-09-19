@@ -5,7 +5,7 @@ import Foundation
 /// 对应 `docs/protocol.md` §三。
 let gatewayProtocolVersion = 2
 
-/// 失败信封里的错误码。协议 v2 有这六个。
+/// 失败信封里的错误码。协议 v2 有这六个，M4 起新增 `unauthenticated`（鉴权域）。
 ///
 /// 但收的时候刻意用 `String` 而不是这个枚举：上游日后加码时，
 /// 客户端应当照原样显示，而不是因为解不出来就崩掉。
@@ -16,6 +16,7 @@ enum GatewayErrorCode: String {
     case unreadableSession = "unreadable-session"
     case internalError = "internal-error"
     case resyncRequired = "resync-required"
+    case unauthenticated = "unauthenticated"
 
     /// 人话解释，用于把服务端的拒绝变成用户看得懂的一句话。未知码返回 nil。
     var explanation: String? {
@@ -32,6 +33,8 @@ enum GatewayErrorCode: String {
             return "网关自身出错 —— 进程还活着，只是这次请求失败了。"
         case .resyncRequired:
             return "本机记的位置在 Mac 上不存在了 —— 正在从头发起一次同步。"
+        case .unauthenticated:
+            return "没有可用的身份 —— 未配对或配对已被撤销。"
         }
     }
 }

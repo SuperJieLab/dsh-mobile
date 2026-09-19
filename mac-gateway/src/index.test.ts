@@ -13,10 +13,18 @@
  * port — rather than a crash. That is the "the process must not crash" promise,
  * checked at the wiring layer.
  *
+ * M4 adds the auth gate: every business request now needs a live access token,
+ * so the tests pair a seeded device token through the real `refresh` op first —
+ * which also exercises the auth path end to end. The credentials file goes to a
+ * temp directory; the tests never touch the real home.
+ *
  * Run: node --test src/index.test.ts
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { apply } from './index.ts'
 
 /** Random high port: two tests must not race each other or anything real. */
@@ -24,10 +32,21 @@ function freshPort(base: number): number {
   return base + Math.floor(Math.random() * 1_500)
 }
 
+/** One temp sandbox per test: a credentials file the real home never sees. */
+function tempCredentialsPath(): string {
+  return join(mkdtempSync(join(tmpdir(), 'mac-gateway-test-')), 'credentials.json')
+}
+
+/** Device token the tests pair with — the raw side of the vault's hash. */
+const DEVICE_TOKEN = 'test-device-token-0123456789abcdef'
+
 /** Install the plugin on a context that runs effects immediately. Returns its teardown. */
-function install(host: string, port: number): () => void {
+function install(host: string, port: number, credentialsPath: string): () => void {
   let cleanup: (() => void) | undefined
-  apply({ effect: (fn: () => () => void) => { cleanup = fn() } } as never, { host, port })
+  apply(
+    { effect: (fn: () => () => void) => { cleanup = fn() } } as never,
+    { host, port, credentialsPath, deviceTokenSeed: DEVICE_TOKEN },
+  )
   return () => cleanup?.()
 }
 
@@ -43,9 +62,24 @@ async function untilUp(port: number, request: () => Promise<Response>): Promise<
   assert.fail('the listener never came up')
 }
 
+/** Walk the real auth path: device token → `refresh` op → live access token. */
+async function accessTokenFor(port: number): Promise<string> {
+  const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ v: 2, op: 'refresh', deviceToken: DEVICE_TOKEN }),
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json() as { ok: boolean; accessToken?: string }
+  assert.equal(body.ok, true)
+  assert.match(body.accessToken ?? '', /^\S+$/)
+  return body.accessToken!
+}
+
 test('the assembled plugin answers a real request on a real port', async () => {
   const port = freshPort(38_100)
-  const teardown = install('127.0.0.1', port)
+  const credentialsPath = tempCredentialsPath()
+  const teardown = install('127.0.0.1', port, credentialsPath)
 
   try {
     const response = await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -53,19 +87,24 @@ test('the assembled plugin answers a real request on a real port', async () => {
     assert.match(await response.text(), /mac-gateway alive/)
   } finally {
     teardown()
+    rmSync(credentialsPath, { force: true })
   }
 })
 
 test('a protocol message is answered with an envelope even when nothing is behind the port', async () => {
   const port = freshPort(39_600)
-  const teardown = install('127.0.0.1', port)
+  const credentialsPath = tempCredentialsPath()
+  const teardown = install('127.0.0.1', port, credentialsPath)
 
   try {
-    const response = await untilUp(port, () => fetch(`http://127.0.0.1:${port}/rpc`, {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
       body: JSON.stringify({ v: 2, op: 'list-sessions' }),
-    }))
+    })
 
     assert.equal(response.status, 200)
     const body = await response.json() as { ok: boolean; error?: { code: string } }
@@ -75,18 +114,94 @@ test('a protocol message is answered with an envelope even when nothing is behin
     assert.equal(body.error?.code, 'internal-error')
   } finally {
     teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+// MARK: - the auth gate (M4 A4)
+
+test('a business request without credentials is refused as 401 unauthenticated', async () => {
+  const port = freshPort(41_000)
+  const credentialsPath = tempCredentialsPath()
+  const teardown = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
+    })
+
+    assert.equal(response.status, 401)
+    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    assert.equal(body.ok, false)
+    assert.equal(body.error?.code, 'unauthenticated')
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('a bad access token is refused exactly like a missing one', async () => {
+  const port = freshPort(41_500)
+  const credentialsPath = tempCredentialsPath()
+  const teardown = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-token-we-issued' },
+      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
+    })
+
+    assert.equal(response.status, 401)
+    const body = await response.json() as { error?: { code: string } }
+    assert.equal(body.error?.code, 'unauthenticated')
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('a wrong device token cannot mint an access token', async () => {
+  const port = freshPort(42_000)
+  const credentialsPath = tempCredentialsPath()
+  const teardown = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: 2, op: 'refresh', deviceToken: 'not-the-paired-token' }),
+    })
+
+    assert.equal(response.status, 401)
+    const body = await response.json() as { error?: { code: string } }
+    assert.equal(body.error?.code, 'unauthenticated')
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
   }
 })
 
 test('the stream channel answers an upgrade on the same port and refuses a follow as an error frame', { timeout: 10_000 }, async () => {
   const port = freshPort(40_900)
-  const teardown = install('127.0.0.1', port)
+  const credentialsPath = tempCredentialsPath()
+  const teardown = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
 
-    // A real WebSocket handshake against the assembled listener.
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`)
+    // A real WebSocket handshake against the assembled listener, with the
+    // access token in the upgrade request — the same header the iPhone uses.
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`, { headers: { authorization: `Bearer ${access}` } })
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true })
       socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
@@ -111,5 +226,31 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
     await new Promise(resolve => setTimeout(resolve, 30)) // let the close clear the heartbeat
   } finally {
     teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('an upgrade without an access token is refused before the handshake', { timeout: 10_000 }, async () => {
+  const port = freshPort(42_500)
+  const credentialsPath = tempCredentialsPath()
+  const teardown = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+
+    // No authorization header: the gate must answer 401 at the HTTP layer —
+    // the connection never becomes a WebSocket at all.
+    await assert.rejects(
+      new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`)
+        socket.addEventListener('open', () => { resolve() }, { once: true })
+        socket.addEventListener('error', () => { reject(new Error('upgrade refused')) }, { once: true })
+        setTimeout(() => { reject(new Error('upgrade unexpectedly neither opened nor failed')) }, 5_000)
+      }),
+      /upgrade refused/,
+    )
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
   }
 })

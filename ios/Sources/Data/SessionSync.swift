@@ -53,6 +53,8 @@ final class SessionSync: ObservableObject {
         followClient.onEvent = { [weak self] event in self?.applyLiveEvent(event) }
         followClient.onTransient = { [weak self] frame in self?.applyTransient(frame) }
         followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
+        // M4：upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
+        followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
         return followClient
     }()
     private var transient = TransientChannel()

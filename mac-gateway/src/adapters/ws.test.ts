@@ -130,7 +130,7 @@ test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 
     { type: 'event', event: event(4) },
   ])
   const server = createServer()
-  attachStreamHandler(server, source)
+  attachStreamHandler(server, source, { authenticate: () => true })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -166,7 +166,7 @@ test('S1 at the adapter: the WS opening equals the HTTP page window', { timeout:
   const log = Array.from({ length: 57 }, (_, index) => event(index))
   const source = fakeSource([snapshotFrame(log, 50)])
   const server = createServer()
-  attachStreamHandler(server, source)
+  attachStreamHandler(server, source, { authenticate: () => true })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -196,7 +196,7 @@ test('a transient frame passes through verbatim and cursor-less', { timeout: 10_
     transient,
   ])
   const server = createServer()
-  attachStreamHandler(server, source)
+  attachStreamHandler(server, source, { authenticate: () => true })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -227,7 +227,7 @@ test('a source that skips a seq is refused loudly, not rendered', { timeout: 10_
       { type: 'event', event: event(5) }, // skipped 3
     ])
     const server = createServer()
-    attachStreamHandler(server, source)
+    attachStreamHandler(server, source, { authenticate: () => true })
     server.listen(0)
     try {
       await once(server, 'listening')
@@ -252,7 +252,7 @@ test('a source that skips a seq is refused loudly, not rendered', { timeout: 10_
 test('a hostile source still answers with an error frame — the process does not crash', { timeout: 10_000 }, async () => {
   const source = fakeSource([], { failWith: Object.assign(new Error('boom'), { isDSHRemoteError: true, code: 'session/not-found' }) })
   const server = createServer()
-  attachStreamHandler(server, source)
+  attachStreamHandler(server, source, { authenticate: () => true })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -274,7 +274,7 @@ test('an unreadable-session failure maps to its own code, like the HTTP path', {
   const failure = Object.assign(new Error('zstd says no'), { name: 'SessionPersistenceCorruptionError' })
   const source = fakeSource([], { failWith: failure })
   const server = createServer()
-  attachStreamHandler(server, source)
+  attachStreamHandler(server, source, { authenticate: () => true })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -304,7 +304,7 @@ test('cancel stops the stream; the pump yields no further frames for it', { time
     },
   }
   const server = createServer()
-  attachStreamHandler(server, source)
+  attachStreamHandler(server, source, { authenticate: () => true })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -328,7 +328,7 @@ test('cancel stops the stream; the pump yields no further frames for it', { time
 test('an unknown upgrade path is declined without speaking WebSocket', { timeout: 10_000 }, async () => {
   const source = fakeSource([])
   const server = createServer()
-  attachStreamHandler(server, source)
+  attachStreamHandler(server, source, { authenticate: () => true })
   server.listen(0)
   try {
     await once(server, 'listening')

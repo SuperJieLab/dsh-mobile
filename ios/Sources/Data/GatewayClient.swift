@@ -2,20 +2,86 @@ import Foundation
 
 /// 与 Mac 侧网关切口的**唯一**接触点。
 ///
-/// 它只做三件事：拼请求信封、发一次 `POST /rpc`、按信封判成败。
+/// 它做四件事：拼请求信封、发一次 `POST /rpc`、按信封判成败、以及 M4 的
+/// **身份**——每个请求带 `Authorization`，401 时用设备凭证静默续期一次再重试。
+///
 /// 协议的类型与语义都在 `GatewayProtocol.swift` 里，SwiftUI 在这里没有位置 ——
 /// 这与 Mac 侧把协议写成纯函数 `handle(msg)` 是同一个手法：
 /// 协议处理不该和它的使用者缠在一起。
-struct GatewayClient {
+///
+/// `struct` 改 `class`（M4）：续期单飞与已配对状态是**可变共享状态**，值语义
+/// 会在视图间复制出各自为政的凭证。仍是 `@MainActor` —— 所有调用方本就在主线程。
+@MainActor
+final class GatewayClient: ObservableObject {
     let baseURL: URL
 
     /// 协议里的唯一端点。多端点会把资源语义烧进 URL（见 `docs/protocol.md` §二）。
-    static let rpcPath = "/rpc"
+    nonisolated static let rpcPath = "/rpc"
 
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
-    static let timeout: TimeInterval = 10
+    nonisolated static let timeout: TimeInterval = 10
 
-    // MARK: - 三个 op
+    /// 三张票在手机侧的家（M4）。默认共享单例：全 App 一个身份。
+    private let credentials: CredentialStore
+
+    /// 续期单飞：同一时刻只允许一个 `refresh` 在途（Plan §3.6 的 401 竞态）。
+    /// 并发撞上 401 的请求都等这一张新票，然后各自重试一次。
+    private var refreshTask: Task<Bool, Never>?
+
+    /// 关系是否存在（设备凭证在 Keychain 里）。配对成功置真，被撤销置假。
+    @Published private(set) var isPaired: Bool
+
+    init(baseURL: URL, credentials: CredentialStore? = nil) {
+        self.baseURL = baseURL
+        // 默认共享单例：全 App 一个身份（nil 默认值避开跨 actor 的默认表达式求值）。
+        self.credentials = credentials ?? .shared
+        self.isPaired = self.credentials.hasDeviceToken
+    }
+
+    /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证（M4 §3.2）。
+    /// 成功即建立关系；失败的文案来自服务端（配对码不对 / 过期 / 作废）。
+    func pair(code: String) async throws {
+        let response: PairResponse = try await send(PairRequest(code: code), authenticated: false)
+        try response.validate()
+        guard let deviceToken = response.deviceToken else {
+            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 deviceToken")
+        }
+        credentials.saveDeviceToken(deviceToken)
+        isPaired = true
+    }
+
+    /// 用设备凭证换一张新 access（M4 §3.3）。返回 false 表示关系已被服务端
+    /// 掐断（401）——此时清掉本机凭证，App 回到未配对状态。
+    ///
+    /// 单飞：撞车的调用共享同一个在途任务的结果，不叠加请求。
+    private func refreshAccess() async -> Bool {
+        if let refreshTask { return await refreshTask.value }
+        let task = Task<Bool, Never> { [weak self] in
+            guard let self, let deviceToken = self.credentials.deviceToken else { return false }
+            do {
+                let response: RefreshResponse = try await self.send(
+                    RefreshRequest(deviceToken: deviceToken), authenticated: false
+                )
+                try response.validate()
+                guard let token = response.accessToken, let expiresAt = response.expiresAt else { return false }
+                self.credentials.storeAccess(token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
+                return true
+            } catch GatewayClientError.unauthenticated {
+                // 服务端不认这段关系了：撤销或凭证被替换。掐断本机状态。
+                self.credentials.deleteDeviceToken()
+                self.isPaired = false
+                return false
+            } catch {
+                // 传输失败不是关系终结：票换不到只是暂时，下次再试。
+                return false
+            }
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return await task.value
+    }
+
+    // MARK: - 三个读 op
 
     /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
     func listSessions() async throws -> [SessionSummary] {
@@ -70,15 +136,40 @@ struct GatewayClient {
         )
     }
 
-    // MARK: - 发一次请求
+    // MARK: - 发一次请求（带身份）
 
     private func send<Request: Encodable, Response: Decodable>(
         _ request: Request,
+        authenticated: Bool = true,
         as: Response.Type = Response.self
     ) async throws -> Response {
+        if let answer = try await sendOnce(request, authenticated: authenticated, type: Response.self) {
+            return answer
+        }
+        // 走到这里 = 业务请求被 401 拒了（pair / refresh 的 401 在 sendOnce 里
+        // 自带语义上抛，不会返回 nil）。换一张票（单飞），恰好重试一次。
+        guard authenticated, await refreshAccess() else {
+            throw GatewayClientError.unauthenticated
+        }
+        if let answer = try await sendOnce(request, authenticated: authenticated, type: Response.self) {
+            return answer
+        }
+        throw GatewayClientError.unauthenticated
+    }
+
+    /// 发一次。返回 `nil` 表示被 401 拒了 —— 由 `send` 决定续期重试还是如实上抛。
+    private func sendOnce<Request: Encodable, Response: Decodable>(
+        _ request: Request,
+        authenticated: Bool,
+        type: Response.Type
+    ) async throws -> Response? {
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // 身份只走传输头，不进消息体（docs/protocol.md §「身份」）。
+        if authenticated, let access = credentials.validAccessToken() {
+            urlRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
+        }
         urlRequest.timeoutInterval = Self.timeout
         urlRequest.httpBody = try JSONEncoder().encode(request)
 
@@ -90,8 +181,26 @@ struct GatewayClient {
             throw GatewayClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }
 
-        if let http = urlResponse as? HTTPURLResponse, http.statusCode != 200 {
-            throw GatewayClientError.badStatus(http.statusCode)
+        if let http = urlResponse as? HTTPURLResponse {
+            guard http.statusCode != 401 else {
+                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层续期重试；
+                // 鉴权请求（pair / refresh）的 401 自带语义，必须读出信封上抛：
+                // 配对码不对要说「配对码不对」，不是笼统的未认证。
+                guard authenticated else {
+                    if let envelope = try? JSONDecoder().decode(FailureEnvelope.self, from: payload),
+                       let failure = envelope.error {
+                        if failure.code == GatewayErrorCode.unauthenticated.rawValue {
+                            throw GatewayClientError.unauthenticated
+                        }
+                        throw GatewayClientError.refused(failure)
+                    }
+                    throw GatewayClientError.unauthenticated
+                }
+                return nil
+            }
+            if http.statusCode != 200 {
+                throw GatewayClientError.badStatus(http.statusCode)
+            }
         }
 
         do {
@@ -123,6 +232,21 @@ extension GatewayClient {
 private struct ListSessionsRequest: Encodable {
     let v = gatewayProtocolVersion
     let op = "list-sessions"
+}
+
+/// 配对（M4）：一次性配对码换设备凭证。身份不进消息体之外的位置 ——
+/// 配对码就是这条消息的载荷，走与业务同一端点。
+private struct PairRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "pair"
+    let code: String
+}
+
+/// 续期（M4）：设备凭证换访问凭证。
+private struct RefreshRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "refresh"
+    let deviceToken: String
 }
 
 private struct SnapshotRequest: Encodable {
@@ -173,6 +297,23 @@ private struct ListSessionsResponse: GatewayResponse {
     let error: GatewayFailure?
     let serverTime: Double?
     let sessions: [SessionSummary]?
+}
+
+/// 配对回包（M4）：设备凭证只在这里出现一次。
+private struct PairResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let deviceToken: String?
+}
+
+/// 续期回包（M4）：访问凭证与过期时刻（epoch 毫秒）。
+private struct RefreshResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let accessToken: String?
+    let expiresAt: Double?
 }
 
 private struct SnapshotResponse: GatewayResponse {
@@ -247,6 +388,9 @@ enum GatewayClientError: LocalizedError {
     case versionMismatch(Int)
     /// 服务端按信封拒绝了。这是**协议内的**结果，不是故障。
     case refused(GatewayFailure)
+    /// 没有可用身份（M4）：未配对，或设备凭证已被服务端撤销。
+    /// 不可重试 —— 重试要靠重新配对，不是再发一次。
+    case unauthenticated
 
     var errorDescription: String? {
         switch self {
@@ -268,6 +412,9 @@ enum GatewayClientError: LocalizedError {
 
         case .refused(let failure):
             return failure.readableDescription
+
+        case .unauthenticated:
+            return "还没有配对，或配对已被 Mac 侧撤销 —— 请重新配对。"
         }
     }
 
