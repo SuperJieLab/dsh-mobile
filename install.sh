@@ -73,7 +73,7 @@ say "看到 [mac-gateway] listening on http://0.0.0.0:3081 之后，"
 say "手机连同一个 Wi-Fi 打开："
 say "    http://$LAN_IP:3081"
 say ""
-say "⚠️ 那个端口目前没有任何鉴权（鉴权在 M6）—— 同 Wi-Fi 下人人可达，别在公共网络上开着。"
+say "⚠️ 那个端口目前没有任何鉴权（鉴权在 M4）—— 同 Wi-Fi 下人人可达，别在公共网络上开着。"
 
 if [ "${1:-}" = "--start" ]; then
   say ""

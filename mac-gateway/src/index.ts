@@ -1,15 +1,17 @@
 /**
  * mac-gateway — the Mac-side DSH plugin for dsh-mobile.
  *
- * M1 Steps 2–3: own an HTTP listener on the LAN and answer the message
+ * M0 Steps 2–3: own an HTTP listener on the LAN and answer the message
  * protocol on it. The listener is the transport; every protocol decision lives
  * in `rpc.ts` (a pure function this module only wires up), and every read of
  * the session store lives in `sessions.ts`.
  *
- * We declare `inject: ['sessionPersistence']` rather than assuming the service
- * is mounted: without it the fiber stays pending and the listener never starts,
- * which is the right failure — a gateway that cannot read sessions has nothing
- * to serve. (Web profile composes it from the base bundle.)
+ * The list path (v2) is zero-I/O: it reads session headers plus a projection the
+ * host already keeps, and never opens a session log. That needs four services
+ * the base bundle provides, so all of them are declared in `inject` rather than
+ * assumed — without them the fiber stays pending and the listener never starts,
+ * which is the right failure: a gateway that cannot read sessions has nothing to
+ * serve. See docs/protocol.md §4.1 for why the list can be served this way.
  *
  * Runtime imports are deliberately limited to Node builtins plus our own
  * modules. This module lives outside the dsh installation, so a bare specifier
@@ -17,13 +19,13 @@
  * MODULE_NOT_FOUND — no `node_modules` exists in any parent directory). The
  * cordis import below is type-only and therefore erased by Node's type stripping.
  *
- * See docs/plans/M1-lan-mvp.md §4.3 Steps 2–3 and docs/protocol.md.
+ * See docs/plans/M0-reachability-spike.md §4.3 Steps 2–3 and docs/protocol.md.
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { handle, type SessionPort } from './rpc.ts'
-import { createSessionPort, type PersistenceLike } from './sessions.ts'
+import { DEFAULT_LIMITS, handle, type Limits, type SessionPort } from './seam/rpc.ts'
+import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
 
 /** Display metadata used by dsh diagnostics. */
 export const name = 'mac-gateway'
@@ -33,7 +35,16 @@ export const name = 'mac-gateway'
  * they are available — see the module comment for why that is the honest
  * behaviour here rather than a fallback.
  */
-export const inject = ['sessionPersistence']
+export const inject = [
+  // The read paths (snapshot / page) go straight to the stored log.
+  'sessionPersistence',
+  // The list path: records (headers + liveness), projections, and what is running.
+  'sessionQuery',
+  'sessionProjections',
+  'sessionProjectionCache',
+  'sessions',
+  'agents',
+]
 
 /** Plugin config, supplied by the owning patch row. */
 export interface Config {
@@ -41,9 +52,16 @@ export interface Config {
   host?: string
   /** Bind port. @default 3081 */
   port?: number
+  /**
+   * Most events one `snapshot` reply may carry. Config rather than a constant so
+   * the caps are observable end to end (see docs/protocol.md §五). @default 500
+   */
+  maxDeltaEvents?: number
+  /** Soft ceiling on one reply's serialized `events`, in bytes. @default 1048576 */
+  maxDeltaBytes?: number
 }
 
-/** All-interfaces bind: the whole point of M1 (see docs/spec.md §四 M1). */
+/** All-interfaces bind: the whole point of M0 (see docs/spec.md §四 M0). */
 const DEFAULT_HOST = '0.0.0.0'
 
 /** Deliberately not 3080 — that is the dsh web profile's own port. */
@@ -52,7 +70,7 @@ const DEFAULT_PORT = 3081
 /**
  * Request-body ceiling. Not a protocol rule but a transport guard: the port is
  * reachable by anyone on the Wi-Fi, and an unbounded read is a trivial
- * memory-exhaustion lever. 1 MiB is far above any v1 request.
+ * memory-exhaustion lever. 1 MiB is far above any v2 request.
  */
 const MAX_BODY_BYTES = 1_048_576
 
@@ -66,21 +84,30 @@ const MAX_BODY_BYTES = 1_048_576
 export function apply(ctx: Context, config: Config = {}): void {
   const host = config.host ?? DEFAULT_HOST
   const port = config.port ?? DEFAULT_PORT
-  const sessionPort = createSessionPort(ctx.sessionPersistence as unknown as PersistenceLike)
+  const sessionPort = createSessionPort(
+    ctx.sessionPersistence as unknown as PersistenceLike,
+    listSourceOver(ctx),
+  )
+  // Caps are configuration, not constants: they exist to be lowered until a
+  // chunked read is observable, which is exactly how they are verified.
+  const limits: Limits = {
+    maxDeltaEvents: config.maxDeltaEvents ?? DEFAULT_LIMITS.maxDeltaEvents,
+    maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
+  }
 
   console.log('[mac-gateway] plugin loaded')
 
   ctx.effect(() => {
     const server = createServer((request, response) => {
       // `respond` never rejects; a throw here would be an unhandled rejection.
-      void respond(request, response, sessionPort)
+      void respond(request, response, sessionPort, limits)
     })
 
     // console.* rather than ctx.logger: in our non-TTY verification runs
     // `ctx.logger.info` produced no stdout line at all (dsh's own startup line
     // was missing too), and a bind failure that cannot be seen is worse than a
     // non-idiomatic one. Whether the logger is merely TTY-gated is unverified —
-    // see docs/plans/M1-lan-mvp.md §5.1.
+    // see docs/plans/M0-reachability-spike.md §5.1.
     server.on('error', (error) => {
       console.error(`[mac-gateway] listener error: ${String(error)}`)
     })
@@ -99,6 +126,70 @@ export function apply(ctx: Context, config: Config = {}): void {
 }
 
 /**
+ * The list path's sources, assembled from the host services.
+ *
+ * Each method mirrors one thing the reference list does (docs/plans/M1-consistency-delta.md
+ * §2.2): records come from the corpus (headers plus a liveness flag), values come
+ * from the live projection for a running session and from the stored checkpoint
+ * for a cold one, and liveness itself comes from the agent registry.
+ *
+ * Nothing here reads a log — that is the whole point. The casts are deliberate:
+ * this module lives outside the dsh installation, where the service types are not
+ * resolvable, so each service is asserted to the narrow shape the adapter
+ * declares and no further.
+ */
+function listSourceOver(ctx: Context): ListSource {
+  return {
+    async records() {
+      const records = await (ctx.sessionQuery as unknown as CorpusLike).listSessions()
+      return records.map(record => ({ header: record.header, live: record.live }))
+    },
+
+    liveValues(sessionId) {
+      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
+      if (session === undefined) return undefined
+      return (ctx.sessionProjections as unknown as ProjectionsLike).cachedSnapshot(session)?.values
+    },
+
+    storedValues(header) {
+      const cache = ctx.sessionProjectionCache as unknown as ProjectionCacheLike
+      const snapshot = cache.cachedSnapshot(header, 0) ?? cache.cachedPredecessorTitle(header, 0)
+      return snapshot?.values
+    },
+
+    isRunning(sessionId) {
+      return (ctx.agents as unknown as AgentsLike).get(sessionId)?.status === 'running'
+    },
+  }
+}
+
+/** The part of `ctx.sessionQuery` this module uses. */
+interface CorpusLike {
+  listSessions(): Promise<readonly { header: never; live: boolean }[]>
+}
+
+/** The part of `ctx.sessions` this module uses. */
+interface SessionsLike {
+  get(id: string): unknown
+}
+
+/** The part of `ctx.sessionProjections` this module uses. */
+interface ProjectionsLike {
+  cachedSnapshot(session: unknown): { values: Readonly<Record<string, unknown>> } | undefined
+}
+
+/** The part of `ctx.sessionProjectionCache` this module uses. */
+interface ProjectionCacheLike {
+  cachedSnapshot(header: never, inheritedEventCount: number): { values: Readonly<Record<string, unknown>> } | undefined
+  cachedPredecessorTitle(header: never, inheritedEventCount: number): { values: Readonly<Record<string, unknown>> } | undefined
+}
+
+/** The part of `ctx.agents` this module uses. */
+interface AgentsLike {
+  get(id: string): { status?: string } | undefined
+}
+
+/**
  * Route one request.
  *
  * `/rpc` carries protocol messages; everything else here exists only so a human
@@ -107,14 +198,19 @@ export function apply(ctx: Context, config: Config = {}): void {
  * the envelope carries the outcome of a message, which is why a protocol-level
  * refusal is still HTTP 200.
  */
-async function respond(request: IncomingMessage, response: ServerResponse, port: SessionPort): Promise<void> {
+async function respond(
+  request: IncomingMessage,
+  response: ServerResponse,
+  port: SessionPort,
+  limits: Limits,
+): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
 
   if (path !== '/rpc') {
     // Liveness, and the answer to any unknown path. Transport-level only: no
     // protocol message is involved, so no envelope is involved either.
     response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
-    response.end(path === '/' ? 'mac-gateway alive — M1 Step 3, POST /rpc for the protocol\n' : 'not found\n')
+    response.end(path === '/' ? 'mac-gateway alive — M1, protocol v2, POST /rpc for the protocol\n' : 'not found\n')
     return
   }
 
@@ -144,7 +240,7 @@ async function respond(request: IncomingMessage, response: ServerResponse, port:
     return
   }
 
-  const answer = await handle(message, port)
+  const answer = await handle(message, port, Date.now, limits)
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   response.end(`${JSON.stringify(answer)}\n`)
 }

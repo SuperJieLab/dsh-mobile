@@ -15,7 +15,7 @@ struct GatewayClient {
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
     static let timeout: TimeInterval = 10
 
-    // MARK: - 两个 op
+    // MARK: - 三个 op
 
     /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
     func listSessions() async throws -> [SessionSummary] {
@@ -25,7 +25,7 @@ struct GatewayClient {
     }
 
     /// 拉某会话的快照。
-    /// - Parameter since: 客户端**下一个期望的 seq**。M1 恒传 `0`（全量）。
+    /// - Parameter since: 客户端**下一个期望的 seq** —— 由本地镜像记着，不是每次传 0。
     func snapshot(sessionId: String, since: Int = 0) async throws -> SessionSnapshot {
         let response: SnapshotResponse = try await send(
             SnapshotRequest(sessionId: sessionId, since: since)
@@ -35,7 +35,39 @@ struct GatewayClient {
         guard let asOfSeq = response.asOfSeq, let events = response.events else {
             throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 asOfSeq / events")
         }
-        return SessionSnapshot(sessionId: response.sessionId ?? sessionId, asOfSeq: asOfSeq, events: events)
+        return SessionSnapshot(
+            sessionId: response.sessionId ?? sessionId,
+            asOfSeq: asOfSeq,
+            // 缺省 `false`：不带这个字段的是旧服务端，它只会一次给完（协议 §五）。
+            hasMore: response.hasMore ?? false,
+            events: events
+        )
+    }
+
+    /// 拉一段回溯窗口 —— 打开会话与往回翻都用它。
+    /// - Parameters:
+    ///   - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」，即打开会话；
+    ///     往回翻时传上一次的 `pageStart`。
+    ///   - maxMessages: 最多取多少条消息。不传就用服务端的默认值。
+    func page(sessionId: String, beforeSeq: Int? = nil, maxMessages: Int? = nil) async throws -> SessionPage {
+        let response: PageResponse = try await send(
+            PageRequest(sessionId: sessionId, beforeSeq: beforeSeq, maxMessages: maxMessages)
+        )
+        try response.validate()
+        // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
+        guard let pageStart = response.pageStart,
+              let asOfSeq = response.asOfSeq,
+              let hasOlder = response.hasOlder,
+              let events = response.events else {
+            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里缺少 pageStart / asOfSeq / hasOlder / events")
+        }
+        return SessionPage(
+            sessionId: response.sessionId ?? sessionId,
+            pageStart: pageStart,
+            asOfSeq: asOfSeq,
+            hasOlder: hasOlder,
+            events: events
+        )
     }
 
     // MARK: - 发一次请求
@@ -81,7 +113,7 @@ struct GatewayClient {
 extension GatewayClient {
     /// Mac 网关的地址 —— **全 App 唯一需要改的一行**。
     ///
-    /// M1 的取舍就是硬编码（Plan §4.3 Step 4）：不做设备发现、不做配置界面。
+    /// M0 的取舍就是硬编码（Plan §4.3 Step 4）：不做设备发现、不做配置界面。
     /// 换成 `http://<Mac的主机名>.local:3081` 也行，那条路走 mDNS，IP 变了不用改。
     static let defaultBaseURL = URL(string: "http://192.168.125.23:3081")!
 }
@@ -98,6 +130,16 @@ private struct SnapshotRequest: Encodable {
     let op = "snapshot"
     let sessionId: String
     let since: Int
+}
+
+/// 可选字段为 `nil` 时不会出现在 JSON 里（合成实现用的是 `encodeIfPresent`），
+/// 这正是协议要的形状：不传 `beforeSeq` 的意思是「从最新往回」，而不是「空值」。
+private struct PageRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "page"
+    let sessionId: String
+    let beforeSeq: Int?
+    let maxMessages: Int?
 }
 
 // MARK: - 响应
@@ -139,6 +181,18 @@ private struct SnapshotResponse: GatewayResponse {
     let error: GatewayFailure?
     let sessionId: String?
     let asOfSeq: Int?
+    let hasMore: Bool?
+    let events: [SessionEvent]?
+}
+
+private struct PageResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let sessionId: String?
+    let pageStart: Int?
+    let asOfSeq: Int?
+    let hasOlder: Bool?
     let events: [SessionEvent]?
 }
 
@@ -154,10 +208,30 @@ struct SessionSnapshot {
     let sessionId: String
     /// 本次覆盖到的位置（不含）—— 回传它就能拿到「空增量」，是水位不变式的用法。
     let asOfSeq: Int
+    /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限（协议 §五）。
+    let hasMore: Bool
     let events: [SessionEvent]
 
     /// 能显示成消息的事件。其余事件（工具调用、轮次边界、用量……）不属于对话内容。
     var messages: [DisplayMessage] { events.compactMap(\.displayMessage) }
+}
+
+// MARK: - 回溯窗口
+
+/// 一段往回读的窗口（协议 §4.3）。
+///
+/// 与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口从某个位置往回走。
+/// 打开会话时用后者取最近一段，之后用前者追新增 —— 这样客户端**不需要跨会话
+/// 记住任何位置**，冷启动永远从「现在的最新一段」开始。
+struct SessionPage {
+    let sessionId: String
+    /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
+    let pageStart: Int
+    /// 窗口末尾（不含）。与 `SessionSnapshot.asOfSeq` 同义。
+    let asOfSeq: Int
+    /// 窗口之前还有事件吗。`false` 表示已经到日志开头。
+    let hasOlder: Bool
+    let events: [SessionEvent]
 }
 
 // MARK: - 失败
