@@ -90,7 +90,7 @@ struct SessionEvent: Decodable, Equatable, Identifiable {
 ///
 /// 若把 `data` 声明成固定的结构体，上游每加一个字段我们就得跟着改 ——
 /// 那正是协议里「桥接而非翻译」这条约束要避免的事。
-enum JSONValue: Decodable, Equatable {
+enum JSONValue: Decodable, Encodable, Equatable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -120,8 +120,27 @@ enum JSONValue: Decodable, Equatable {
         }
     }
 
+    /// 对称的编码：跟解码一样按实际类型走 —— `JSONValue` 要能在两个方向上
+    /// 原样表示任意 JSON（M2 的跟随流要往回发帧）。
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .null: try container.encodeNil()
+        case .array(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        }
+    }
+
     var string: String? {
         if case .string(let value) = self { return value }
+        return nil
+    }
+
+    var bool: Bool? {
+        if case .bool(let value) = self { return value }
         return nil
     }
 

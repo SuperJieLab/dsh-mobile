@@ -32,6 +32,10 @@ final class SessionSync: ObservableObject {
     /// 还能往回翻吗。为真时界面给出入口。
     @Published private(set) var hasOlder = false
     @Published private(set) var status: Status = .idle
+    /// 正在生成的回复（打字机）；没有进行中的 attempt 就是空串。
+    @Published private(set) var transientText = ""
+    /// 跟随流是否活着。为假时这屏的内容就是「上一次拿到的」—— 如实显示，不装新鲜。
+    @Published private(set) var isFollowing = false
 
     private let client: GatewayClient
     private let sessionId: String
@@ -39,6 +43,17 @@ final class SessionSync: ObservableObject {
     /// 这是刻意的：窗口是服务端此刻给的，比任何本地残留都可信。
     private var mirror = SessionMirror()
     private var isSyncing = false
+
+    /// 跟随流（M2）：打开详情页即开启，实时收 opening / 事件 / 瞬态帧。
+    private lazy var follow: FollowClient = {
+        let followClient = FollowClient()
+        followClient.onOpening = { [weak self] payload in self?.applyOpening(payload) }
+        followClient.onEvent = { [weak self] event in self?.applyLiveEvent(event) }
+        followClient.onTransient = { [weak self] frame in self?.applyTransient(frame) }
+        followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
+        return followClient
+    }()
+    private var transient = TransientChannel()
 
     init(client: GatewayClient, sessionId: String) {
         self.client = client
@@ -165,6 +180,81 @@ final class SessionSync: ObservableObject {
         }
 
         refreshView()
+    }
+
+    // MARK: - 跟随（M2 的主路径）
+
+    /// 打开详情页即跟随：服务端推 opening（首屏窗口）与后续事件，不再轮询。
+    ///
+    /// 编排只做两件事，判定全在状态机里 —— 与 HTTP 路径共用同一台 `SessionMirror`：
+    /// - opening → `mirror.open(with:)`（**替换**窗口，重连重建同此一途）
+    /// - 事件帧 → `mirror.apply(.received(Snapshot(asOfSeq: seq + 1, …)))`
+    ///   —— 一条事件就是一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
+    func startFollowing() {
+        follow.start(sessionId: sessionId)
+    }
+
+    /// 离开详情页：关流、清瞬态。镜像留在内存里（视图销毁时一起消失）。
+    func stopFollowing() {
+        follow.stop()
+        isFollowing = false
+        transient = TransientChannel()
+        transientText = ""
+    }
+
+    private func applyOpening(_ payload: JSONValue) {
+        isFollowing = true
+        let window = Window(
+            pageStart: payload["pageStart"]?.int ?? 0,
+            asOfSeq: payload["cursor"]?.int ?? 0,
+            hasOlder: payload["hasOlder"]?.bool ?? false,
+            events: (payload["events"]?.array ?? []).compactMap { try? JSONDecoder().decode(SessionEvent.self, from: JSONEncoder().encode($0)) }
+        )
+        _ = mirror.open(with: window)
+
+        // 瞬态基线：opening 里带了进行中的 attempt 就恢复打字机，没有就清场。
+        if let baseline = payload["assistantStream"] {
+            transient.apply(baseline: parseBaseline(baseline))
+        } else {
+            transient = TransientChannel()
+        }
+        transientText = transient.text
+        status = .done(added: window.events.count, recovered: false)
+        refreshView()
+    }
+
+    private func applyLiveEvent(_ event: SessionEvent) {
+        // 一条事件 = 一次覆盖到 seq+1 的快照；无缺口可言（上游 gap-free 是契约，
+        // 网关另有目击），幂等照旧生效。
+        _ = mirror.apply(.received(Snapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])))
+        refreshView()
+    }
+
+    private func applyTransient(_ frame: JSONValue) {
+        if transient.apply(frame: frame) == .broken {
+            // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
+            follow.reopenStream()
+            return
+        }
+        transientText = transient.text
+    }
+
+    private func handleStreamRefusal(_ failure: GatewayFailure) {
+        status = .failed("跟随流被拒绝：\(failure.readableDescription)")
+        refreshView()
+    }
+
+    /// opening 的瞬态基线 → 通道的输入。只认我们声明的字段，其余忽略。
+    private func parseBaseline(_ json: JSONValue) -> TransientBaseline {
+        let active = json["activeAttempt"]
+        return TransientBaseline(
+            revision: json["revision"]?.int ?? 0,
+            active: active == nil ? nil : TransientBaseline.Active(
+                revision: active?["revision"]?.int ?? json["revision"]?.int ?? 0,
+                nextIndex: active?["nextIndex"]?.int ?? 0,
+                stream: active?["stream"]?.array ?? []
+            )
+        )
     }
 
     // MARK: - 一次请求

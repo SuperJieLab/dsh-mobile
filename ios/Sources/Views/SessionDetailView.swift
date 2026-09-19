@@ -58,6 +58,21 @@ struct SessionDetailView: View {
                     MessageBubble(message: message)
                 }
 
+                // 打字机：正在生成的回复。它不在镜像里 —— 瞬态内容没有 seq，
+                // 不属于「已读到的位置」（M2 的第一条纪律）。
+                if !sync.transientText.isEmpty {
+                    Text("DSH 正在输入…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(sync.transientText)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(uiColor: .secondarySystemBackground), in: .rect(cornerRadius: 14))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowSeparator(.hidden)
+                }
+
                 // 滚动锚点：初始同步完成后定位到这里（最新的消息在列表末尾）。
                 Color.clear
                     .frame(height: 1)
@@ -87,7 +102,10 @@ struct SessionDetailView: View {
                 }
             }
             .refreshable { await sync.sync() }
-            .task { await sync.sync() }
+            // 进屏即跟随（M2 主路径）：opening 给首屏，事件与瞬态实时推。
+            // 离屏即停。`sync()`（HTTP 全量对齐）保留给下拉刷新作兜底。
+            .task { sync.startFollowing() }
+            .onDisappear { sync.stopFollowing() }
         }
     }
 
