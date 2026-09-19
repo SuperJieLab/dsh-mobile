@@ -99,7 +99,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
   }
 
-  console.log('[mac-gateway] plugin loaded')
+  console.log('[mac-gateway] plugin loaded — M2 build, stream channel on /rpc/stream')
 
   ctx.effect(() => {
     const server = createServer((request, response) => {

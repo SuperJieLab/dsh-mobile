@@ -102,6 +102,7 @@ async function handleUpgrade(
   source: FollowSource,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
+  console.log(`[mac-gateway] upgrade request for "${path}"`)
   if (path !== STREAM_PATH) {
     // Not ours — decline without pretending to speak WebSocket.
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
@@ -111,11 +112,13 @@ async function handleUpgrade(
 
   const accept = acceptKeyOf(request.headers)
   if (accept === undefined) {
+    console.log('[mac-gateway] upgrade refused: no Sec-WebSocket-Key')
     socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
     socket.destroy()
     return
   }
 
+  console.log('[mac-gateway] upgrade accepted → 101')
   socket.write(handshakeResponse(accept))
   runSocket(socket, source, head)
 }
@@ -249,6 +252,7 @@ async function pump(
         const first = events[0] as { seq?: unknown } | undefined
         const cursor = frame.cursor + 1 // reference cursor is inclusive; ours is exclusive
         expectedSeq = cursor
+        console.log(`[mac-gateway] follow opening for "${request.sessionId}": cursor=${cursor}, ${events.length} events`)
         sendItem({
           sessionId: request.sessionId,
           cursor,

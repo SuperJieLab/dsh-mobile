@@ -97,10 +97,18 @@ final class FollowClient: NSObject {
 
     private func connect() {
         guard following, sessionId != nil else { return }
+        // 注意：不在这里清零 reconnectAttempt —— 退避档位必须随失败次数爬升，
+        // 否则握手持续失败时会退化成每秒一次的疯狂循环（真机抓到过）。
         generation += 1
         let current = generation
-        reconnectAttempt = 0
         phase = .connecting
+
+        // 上一代次的连接必须先关掉：不关的话旧 socket 的 receive/heartbeat
+        // 还在（回调虽被代次拦住，连接本身泄漏），且系统的连接行为会互相干扰。
+        if task !== nil {
+            print("[FollowClient] g\(current) closing previous task before connecting")
+            closeTask()
+        }
 
         guard var components = URLComponents(url: GatewayClient.defaultBaseURL, resolvingAgainstBaseURL: false) else {
             phase = .idle
@@ -111,12 +119,23 @@ final class FollowClient: NSObject {
 
         let webSocketTask = URLSession.shared.webSocketTask(with: components.url!)
         task = webSocketTask
+        print("[FollowClient] connect g\(current) → \(components.url!)")
         webSocketTask.resume()
 
+        // 握手由系统完成，open 帧立即发出（未就绪的连接会替我们排队）——
+        // 服务端等的就是它：没有 open，永远不会有 opening。
+        if let sessionId {
+            print("[FollowClient] g\(current) sending open for \(sessionId)")
+            openFollowStream(sessionId: sessionId)
+        }
+
         // 就绪硬超时：15s 内没收到 opening 就断开走重连。
+        // ⚠️ 括号必须显式：`?? 15 * 1e9` 会把「15」当纳秒传进去（真机抓到过 ——
+        // 每次连接立即超时，open 帧被 cancel 成 -999，永远收不到 opening）。
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(self?.readyTimeout ?? 15 * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64((self?.readyTimeout ?? 15) * 1_000_000_000))
             guard let self, self.generation == current, self.task === webSocketTask, self.phase != .ready else { return }
+            print("[FollowClient] g\(current) ready timeout (\(Int(self.readyTimeout))s) — closing and retrying")
             self.closeTask()
             self.scheduleReconnect()
         }
@@ -140,8 +159,11 @@ final class FollowClient: NSObject {
     }
 
     /// 关掉当前任务并使其回调作废（代次在外层管）。
-    private func closeTask() {
-        task?.cancel(with: .goingAway, reason: nil)
+    private func closeTask(from caller: String = #function) {
+        if let task {
+            print("[FollowClient] g\(generation) closeTask from \(caller)")
+            task.cancel(with: .goingAway, reason: nil)
+        }
         task = nil
     }
 
@@ -152,8 +174,10 @@ final class FollowClient: NSObject {
             Task { @MainActor [weak self] in
                 guard let self, self.generation == current, self.task === webSocketTask else { return }
                 switch result {
-                case .failure:
-                    // 连接死了：清场走退避重连。
+                case .failure(let error):
+                    // 连接死了：清场走退避重连。打印具体原因 —— ATS / LNP /
+                    // 路由器隔离都会在这里留下各自的错误码。
+                    print("[FollowClient] g\(current) receive failed: \(error)")
                     self.closeTask()
                     self.scheduleReconnect()
 
@@ -166,10 +190,15 @@ final class FollowClient: NSObject {
     }
 
     private func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
-        guard case .string(let text) = message,
-              let frame = try? JSONDecoder().decode(MuxFrame.self, from: Data(text.utf8)) else {
+        guard case .string(let text) = message else {
+            print("[FollowClient] g\(current) non-text frame ignored")
+            return
+        }
+        guard let frame = try? JSONDecoder().decode(MuxFrame.self, from: Data(text.utf8)) else {
+            print("[FollowClient] g\(current) unparsable frame (first 120 chars): \(text.prefix(120))")
             return // 解不了的帧不是消息，忽略
         }
+        print("[FollowClient] g\(current) frame: \(frame.type)")
 
         switch frame.type {
         case "item":
@@ -217,7 +246,10 @@ final class FollowClient: NSObject {
               let text = String(data: data, encoding: .utf8) else { return }
         task?.send(.string(text)) { [weak self] error in
             Task { @MainActor [weak self] in
-                if error != nil {
+                if let error {
+                    // 握手没完成或连接已死时 send 会在这里失败 —— 这是
+                    // 「发了 open 却收不到任何帧」最常见的原因，必须留痕。
+                    print("[FollowClient] g\(self?.generation ?? -1) send failed: \(error)")
                     self?.closeTask()
                     self?.scheduleReconnect()
                 }
@@ -275,6 +307,7 @@ final class FollowClient: NSObject {
 
         let delay = Self.backoffDelayMs(attempt: reconnectAttempt, random: Double.random(in: 0..<1))
 
+        print("[FollowClient] reconnect in \(delay)ms (attempt \(reconnectAttempt))")
         phase = .waiting(ms: delay)
         let work = DispatchWorkItem { [weak self] in
             self?.connect()
