@@ -323,13 +323,71 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
   const events = await port.readAll(sessionId)
   if (events === undefined) return failure('unknown-session', `no stored session "${sessionId}"`)
 
-  // The window arithmetic reads positions as seqs, so the log being dense and
-  // zero-based is a precondition here rather than a hope. Checked because this
-  // is the one path that can check it — and refusing beats handing back a
-  // window whose boundary means something different than it says.
+  let window: PageWindow
+  try {
+    window = pageWindow(sessionId, events, beforeSeq, maxMessages)
+  } catch (error) {
+    // Two distinct refusals, same codes as before the extraction: a log this
+    // runtime cannot interpret is `unreadable-session`, a cursor past the end
+    // is `resync-required` (docs/plans/M1-consistency-delta.md 判据 P4).
+    if (error instanceof LogNotDenseError) return failure('unreadable-session', error.message)
+    if (error instanceof CursorPastEndError) return failure('resync-required', error.message)
+    throw error
+  }
+
+  return {
+    v: PROTOCOL_VERSION,
+    ok: true,
+    sessionId,
+    pageStart: window.pageStart,
+    asOfSeq: window.asOfSeq,
+    hasOlder: window.hasOlder,
+    events: [...window.events],
+  }
+}
+
+/** Thrown by {@link pageWindow} when the log's seqs are not dense from 0. */
+export class LogNotDenseError extends Error {
+  constructor(sessionId: string, index: number, seq: string) {
+    super(`session "${sessionId}" log is not dense: index ${index} holds seq ${seq}`)
+    this.name = 'LogNotDenseError'
+  }
+}
+
+/** Thrown by {@link pageWindow} when `beforeSeq` names a position past the log's end. */
+export class CursorPastEndError extends Error {
+  constructor(sessionId: string, beforeSeq: number, length: number) {
+    super(`beforeSeq ${beforeSeq} is past the end of session "${sessionId}" (${length} events)`)
+    this.name = 'CursorPastEndError'
+  }
+}
+
+/**
+ * One backwards window over a whole log — the arithmetic both `page` and the
+ * follow opening share.
+ *
+ * Bounded by *messages* but delivered as the whole interval — a caller drawing
+ * seq N needs its neighbours too, and those neighbours are frequently not
+ * messages themselves (docs/protocol.md §4.3). Sharing this one function is
+ * what makes "the follow opening is the same window a `page` returns" a
+ * structural fact rather than a promise: there is no second implementation to
+ * drift from.
+ *
+ * @throws {@link LogNotDenseError} when the log's seqs are not `0..n-1` — the
+ *   window arithmetic reads positions as seqs, so density is a precondition
+ *   here rather than a hope. Both callers refuse on it: `page` with
+ *   `unreadable-session`, the follow path likewise, rather than handing back a
+ *   window whose boundary means something different than it says.
+ */
+export function pageWindow(
+  sessionId: string,
+  events: readonly WireEvent[],
+  beforeSeq: number | undefined,
+  maxMessages: number,
+): PageWindow {
   const lastIndex = events.findIndex((event, index) => event.seq !== index)
   if (lastIndex !== -1) {
-    return failure('unreadable-session', `session "${sessionId}" log is not dense: index ${lastIndex} holds seq ${String(events[lastIndex]?.seq)}`)
+    throw new LogNotDenseError(sessionId, lastIndex, String(events[lastIndex]?.seq))
   }
 
   const end = beforeSeq ?? events.length
@@ -337,7 +395,7 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
     // Unlike `snapshot`, this bound is knowable: the whole log is in hand. So a
     // position past the end is refused rather than answered with an empty
     // window that looks exactly like "you have reached the beginning".
-    return failure('resync-required', `beforeSeq ${end} is past the end of session "${sessionId}" (${events.length} events)`)
+    throw new CursorPastEndError(sessionId, end, events.length)
   }
 
   let start = 0
@@ -352,15 +410,19 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
     }
   }
 
-  return {
-    v: PROTOCOL_VERSION,
-    ok: true,
-    sessionId,
-    pageStart: start,
-    asOfSeq: end,
-    hasOlder: start > 0,
-    events: events.slice(start, end),
-  }
+  return { pageStart: start, asOfSeq: end, hasOlder: start > 0, events: events.slice(start, end) }
+}
+
+/** One backwards window's geometry — see {@link pageWindow}. */
+export interface PageWindow {
+  /** First seq of the window (the client's next `beforeSeq` when paging back). */
+  pageStart: number
+  /** Exclusive upper bound the window reached. */
+  asOfSeq: number
+  /** Whether older events exist before the window. */
+  hasOlder: boolean
+  /** The window's events, in seq order. */
+  events: readonly WireEvent[]
 }
 
 /**

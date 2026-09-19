@@ -26,6 +26,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_LIMITS, handle, type Limits, type SessionPort } from './seam/rpc.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
+import { attachStreamHandler, type FollowSource, type UpstreamFollowFrame } from './adapters/ws.ts'
 
 /** Display metadata used by dsh diagnostics. */
 export const name = 'mac-gateway'
@@ -44,6 +45,9 @@ export const inject = [
   'sessionProjectionCache',
   'sessions',
   'agents',
+  // The follow stream (M2): pump the controller's follow to the WS channel.
+  // Only present in the web-app bundle — spec §8.5 B5 records what that costs.
+  'sessionController',
 ]
 
 /** Plugin config, supplied by the owning patch row. */
@@ -103,6 +107,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       void respond(request, response, sessionPort, limits)
     })
 
+    // The stream channel shares the listener: same port, `POST /rpc` for the
+    // one-way calls, `/rpc/stream` upgrade for the follow stream.
+    attachStreamHandler(server, streamSourceOver(ctx))
+
     // console.* rather than ctx.logger: in our non-TTY verification runs
     // `ctx.logger.info` produced no stdout line at all (dsh's own startup line
     // was missing too), and a bind failure that cannot be seen is worse than a
@@ -161,6 +169,24 @@ function listSourceOver(ctx: Context): ListSource {
       return (ctx.agents as unknown as AgentsLike).get(sessionId)?.status === 'running'
     },
   }
+}
+
+/**
+ * The follow stream's source, assembled from the host's session controller.
+ *
+ * One cast to the narrow face the pump uses (see `FollowSource`); the controller
+ * is only present in the web-app bundle, where cordis holds this plugin until
+ * it appears — the same honest wait the list path's services get.
+ */
+function streamSourceOver(ctx: Context): FollowSource {
+  const controller = ctx.sessionController as unknown as {
+    follow(request: {
+      address: { kind: 'session'; sessionId: string }
+      maxMessages?: number
+      assistantStream: true
+    }, signal: AbortSignal): AsyncIterable<UpstreamFollowFrame>
+  }
+  return { follow: (request, signal) => controller.follow(request, signal) }
 }
 
 /** The part of `ctx.sessionQuery` this module uses. */

@@ -77,3 +77,39 @@ test('a protocol message is answered with an envelope even when nothing is behin
     teardown()
   }
 })
+
+test('the stream channel answers an upgrade on the same port and refuses a follow as an error frame', { timeout: 10_000 }, async () => {
+  const port = freshPort(40_900)
+  const teardown = install('127.0.0.1', port)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+
+    // A real WebSocket handshake against the assembled listener.
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`)
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve(), { once: true })
+      socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
+      setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
+    })
+
+    // The fake context has no session controller behind the port, so the pump
+    // fails — and must fail as an error frame (the stream channel's form of
+    // "a hostile data source is still a reply"), never as a dead socket.
+    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      socket.addEventListener('message', event => {
+        resolve(JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>)
+      }, { once: true })
+      socket.addEventListener('error', () => { reject(new Error('socket died instead of answering')) }, { once: true })
+      setTimeout(() => { reject(new Error('no frame arrived')) }, 5_000)
+    })
+
+    assert.equal(reply.type, 'error')
+    assert.equal((reply.payload as { code?: string }).code, 'internal-error')
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30)) // let the close clear the heartbeat
+  } finally {
+    teardown()
+  }
+})
