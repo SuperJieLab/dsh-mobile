@@ -249,14 +249,31 @@ final class FollowClient: NSObject {
         }
     }
 
+    /**
+     * 重连延迟：base 500ms × 2^n，抖动取封顶值的 50–100%，封顶 10s。
+     *
+     * 抽成纯函数（`random` 注入）是因为它是这段编排里唯一**可断言**的行为：
+     * 曲线对不对、抖动范围对不对，都能在不碰 socket 的情况下验证。完整的
+     * 「断线 → 退避 → 重连 → 代次递增」编排需要真网络，由真机判据 R3/R4 覆盖。
+     *
+     * - Parameters:
+     *   - attempt: 第几次重连（从 1 起）。
+     *   - random: 抖动采样，`0..<1`。
+     */
+    static func backoffDelayMs(attempt: Int, random: Double) -> Int {
+        // attempt 1 是第一次重连，指数从 2^0 起。
+        let exponent = min(max(attempt, 1), 16) - 1
+        let cap = min(baseBackoffMs * (1 << exponent), maxBackoffMs)
+        return Int(Double(cap) * (0.5 + min(max(random, 0), 1) * 0.5))
+    }
+
     /// 退避重连：base 500ms × 2^n，抖动 50–100%，封顶 10s。
     private func scheduleReconnect() {
         guard following, sessionId != nil else { return }
         phase = .waiting(ms: 0)
         reconnectAttempt += 1
 
-        let cap = min(Self.baseBackoffMs * (1 << min(reconnectAttempt, 16)), Self.maxBackoffMs)
-        let delay = Int(Double(cap) * (0.5 + Double.random(in: 0..<0.5)))
+        let delay = Self.backoffDelayMs(attempt: reconnectAttempt, random: Double.random(in: 0..<1))
 
         phase = .waiting(ms: delay)
         let work = DispatchWorkItem { [weak self] in
