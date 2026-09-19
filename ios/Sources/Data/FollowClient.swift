@@ -26,7 +26,6 @@ final class FollowClient: NSObject {
         case ready
         case waiting(ms: Int)
     }
-
     // MARK: - 回调（由编排层注入；全部在主线程）
 
     /// opening 帧：`{sessionId, cursor, pageStart, hasOlder, events, assistantStream?}`。
@@ -37,6 +36,8 @@ final class FollowClient: NSObject {
     var onTransient: ((JSONValue) -> Void)?
     /// 一条 error 帧 —— 流通道里的协议内拒绝。
     var onRefused: ((GatewayFailure) -> Void)?
+    /// 连接阶段变化（连接态指示器的数据源，M3）。
+    var onPhaseChange: ((Phase) -> Void)?
 
     // MARK: - 状态
 
@@ -91,6 +92,18 @@ final class FollowClient: NSObject {
     func reopenStream() {
         guard following, let sessionId else { return }
         openFollowStream(sessionId: sessionId)
+    }
+
+    /// 回前台立即触发一次重连 —— 上游「恢复立即试」（online 事件 → 重连控制器）
+    /// 的复现（M3）。退避窗口里的等待被跳过；已在握手或就绪的连接不受影响，
+    /// 不叠加并发连接。
+    func reconnectNow() {
+        guard following, sessionId != nil else { return }
+        guard phase != .ready, phase != .connecting else { return }
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        print("[FollowClient] foreground — reconnecting immediately (skipping backoff)")
+        connect()
     }
 
     // MARK: - 连接

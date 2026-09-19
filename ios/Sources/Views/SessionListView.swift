@@ -11,6 +11,8 @@ struct SessionListView: View {
     @State private var sessions: [SessionSummary] = []
     @State private var failure: String?
     @State private var isLoading = false
+    /// 回前台立即刷新（M3）：App 生命周期与列表域的连接点。
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         List {
@@ -49,7 +51,16 @@ struct SessionListView: View {
         }
         .refreshable { await reload() }
         .task { await reload() }
+        // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应（M3）。
+        // 失败时旧列表照常保留（reload 的既有纪律），指示器转「已断开」。
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await reload() }
+        }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                ConnectionBadge(state: ConnectionBadge.Status(isLoading: isLoading, lastFailure: failure))
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     Task { await reload() }

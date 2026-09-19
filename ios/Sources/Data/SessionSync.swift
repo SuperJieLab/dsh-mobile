@@ -36,6 +36,8 @@ final class SessionSync: ObservableObject {
     @Published private(set) var transientText = ""
     /// 跟随流是否活着。为假时这屏的内容就是「上一次拿到的」—— 如实显示，不装新鲜。
     @Published private(set) var isFollowing = false
+    /// 跟随流的连接阶段 —— 连接态指示器的数据源（M3），从 `FollowClient` 转发。
+    @Published private(set) var connectionPhase: FollowClient.Phase = .idle
 
     private let client: GatewayClient
     private let sessionId: String
@@ -200,6 +202,12 @@ final class SessionSync: ObservableObject {
         isFollowing = false
         transient = TransientChannel()
         transientText = ""
+    }
+
+    /// 回前台立即触发重连（M3）：上游「恢复立即试」的复现。已就绪或正在握手时无事发生。
+    /// 只动连接编排，不碰镜像 —— 新 opening 会经 `applyOpening` 原路进来。
+    func reconnectNow() {
+        follow.reconnectNow()
     }
 
     private func applyOpening(_ payload: JSONValue) {

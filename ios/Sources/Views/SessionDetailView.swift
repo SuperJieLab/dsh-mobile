@@ -20,6 +20,8 @@ struct SessionDetailView: View {
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
+    /// 回前台立即重连（M3）：App 生命周期与详情域的连接点。
+    @Environment(\.scenePhase) private var scenePhase
 
     init(client: GatewayClient, session: SessionSummary) {
         self.client = client
@@ -106,6 +108,17 @@ struct SessionDetailView: View {
             // 离屏即停。`sync()`（HTTP 全量对齐）保留给下拉刷新作兜底。
             .task { sync.startFollowing() }
             .onDisappear { sync.stopFollowing() }
+            // 回前台立即重连 —— 上游「恢复立即试」在详情域的对应（M3）。
+            // 已就绪 / 正在握手时 reconnectNow() 自己无事发生，不会叠加连接。
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                sync.reconnectNow()
+            }
+            .safeAreaInset(edge: .bottom) {
+                // 连接态指示器：跟随流断开时如实说「已断开」，旧内容照常可读。
+                ConnectionBadge(state: ConnectionBadge.Status(followPhase: sync.connectionPhase))
+                    .padding(.vertical, 4)
+            }
         }
     }
 
