@@ -66,8 +66,15 @@ export interface MuxErrorFrame {
   payload: { code: string; message: string }
 }
 
+/** Server → client: a connection-level approval push (M5, 实施期修正 11). */
+export interface MuxApprovalFrame {
+  type: 'approval'
+  /** `{kind:'request', eventId, toolName, callId?, reason?}` or `{kind:'cancel', eventId}`. */
+  payload: unknown
+}
+
 /** Everything the server sends on the mux connection. */
-export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame
+export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApprovalFrame
 
 /**
  * Parse one client frame from its wire text.

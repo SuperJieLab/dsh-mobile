@@ -94,14 +94,31 @@ export const STREAM_PATH = '/rpc/stream'
  * up even after its token expires: re-authentication happens on the next
  * connect, not mid-stream (docs/plans/M4-identity-credentials.md §3.3).
  */
+/** What the approval relay uses to push at connected phones. */
+export interface Broadcaster {
+  /** Send one connection-level frame to every live, authenticated client. */
+  broadcast(frame: MuxServerFrame): void
+}
+
+/** Called once per connected client, with a sender scoped to that socket. */
+export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
+
 export function attachStreamHandler(
   server: Server,
   source: FollowSource,
   gate: { authenticate(authorizationHeader: string | undefined): boolean },
-): void {
+  hooks: { onClientConnected?: ClientHook } = {},
+): Broadcaster {
+  const clients = new Set<Duplex>()
   server.on('upgrade', (request, socket, head) => {
-    void handleUpgrade(request, socket, head, source, gate)
+    void handleUpgrade(request, socket, head, source, gate, clients, hooks.onClientConnected)
   })
+  return {
+    broadcast(frame) {
+      const text = encodeTextFrame(encodeServerFrame(frame))
+      for (const socket of clients) write(socket, text)
+    },
+  }
 }
 
 async function handleUpgrade(
@@ -110,6 +127,8 @@ async function handleUpgrade(
   head: Buffer,
   source: FollowSource,
   gate: { authenticate(authorizationHeader: string | undefined): boolean },
+  clients: Set<Duplex>,
+  onClientConnected?: ClientHook,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
   console.log(`[mac-gateway] upgrade request for "${path}"`)
@@ -137,7 +156,11 @@ async function handleUpgrade(
 
   console.log('[mac-gateway] upgrade accepted → 101')
   socket.write(handshakeResponse(accept))
+  clients.add(socket)
+  socket.on('close', () => clients.delete(socket))
   runSocket(socket, source, head)
+  // Replay what is standing (held approvals) before the client asks anything.
+  onClientConnected?.((frame) => send(socket, frame))
 }
 
 /** Per-connection state and loop. */

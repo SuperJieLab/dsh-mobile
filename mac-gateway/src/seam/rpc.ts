@@ -28,6 +28,12 @@
  * See docs/plans/M0-reachability-spike.md §4.3 Step 3 and docs/protocol.md.
  */
 
+import {
+  approvalAnswerOf,
+  sessionPromptOf,
+  type WritePort,
+} from './write.ts'
+
 /** The only protocol version this build speaks. */
 export const PROTOCOL_VERSION = 2
 
@@ -200,6 +206,7 @@ export async function handle(
   port: SessionPort,
   now: () => number = Date.now,
   limits: Limits = DEFAULT_LIMITS,
+  write?: WritePort,
 ): Promise<Response> {
   const envelope = asRecord(message)
   if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
@@ -217,6 +224,14 @@ export async function handle(
         return await snapshot(envelope, port, normalizeLimits(limits))
       case 'page':
         return await page(envelope, port)
+      case 'approval-answer':
+      case 'session-prompt':
+        // Write ops (M5). `write` is absent only in read-only test assemblies;
+        // production always wires it, so this refusal is unreachable there.
+        if (write === undefined) return failure('internal-error', `write channel not wired for "${op}"`)
+        return op === 'approval-answer'
+          ? await approvalAnswer(envelope, write)
+          : await sessionPrompt(envelope, write)
       default:
         return failure('unknown-op', `unsupported op "${op}"`)
     }
@@ -228,6 +243,36 @@ export async function handle(
       ? failure('unreadable-session', describe(error))
       : failure('internal-error', describe(error))
   }
+}
+
+/**
+ * Deliver one approval answer (M5). `ok` here means *delivered to the pending
+ * question* — the authoritative outcome is the `approval/decided` audit event,
+ * which the client reconciles from the stream (Plan §3.3 决定 3).
+ */
+async function approvalAnswer(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
+  const answer = approvalAnswerOf(envelope)
+  if (answer === undefined) {
+    return failure('invalid-request', 'approval-answer needs eventId, decision ("allow" | "deny"), and answerId')
+  }
+  const outcome = await write.answerApproval(answer)
+  if (outcome === 'unknown-approval') {
+    return failure('unknown-approval', `no pending approval answers to "${answer.eventId}" — already decided, cancelled, or never asked`)
+  }
+  return { v: PROTOCOL_VERSION, ok: true, eventId: answer.eventId }
+}
+
+/** Admit one prompt (M5). `ok` means *accepted into the inbox* — the reply itself arrives via the stream. */
+async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
+  const prompt = sessionPromptOf(envelope)
+  if (prompt === undefined) {
+    return failure('invalid-request', 'session-prompt needs sessionId, promptId, and non-whitespace text')
+  }
+  const outcome = await write.promptSession(prompt)
+  if (outcome === 'unknown-session') {
+    return failure('unknown-session', `no stored session "${prompt.sessionId}"`)
+  }
+  return { v: PROTOCOL_VERSION, ok: true, sessionId: prompt.sessionId }
 }
 
 /** The list path: cheap per-session metadata, newest first. */

@@ -25,9 +25,11 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort } from './seam/rpc.ts'
+import type { WritePort } from './seam/write.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
 import { attachStreamHandler, type FollowSource, type UpstreamFollowFrame } from './adapters/ws.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
+import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './adapters/write.ts'
 
 /** Display metadata used by dsh diagnostics. */
 export const name = 'mac-gateway'
@@ -49,6 +51,9 @@ export const inject = [
   // The follow stream (M2): pump the controller's follow to the WS channel.
   // Only present in the web-app bundle — spec §8.5 B5 records what that costs.
   'sessionController',
+  // The approval relay (M5, 实施期修正 11): the gateway's `$events` stream is
+  // how a remote client receives and answers approval waterfall requests.
+  'typertGateway',
 ]
 
 /** Plugin config, supplied by the owning patch row. */
@@ -121,18 +126,61 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
   console.log(`[mac-gateway] pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
 
-  console.log('[mac-gateway] plugin loaded — M4 build, auth on both channels')
+  // The write channel (M5): the relay stands between `approval-answer` and the
+  // gateway's `$events` stream as a remote event client (实施期修正 11 — the
+  // host-side waterfall listener approach proved structurally dead); the pump
+  // forwards `session-prompt` through the controller's own prompt door
+  // (docs/plans/M5-remote-intervention.md §四).
+  const relayLifetime = new AbortController()
+  const relay = new ApprovalRelay(gatewayOver(ctx), broadcasterOver())
+  relay.start(relayLifetime.signal)
+  const writePort = writePortOver(ctx, relay)
+
+  console.log('[mac-gateway] plugin loaded — M5 build, auth on both channels, write channel on')
 
   ctx.effect(() => {
     const server = createServer((request, response) => {
       // `respond` never rejects; a throw here would be an unhandled rejection.
-      void respond(request, response, sessionPort, limits, vault)
+      void respond(request, response, sessionPort, limits, vault, writePort)
     })
 
     // The stream channel shares the listener: same port, `POST /rpc` for the
     // one-way calls, `/rpc/stream` upgrade for the follow stream. The upgrade
     // is gated like any request (M4): no live access token, no 101.
-    attachStreamHandler(server, streamSourceOver(ctx), vault)
+    const broadcaster = attachStreamHandler(server, streamSourceOver(ctx), vault, {
+      // A freshly connected phone first gets the reconciliation frame — the
+      // ids of every question still standing — then each one replayed. The
+      // sync is what lets the client drop forwarded cards whose cancel frame
+      // fired while it was offline (the gateway only delivers `cancel` to
+      // clients that were connected at settle time, so an absent id on a
+      // fresh connection is authoritative: that question is gone).
+      onClientConnected: (send) => {
+        const held = relay.held()
+        if (!relay.ready) {
+          // The relay has no live `$events` identity, so its held set proves
+          // nothing. Say so: a `stale` sync tells the client to keep its
+          // cards instead of pruning against an empty (lying) list.
+          send({ type: 'approval', payload: { kind: 'sync', eventIds: [], callIds: [], stale: true } })
+          return
+        }
+        send({
+          type: 'approval',
+          payload: {
+            kind: 'sync',
+            eventIds: held.map(h => h.eventId),
+            // callIds ride along so the client can also reconcile its
+            // audit-rebuilt cards (asked − decided in the log) against what
+            // the gateway actually still holds: a dangling asked (host died
+            // mid-ask, the decided never gets written) must not resurrect.
+            callIds: held.flatMap(h => h.callId === undefined ? [] : [h.callId]),
+          },
+        })
+        for (const heldItem of held) {
+          send({ type: 'approval', payload: { kind: 'request', eventId: heldItem.eventId, toolName: heldItem.toolName, ...(heldItem.callId === undefined ? {} : { callId: heldItem.callId }), ...(heldItem.reason === undefined ? {} : { reason: heldItem.reason }) } })
+        }
+      },
+    })
+    approvalBroadcasterSink?.((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
 
     // console.* rather than ctx.logger: in our non-TTY verification runs
     // `ctx.logger.info` produced no stdout line at all (dsh's own startup line
@@ -148,6 +196,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
 
     return () => {
+      relayLifetime.abort()
       // close() alone leaves idle keep-alive sockets open since Node 19, which
       // would keep the port occupied across a live patch reload.
       server.closeAllConnections()
@@ -253,6 +302,7 @@ async function respond(
   port: SessionPort,
   limits: Limits,
   vault: CredentialVault,
+  writePort: WritePort,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
 
@@ -307,7 +357,12 @@ async function respond(
     return
   }
 
-  const answer = await handle(message, port, Date.now, limits)
+  const answer = await handle(message, port, Date.now, limits, writePort)
+  // Write ops are the one place a refusal is not self-evident from the phone:
+  // the client only shows a status line, so the server side keeps the evidence.
+  if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer')) {
+    console.error(`[mac-gateway] write op "${op}" refused: ${JSON.stringify(answer.error)}`)
+  }
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   response.end(`${JSON.stringify(answer)}\n`)
 }
@@ -315,6 +370,102 @@ async function respond(
 /** Refusal envelope shared by the auth path (the read path builds its own inside `handle`). */
 function refusal(code: string, message: string): { v: number; ok: false; error: { code: string; message: string } } {
   return { v: PROTOCOL_VERSION, ok: false, error: { code, message } }
+}
+
+/**
+ * The write channel as the protocol layer sees it (M5), assembled from the host
+ * like every other source here.
+ *
+ * `approval-answer` goes to the relay; `session-prompt` goes through the
+ * controller's prompt door, with `session/not-found` folded into the protocol's
+ * `unknown-session` and every other upstream failure rethrown so `handle`
+ * answers `internal-error` — conditions a retry cannot fix are our side's to
+ * explain, not the client's to guess at.
+ */
+function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
+  return {
+    answerApproval: (answer) => relay.answerApproval(answer),
+    promptSession: async (prompt) => {
+      try {
+        return await pumpPrompt(promptControllerOver(ctx), prompt)
+      } catch (error) {
+        // Diagnostic (2026-09-19): the phone only sees `internal-error`; the
+        // stack here is the evidence. Remove once the cause is fixed.
+        console.error('[mac-gateway] prompt pump threw:', error)
+        throw error
+      }
+    },
+  }
+}
+
+/**
+ * The part of the gateway service the approval relay drives.
+ *
+ * 实施期修正 13（真机日志 `openWireStream is not a function or its return
+ * value is not async iterable`）：`ctx.typertGateway` 交到插件手里的不是
+ * 服务原始实例 —— 每个成员可能被 traceable/严格视图包过一层，异步生成器
+ * 方法经包装后不再返回可迭代对象。两级防御：
+ * 1. `Symbol.for('cordis.original')` 是全局注册表 symbol（cordis 的
+ *    `originalOf` 逃生口），无需 import 即可解出原始实例 —— 原始实例上
+ *    `openWireStream` / `dispatchRpc` 都是真实方法；
+ * 2. 解不出来时退到声明面：`wireStream.open` 是官方闭包（内部直通真实
+ *    方法），用它适配收流；`dispatchRpc` 若仍不在则显式告警 —— 应答门
+ *    缺失必须在对齐时暴露，而不是等第一次审批应答才炸。
+ */
+function gatewayOver(ctx: Context): RemoteEventGatewayLike {
+  const view = ctx.typertGateway as unknown as Record<PropertyKey, unknown> | undefined
+  if (view === undefined || typeof view !== 'object') {
+    throw new Error('ctx.typertGateway is unavailable — the web profile did not provide the gateway service')
+  }
+  const raw = (typeof view[Symbol.for('cordis.original')] === 'object' && view[Symbol.for('cordis.original')] !== null
+    ? view[Symbol.for('cordis.original')]
+    : view) as Record<PropertyKey, unknown>
+
+  if (typeof raw.openWireStream === 'function' && typeof raw.dispatchRpc === 'function') {
+    console.log('[mac-gateway] approval relay gateway: raw service (openWireStream + dispatchRpc)')
+    return raw as unknown as RemoteEventGatewayLike
+  }
+
+  const wireStream = (typeof raw.wireStream === 'object' && raw.wireStream !== null ? raw.wireStream : undefined) as
+    | { open?(endpoint: string, payload: { args: Record<string, never> }, signal: AbortSignal): AsyncIterable<unknown> }
+    | undefined
+  if (typeof wireStream?.open === 'function' && typeof raw.dispatchRpc === 'function') {
+    console.log('[mac-gateway] approval relay gateway: raw service via wireStream.open + dispatchRpc')
+    return {
+      openWireStream: (endpoint, payload, signal) => wireStream.open!(endpoint, payload, signal) as AsyncIterable<UpstreamWireFrame>,
+      dispatchRpc: raw.dispatchRpc as RemoteEventGatewayLike['dispatchRpc'],
+    }
+  }
+
+  console.error(`[mac-gateway] approval relay gateway members: openWireStream=${typeof raw.openWireStream}, wireStream=${typeof raw.wireStream}, dispatchRpc=${typeof raw.dispatchRpc}`)
+  throw new Error('ctx.typertGateway exposes neither the raw gateway nor the wireStream/dispatchRpc surface — approval relay cannot run')
+}
+
+/**
+ * The broadcast face for the relay. The WS adapter owns the socket set; the
+ * broadcaster handed to the relay is wired up when the listener effect runs,
+ * so it forwards through a stable indirection that exists before the server.
+ */
+function broadcasterOver(): { broadcast(frame: unknown): void } {
+  let sink: ((frame: unknown) => void) | undefined
+  approvalBroadcasterSink = (fn) => { sink = fn }
+  return { broadcast: (frame) => sink?.(frame) }
+}
+
+/** Wiring seam for {@link broadcasterOver}; assigned once when the listener starts. */
+let approvalBroadcasterSink: ((sink: (frame: unknown) => void) => void) | undefined
+
+/** The part of `ctx.sessionController` the prompt pump calls. */
+function promptControllerOver(ctx: Context): PromptControllerLike {
+  const controller = ctx.sessionController as unknown as {
+    prompt(request: {
+      requestId: string
+      sessionId: string
+      mode: 'queue' | 'steer'
+      content: readonly { type: 'text'; text: string }[]
+    }, signal: AbortSignal): Promise<{ accepted: true }>
+  }
+  return { prompt: (request, signal) => controller.prompt(request, signal) }
 }
 
 /**

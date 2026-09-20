@@ -40,14 +40,48 @@ function tempCredentialsPath(): string {
 /** Device token the tests pair with — the raw side of the vault's hash. */
 const DEVICE_TOKEN = 'test-device-token-0123456789abcdef'
 
-/** Install the plugin on a context that runs effects immediately. Returns its teardown. */
-function install(host: string, port: number, credentialsPath: string): () => void {
+/**
+ * The fake `typertGateway`: a controlled `$events` stream (tests push waterfall
+ * frames into it) plus a result door that records what the relay delivered.
+ */
+interface FakeGateway {
+  push(frame: { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }): void
+  results: { clientId: string; eventId: string; outcome: unknown }[]
+}
+
+/** Install the plugin on a context that runs effects immediately. Returns its teardown and the fake gateway. */
+function install(host: string, port: number, credentialsPath: string): { teardown: () => void; gateway: FakeGateway } {
   let cleanup: (() => void) | undefined
+  const pushes: ((frame: { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }) => void)[] = []
+  const results: { clientId: string; eventId: string; outcome: unknown }[] = []
+  const gateway: FakeGateway = {
+    results,
+    push(frame) {
+      for (const push of pushes) push(frame)
+    },
+  }
   apply(
-    { effect: (fn: () => () => void) => { cleanup = fn() } } as never,
+    {
+      effect: (fn: () => () => void) => { cleanup = fn() },
+      typertGateway: {
+        async *openWireStream(_endpoint: string, _payload: unknown, signal: AbortSignal) {
+          yield { type: 'ready', clientId: 'fake-client' }
+          const queue: Array<{ type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }> = []
+          pushes.push((frame) => queue.push(frame))
+          while (!signal.aborted) {
+            while (queue.length > 0) yield queue.shift()!
+            await new Promise((resolve) => setTimeout(resolve, 5))
+          }
+        },
+        async dispatchRpc(_endpoint: string, payload: { args: { clientId: string; eventId: string; outcome: unknown } }) {
+          results.push(payload.args)
+          return { ok: true, value: undefined }
+        },
+      },
+    } as never,
     { host, port, credentialsPath, deviceTokenSeed: DEVICE_TOKEN },
   )
-  return () => cleanup?.()
+  return { teardown: () => cleanup?.(), gateway }
 }
 
 /** Retry the request until the listener is up; give up after two seconds. */
@@ -79,7 +113,7 @@ async function accessTokenFor(port: number): Promise<string> {
 test('the assembled plugin answers a real request on a real port', async () => {
   const port = freshPort(38_100)
   const credentialsPath = tempCredentialsPath()
-  const teardown = install('127.0.0.1', port, credentialsPath)
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     const response = await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -94,7 +128,7 @@ test('the assembled plugin answers a real request on a real port', async () => {
 test('a protocol message is answered with an envelope even when nothing is behind the port', async () => {
   const port = freshPort(39_600)
   const credentialsPath = tempCredentialsPath()
-  const teardown = install('127.0.0.1', port, credentialsPath)
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -123,7 +157,7 @@ test('a protocol message is answered with an envelope even when nothing is behin
 test('a business request without credentials is refused as 401 unauthenticated', async () => {
   const port = freshPort(41_000)
   const credentialsPath = tempCredentialsPath()
-  const teardown = install('127.0.0.1', port, credentialsPath)
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -147,7 +181,7 @@ test('a business request without credentials is refused as 401 unauthenticated',
 test('a bad access token is refused exactly like a missing one', async () => {
   const port = freshPort(41_500)
   const credentialsPath = tempCredentialsPath()
-  const teardown = install('127.0.0.1', port, credentialsPath)
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -170,7 +204,7 @@ test('a bad access token is refused exactly like a missing one', async () => {
 test('a wrong device token cannot mint an access token', async () => {
   const port = freshPort(42_000)
   const credentialsPath = tempCredentialsPath()
-  const teardown = install('127.0.0.1', port, credentialsPath)
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -193,7 +227,7 @@ test('a wrong device token cannot mint an access token', async () => {
 test('the stream channel answers an upgrade on the same port and refuses a follow as an error frame', { timeout: 10_000 }, async () => {
   const port = freshPort(40_900)
   const credentialsPath = tempCredentialsPath()
-  const teardown = install('127.0.0.1', port, credentialsPath)
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -214,8 +248,12 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
     socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
     const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
       socket.addEventListener('message', event => {
-        resolve(JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>)
-      }, { once: true })
+        const frame = JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>
+        // The relay replays reconciliation + held approvals on every connect;
+        // this test only cares about the follow pump's answer.
+        if (frame.type === 'approval') return
+        resolve(frame)
+      })
       socket.addEventListener('error', () => { reject(new Error('socket died instead of answering')) }, { once: true })
       setTimeout(() => { reject(new Error('no frame arrived')) }, 5_000)
     })
@@ -233,7 +271,7 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
 test('an upgrade without an access token is refused before the handshake', { timeout: 10_000 }, async () => {
   const port = freshPort(42_500)
   const credentialsPath = tempCredentialsPath()
-  const teardown = install('127.0.0.1', port, credentialsPath)
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -249,6 +287,157 @@ test('an upgrade without an access token is refused before the handshake', { tim
       }),
       /upgrade refused/,
     )
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+// MARK: - the write channel (M5 W5)
+
+/** A waterfall request whose session tail is an `approval/asked` audit event. */
+function waterfallRequest(id: string): unknown {
+  return {
+    agent: {
+      session: {
+        seq: 1,
+        eventAt: (seq: number) => (seq === 0 ? { type: 'approval/asked', data: { id, toolName: 'shell' } } : undefined),
+      },
+    },
+  }
+}
+
+test('a real HTTP approval-answer settles a held waterfall frame; the consumed question then refuses', { timeout: 10_000 }, async () => {
+  const port = freshPort(43_000)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    // The fake host emits one approval waterfall frame; the relay must hold it.
+    gateway.push({
+      type: 'waterfall',
+      event: 'approval/request',
+      eventId: 'wire-1',
+      agentId: 'agent-1',
+      request: { toolName: 'shell', reason: 'needs write' },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const send = async (body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> => {
+      const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+        body: JSON.stringify(body),
+      })
+      return { status: response.status, body: await response.json() as Record<string, unknown> }
+    }
+
+    const first = await send({ v: 2, op: 'approval-answer', eventId: 'wire-1', decision: 'allow', answerId: 'a1' })
+    assert.equal(first.status, 200)
+    assert.equal(first.body.ok, true)
+    assert.deepEqual(gateway.results, [{
+      clientId: 'fake-client',
+      eventId: 'wire-1',
+      outcome: { kind: 'result', value: 'allowed-once' },
+    }], 'the outcome must reach the gateway result door in the upstream vocabulary')
+
+    const consumed = await send({ v: 2, op: 'approval-answer', eventId: 'wire-1', decision: 'deny', answerId: 'a2' })
+    assert.equal(consumed.body.ok, false)
+    assert.equal((consumed.body.error as { code?: string }).code, 'unknown-approval')
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('a freshly connected phone is reconciled first: sync frame names the standing ids, then replay', { timeout: 10_000 }, async () => {
+  const port = freshPort(43_300)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    gateway.push({
+      type: 'waterfall',
+      event: 'approval/request',
+      eventId: 'wire-1',
+      agentId: 'agent-1',
+      request: { toolName: 'shell', reason: 'needs write' },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`, { headers: { authorization: `Bearer ${access}` } })
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve(), { once: true })
+      socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
+      setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
+    })
+
+    const approvalFrames: Array<Record<string, unknown>> = []
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('message', event => {
+        const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; payload?: Record<string, unknown> }
+        if (frame.type !== 'approval' || frame.payload === undefined) return
+        approvalFrames.push(frame.payload)
+        if (approvalFrames.length >= 2) resolve()
+      })
+      setTimeout(() => reject(new Error(`expected sync + request, got ${JSON.stringify(approvalFrames)}`)), 5_000)
+    })
+
+    assert.deepEqual(approvalFrames[0], { kind: 'sync', eventIds: ['wire-1'], callIds: [] },
+      'the first approval frame must be the reconciliation list, so the client can drop stale cards')
+    assert.equal((approvalFrames[1] as { kind?: string }).kind, 'request')
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('a write op without an access token is refused exactly like a read', { timeout: 10_000 }, async () => {
+  const port = freshPort(43_500)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: 2, op: 'session-prompt', sessionId: 's', text: 'hi', promptId: 'p' }),
+    })
+    assert.equal(response.status, 401)
+    const body = await response.json() as { error?: { code?: string } }
+    assert.equal(body.error?.code, 'unauthenticated')
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('session-prompt without a controller behind the port fails as an envelope, not a crash', { timeout: 10_000 }, async () => {
+  const port = freshPort(44_000)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+      body: JSON.stringify({ v: 2, op: 'session-prompt', sessionId: 's', text: 'hi', promptId: 'p' }),
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    assert.equal(body.ok, false)
+    assert.equal(body.error?.code, 'internal-error')
   } finally {
     teardown()
     rmSync(credentialsPath, { force: true })
