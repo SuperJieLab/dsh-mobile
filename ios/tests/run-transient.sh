@@ -8,8 +8,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="${TMPDIR:-/tmp}/dsh-mobile-transient-tests"
 
 swiftc -O -o "$out" \
-  "$here/../Sources/Data/GatewayProtocol.swift" \
-  "$here/../Sources/Data/TransientChannel.swift" \
+  "$here/../Sources/Core/GatewayProtocol.swift" \
+  "$here/../Sources/Core/TransientChannel.swift" \
   "$here/TransientChannelTests.swift"
 
 "$out"

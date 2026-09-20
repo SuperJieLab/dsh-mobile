@@ -34,6 +34,8 @@ final class FollowClient: NSObject {
     var onEvent: ((SessionEvent) -> Void)?
     /// 一条瞬态帧（start/chunk/end，原样）。
     var onTransient: ((JSONValue) -> Void)?
+    /// 一条连接级审批帧（M5 实施期修正 11：`{kind:'request'|'cancel', ...}` 原样）。
+    var onApproval: ((JSONValue) -> Void)?
     /// 一条 error 帧 —— 流通道里的协议内拒绝。
     var onRefused: ((GatewayFailure) -> Void)?
     /// 连接阶段变化（连接态指示器的数据源，M3）。
@@ -253,6 +255,10 @@ final class FollowClient: NSObject {
         case "end":
             // 流被服务端正常收尾 —— 重开一个（例如服务端主动收尾的会话）。
             if let sessionId { openFollowStream(sessionId: sessionId) }
+
+        case "approval":
+            // 连接级审批推送（无 streamId）：连接活着就有，与跟随流无关。
+            if let payload = frame.payload { onApproval?(payload) }
 
         default:
             break

@@ -41,6 +41,9 @@ final class SessionSync: ObservableObject {
 
     private let client: GatewayClient
     private let sessionId: String
+    /// 待批审批的状态机（M5）。事实来源与镜像同一条：窗口事件里的
+    /// `approval/asked` − `approval/decided` 差集，在每次刷新视图时重建。
+    let approvals: ApprovalStore
     /// 内存里的镜像。视图重建时会新建一个 `SessionSync`，于是窗口重取一次 ——
     /// 这是刻意的：窗口是服务端此刻给的，比任何本地残留都可信。
     private var mirror = SessionMirror()
@@ -52,16 +55,37 @@ final class SessionSync: ObservableObject {
         followClient.onOpening = { [weak self] payload in self?.applyOpening(payload) }
         followClient.onEvent = { [weak self] event in self?.applyLiveEvent(event) }
         followClient.onTransient = { [weak self] frame in self?.applyTransient(frame) }
+        followClient.onApproval = { [weak self] payload in self?.approvals.receive(payload) }
         followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
         // M4：upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
         followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
         return followClient
     }()
     private var transient = TransientChannel()
+    /// 把嵌套状态机的变化冒泡成自己的 objectWillChange：视图只观察
+    /// `SessionSync`，而 `ApprovalStore` 是独立的 ObservableObject ——
+    /// 不转发的话，审批卡的增删根本不会触发视图重算（真机踩实）。
+    private var approvalsObservation: AnyCancellable?
 
     init(client: GatewayClient, sessionId: String) {
         self.client = client
         self.sessionId = sessionId
+        self.approvals = ApprovalStore(client: client)
+        approvalsObservation = approvals.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    /// 下发一条指令（M5）：回包 ok = 已受理，回答本身从跟随流里来。
+    /// 失败如实进状态行 —— 发送失败时输入的字还在框里，用户可以重试。
+    func sendPrompt(_ text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try await client.sendPrompt(sessionId: sessionId, text: trimmed, promptId: UUID().uuidString)
+        } catch {
+            status = .failed("指令没能送达：\(error.localizedDescription)")
+            refreshView()
+        }
     }
 
     /// 同步一次：镜像空着就先取一个窗口，然后从末尾追新增到最新。
@@ -325,6 +349,7 @@ final class SessionSync: ObservableObject {
         messages = mirror.events.compactMap(\.displayMessage)
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
+        approvals.rebuild(from: mirror.events)
     }
 
     /// 重置理由的人话说法。这类文案属于界面，不属于状态机。

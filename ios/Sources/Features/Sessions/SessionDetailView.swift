@@ -20,6 +20,8 @@ struct SessionDetailView: View {
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
+    /// 输入框里的草稿（M5 下发指令）。
+    @State private var draft = ""
     /// 回前台立即重连（M3）：App 生命周期与详情域的连接点。
     @Environment(\.scenePhase) private var scenePhase
 
@@ -115,9 +117,47 @@ struct SessionDetailView: View {
                 sync.reconnectNow()
             }
             .safeAreaInset(edge: .bottom) {
-                // 连接态指示器：跟随流断开时如实说「已断开」，旧内容照常可读。
-                ConnectionBadge(state: ConnectionBadge.Status(followPhase: sync.connectionPhase))
-                    .padding(.vertical, 4)
+                // 底栏：审批卡（M5）→ 说明行 → 输入框 → 连接态。审批面板挂
+                // composer 上方是上游 Web UI 的原生位置（conversation.composer
+                // 槽位）——「正在问我的事」永远在输入框旁边，不在消息流里。
+                VStack(spacing: 0) {
+                    ForEach(sync.approvals.pending) { approval in
+                        ApprovalCard(approval: approval, state: sync.approvals.states[approval.id]) { allow in
+                            Task { await sync.approvals.answer(approval, allow: allow) }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 6)
+                    }
+
+                    if let notice = sync.approvals.notice {
+                        Text(notice)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 2)
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField("发一条指令给 DSH…", text: $draft, axis: .vertical)
+                            .lineLimit(1...4)
+                            .textFieldStyle(.roundedBorder)
+                        Button {
+                            let text = draft
+                            draft = ""
+                            Task { await sync.sendPrompt(text) }
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title2)
+                        }
+                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+
+                    // 连接态指示器：跟随流断开时如实说「已断开」，旧内容照常可读。
+                    ConnectionBadge(state: ConnectionBadge.Status(followPhase: sync.connectionPhase))
+                        .padding(.vertical, 4)
+                }
+                .background(.bar)
             }
         }
     }

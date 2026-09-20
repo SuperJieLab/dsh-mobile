@@ -136,6 +136,26 @@ final class GatewayClient: ObservableObject {
         )
     }
 
+    // MARK: - 两个写 op（M5）
+
+    /// 应答一条审批。`ok` 只意味着**已投递**——权威结果以流里的
+    /// `approval/decided` 为准（Plan §3.3 决定 3）。失败时如实上抛：
+    /// `unknown-approval` 表示这条审批已经不在了。
+    func answerApproval(eventId: String, allow: Bool, answerId: String) async throws {
+        let response: ApprovalAnswerResponse = try await send(
+            ApprovalAnswerRequest(eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId)
+        )
+        try response.validate()
+    }
+
+    /// 下发一条指令（发消息进会话）。`ok` 意味着**已受理**——回答本身从流里来。
+    func sendPrompt(sessionId: String, text: String, promptId: String) async throws {
+        let response: SessionPromptResponse = try await send(
+            SessionPromptRequest(sessionId: sessionId, text: text, promptId: promptId)
+        )
+        try response.validate()
+    }
+
     // MARK: - 发一次请求（带身份）
 
     private func send<Request: Encodable, Response: Decodable>(
@@ -266,6 +286,25 @@ private struct PageRequest: Encodable {
     let maxMessages: Int?
 }
 
+/// 审批应答（M5）：应答词汇表只有两键，映射在服务端完成 ——
+/// `allow` → `allowed-once`（一次性，绝不推断持久授权）。
+private struct ApprovalAnswerRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "approval-answer"
+    let eventId: String
+    let decision: String
+    let answerId: String
+}
+
+/// 下发指令（M5）：`promptId` 是幂等键，服务端按它去重重复投递。
+private struct SessionPromptRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "session-prompt"
+    let sessionId: String
+    let text: String
+    let promptId: String
+}
+
 // MARK: - 响应
 
 /// 响应信封的公共部分（协议 §三）。
@@ -335,6 +374,22 @@ private struct PageResponse: GatewayResponse {
     let asOfSeq: Int?
     let hasOlder: Bool?
     let events: [SessionEvent]?
+}
+
+/// 审批应答回包（M5）：成功不带载荷，`eventId` 原样回显。
+private struct ApprovalAnswerResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let eventId: String?
+}
+
+/// 下发指令回包（M5）：成功即已受理。
+private struct SessionPromptResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let sessionId: String?
 }
 
 /// 只用来在解码失败时兜出信封里的错误。
