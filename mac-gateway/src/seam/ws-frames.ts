@@ -2,7 +2,7 @@
  * The WebSocket framing seam: the RFC 6455 subset this gateway speaks, as pure
  * functions.
  *
- * Why hand-rolled: the plugin imports Node builtins only (docs/plans/M0 §5.1 —
+ * Why hand-rolled: the plugin imports Node builtins only (docs/dev/plans/M0 §5.1 —
  * bare specifiers do not resolve from outside the dsh installation), so there
  * is no `ws` library. The subset is exactly what the mux needs — text frames
  * both ways, ping/pong for the heartbeat, close — and nothing else: no
@@ -15,7 +15,7 @@
  * message may arrive fragmented, so the parser is incremental — it consumes
  * buffer chunks and reports what it consumed.
  *
- * See docs/plans/M2-realtime-transient.md §3.2 and §4.4 step 1.
+ * See docs/dev/plans/M2-realtime-transient.md §3.2 and §4.4 step 1.
  */
 
 import { createHash } from 'node:crypto'

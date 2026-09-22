@@ -12,7 +12,7 @@
  * list that read no logs.
  *
  * Run: node --test src/adapters/sessions.test.ts
- * See docs/protocol.md §4.1 and docs/plans/M1-consistency-delta.md §3.2.
+ * See docs/dev/protocol.md §4.1 and docs/dev/plans/M1-consistency-delta.md §3.2.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

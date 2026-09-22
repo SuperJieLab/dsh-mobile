@@ -6,7 +6,7 @@
  * 瞬态帧（`assistant-stream`）**没有 `seq`**（上游契约如此），只有 attemptId /
  * revision / index —— 它们不进水位体系：推进游标等于把「没落盘的东西」当成了
  * 「已读到的位置」。所以它有自己的通道、自己的校验，与 `SessionMirror` 平行，
- * 互不触碰（docs/plans/M2-realtime-transient.md §3.4）。
+ * 互不触碰（docs/dev/plans/M2-realtime-transient.md §3.4）。
  *
  * ## revision 与 index 是两个不同的序号（真机联调实测校准，2026-09-19）
  *

@@ -24,7 +24,7 @@
  * The price is that the list promises less. `updatedAt` now means "the last time
  * you spoke" instead of "the newest event", and an event count is not promised at
  * all — because a field that can only be computed from a log cannot also be
- * served without reading one (docs/protocol.md §4.1). Those are contract changes,
+ * served without reading one (docs/dev/protocol.md §4.1). Those are contract changes,
  * so the protocol went to v2.
  *
  * ## Why one visibility rule lives here
@@ -159,7 +159,7 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
           // apart, and only for the case it can actually prove: an empty log
           // cannot contain position 1. A `since` merely beyond the water mark is
           // indistinguishable from "caught up" from here and stays a normal
-          // empty answer (docs/protocol.md §五, docs/plans/M1-consistency-delta.md
+          // empty answer (docs/dev/protocol.md §五, docs/dev/plans/M1-consistency-delta.md
           // §3.3.2 决定 5).
           const head = await handle.read(0, 1)
           if (head.events.length === 0) {
@@ -220,7 +220,7 @@ function metadataOf(values: ProjectionValues | undefined): SessionListMetadataLi
  *
  * Anything that is not a string — including the `null` a title-less session
  * carries — means "no title", so the field is absent rather than empty
- * (docs/protocol.md §4.1).
+ * (docs/dev/protocol.md §4.1).
  */
 function titleOf(values: ProjectionValues | undefined): { title?: string } {
   const cell = values?.title

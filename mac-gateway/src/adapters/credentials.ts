@@ -14,7 +14,7 @@
  *
  * The access table is deliberately in memory: a 15-minute ticket does not need
  * to survive a restart, and the client's refresh flow makes re-issuing one an
- * invisible non-event (docs/plans/M4-identity-credentials.md §3.3).
+ * invisible non-event (docs/dev/plans/M4-identity-credentials.md §3.3).
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'

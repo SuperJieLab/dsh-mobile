@@ -11,7 +11,7 @@
  * the base bundle provides, so all of them are declared in `inject` rather than
  * assumed — without them the fiber stays pending and the listener never starts,
  * which is the right failure: a gateway that cannot read sessions has nothing to
- * serve. See docs/protocol.md §4.1 for why the list can be served this way.
+ * serve. See docs/dev/protocol.md §4.1 for why the list can be served this way.
  *
  * Runtime imports are deliberately limited to Node builtins plus our own
  * modules. This module lives outside the dsh installation, so a bare specifier
@@ -19,7 +19,7 @@
  * MODULE_NOT_FOUND — no `node_modules` exists in any parent directory). The
  * cordis import below is type-only and therefore erased by Node's type stripping.
  *
- * See docs/plans/M0-reachability-spike.md §4.3 Steps 2–3 and docs/protocol.md.
+ * See docs/dev/plans/M0-reachability-spike.md §4.3 Steps 2–3 and docs/dev/protocol.md.
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -64,7 +64,7 @@ export interface Config {
   port?: number
   /**
    * Most events one `snapshot` reply may carry. Config rather than a constant so
-   * the caps are observable end to end (see docs/protocol.md §五). @default 500
+   * the caps are observable end to end (see docs/dev/protocol.md §五). @default 500
    */
   maxDeltaEvents?: number
   /** Soft ceiling on one reply's serialized `events`, in bytes. @default 1048576 */
@@ -82,7 +82,7 @@ export interface Config {
   deviceTokenSeed?: string
 }
 
-/** All-interfaces bind: the whole point of M0 (see docs/spec.md §四 M0). */
+/** All-interfaces bind: the whole point of M0 (see docs/dev/spec.md §四 M0). */
 const DEFAULT_HOST = '0.0.0.0'
 
 /** Deliberately not 3080 — that is the dsh web profile's own port. */
@@ -116,7 +116,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
   }
 
-  // The vault owns the three tickets (docs/plans/M4-identity-credentials.md §4.2).
+  // The vault owns the three tickets (docs/dev/plans/M4-identity-credentials.md §4.2).
   // `pair` / `refresh` are answered before the auth gate — the gate exists to
   // protect everything *else* — and both carry their own credential in the body.
   const vault = new CredentialVault(config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH)
@@ -130,7 +130,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // gateway's `$events` stream as a remote event client (实施期修正 11 — the
   // host-side waterfall listener approach proved structurally dead); the pump
   // forwards `session-prompt` through the controller's own prompt door
-  // (docs/plans/M5-remote-intervention.md §四).
+  // (docs/dev/plans/M5-remote-intervention.md §四).
   const relayLifetime = new AbortController()
   const relay = new ApprovalRelay(gatewayOver(ctx), broadcasterOver())
   relay.start(relayLifetime.signal)
@@ -186,7 +186,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     // `ctx.logger.info` produced no stdout line at all (dsh's own startup line
     // was missing too), and a bind failure that cannot be seen is worse than a
     // non-idiomatic one. Whether the logger is merely TTY-gated is unverified —
-    // see docs/plans/M0-reachability-spike.md §5.1.
+    // see docs/dev/plans/M0-reachability-spike.md §5.1.
     server.on('error', (error) => {
       console.error(`[mac-gateway] listener error: ${String(error)}`)
     })
@@ -208,7 +208,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 /**
  * The list path's sources, assembled from the host services.
  *
- * Each method mirrors one thing the reference list does (docs/plans/M1-consistency-delta.md
+ * Each method mirrors one thing the reference list does (docs/dev/plans/M1-consistency-delta.md
  * §2.2): records come from the corpus (headers plus a liveness flag), values come
  * from the live projection for a running session and from the stored checkpoint
  * for a cold one, and liveness itself comes from the agent registry.

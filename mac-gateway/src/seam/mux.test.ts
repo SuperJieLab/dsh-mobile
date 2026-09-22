@@ -1,7 +1,7 @@
 /**
  * Stream seam tests.
  *
- * The headline test is S1 (docs/plans/M2-realtime-transient.md §5.1): the same
+ * The headline test is S1 (docs/dev/plans/M2-realtime-transient.md §5.1): the same
  * window, encoded once through the HTTP `page` path and once through the follow
  * opening, must serialize **character-for-character identically**. That is the
  * executable form of the first protocol discipline — "the protocol is defined

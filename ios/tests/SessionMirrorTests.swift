@@ -4,7 +4,7 @@
  * 状态机不碰网络、不碰 UI、不碰持久化，所以这里没有服务器、没有 DSH 运行时、
  * 没有文件系统 —— 每条断言都由状态机自己决定。跑法见同目录的 `run.sh`。
  *
- * 断言清单与出处：docs/plans/M1-consistency-delta.md §5.1（SM1–SM8）。
+ * 断言清单与出处：docs/dev/plans/M1-consistency-delta.md §5.1（SM1–SM8）。
  */
 import Foundation
 

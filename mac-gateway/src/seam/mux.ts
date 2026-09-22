@@ -7,7 +7,7 @@
  * Everything that IS a protocol message — records, events, error objects — is
  * produced by `rpc.ts` and passed through here **verbatim**: that pass-through
  * is the executable form of "the same messages, one word unchanged, on the new
- * carrier" (docs/plans/M2-realtime-transient.md §3.3).
+ * carrier" (docs/dev/plans/M2-realtime-transient.md §3.3).
  *
  * Frame shapes mirror the reference mux exactly (upstream `stream-protocol.ts`,
  * pinned at `0d1f5000`): a client sends `{type:'open'|'cancel', streamId,
@@ -15,14 +15,14 @@
  * One logical stream is one AsyncIterable; there is no request/response
  * correlation to get wrong. The HTTP envelope's `{v, op, ok}` shell does not
  * enter this channel — a stream has no reply to mark ok, and the version gate
- * lives in the `mux v1` framing contract instead (docs/plans/M2-realtime-transient.md
+ * lives in the `mux v1` framing contract instead (docs/dev/plans/M2-realtime-transient.md
  * §3.3, "the precise scope of 'word for word'").
  *
  * The opening's records share `pageWindow` with `page` (rpc.ts) — one window
  * function, so "the follow opening is the same window a `page` returns" is a
  * structural fact, not a promise to keep in sync.
  *
- * See docs/plans/M2-realtime-transient.md §3.2/§3.3/§4.4.
+ * See docs/dev/plans/M2-realtime-transient.md §3.2/§3.3/§4.4.
  */
 
 import { pageWindow, type WireEvent } from './rpc.ts'
@@ -118,7 +118,7 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
  * Deliberately small — the reference request is `{address, maxMessages?,
  * assistantStream?}` (upstream `types.ts:449`), and the notable absence is a
  * water mark: a reconnect re-opens and rebuilds its window from the new opening
- * rather than resuming from a cursor (docs/plans/M2-realtime-transient.md §3.4).
+ * rather than resuming from a cursor (docs/dev/plans/M2-realtime-transient.md §3.4).
  */
 export interface FollowRequest {
   sessionId: string
@@ -130,7 +130,7 @@ export interface FollowRequest {
  * Validate an `open` payload as a follow request.
  *
  * The op set is shared with the HTTP envelope by name and meaning; M2 adds
- * exactly one op, `follow` (docs/plans/M2-realtime-transient.md §3.3). A
+ * exactly one op, `follow` (docs/dev/plans/M2-realtime-transient.md §3.3). A
  * payload naming any other op — or none — is not a follow request and comes
  * back `undefined`.
  *
@@ -170,7 +170,7 @@ export interface FollowOpening {
    * The transient baseline, carried through verbatim when one is live: an
    * in-progress assistant attempt with its accumulated text and next chunk
    * index. Opaque here — the client's `TransientChannel` owns its semantics
-   * (docs/plans/M2-realtime-transient.md §3.4); the seam only promises that
+   * (docs/dev/plans/M2-realtime-transient.md §3.4); the seam only promises that
    * what the source gave arrives unchanged.
    */
   assistantStream?: unknown

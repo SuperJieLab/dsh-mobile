@@ -2,7 +2,7 @@ import Foundation
 
 /// 协议版本。请求与响应都必须带它 —— 这是版本协商的位置，现在就留好。
 ///
-/// 对应 `docs/protocol.md` §三。
+/// 对应 `docs/dev/protocol.md` §三。
 let gatewayProtocolVersion = 2
 
 /// 失败信封里的错误码。协议 v2 有这六个，M4 起新增 `unauthenticated`（鉴权域），
@@ -62,7 +62,7 @@ struct GatewayFailure: Decodable {
 /// 列表里的一行（协议 v2）。
 ///
 /// 这里每个字段都来自会话 header 或 host 已经维护的投影 —— **没有一个是读日志
-/// 算出来的**，这正是列表能做到零 I/O 的原因（`docs/protocol.md` §4.1）。
+/// 算出来的**，这正是列表能做到零 I/O 的原因（`docs/dev/protocol.md` §4.1）。
 struct SessionSummary: Decodable, Identifiable, Hashable {
     let id: String
     /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——

@@ -8,7 +8,7 @@
  * `agent.ts` 的 `() => ++assistantStreamRevision`），start/chunk/end 都占号；
  * `index` 是 attempt 内 chunk 位置，start 后从 0 起。
  *
- * 断言清单与出处：docs/plans/M2-realtime-transient.md §5.2（C2 对应 TC3/TC4/TC5）。
+ * 断言清单与出处：docs/dev/plans/M2-realtime-transient.md §5.2（C2 对应 TC3/TC4/TC5）。
  */
 import Foundation
 

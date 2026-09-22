@@ -29,7 +29,7 @@
  * 上游有等价的语义（`RemoteJournalStream` 的「丢重复、拒缺口、钉 cut」，以及
  * `page` 的往回翻），但那是 TypeScript，代码用不了 —— 这里照它的语义重写最小的一段。
  *
- * 出处：docs/plans/M1-consistency-delta.md §3.3.2 决定 2 / 决定 9；契约见 docs/protocol.md。
+ * 出处：docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 2 / 决定 9；契约见 docs/dev/protocol.md。
  */
 
 /// 一次 `snapshot` 成功响应的内容。

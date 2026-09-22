@@ -1,7 +1,7 @@
 /**
  * The auth seam: three tickets, all decisions as pure functions.
  *
- * Model (docs/plans/M4-identity-credentials.md §4.2) — each ticket answers one
+ * Model (docs/dev/plans/M4-identity-credentials.md §4.2) — each ticket answers one
  * question, so leaking any one of them is not losing all three:
  *
  *   pairing code   one-shot · 10 min · dead after 5 wrong tries — establishes
@@ -78,7 +78,7 @@ export function newToken(random: () => number): string {
 /**
  * `Authorization: Bearer <token>` → the token; anything else → nothing.
  *
- * The header is the only place identity rides (docs/protocol.md §「身份」):
+ * The header is the only place identity rides (docs/dev/protocol.md §「身份」):
  * putting it in the envelope would weld it to one transport, which is the one
  * thing the protocol's first constraint forbids.
  */

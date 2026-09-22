@@ -1,6 +1,6 @@
 /**
  * The write seam (M5): parsing and replay bookkeeping for the two write ops —
- * docs/plans/M5-remote-intervention.md §四 (as amended by 实施期修正 11).
+ * docs/dev/plans/M5-remote-intervention.md §四 (as amended by 实施期修正 11).
  *
  * Write payloads are validated strictly, unlike the read paths' lenient
  * defaults: on a read, a malformed cursor degrades to a redundant payload; on a

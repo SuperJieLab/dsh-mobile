@@ -7,7 +7,7 @@ import Foundation
  *    丢弃 —— 重连竞态下，迟到的一条旧帧不能污染新代次的视图。
  * 2. **退避重连**：base 500ms × 2^n，抖动取 50–100%，封顶 10s，就绪硬超时 15s
  *    —— 参数照抄上游（`recovery-config.ts:26-30`）。**重连即重新 open**：新
- *    opening 重建窗口，不做水位续传（docs/plans/M2-realtime-transient.md §3.4）。
+ *    opening 重建窗口，不做水位续传（docs/dev/plans/M2-realtime-transient.md §3.4）。
  * 3. **心跳**：2s 一次 ping，连续 2 次没等到 pong 就当连接已死，走重连 ——
  *    参数照抄上游（`stream-server.ts`）。URLSession 会自动回服务端的 ping，
  *    这里管的是「对面还活着吗」这一侧。

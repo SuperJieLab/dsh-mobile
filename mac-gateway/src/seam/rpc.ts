@@ -6,9 +6,9 @@
  * so the same function is exercised by the seam tests, by `curl` over real HTTP,
  * and by the iPhone client, and it is what a future transport (WebSocket, raw
  * TCP) would call unchanged. That is the executable form of the first constraint
- * in docs/protocol.md: the protocol is defined as messages, not as URLs.
+ * in docs/dev/protocol.md: the protocol is defined as messages, not as URLs.
  *
- * Water-mark semantics (docs/protocol.md §五): both bounds are half-open.
+ * Water-mark semantics (docs/dev/protocol.md §五): both bounds are half-open.
  *   - `since` is the client's *next expected seq* — the server returns `seq >= since`.
  *     `0` therefore means "I have nothing", which is why the client can send it
  *     unconditionally.
@@ -17,15 +17,15 @@
  *
  * Two read directions live here and they do not overlap: `snapshot` walks
  * forward from a cursor, `page` walks backwards from a position to build a
- * window to open on (docs/protocol.md §4.2 / §4.3).
+ * window to open on (docs/dev/protocol.md §4.2 / §4.3).
  *
- * Reply caps (docs/plans/M1-consistency-delta.md §3.3.2 决定 4): one reply carries
+ * Reply caps (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 4): one reply carries
  * at most `maxDeltaEvents` events and, softly, `maxDeltaBytes` of serialized
  * `events`; a reply that stops early says so with `hasMore` so the client can
  * loop. The caps bound one reply's size — they never change what the sequence of
  * replies adds up to, which is what the chunking test pins down.
  *
- * See docs/plans/M0-reachability-spike.md §4.3 Step 3 and docs/protocol.md.
+ * See docs/dev/plans/M0-reachability-spike.md §4.3 Step 3 and docs/dev/protocol.md.
  */
 
 import {
@@ -60,7 +60,7 @@ export interface WireEvent {
  *
  * Every field here comes from a session header or from a projection the host
  * already keeps. That is what makes listing zero-I/O: **nothing in this shape
- * requires reading a log** (docs/protocol.md §4.1).
+ * requires reading a log** (docs/dev/protocol.md §4.1).
  */
 export interface SessionRow {
   /** Stored session id. */
@@ -103,7 +103,7 @@ export interface SessionSlice {
    * The client's cursor names a position that cannot exist: the log is empty
    * while `since` is positive. This is the only wrong cursor the data source can
    * prove — a `since` merely past the water mark looks exactly like "caught up"
-   * from here (docs/plans/M1-consistency-delta.md §3.3.2 决定 5).
+   * from here (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
    */
   staleCursor: boolean
 }
@@ -166,7 +166,7 @@ export const DEFAULT_PAGE_MESSAGES = 50
  */
 const MESSAGE_EVENT_TYPES: ReadonlySet<string> = new Set(['user/message', 'assistant/message'])
 
-/** A refusal. `code` is one of the codes in docs/protocol.md §六. */
+/** A refusal. `code` is one of the codes in docs/dev/protocol.md §六. */
 export interface WireError {
   code: string
   message: string
@@ -293,7 +293,7 @@ async function listSessions(port: SessionPort, now: () => number): Promise<Respo
  * One row as the wire shape, omitting `title` rather than sending null.
  *
  * `eventCount` is deliberately absent: it is a log-derived fact, and promising
- * one would put the log back on the list path (docs/protocol.md §4.1).
+ * one would put the log back on the list path (docs/dev/protocol.md §4.1).
  */
 function toWireSummary(row: SessionRow): Record<string, unknown> {
   return {
@@ -323,7 +323,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
   if (slice.staleCursor) {
     // An error code rather than a silent empty reply: the client's whole view is
     // untrustworthy, and a boolean field would be swallowed by clients that
-    // tolerate unknown fields (docs/protocol.md §六).
+    // tolerate unknown fields (docs/dev/protocol.md §六).
     return failure('resync-required', `since ${since} cannot exist: this session's log is empty`)
   }
 
@@ -345,7 +345,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
  *
  * Bounded by *messages* but delivered as the whole interval — a caller drawing
  * seq N needs its neighbours too, and those neighbours are frequently not
- * messages themselves (docs/protocol.md §4.3).
+ * messages themselves (docs/dev/protocol.md §4.3).
  */
 async function page(envelope: Record<string, unknown>, port: SessionPort): Promise<Response> {
   const sessionId = envelope.sessionId
@@ -374,7 +374,7 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
   } catch (error) {
     // Two distinct refusals, same codes as before the extraction: a log this
     // runtime cannot interpret is `unreadable-session`, a cursor past the end
-    // is `resync-required` (docs/plans/M1-consistency-delta.md 判据 P4).
+    // is `resync-required` (docs/dev/plans/M1-consistency-delta.md 判据 P4).
     if (error instanceof LogNotDenseError) return failure('unreadable-session', error.message)
     if (error instanceof CursorPastEndError) return failure('resync-required', error.message)
     throw error
@@ -413,7 +413,7 @@ export class CursorPastEndError extends Error {
  *
  * Bounded by *messages* but delivered as the whole interval — a caller drawing
  * seq N needs its neighbours too, and those neighbours are frequently not
- * messages themselves (docs/protocol.md §4.3). Sharing this one function is
+ * messages themselves (docs/dev/protocol.md §4.3). Sharing this one function is
  * what makes "the follow opening is the same window a `page` returns" a
  * structural fact rather than a promise: there is no second implementation to
  * drift from.

@@ -15,7 +15,7 @@ import Foundation
 final class GatewayClient: ObservableObject {
     let baseURL: URL
 
-    /// 协议里的唯一端点。多端点会把资源语义烧进 URL（见 `docs/protocol.md` §二）。
+    /// 协议里的唯一端点。多端点会把资源语义烧进 URL（见 `docs/dev/protocol.md` §二）。
     nonisolated static let rpcPath = "/rpc"
 
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
@@ -186,7 +186,7 @@ final class GatewayClient: ObservableObject {
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // 身份只走传输头，不进消息体（docs/protocol.md §「身份」）。
+        // 身份只走传输头，不进消息体（docs/dev/protocol.md §「身份」）。
         if authenticated, let access = credentials.validAccessToken() {
             urlRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
         }

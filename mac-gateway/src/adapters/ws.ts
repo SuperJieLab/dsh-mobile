@@ -5,11 +5,11 @@
  * The upgrade hangs off the listener this plugin starts itself (`'upgrade'`
  * event, same port as `POST /rpc`) — `ctx.webServer` is not an option here: it
  * is a host-global setting whose CLI refuses `0.0.0.0`, and M0 exists precisely
- * because of that (docs/plans/M0-reachability-spike.md §3.2). The reference
+ * because of that (docs/dev/plans/M0-reachability-spike.md §3.2). The reference
  * gateway's `registerUpgrade` is the same idea played on the host's server; ours
  * is the same idea played on ours.
  *
- * The pump's contract to the wire (docs/plans/M2-realtime-transient.md §3.3):
+ * The pump's contract to the wire (docs/dev/plans/M2-realtime-transient.md §3.3):
  * the reference follow frames wrap every event as `{type:'event', event}` —
  * the unwrap is the whole conversion. The opening's window arrives already cut
  * by the source's own pagination (the same message-count rule our `page` was
@@ -21,7 +21,7 @@
  * witnessing (the source promises gap-free; we refuse loudly if it ever lies —
  * §3.5), and error mapping.
  *
- * See docs/plans/M2-realtime-transient.md §3.2/§4.4 step 3.
+ * See docs/dev/plans/M2-realtime-transient.md §3.2/§4.4 step 3.
  */
 
 import type { Duplex, IncomingMessage, Server } from 'node:http'
@@ -92,7 +92,7 @@ export const STREAM_PATH = '/rpc/stream'
  * `gate` is the M4 auth gate: checked once at upgrade, before the handshake is
  * answered — no live access token, no 101. A connection that got through stays
  * up even after its token expires: re-authentication happens on the next
- * connect, not mid-stream (docs/plans/M4-identity-credentials.md §3.3).
+ * connect, not mid-stream (docs/dev/plans/M4-identity-credentials.md §3.3).
  */
 /** What the approval relay uses to push at connected phones. */
 export interface Broadcaster {
@@ -309,7 +309,7 @@ async function pump(
         const event = frame.event as { seq?: unknown } | undefined
         // The source promises gap-free; we witness it. A skipped seq means the
         // stream's own promise broke — refuse loudly rather than render a view
-        // with a hole nobody can see (docs/plans/M2-realtime-transient.md §3.5).
+        // with a hole nobody can see (docs/dev/plans/M2-realtime-transient.md §3.5).
         if (expectedSeq !== undefined && event?.seq !== expectedSeq) {
           console.error(`[mac-gateway] follow stream broke continuity: expected seq ${String(expectedSeq)}, got ${String(event?.seq)}`)
           send(socket, { type: 'error', streamId, payload: { code: 'internal-error', message: `follow stream skipped seq ${String(expectedSeq)}` } })

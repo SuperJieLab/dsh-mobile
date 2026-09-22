@@ -1,5 +1,5 @@
 /**
- * The write seam's tests (M5, docs/plans/M5-remote-intervention.md §五 W1–W3
+ * The write seam's tests (M5, docs/dev/plans/M5-remote-intervention.md §五 W1–W3
  * plus the `handle` dispatch; W4's server-side rebuild was retired by 实施期
  * 修正 11 — rebuilding is the phone's display concern now). The port is a
  * fake; no runtime, no network.

@@ -1,7 +1,7 @@
 /**
  * 跟随承载下的镜像重放测试（C3）与退避曲线测试（C1 可测部分）。
  *
- * ## C3 —— 「连接必然断」对新承载的压力测试（docs/plans/M2-realtime-transient.md §5.2）
+ * ## C3 —— 「连接必然断」对新承载的压力测试（docs/dev/plans/M2-realtime-transient.md §5.2）
  *
  * 跟随流喂给镜像的形状是刻意选的：opening 就是 `page` 的窗口（`Window`），
  * 一条事件帧就是一次覆盖到 `seq + 1` 的快照（`Snapshot`）。所以这里**不碰

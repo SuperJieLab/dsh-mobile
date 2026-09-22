@@ -2,7 +2,7 @@
 #
 # The dsh loader reads this file whenever this package is installed into a
 # profile as a bundle. It becomes a bundle layer, applied **before** the
-# profile's own patch layer — see docs/plans/M0-reachability-spike.md §4.3 Step 5.
+# profile's own patch layer — see docs/dev/plans/M0-reachability-spike.md §4.3 Step 5.
 #
 # `name` is RELATIVE TO THIS FILE, and that is the opposite of what a
 # machine-local profile patch needs. The loader anchors relative paths beside
