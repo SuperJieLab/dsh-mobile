@@ -12,6 +12,6 @@
     }
   },
   "scripts": {
-    "test": "node --test src/seam/rpc.test.ts src/seam/write.test.ts src/adapters/sessions.test.ts src/adapters/write.test.ts src/index.test.ts"
+    "test": "node --test 'src/**/*.test.ts'"
   }
 }
