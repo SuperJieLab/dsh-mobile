@@ -1,5 +1,5 @@
 /**
- * TransientChannel 的接缝测试（TC1–TC8）。
+ * TransientChannel 的契约测试（TC1–TC8）。
  *
  * 与 `SessionMirrorTests` 同一手法：状态机不碰网络、不碰 UI、不碰持久化，
  * 这里没有服务器也没有文件系统 —— 每条断言都由状态机自己决定。

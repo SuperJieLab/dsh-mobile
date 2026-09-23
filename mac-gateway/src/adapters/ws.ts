@@ -30,7 +30,7 @@ import {
   followRequestOf,
   parseClientFrame,
   type MuxServerFrame,
-} from '../seam/mux.ts'
+} from '../contract/mux.ts'
 import {
   WsFrameParser,
   acceptKeyOf,
@@ -39,7 +39,7 @@ import {
   encodePong,
   encodeTextFrame,
   handshakeResponse,
-} from '../seam/ws-frames.ts'
+} from '../contract/ws-frames.ts'
 
 /**
  * The stream source this adapter is written against — the narrow face of
@@ -222,7 +222,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer): void {
 
 /**
  * Route one parsed client text frame: an `open` starts a pump, a `cancel`
- * stops one. The seam's parser has already refused everything that is not a
+ * stops one. The contract's parser has already refused everything that is not a
  * well-formed client frame, so what survives to here is shape-checked.
  */
 function onClientText(

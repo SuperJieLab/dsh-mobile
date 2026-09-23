@@ -2,11 +2,11 @@
  * Seam tests for the protocol: one wire message in, one wire message out.
  *
  * These tests are the reason `handle` exists as a standalone function. They run
- * with `node --test src/seam/rpc.test.ts` — no server, no DSH runtime, no filesystem,
+ * with `node --test src/contract/rpc.test.ts` — no server, no DSH runtime, no filesystem,
  * no network. The data source is injected, so every case below is decided by
  * the protocol layer alone.
  *
- * Run: node --test src/seam/rpc.test.ts
+ * Run: node --test src/contract/rpc.test.ts
  * See docs/dev/protocol.md and docs/dev/plans/M0-reachability-spike.md §4.3 Step 3.
  */
 import { test } from 'node:test'
@@ -20,7 +20,7 @@ interface FakeSession {
   events: readonly WireEvent[]
 }
 
-/** An in-memory {@link SessionPort} — the seam's only dependency, fully controlled. */
+/** An in-memory {@link SessionPort} — the contract's only dependency, fully controlled. */
 function fakePort(sessions: readonly FakeSession[] = []): SessionPort {
   const byId = new Map(sessions.map(session => [session.row.id, session]))
   return {
@@ -240,7 +240,7 @@ test('an unexpected data-source failure surfaces as a refusal, not a crash', asy
   assert.equal('error' in read && read.error.code, 'internal-error')
 })
 
-test('every response the seam can produce carries v', async () => {
+test('every response the contract can produce carries v', async () => {
   const messages = [
     { v: 2, op: 'list-sessions' },
     { v: 2, op: 'nope' },

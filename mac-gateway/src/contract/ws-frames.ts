@@ -1,5 +1,5 @@
 /**
- * The WebSocket framing seam: the RFC 6455 subset this gateway speaks, as pure
+ * The WebSocket framing contract: the RFC 6455 subset this gateway speaks, as pure
  * functions.
  *
  * Why hand-rolled: the plugin imports Node builtins only (docs/dev/plans/M0 §5.1 —

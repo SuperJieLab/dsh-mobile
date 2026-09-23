@@ -1,7 +1,7 @@
 /**
  * The credentials adapter: the vault that owns the three tickets' state.
  *
- * Split of responsibilities against `seam/auth.ts` (every *rule* is there):
+ * Split of responsibilities against `contract/auth.ts` (every *rule* is there):
  * this module owns only state and I/O — the credentials file under
  * `~/.dsh/dsh-mobile/`, and the in-memory table of live access tokens.
  *
@@ -30,7 +30,7 @@ import {
   PAIRING_TTL_MS,
   sha256Hex,
   type StoredCredentials,
-} from '../seam/auth.ts'
+} from '../contract/auth.ts'
 
 /** Where the file lives when no one says otherwise. */
 export const DEFAULT_CREDENTIALS_PATH = join(homedir(), '.dsh', 'dsh-mobile', 'credentials.json')

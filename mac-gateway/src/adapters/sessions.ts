@@ -1,7 +1,7 @@
 /**
  * The DSH adapter: the only module that knows the session store exists.
  *
- * It implements the seam's `SessionPort` on top of the host's own services, so
+ * It implements the contract's `SessionPort` on top of the host's own services, so
  * `rpc.ts` stays free of both DSH and I/O. The adapter declares only the shapes
  * it actually uses rather than importing the real types: this module lives
  * outside the dsh installation, where a bare specifier such as
@@ -33,7 +33,7 @@
  * rules (subagent, archived, blank) belong to the client, so only this one — a
  * fact the header already carries — is applied here.
  */
-import type { SessionPort, SessionRow, SessionSlice, WireEvent } from '../seam/rpc.ts'
+import type { SessionPort, SessionRow, SessionSlice, WireEvent } from '../contract/rpc.ts'
 
 /** The header fields this adapter reads. */
 interface HeaderLike {
@@ -144,14 +144,14 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
       } catch (error) {
         // A missing session is a normal answer (`unknown-session`), not a fault.
         // Every other open failure — a format this build refuses, corruption,
-        // ownership trouble — propagates and becomes a refusal at the seam.
+        // ownership trouble — propagates and becomes a refusal at the contract.
         if ((error as { name?: unknown } | null)?.name === 'SessionPersistenceNotFoundError') return undefined
         throw error
       }
 
       try {
         // One event past the cap: its presence is what proves there is more,
-        // so the seam never has to guess where the log ends.
+        // so the contract never has to guess where the log ends.
         const { events } = await handle.read(since, limit + 1)
 
         if (events.length === 0 && since > 0) {

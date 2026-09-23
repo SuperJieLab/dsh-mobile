@@ -1,5 +1,5 @@
 /**
- * Stream seam tests.
+ * Stream contract tests.
  *
  * The headline test is S1 (docs/dev/plans/M2-realtime-transient.md §5.1): the same
  * window, encoded once through the HTTP `page` path and once through the follow

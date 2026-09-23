@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# 编译并运行 TransientChannel 的接缝测试（跑法与 run.sh 同）。
+# 编译并运行 TransientChannel 的契约测试（跑法与 run.sh 同）。
 #
 set -eu
 

@@ -1,5 +1,5 @@
 /**
- * The write seam (M5): parsing and replay bookkeeping for the two write ops —
+ * The write contract (M5): parsing and replay bookkeeping for the two write ops —
  * docs/dev/plans/M5-remote-intervention.md §四 (as amended by 实施期修正 11).
  *
  * Write payloads are validated strictly, unlike the read paths' lenient
@@ -69,7 +69,7 @@ export function sessionPromptOf(message: Record<string, unknown>): SessionPrompt
   return { sessionId, text, promptId }
 }
 
-/** The data source the two write ops are written against — the write seam's only dependency. */
+/** The data source the two write ops are written against — the write contract's only dependency. */
 export interface WritePort {
   /**
    * Deliver one answer to the pending approval, or report that no pending

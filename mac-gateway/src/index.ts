@@ -24,8 +24,8 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort } from './seam/rpc.ts'
-import type { WritePort } from './seam/write.ts'
+import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort } from './contract/rpc.ts'
+import type { WritePort } from './contract/write.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
 import { attachStreamHandler, type FollowSource, type UpstreamFollowFrame } from './adapters/ws.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
@@ -452,7 +452,7 @@ function broadcasterOver(): { broadcast(frame: unknown): void } {
   return { broadcast: (frame) => sink?.(frame) }
 }
 
-/** Wiring seam for {@link broadcasterOver}; assigned once when the listener starts. */
+/** Wiring point for {@link broadcasterOver}; assigned once when the listener starts. */
 let approvalBroadcasterSink: ((sink: (frame: unknown) => void) => void) | undefined
 
 /** The part of `ctx.sessionController` the prompt pump calls. */
@@ -471,7 +471,7 @@ function promptControllerOver(ctx: Context): PromptControllerLike {
 /**
  * Answer `pair` / `refresh` — the two ops that establish and exercise the
  * relationship. Kept beside the gate rather than inside `handle` on purpose:
- * the protocol seam stays a pure read protocol, and these two are the only
+ * the protocol contract stays a pure read protocol, and these two are the only
  * messages whose authority comes from the body rather than the header.
  */
 async function handleAuthOp(

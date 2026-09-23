@@ -1,8 +1,8 @@
 /**
- * Auth seam tests (M4): every rule the three tickets promise, asserted on pure
+ * Auth contract tests (M4): every rule the three tickets promise, asserted on pure
  * functions with injected randomness and clock — no filesystem, no socket.
  *
- * Run: node --test src/seam/auth.test.ts
+ * Run: node --test src/contract/auth.test.ts
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

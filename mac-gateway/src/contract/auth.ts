@@ -1,5 +1,5 @@
 /**
- * The auth seam: three tickets, all decisions as pure functions.
+ * The auth contract: three tickets, all decisions as pure functions.
  *
  * Model (docs/dev/plans/M4-identity-credentials.md §4.2) — each ticket answers one
  * question, so leaking any one of them is not losing all three:

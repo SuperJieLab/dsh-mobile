@@ -1,7 +1,7 @@
 /**
  * The approval relay's behaviour tests (M5, 实施期修正 11): waterfall frames
  * held and broadcast, one-shot delivery through the result door, replay, and
- * the cancel path. The gateway is a fake `$events` stream — the same seam the
+ * the cancel path. The gateway is a fake `$events` stream — the same contract the
  * real gateway service presents in-process.
  */
 

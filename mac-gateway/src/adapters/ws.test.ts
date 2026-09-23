@@ -2,7 +2,7 @@
  * Stream adapter tests: a real listener, a real WebSocket client (Node's
  * built-in, the same RFC 6455 an iOS client speaks), a fake follow source.
  *
- * What these prove beyond the seam tests: the upgrade negotiation works, the
+ * What these prove beyond the contract tests: the upgrade negotiation works, the
  * mux survives a real socket, the pump's unwrapping produces openings and
  * events a `page` could have produced, continuity witnessing fires on a lying
  * source, and a hostile source still answers with frames instead of killing
@@ -14,7 +14,7 @@ import test from 'node:test'
 import { createServer, request as httpRequest, type Server } from 'node:http'
 import { once } from 'node:events'
 import { attachStreamHandler, STREAM_PATH, type FollowSource, type UpstreamFollowFrame } from './ws.ts'
-import type { WireEvent } from '../seam/rpc.ts'
+import type { WireEvent } from '../contract/rpc.ts'
 
 /** A follow source replaying scripted frames, optionally lying. */
 function fakeSource(frames: UpstreamFollowFrame[], options: { failWith?: unknown } = {}): FollowSource & { calls: number } {

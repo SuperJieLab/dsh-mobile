@@ -1,9 +1,9 @@
 /**
- * The protocol seam: one wire message in, one wire message out.
+ * The protocol contract: one wire message in, one wire message out.
  *
  * `handle` is deliberately a plain async function with its data source injected.
  * It knows nothing about HTTP, sockets, the DSH runtime, or the session store —
- * so the same function is exercised by the seam tests, by `curl` over real HTTP,
+ * so the same function is exercised by the contract tests, by `curl` over real HTTP,
  * and by the iPhone client, and it is what a future transport (WebSocket, raw
  * TCP) would call unchanged. That is the executable form of the first constraint
  * in docs/dev/protocol.md: the protocol is defined as messages, not as URLs.
@@ -109,7 +109,7 @@ export interface SessionSlice {
 }
 
 /**
- * The data source the protocol layer is written against — the seam's only
+ * The data source the protocol layer is written against — the contract's only
  * dependency. Swapping the DSH-backed adapter for a fake is how the tests stay
  * free of any runtime, filesystem, or network.
  */

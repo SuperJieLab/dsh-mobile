@@ -35,7 +35,7 @@ import {
   outcomeOfDecision,
   type ApprovalAnswerMessage,
   type SessionPromptMessage,
-} from '../seam/write.ts'
+} from '../contract/write.ts'
 
 /** One frame of the gateway's `$events` wire stream, as far as the relay cares. */
 export type UpstreamWireFrame =

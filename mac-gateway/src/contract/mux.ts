@@ -1,5 +1,5 @@
 /**
- * The stream seam: the mux framing and the follow opening, as pure functions.
+ * The stream contract: the mux framing and the follow opening, as pure functions.
  *
  * This layer owns everything about the new transport that is NOT a protocol
  * message: the frame envelope (which carries `streamId` and nothing else), the
@@ -170,7 +170,7 @@ export interface FollowOpening {
    * The transient baseline, carried through verbatim when one is live: an
    * in-progress assistant attempt with its accumulated text and next chunk
    * index. Opaque here — the client's `TransientChannel` owns its semantics
-   * (docs/dev/plans/M2-realtime-transient.md §3.4); the seam only promises that
+   * (docs/dev/plans/M2-realtime-transient.md §3.4); the contract only promises that
    * what the source gave arrives unchanged.
    */
   assistantStream?: unknown
