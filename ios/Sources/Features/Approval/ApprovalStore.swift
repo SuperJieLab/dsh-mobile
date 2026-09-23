@@ -49,6 +49,8 @@ final class ApprovalStore: ObservableObject {
     @Published private(set) var notice: String?
 
     private let client: GatewayClient
+    /// 最近一次重建用的事件 —— `sync` 改了对账状态后要拿它重算，见 `reconcile()`。
+    private var lastEvents: [SessionEvent] = []
     /// 转发而来的活卡（eventId → 卡片）；重建时跨窗口保留。
     private var live: [String: PendingApproval] = [:]
     /// 最近一次 sync 对账里上游仍挂着的 callId（实施期修正 12）——重建时
@@ -68,8 +70,18 @@ final class ApprovalStore: ObservableObject {
     /// 窗口是连续的：asked 之后落下的 decided 必然还在同一窗口里，
     /// 所以这个差集在窗口边界上不产生假阳性。
     func rebuild(from events: [SessionEvent]) {
+        lastEvents = events
+        reconcile()
+    }
+
+    /// 按手头的事件与对账状态重算待批集合。
+    ///
+    /// 与 `rebuild` 分开，是为了让**对账名单的变化**也能立刻生效：`sync` 帧改的是
+    /// `hasSync` / `standingCallIds`，而审计卡的过滤只在重算时跑 —— 不重算的话，
+    /// 结论要拖到下一次事件或刷新才落地（真机抓到：残骸卡一直挂在屏上）。
+    private func reconcile() {
         var pendingById: [String: PendingApproval] = [:]
-        for event in events {
+        for event in lastEvents {
             switch event.type {
             case "approval/asked":
                 guard let id = event.data["id"]?.string,
@@ -88,6 +100,16 @@ final class ApprovalStore: ObservableObject {
                 )
             case "approval/decided":
                 if let id = event.data["id"]?.string { pendingById.removeValue(forKey: id) }
+            case "turn/end":
+                // 实施期修正 14：turn 闭合 ⇒ 这一轮里还没收口的 asked 是崩溃残骸。
+                // 上游 `approval.request()` 在 turn 内一直阻塞到 outcome 落盘
+                // （`user-approval/src/index.ts:208-227`：append asked → await
+                // decide() → append decided），所以 turn 能结束，就意味着它发起的
+                // 每个审批都已有结局。只有进程在等 outcome 的中途被杀，才会留下
+                // 「turn 已闭合、decided 永久缺席」的一对 —— 其随后那条
+                // `tool/result` 带 `TOOL_OUTCOME_UNKNOWN`（真机产物）。差集把它们
+                // 当成待批是假阳性：卡片既不可应答、又永远等不到收口。
+                pendingById.removeAll()
             default:
                 break
             }
@@ -152,11 +174,12 @@ final class ApprovalStore: ObservableObject {
             if payload["stale"]?.bool == true {
                 hasSync = false
                 standingCallIds = []
+                reconcile()
                 return
             }
             let standing = Set(ids.compactMap { $0.string })
             pending.removeAll { card in
-                guard let eventId = card.eventId else { return false } // 审计卡交给 rebuild 对账
+                guard let eventId = card.eventId else { return false } // 审计卡交给 reconcile 对账
                 if standing.contains(eventId) { return false }
                 live.removeValue(forKey: eventId)
                 states[eventId] = nil
@@ -166,6 +189,8 @@ final class ApprovalStore: ObservableObject {
                 hasSync = true
                 standingCallIds = Set(callIds.compactMap { $0.string })
             }
+            // 名单变了就可能改变审计卡的判定 —— 当场重算，不等下一次刷新。
+            reconcile()
         default:
             break
         }
