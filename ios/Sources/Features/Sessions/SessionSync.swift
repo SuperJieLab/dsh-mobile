@@ -38,6 +38,9 @@ final class SessionSync: ObservableObject {
     @Published private(set) var isFollowing = false
     /// 跟随流的连接阶段 —— 连接态指示器的数据源（M3），从 `FollowClient` 转发。
     @Published private(set) var connectionPhase: FollowClient.Phase = .idle
+    /// 上下文占用（M6）。为 `nil` 时界面**隐藏整行** —— 「没有读数」与「占用 0%」
+    /// 不是一回事，那个区别整个 M6 的占用链路都在守（判据 U2）。
+    @Published private(set) var usage: UsagePayload? = nil
 
     private let client: GatewayClient
     private let sessionId: String
@@ -56,6 +59,7 @@ final class SessionSync: ObservableObject {
         followClient.onEvent = { [weak self] event in self?.applyLiveEvent(event) }
         followClient.onTransient = { [weak self] frame in self?.applyTransient(frame) }
         followClient.onApproval = { [weak self] payload in self?.approvals.receive(payload) }
+        followClient.onUsage = { [weak self] snapshot in self?.applyUsage(snapshot) }
         followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
         // M4：upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
         followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
@@ -279,6 +283,15 @@ final class SessionSync: ObservableObject {
     private func handleStreamRefusal(_ failure: GatewayFailure) {
         status = .failed("跟随流被拒绝：\(failure.readableDescription)")
         refreshView()
+    }
+
+    /// 一份占用读数（M6）：opening 里的基线，或后续 `usage` 帧 —— 同一处理。
+    ///
+    /// 被丢弃的帧**不动视图**（`UsageState` 判定的），所以乱序与重放不会让
+    /// 百分比跳一下再回来。
+    private func applyUsage(_ snapshot: UsageSnapshot) {
+        guard usageState.apply(snapshot) == .accepted else { return }
+        usage = usageState.usage
     }
 
     /// opening 的瞬态基线 → 通道的输入。只认我们声明的字段，其余忽略。

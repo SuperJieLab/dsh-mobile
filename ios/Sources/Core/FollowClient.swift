@@ -36,6 +36,12 @@ final class FollowClient: NSObject {
     var onTransient: ((JSONValue) -> Void)?
     /// 一条连接级审批帧（M5 实施期修正 11：`{kind:'request'|'cancel', ...}` 原样）。
     var onApproval: ((JSONValue) -> Void)?
+    /// 一份上下文占用读数（M6）。
+    ///
+    /// 两个来源、同一个形状：opening 里的基线，以及随后的 `usage` 帧。缺席的含义
+    /// 与「空」不同 —— 字段**不在** = 服务端读不出（保留手里那份），字段在而
+    /// `usage` 为空 = 这个水位上确实没有可显示的东西（清空）。
+    var onUsage: ((UsageSnapshot) -> Void)?
     /// 一条 error 帧 —— 流通道里的协议内拒绝。
     var onRefused: ((GatewayFailure) -> Void)?
     /// 连接阶段变化（连接态指示器的数据源，M3）。
@@ -231,6 +237,9 @@ final class FollowClient: NSObject {
                 missedPongs = 0
                 phase = .ready
                 onOpening?(payload)
+                // 占用基线随 opening 一同到达（服务端读不出投影时不带这个字段，
+                // 那与「这个水位上没有值」是两件事，所以只在字段在时才上报）。
+                if let baseline = payload["occupancy"]?.usageSnapshot { onUsage?(baseline) }
             } else if payload["type"]?.string == "assistant-stream" {
                 onTransient?(payload["frame"] ?? .null)
             } else if let event = payload.sessionEvent {
@@ -259,6 +268,14 @@ final class FollowClient: NSObject {
         case "approval":
             // 连接级审批推送（无 streamId）：连接活着就有，与跟随流无关。
             if let payload = frame.payload { onApproval?(payload) }
+
+        case "usage":
+            // 占用读数（M6）。与 `approval` 不同，它**带 `streamId`** —— 属于本流
+            // 打开的那个会话，所以核一次 `sessionId`（帧串流时不能画别人的占用）。
+            guard let payload = frame.payload, let sessionId,
+                  payload["sessionId"]?.string == sessionId,
+                  let snapshot = payload.usageSnapshot else { return }
+            onUsage?(snapshot)
 
         default:
             break
@@ -365,5 +382,12 @@ private extension JSONValue {
     var sessionEvent: SessionEvent? {
         guard self["type"]?.string != nil, self["seq"] != nil else { return nil }
         return try? JSONDecoder().decode(SessionEvent.self, from: JSONEncoder().encode(self))
+    }
+
+    /// 若这个对象是一份占用读数（有 `asOfSeq`），解成 `UsageSnapshot`。
+    /// 不是（opening 本体、别的载荷）就是 `nil` —— 据此区分「没这个字段」。
+    var usageSnapshot: UsageSnapshot? {
+        guard self["asOfSeq"] != nil else { return nil }
+        return try? JSONDecoder().decode(UsageSnapshot.self, from: JSONEncoder().encode(self))
     }
 }

@@ -26,6 +26,7 @@
  */
 
 import { pageWindow, type WireEvent } from './rpc.ts'
+import type { UsageSnapshot } from './usage.ts'
 
 /** The one framing version this build speaks. */
 export const MUX_VERSION = 1
@@ -73,8 +74,23 @@ export interface MuxApprovalFrame {
   payload: unknown
 }
 
+/**
+ * Server → client: the occupancy reading for one stream (M6).
+ *
+ * Stream-scoped, unlike `approval`: occupancy belongs to the session this
+ * stream follows, and the water mark it carries is the projection's cut, not
+ * the window's `cursor` — the two are different axes and a client must not
+ * subtract them (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+ */
+export interface MuxUsageFrame {
+  type: 'usage'
+  streamId: number
+  /** `sessionId` so a client can check the frame against the stream it opened. */
+  payload: { sessionId: string } & UsageSnapshot
+}
+
 /** Everything the server sends on the mux connection. */
-export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApprovalFrame
+export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApprovalFrame | MuxUsageFrame
 
 /**
  * Parse one client frame from its wire text.
@@ -174,6 +190,16 @@ export interface FollowOpening {
    * what the source gave arrives unchanged.
    */
   assistantStream?: unknown
+  /**
+   * The occupancy baseline, read at the moment this opening was assembled (M6).
+   * Absent when the projections held nothing displayable — a statement, not a
+   * fault (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+   *
+   * ⚠️ `occupancy.asOfSeq` is the projection's cut, **not** this opening's
+   * `cursor`: the window is cut by message count and may trail or lead the log
+   * the projections were folded over. The two water marks are independent.
+   */
+  occupancy?: UsageSnapshot
 }
 
 /**
@@ -183,10 +209,19 @@ export interface FollowOpening {
  * API walks forward only), and it is what makes the window assembly identical
  * to a `page`'s: same function, same density precondition, same boundary rule.
  *
+ * `occupancy` is carried through as read: this function does not know where the
+ * projections live, and the caller reads them at the moment it assembles the
+ * opening so the client gets a window and a state from one moment
+ * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+ *
  * @throws the errors {@link pageWindow} throws — the adapter turns them into an
  *   `error` frame carrying the same code a `page` would have refused with.
  */
-export function followOpening(request: FollowRequest, events: readonly WireEvent[]): FollowOpening {
+export function followOpening(
+  request: FollowRequest,
+  events: readonly WireEvent[],
+  occupancy?: UsageSnapshot,
+): FollowOpening {
   const window = pageWindow(request.sessionId, events, undefined, request.maxMessages ?? DEFAULT_FOLLOW_MESSAGES)
   return {
     sessionId: request.sessionId,
@@ -194,6 +229,7 @@ export function followOpening(request: FollowRequest, events: readonly WireEvent
     pageStart: window.pageStart,
     hasOlder: window.hasOlder,
     events: window.events,
+    ...(occupancy === undefined ? {} : { occupancy }),
   }
 }
 

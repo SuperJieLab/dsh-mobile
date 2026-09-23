@@ -26,6 +26,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort } from './contract/rpc.ts'
 import type { WritePort } from './contract/write.ts'
+import { usageSnapshotOf } from './contract/usage.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
 import { attachStreamHandler, type FollowSource, type UpstreamFollowFrame } from './adapters/ws.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
@@ -250,6 +251,12 @@ function listSourceOver(ctx: Context): ListSource {
  * is only present in the web-app bundle, where cordis holds this plugin until
  * it appears — the same honest wait the list path's services get.
  */
+/**
+ * The projection keys the occupancy reading is built from — named so the read
+ * does not materialize views nothing consumes (M6).
+ */
+const OCCUPANCY_KEYS = ['contextPressure', 'contextBreakdown'] as const
+
 function streamSourceOver(ctx: Context): FollowSource {
   const controller = ctx.sessionController as unknown as {
     follow(request: {
@@ -258,7 +265,16 @@ function streamSourceOver(ctx: Context): FollowSource {
       assistantStream: true
     }, signal: AbortSignal): AsyncIterable<UpstreamFollowFrame>
   }
-  return { follow: (request, signal) => controller.follow(request, signal) }
+  return {
+    follow: (request, signal) => controller.follow(request, signal),
+    occupancyOf: (sessionId) => {
+      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
+      if (session === undefined) return undefined
+      const read = ctx.sessionProjections as unknown as ProjectionsLike
+      const snapshot = read.snapshot(session, OCCUPANCY_KEYS)
+      return snapshot === undefined ? undefined : usageSnapshotOf(snapshot.values, snapshot.asOfSeq)
+    },
+  }
 }
 
 /** The part of `ctx.sessionQuery` this module uses. */
@@ -273,7 +289,25 @@ interface SessionsLike {
 
 /** The part of `ctx.sessionProjections` this module uses. */
 interface ProjectionsLike {
-  cachedSnapshot(session: unknown): { values: Readonly<Record<string, unknown>> } | undefined
+  /**
+   * The zero-I/O read the list path uses: already-materialized cells only, and
+   * a water mark that is the *lowest* cached cut (upstream
+   * `dsh-session-projection`: `cachedSnapshot`, whose values may trail the live
+   * session and are documented as hints).
+   */
+  cachedSnapshot(session: unknown): ProjectionSnapshotLike | undefined
+  /**
+   * One consistent cut over the registered units, cut at the log's current
+   * water mark — the read the occupancy frames use, because their `asOfSeq`
+   * must advance (docs/dev/plans/M6-presentation-layer.md §3.1 决定 3).
+   */
+  snapshot(session: unknown, keys?: readonly string[]): ProjectionSnapshotLike | undefined
+}
+
+/** One cut of projection values, as both reads above return it. */
+interface ProjectionSnapshotLike {
+  asOfSeq: number
+  values: Readonly<Record<string, unknown>>
 }
 
 /** The part of `ctx.sessionProjectionCache` this module uses. */

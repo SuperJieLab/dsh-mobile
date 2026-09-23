@@ -148,11 +148,3 @@ struct TransientChannel {
         return chunk?["text"]?.string
     }
 }
-
-extension JSONValue {
-    /// 拿一个整数字段；拿不到就是 `nil`。
-    var int: Int? {
-        if case .number(let value) = self, value == value.rounded(), value >= 0 { return Int(value) }
-        return nil
-    }
-}

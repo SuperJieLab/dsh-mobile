@@ -31,6 +31,7 @@ import {
   parseClientFrame,
   type MuxServerFrame,
 } from '../contract/mux.ts'
+import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import {
   WsFrameParser,
   acceptKeyOf,
@@ -42,15 +43,31 @@ import {
 } from '../contract/ws-frames.ts'
 
 /**
- * The stream source this adapter is written against — the narrow face of
- * `ctx.sessionController` the pump uses, declared here because the service's
- * real type does not resolve from outside the dsh installation.
+ * The stream source this adapter is written against — the narrow face of the
+ * host the pump uses, declared here because the services' real types do not
+ * resolve from outside the dsh installation.
+ *
+ * Two faces, because the pump needs two kinds of fact (M6): the follow stream
+ * itself, and the occupancy reading for the session that stream follows. Both
+ * come from the same host, which is why they arrive as one injection rather
+ * than two (docs/dev/plans/M6-presentation-layer.md §四).
  */
 export interface FollowSource {
   follow(
     request: { address: { kind: 'session'; sessionId: string }; maxMessages?: number; assistantStream: true },
     signal: AbortSignal,
   ): AsyncIterable<UpstreamFollowFrame>
+  /**
+   * Read the occupancy projections for one session, right now.
+   *
+   * Synchronous and in-memory — the host folds projections as events land, so
+   * this is a state read, not a log walk (docs/dev/plans/M6-presentation-layer.md
+   * §3.1 决定 3, which is also where using `snapshot()` rather than the cheaper
+   * cached read is argued).
+   *
+   * @returns the reading, or `undefined` when the host does not know the session.
+   */
+  occupancyOf(sessionId: string): UsageSnapshot | undefined
 }
 
 /**
@@ -273,6 +290,32 @@ async function pump(
     send(socket, { type: 'item', streamId, payload })
   }
 
+  /**
+   * Read the occupancy projections, treating a failed read as "nothing to say".
+   *
+   * Occupancy rides the same stream as the events but is an addition to them: an
+   * unreadable projection must not cost the phone its session, so a read that
+   * throws is logged and skipped rather than turned into an `error` frame —
+   * which would end the stream (M6).
+   */
+  const readUsage = (): UsageSnapshot | undefined => {
+    try {
+      return source.occupancyOf(request.sessionId)
+    } catch (error) {
+      console.error(`[mac-gateway] occupancy read failed for "${request.sessionId}": ${describe(error)}`)
+      return undefined
+    }
+  }
+
+  /** The last reading this stream sent — the baseline counts, so it is not repeated. */
+  let lastUsage: UsageSnapshot | undefined
+  const pushUsage = (): void => {
+    const reading = readUsage()
+    if (reading === undefined || !usageShouldEmit(lastUsage, reading)) return
+    lastUsage = reading
+    send(socket, { type: 'usage', streamId, payload: { sessionId: request.sessionId, ...reading } })
+  }
+
   try {
     const iterable = source.follow({
       address: { kind: 'session', sessionId: request.sessionId },
@@ -294,6 +337,10 @@ async function pump(
         const cursor = frame.cursor + 1 // reference cursor is inclusive; ours is exclusive
         expectedSeq = cursor
         console.log(`[mac-gateway] follow opening for "${request.sessionId}": cursor=${cursor}, ${events.length} events`)
+        // The occupancy baseline is read in the same breath as the window, so
+        // the phone opens on a window and a state from one moment (M6 §3.1 决定 2).
+        const occupancy = readUsage()
+        lastUsage = occupancy
         sendItem({
           sessionId: request.sessionId,
           cursor,
@@ -301,12 +348,13 @@ async function pump(
           hasOlder: frame.hasMore,
           events,
           ...(frame.assistantStream === undefined ? {} : { assistantStream: frame.assistantStream }),
+          ...(occupancy === undefined ? {} : { occupancy }),
         })
         continue
       }
 
       if (frame.type === 'event') {
-        const event = frame.event as { seq?: unknown } | undefined
+        const event = frame.event as { type?: unknown; seq?: unknown } | undefined
         // The source promises gap-free; we witness it. A skipped seq means the
         // stream's own promise broke — refuse loudly rather than render a view
         // with a hole nobody can see (docs/dev/plans/M2-realtime-transient.md §3.5).
@@ -317,6 +365,8 @@ async function pump(
         }
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
         sendItem(event) // verbatim — the protocol message IS the event object
+        // A trigger event may have moved the projections; say so only if it did (M6).
+        if (typeof event?.type === 'string' && usageIsTrigger({ type: event.type })) pushUsage()
         continue
       }
 

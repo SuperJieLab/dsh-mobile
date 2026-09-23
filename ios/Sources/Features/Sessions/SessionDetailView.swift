@@ -136,6 +136,15 @@ struct SessionDetailView: View {
                             .padding(.vertical, 2)
                     }
 
+                    // 上下文占用（M6）：上游把它放在 composer 旁，这里同位置。
+                    // 没有读数就整行不出现 —— 不画一个 0%（与判据 U2 同一条纪律：
+                    // 「不知道」不该被显示成「空」）。
+                    if let usage = sync.usage {
+                        OccupancyBar(usage: usage)
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 4)
+                    }
+
                     HStack(spacing: 8) {
                         TextField("发一条指令给 DSH…", text: $draft, axis: .vertical)
                             .lineLimit(1...4)

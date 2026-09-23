@@ -166,6 +166,16 @@ enum JSONValue: Decodable, Encodable, Equatable {
 
     /// 取对象里的一个键；拿不到就是 nil。
     subscript(key: String) -> JSONValue? { object?[key] }
+
+    /// 拿一个整数字段；拿不到就是 `nil`。
+    ///
+    /// 与 `JSONValue` 同层：它是这个类型自己的取值辅助，凡是要读协议对象的
+    /// 地方都要用（原先寄居在 `TransientChannel` 里，会让只编协议层的测试脚本
+    /// 连带编译一个用不到的状态机）。
+    var int: Int? {
+        if case .number(let value) = self, value == value.rounded(), value >= 0 { return Int(value) }
+        return nil
+    }
 }
 
 // MARK: - 从事件里抽出可显示的消息
@@ -224,6 +234,41 @@ extension SessionEvent {
         let joined = parts.joined(separator: "\n")
         return joined.isEmpty ? nil : joined
     }
+}
+
+// MARK: - 上下文占用（M6）
+
+/// 占用组成的三项。**不是** `usedTokens` 的分解 —— 估算器对中文与 JSON schema
+/// 定价偏低，三项加起来不等于那个数（`docs/dev/plans/M6-presentation-layer.md` §3.1 决定 6）。
+struct UsageBreakdown: Decodable, Equatable {
+    let systemTokens: Int
+    let toolsTokens: Int
+    let messageTokens: Int
+}
+
+/// 手机上要画的那个比例。
+struct UsagePayload: Decodable, Equatable {
+    /// 分子。服务端已按「provider 报的数优先，启发式重定价次之」算好，客户端不再自己推。
+    let usedTokens: Int
+    /// 分母 —— 路由声明的上下文容量。
+    let contextWindow: Int
+    /// 组成三项。服务端认为「不知道」时整个缺失 —— 缺它**不减损**上面那个比例。
+    ///
+    /// ⚠️ 写成带默认值的 `var` 只为让构造时能省略它 —— Swift 的 memberwise init
+    /// 不给 `let` + Optional 隐含缺省，而这两个类型构造出来就不再被改。
+    var breakdown: UsageBreakdown? = nil
+}
+
+/// 一个水位上的一份占用读数。
+///
+/// `usage` 缺失是一个**陈述**而不是故障：这个 cut 上没有可显示的东西，
+/// 正在显示的旧值应当被清掉（`docs/dev/plans/M6-presentation-layer.md` §3.1 决定 4）。
+struct UsageSnapshot: Decodable, Equatable {
+    /// 这份读数取自日志的哪个水位。⚠️ 与窗口的 `cursor` 是两条轴，**不要相减** ——
+    /// 窗口按消息数切，可能落后或领先投影折叠到的位置。
+    let asOfSeq: Int
+    /// 缺省 = 这个水位上没有可显示的东西（构造时可省略，理由同 `UsagePayload.breakdown`）。
+    var usage: UsagePayload? = nil
 }
 
 // MARK: - 时刻

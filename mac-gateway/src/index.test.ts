@@ -487,3 +487,177 @@ test('session-prompt without a controller behind the port fails as an envelope, 
     rmSync(credentialsPath, { force: true })
   }
 })
+
+// MARK: - the occupancy frames (M6 U6)
+
+/**
+ * A scripted follow stream plus scriptable projections — the two host faces the
+ * occupancy path reads for real.
+ *
+ * The opening is whatever the test declares; every `emit` afterwards becomes one
+ * event frame. Reads are counted so a test can tell "asked again" from "asked
+ * once", which is what the "no news, no frame" half of U6 turns on.
+ */
+function fakeFollowHost(opening: {
+  cursor: number
+  records: { type: 'event'; event: unknown }[]
+  hasMore: boolean
+}) {
+  const events: unknown[] = []
+  let projected: { values: Record<string, unknown>; asOfSeq: number } | undefined
+  let reads = 0
+  return {
+    services: {
+      sessions: { get: (id: string) => (id === 's1' ? { id: 's1' } : undefined) },
+      sessionProjections: {
+        cachedSnapshot: () => undefined,
+        snapshot: () => {
+          reads += 1
+          return projected
+        },
+      },
+      sessionController: {
+        follow: async function* (_request: unknown, signal: AbortSignal) {
+          yield { type: 'snapshot', ...opening }
+          while (!signal.aborted) {
+            while (events.length > 0) yield { type: 'event', event: events.shift()! }
+            await new Promise(resolve => setTimeout(resolve, 5))
+          }
+        },
+      },
+    },
+    emit(event: unknown) { events.push(event) },
+    project(values: Record<string, unknown> | undefined, asOfSeq: number) {
+      projected = values === undefined ? undefined : { values, asOfSeq }
+    },
+    reads: () => reads,
+  }
+}
+
+/** Open the stream channel through the real handshake and collect non-approval frames. */
+async function openStream(port: number, access: string): Promise<{
+  socket: WebSocket
+  frames: Record<string, unknown>[]
+  waitFor: (predicate: (frames: Record<string, unknown>[]) => boolean, what: string) => Promise<void>
+}> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`, { headers: { authorization: `Bearer ${access}` } })
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener('open', () => resolve(), { once: true })
+    socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
+    setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
+  })
+  const frames: Record<string, unknown>[] = []
+  const waiters: { predicate: (frames: Record<string, unknown>[]) => boolean; resolve: () => void }[] = []
+  socket.addEventListener('message', event => {
+    const frame = JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>
+    if (frame.type === 'approval') return // the relay's reconciliation is not this test's subject
+    frames.push(frame)
+    for (const waiter of [...waiters]) {
+      if (!waiter.predicate(frames)) continue
+      waiters.splice(waiters.indexOf(waiter), 1)
+      waiter.resolve()
+    }
+  })
+  const waitFor = (predicate: (frames: Record<string, unknown>[]) => boolean, what: string): Promise<void> => {
+    if (predicate(frames)) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      waiters.push({ predicate, resolve })
+      setTimeout(() => { reject(new Error(`timed out waiting for ${what}; got ${JSON.stringify(frames)}`)) }, 5_000)
+    })
+  }
+  return { socket, frames, waitFor }
+}
+
+/** The opening item frame's payload, once it has arrived (`cursor` marks it). */
+function openingOf(frames: Record<string, unknown>[]): Record<string, unknown> | undefined {
+  return frames
+    .map(frame => frame.payload as Record<string, unknown> | undefined)
+    .find(payload => payload !== undefined && payload['cursor'] !== undefined)
+}
+
+test('U6: the opening carries an occupancy baseline and a trigger event pushes a frame', { timeout: 15_000 }, async () => {
+  const port = freshPort(44_600)
+  const credentialsPath = tempCredentialsPath()
+  const follow = fakeFollowHost({ cursor: 3, records: [{ type: 'event', event: { type: 'user/message', seq: 2 } }], hasMore: false })
+  follow.project({
+    contextPressure: { projectedTokens: 52_300, contextWindow: 128_000 },
+    contextBreakdown: { systemTokens: 1_000, toolsTokens: 2_000, messageTokens: 49_300 },
+  }, 3)
+  const { teardown } = install('127.0.0.1', port, credentialsPath, follow.services)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+    const { socket, frames, waitFor } = await openStream(port, access)
+
+    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
+
+    // The window and the state travel together, each with its own water mark.
+    const opening = openingOf(frames)!
+    assert.equal(opening['cursor'], 4, 'the exclusive cursor: the window ends at seq 3')
+    assert.deepEqual(opening['occupancy'], {
+      asOfSeq: 3,
+      usage: {
+        usedTokens: 52_300,
+        contextWindow: 128_000,
+        breakdown: { systemTokens: 1_000, toolsTokens: 2_000, messageTokens: 49_300 },
+      },
+    })
+
+    // A settling turn moves the projections; the event and the new reading both arrive.
+    follow.project({ contextPressure: { projectedTokens: 61_000, contextWindow: 128_000 } }, 5)
+    follow.emit({ type: 'assistant/message', seq: 4, data: { usage: { inputTokens: 60_000 } } })
+    await waitFor(f => f.some(frame => frame.type === 'usage'), 'the occupancy frame')
+
+    const usageFrame = frames.find(frame => frame.type === 'usage')!
+    assert.equal(usageFrame['streamId'], 1)
+    assert.deepEqual(usageFrame['payload'], {
+      sessionId: 's1',
+      asOfSeq: 5,
+      usage: { usedTokens: 61_000, contextWindow: 128_000 },
+    })
+
+    // Nothing moved this time: the event still travels, the reading does not.
+    follow.emit({ type: 'assistant/message', seq: 5 })
+    await waitFor(f => f.some(frame => frame.type === 'item' && (frame.payload as { seq?: number }).seq === 5), 'the second event')
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal(frames.filter(frame => frame.type === 'usage').length, 1, 'an unchanged value must not earn a second frame')
+    assert.ok(follow.reads() >= 3, 'the projections were still read — the frame was skipped, not the read')
+
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('U6: without projections the baseline is absent and no frame is ever pushed', { timeout: 15_000 }, async () => {
+  const port = freshPort(44_900)
+  const credentialsPath = tempCredentialsPath()
+  const follow = fakeFollowHost({ cursor: 1, records: [{ type: 'event', event: { type: 'user/message', seq: 0 } }], hasMore: false })
+  follow.project(undefined, 1)
+  const { teardown } = install('127.0.0.1', port, credentialsPath, follow.services)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+    const { socket, frames, waitFor } = await openStream(port, access)
+
+    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
+    assert.equal(openingOf(frames)!['occupancy'], undefined, 'nothing displayable means no baseline, not a zero')
+
+    follow.emit({ type: 'assistant/message', seq: 2 })
+    await waitFor(f => f.some(frame => frame.type === 'item' && (frame.payload as { seq?: number }).seq === 2), 'the event')
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal(frames.filter(frame => frame.type === 'usage').length, 0)
+
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
