@@ -1,21 +1,16 @@
 /**
- * The credentials adapter: the vault that owns the three tickets' state.
+ * The credentials adapter: the vault that owns the three tickets' state. Every *rule* lives
+ * in `contract/auth.ts`; this module owns only state and I/O — the credentials file and the
+ * in-memory table of live access tokens.
  *
- * Split of responsibilities against `contract/auth.ts` (every *rule* is there):
- * this module owns only state and I/O — the credentials file under
- * `~/.dsh/dsh-mobile/`, and the in-memory table of live access tokens.
+ * Read side, fail-closed: a file that cannot be read or parsed counts as unpaired (worst case
+ * one re-pairing, never an unintended grant). Write side, best-effort but never silent: a
+ * persist failure is logged and the relationship stays usable for this run, only failing to
+ * survive a restart — refusing outright would deny a valid pairing over an unwritable disk.
  *
- * Fail-closed is the standing rule on the read side: a credentials file that
- * cannot be read or parsed is treated as unpaired (the worst case is one
- * re-pairing, never an unintended grant). The write side is best-effort but
- * never silent — a persist failure is logged and the in-memory relationship
- * stays usable for this run, at the cost of not surviving a restart. Refusing
- * outright was considered and rejected: the disk being unwritable is not a
- * reason to deny a pairing that is otherwise valid.
- *
- * The access table is deliberately in memory: a 15-minute ticket does not need
- * to survive a restart, and the client's refresh flow makes re-issuing one an
- * invisible non-event (docs/dev/plans/M4-identity-credentials.md §3.3).
+ * The access table is in memory by design: a 15-minute ticket need not survive a restart, and
+ * the client's refresh flow makes re-issuing one an invisible non-event
+ * (docs/dev/plans/M4-identity-credentials.md §3.3).
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -69,8 +64,8 @@ export class CredentialVault {
         this.file = emptyCredentials()
       }
     } catch {
-      // Absent or corrupt: the same answer either way — an unpaired vault (the
-      // next `pairingCode()` issues a fresh code). Fail closed, never half-open.
+      // Absent or corrupt: an unpaired vault either way — the next `pairingCode()`
+      // issues a fresh code.
       this.file = emptyCredentials()
     }
   }
@@ -85,8 +80,8 @@ export class CredentialVault {
   }
 
   /**
-   * The pairing code to show on the screen: issue one if there is none, or the
-   * old one died — a code that can no longer be answered must not be displayed.
+   * The pairing code to show on the screen: issue one if there is none or the old one died —
+   * a code that can no longer be answered must not be displayed.
    */
   pairingCode(): string {
     const now = this.now()
@@ -135,9 +130,9 @@ export class CredentialVault {
   }
 
   /**
-   * Pre-pair without a pairing code — assembly tests only. Production pairing
-   * goes through `pairingCode()` + `pair()`; this writes the relationship
-   * directly so a test can hold the raw token without parsing console output.
+   * Pre-pair without a pairing code — assembly tests only. Production pairing goes through
+   * `pairingCode()` + `pair()`, and this writes the relationship directly so a test can hold
+   * the raw token without parsing console output.
    */
   seedDeviceToken(deviceToken: string): void {
     this.file = { version: 1, deviceTokenHash: sha256Hex(deviceToken) }

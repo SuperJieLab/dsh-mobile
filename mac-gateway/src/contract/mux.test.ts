@@ -1,13 +1,9 @@
 /**
  * Stream contract tests.
  *
- * The headline test is S1 (docs/dev/plans/M2-realtime-transient.md §5.1): the same
- * window, encoded once through the HTTP `page` path and once through the follow
- * opening, must serialize **character-for-character identically**. That is the
- * executable form of the first protocol discipline — "the protocol is defined
- * as messages, not as URLs" — witnessed at the exact moment a second carrier
- * appears. If this test ever fails, the discipline was already broken upstream
- * of it, which is precisely what it is here to catch.
+ * The headline test is S1 (docs/dev/plans/M2-realtime-transient.md §5.1): the same window via
+ * the HTTP `page` path and via the follow opening must serialize **character-for-character
+ * identically** — "the protocol is messages, not URLs", now executable with a second carrier.
  */
 
 import assert from 'node:assert/strict'
@@ -37,9 +33,8 @@ function fakeLog(): WireEvent[] {
  * A log with real turn boundaries: every turn is `user/message`, `turn/start`,
  * `assistant/message`, `turn/end`.
  *
- * `followOpening`'s geometry is only meaningful against a log that has turns:
- * a window's start is aligned back to one (spec §8.5 B6 二次裁决), and a log
- * with no `turn/start` anywhere can only exercise the ceiling.
+ * `followOpening`'s geometry needs turns: a window's start is aligned back to one
+ * (spec §8.5 B6 二次裁决), and a log with no `turn/start` only exercises the ceiling.
  */
 function turnedLog(turns: number): WireEvent[] {
   const events: WireEvent[] = []
@@ -61,10 +56,9 @@ function messageCount(events: readonly WireEvent[]): number {
 }
 
 /**
- * Only the log matters here: every case below reaches the port through the
- * `page` path, which reads the whole log (`readAll`). `list` / `read` are
- * placeholders — this file does not exercise those paths, and a second copy of
- * the slicing rule would be one more thing to keep in step with `rpc.ts`.
+ * Only the log matters: every case reaches the port through the `page` path, which
+ * reads the whole log (`readAll`). `list` / `read` are placeholders — a second copy
+ * of the slicing rule would be one more thing to keep in step with `rpc.ts`.
  */
 function fakePort(log: readonly WireEvent[]): SessionPort {
   return {

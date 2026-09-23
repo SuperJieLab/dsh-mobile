@@ -2,16 +2,14 @@ import SwiftUI
 
 /// 上下文占用：一行读数，点开看组成三项（M6）。
 ///
-/// 复现对象是上游 composer 旁的占用面板（`ContextMeter.tsx`），只把那个环换成一
-/// 行 —— 窄屏上没有环的位置，读数本身才是要传达的。呈现规则全部照上游：
-///
+/// 复现对象是上游 composer 旁的占用面板（`ContextMeter.tsx`），只把那个环换成一行 —— 窄屏上
+/// 没有环的位置。呈现规则全部照上游：
 /// - 百分比与紧凑数字（换算在 `UsagePayload.percent` / `.figures` 里，判据 O2）
 /// - 「约」无条件加，不区分数字来自哪个投影字段（§3.1 决定 5）
 /// - **组成缺省时不出展开区，比例照常显示**（判据 U8）；三行文案用上游的中文
 ///   （`ui-conversation/src/client/locales.ts:63-65`）
 ///
-/// ⚠️ 本视图只在有读数时被挂上 —— 「没有读数」与「占用 0%」不是一回事，
-/// 判空归调用方（`SessionDetailView`），这样这里永远不做空态。
+/// ⚠️ 本视图只在有读数时被挂上，判空归调用方（`SessionDetailView`）—— 这里永远不做空态（判据 U2）。
 struct OccupancyBar: View {
     let usage: UsagePayload
 
@@ -27,8 +25,8 @@ struct OccupancyBar: View {
         ]
     }
 
-    /// 用 `Identifiable` 而不是 `id: \.label` —— Swift 的 key path 不能指向
-    /// 元组成员，拿元组数组直接喂 `ForEach` 编不过。
+    /// 用 `Identifiable` 而不是 `id: \.label` —— key path 不能指向元组成员，
+    /// 元组数组喂 `ForEach` 编不过。
     private struct CompositionRow: Identifiable {
         var id: String { label }
         let label: String

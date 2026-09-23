@@ -2,10 +2,9 @@ import SwiftUI
 
 /// 一张待批审批卡（M5）。
 ///
-/// 展示 `toolName` 与提问方的 `reason`，给两个一次性按钮。状态流转都写在
-/// `ApprovalStore` 里 —— 这个视图只画：没动过给按钮，未知态如实说明，
-/// 已投递就只等结果。**本视图绝不展示工具参数**：那是登记在 §8.5 的优化点，
-/// 与参照实例（Web UI 的审批交互）同水位即可。
+/// 展示 `toolName` 与 `reason`，给两个一次性按钮；状态流转都在 `ApprovalStore` 里，这个视图
+/// 只画（没动过给按钮、未知态如实说明、已投递只等结果）。**绝不展示工具参数**：那是 §8.5 的
+/// 优化点，与 Web UI 同水位即可。
 struct ApprovalCard: View {
     let approval: ApprovalStore.PendingApproval
     let state: ApprovalStore.AnswerState?

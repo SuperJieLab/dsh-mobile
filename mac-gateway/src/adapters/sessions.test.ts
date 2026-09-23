@@ -1,16 +1,9 @@
 /**
  * Adapter tests: how one list row is assembled.
  *
- * The list path is where v2 changed the most, and the change is exactly the part
- * that is hard to see from outside: the row no longer comes from reading a log,
- * it comes from a header plus a projection the host already keeps. Two things
- * therefore need pinning down — where each field comes from, and that no session
- * log is ever opened.
- *
- * The zero-I/O claim is tested the only way that actually proves it: the
- * persistence stub throws if anything opens a handle, so a passing list is a
- * list that read no logs.
- *
+ * The row comes from a header plus a host-kept projection, never from reading a log.
+ * Two things need pinning: where each field comes from, and that no log is ever
+ * opened — proved by a persistence stub that throws if anything opens a handle.
  * Run: node --test src/adapters/sessions.test.ts
  * See docs/dev/protocol.md §4.1 and docs/dev/plans/M1-consistency-delta.md §3.2.
  */
@@ -29,10 +22,8 @@ function header(
 }
 
 /**
- * A persistence that fails loudly if the list path touches it.
- *
- * This is the point of the test file: "listing is zero-I/O" is otherwise a claim
- * about code we do not run.
+ * A persistence that fails loudly if the list path touches it: "listing is zero-I/O"
+ * is otherwise a claim about code we do not run.
  */
 function logForbiddingPersistence(): PersistenceLike {
   return {

@@ -1,28 +1,22 @@
 /**
- * The write contract (M5): parsing and replay bookkeeping for the two write ops —
- * docs/dev/plans/M5-remote-intervention.md §四 (as amended by 实施期修正 11).
+ * The write contract (M5): parsing and replay bookkeeping for the two write ops
+ * — docs/dev/plans/M5-remote-intervention.md §四 (as amended by 实施期修正 11).
+ * Write payloads are validated strictly, unlike the read paths: a malformed
+ * decision silently executed is a remote command run on a guess, so every
+ * malformed write is refused with `invalid-request` (Plan §3.3 决定 8).
  *
- * Write payloads are validated strictly, unlike the read paths' lenient
- * defaults: on a read, a malformed cursor degrades to a redundant payload; on a
- * write, a malformed decision silently executed is a remote command run on a
- * guess. So every malformed write is refused with `invalid-request` rather than
- * normalized (Plan §3.3 决定 8).
- *
- * The replay table makes retries safe (W1): a client that re-sends after a
- * lost reply gets the first outcome again, never a second delivery. The table
- * lives for the process lifetime — long enough for the seconds-scale retry
- * window a lost reply implies, and cleared by a restart, which is harmless
- * because the log's `approval/decided` audit is the truth a client reconciles
- * against anyway (Plan §3.3 决定 3).
+ * The replay table makes retries safe (W1): a re-send after a lost reply gets
+ * the first outcome again. Cleared by a restart, harmless — the log's
+ * `approval/decided` audit is the truth a client reconciles against
+ * (Plan §3.3 决定 3).
  */
 
 /** A validated `approval-answer` message. */
 export interface ApprovalAnswerMessage {
   /**
-   * The `$events` waterfall frame's `eventId` this answer is about — the id
-   * the `approval-request` frame the phone saw carried (实施期修正 11: the
-   * projected request payload has no audit id, so the waterfall's own eventId
-   * is the only end-to-end address).
+   * The `$events` waterfall frame's `eventId` this answer is about — the id the
+   * `approval-request` frame the phone saw carried (实施期修正 11: the projected
+   * request has no audit id, so this is the only end-to-end address).
    */
   eventId: string
   /** The client's choice; mapped to the upstream outcome vocabulary on delivery. */
@@ -32,8 +26,8 @@ export interface ApprovalAnswerMessage {
 }
 
 /**
- * Parse and validate one `approval-answer` payload, or `undefined` when the
- * message cannot be an answer at all. Strict on purpose — see the module note.
+ * Parse and validate one `approval-answer` payload, or `undefined` when it
+ * cannot be an answer at all. Strict on purpose — see the module note.
  */
 export function approvalAnswerOf(message: Record<string, unknown>): ApprovalAnswerMessage | undefined {
   const eventId = nonEmptyString(message.eventId)
@@ -55,9 +49,8 @@ export interface SessionPromptMessage {
 
 /**
  * Parse and validate one `session-prompt` payload, or `undefined`. `sessionId`
- * is *not* validated here: the read paths already map a malformed session id to
- * `unknown-session` ("it can never name a session, the remedy is identical"),
- * and the write path keeps that convention rather than splitting it.
+ * is *not* validated here: the read paths already map a malformed id to
+ * `unknown-session`, and the write path keeps that convention.
  */
 export function sessionPromptOf(message: Record<string, unknown>): SessionPromptMessage | undefined {
   const sessionId = nonEmptyString(message.sessionId)
@@ -84,11 +77,8 @@ export interface WritePort {
 }
 
 /**
- * Remember the first outcome per idempotency key and replay it forever after.
- *
- * `produce` runs at most once per key — that is the whole point: the side
- * effect it stands for (delivering an answer, admitting a prompt) happens once
- * even when the client retries.
+ * Remember the first outcome per idempotency key and replay it forever after:
+ * `produce` runs at most once per key, so its side effect happens only once.
  */
 export class ReplayTable<V> {
   readonly #entries = new Map<string, V>()

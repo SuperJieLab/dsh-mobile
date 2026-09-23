@@ -2,9 +2,9 @@ import SwiftUI
 
 /// 配对屏（M4）：用 Mac 屏幕上的一次性配对码建立关系。
 ///
-/// 这是全 App 唯一需要用户「在场」的动作，也是唯一一段不需要身份的通信 ——
-/// 配对码本身就是这条消息的凭证（一次性、10 分钟、错 5 次作废，限次与时效
-/// 都在服务端）。成功后设备凭证进 Keychain，之后的一切请求静默带票。
+/// 全 App 唯一需要用户「在场」的动作，也是唯一一段不需要身份的通信 —— 配对码本身就是凭证
+/// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。成功后设备凭证进 Keychain，
+/// 之后一切请求静默带票。
 struct PairingView: View {
     let client: GatewayClient
 
@@ -54,8 +54,8 @@ struct PairingView: View {
             try await client.pair(code: code)
             code = ""
         } catch {
-            // 服务端的话原样显示（配对码不对 / 过期 / 作废）—— 与 M0 起
-            // 「看得见为什么不行」的纪律一致。
+            // 服务端的话原样显示（配对码不对 / 过期 / 作废）——
+            // 与 M0 起「看得见为什么不行」的纪律一致。
             failure = error.localizedDescription
         }
     }

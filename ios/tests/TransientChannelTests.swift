@@ -1,14 +1,9 @@
 /**
- * TransientChannel 的契约测试（TC1–TC8）。
- *
- * 与 `SessionMirrorTests` 同一手法：状态机不碰网络、不碰 UI、不碰持久化，
- * 这里没有服务器也没有文件系统 —— 每条断言都由状态机自己决定。
- *
- * revision 语义（真机联调校准，2026-09-19）：**每帧全局 +1**（上游
- * `agent.ts` 的 `() => ++assistantStreamRevision`），start/chunk/end 都占号；
+ * TransientChannel 的契约测试（TC1–TC8）：状态机不碰网络 / UI / 持久化。
+ * revision 语义照上游 `agent.ts` 的 `() => ++assistantStreamRevision`：**每帧全局 +1**，
+ * start/chunk/end 都占号；
  * `index` 是 attempt 内 chunk 位置，start 后从 0 起。
- *
- * 断言清单与出处：docs/dev/plans/M2-realtime-transient.md §5.2（C2 对应 TC3/TC4/TC5）。
+ * 出处：docs/dev/plans/M2-realtime-transient.md §5.2（C2 对应 TC3/TC4/TC5）。
  */
 import Foundation
 
@@ -51,8 +46,7 @@ struct TransientChannelTests {
         )
     }
 
-    /// 开场基线：已用掉 `usedRevision` 号；attempt 内已累积 `stream` 文本、
-    /// 下一个 chunk 位置 `nextIndex`。
+    /// 开场基线：已用掉 `usedRevision` 号；attempt 内已累积 `stream`，下一 chunk 位置 `nextIndex`。
     private static func baseline(usedRevision: Int, nextIndex: Int, stream: [String]) -> TransientBaseline {
         TransientBaseline(
             revision: usedRevision,
@@ -84,13 +78,12 @@ struct TransientChannelTests {
         verdict = channel.apply(frame: chunk(0, revision: 9, text: "跳"))
         expect(verdict == .broken, "TC3 revision 跳号判 broken")
 
-        // TC4：index 断号 ⇒ broken。
         channel = TransientChannel()
         channel.apply(baseline: baseline(usedRevision: 3, nextIndex: 5, stream: []))
         verdict = channel.apply(frame: chunk(7, revision: 4, text: "跳"))
         expect(verdict == .broken && channel.text.isEmpty, "TC4 index 断号判 broken 且不改文本")
 
-        // TC5：start → chunk → end 的完整 attempt；end 清场。
+        // TC5：start → chunk → end 的完整 attempt。
         channel = TransientChannel()
         channel.apply(baseline: baseline(usedRevision: 0, nextIndex: 0, stream: []))
         verdict = channel.apply(frame: start(1))
@@ -117,7 +110,6 @@ struct TransientChannelTests {
         _ = idle.apply(frame: chunk(0, revision: 1, text: "残留"))
         idle.apply(baseline: TransientBaseline(revision: 5, active: nil))
         expect(idle.text.isEmpty && !idle.isLive, "TC7a 无 attempt 基线清空一切")
-        // 水位对齐：下一帧（新的 start）必须带 revision 6。
         verdict = idle.apply(frame: start(6))
         expect(verdict == .consumed, "TC7b 基线后的 start 用 revision+1")
 

@@ -1,16 +1,11 @@
 import Foundation
 
-/// 与 Mac 侧网关切口的**唯一**接触点。
+/// 与 Mac 侧网关切口的**唯一**接触点，做四件事：拼请求信封、发一次 `POST /rpc`、按信封判成败、
+/// 以及 M4 的**身份** —— 每个请求带 `Authorization`，401 时用设备凭证静默续期一次再重试。
 ///
-/// 它做四件事：拼请求信封、发一次 `POST /rpc`、按信封判成败、以及 M4 的
-/// **身份**——每个请求带 `Authorization`，401 时用设备凭证静默续期一次再重试。
-///
-/// 协议的类型与语义都在 `GatewayProtocol.swift` 里，SwiftUI 在这里没有位置 ——
-/// 这与 Mac 侧把协议写成纯函数 `handle(msg)` 是同一个手法：
-/// 协议处理不该和它的使用者缠在一起。
-///
-/// `struct` 改 `class`（M4）：续期单飞与已配对状态是**可变共享状态**，值语义
-/// 会在视图间复制出各自为政的凭证。仍是 `@MainActor` —— 所有调用方本就在主线程。
+/// 协议的类型与语义都在 `GatewayProtocol.swift`，SwiftUI 在这里没有位置。`struct` 改 `class`（M4）
+/// 是因为续期单飞与已配对状态是**可变共享状态**，值语义会在视图间复制出各自为政的凭证；仍
+/// `@MainActor`，因为所有调用方本就在主线程。
 @MainActor
 final class GatewayClient: ObservableObject {
     let baseURL: URL
@@ -33,13 +28,12 @@ final class GatewayClient: ObservableObject {
 
     init(baseURL: URL, credentials: CredentialStore? = nil) {
         self.baseURL = baseURL
-        // 默认共享单例：全 App 一个身份（nil 默认值避开跨 actor 的默认表达式求值）。
+        // nil 默认值是为了避开跨 actor 的默认表达式求值。
         self.credentials = credentials ?? .shared
         self.isPaired = self.credentials.hasDeviceToken
     }
 
-    /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证（M4 §3.2）。
-    /// 成功即建立关系；失败的文案来自服务端（配对码不对 / 过期 / 作废）。
+    /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证（M4 §3.2）。成功即建立关系；失败文案来自服务端。
     func pair(code: String) async throws {
         let response: PairResponse = try await send(PairRequest(code: code), authenticated: false)
         try response.validate()
@@ -50,10 +44,8 @@ final class GatewayClient: ObservableObject {
         isPaired = true
     }
 
-    /// 用设备凭证换一张新 access（M4 §3.3）。返回 false 表示关系已被服务端
-    /// 掐断（401）——此时清掉本机凭证，App 回到未配对状态。
-    ///
-    /// 单飞：撞车的调用共享同一个在途任务的结果，不叠加请求。
+    /// 用设备凭证换一张新 access（M4 §3.3）。返回 false 表示关系已被服务端掐断（401）—— 此时
+    /// 清掉本机凭证，App 回到未配对状态。单飞：撞车的调用共享同一个在途任务，不叠加请求。
     private func refreshAccess() async -> Bool {
         if let refreshTask { return await refreshTask.value }
         let task = Task<Bool, Never> { [weak self] in
@@ -111,8 +103,8 @@ final class GatewayClient: ObservableObject {
 
     /// 拉一段回溯窗口 —— 打开会话与往回翻都用它。
     /// - Parameters:
-    ///   - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」，即打开会话；
-    ///     往回翻时传上一次的 `pageStart`。
+    ///   - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」（打开会话）；
+    ///   往回翻时传上一次的 `pageStart`。
     ///   - maxMessages: 最多取多少条消息。不传就用服务端的默认值。
     func page(sessionId: String, beforeSeq: Int? = nil, maxMessages: Int? = nil) async throws -> SessionPage {
         let response: PageResponse = try await send(
@@ -136,9 +128,8 @@ final class GatewayClient: ObservableObject {
 
     // MARK: - 两个写 op（M5）
 
-    /// 应答一条审批。`ok` 只意味着**已投递**——权威结果以流里的
-    /// `approval/decided` 为准（Plan §3.3 决定 3）。失败时如实上抛：
-    /// `unknown-approval` 表示这条审批已经不在了。
+    /// 应答一条审批。`ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准（Plan §3.3
+    /// 决定 3）。失败如实上抛：`unknown-approval` 表示这条审批已经不在了。
     func answerApproval(eventId: String, allow: Bool, answerId: String) async throws {
         let response: ApprovalAnswerResponse = try await send(
             ApprovalAnswerRequest(eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId)
@@ -200,9 +191,8 @@ final class GatewayClient: ObservableObject {
 
         if let http = urlResponse as? HTTPURLResponse {
             guard http.statusCode != 401 else {
-                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层续期重试；
-                // 鉴权请求（pair / refresh）的 401 自带语义，必须读出信封上抛：
-                // 配对码不对要说「配对码不对」，不是笼统的未认证。
+                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层续期重试；鉴权请求
+                // （pair / refresh）的 401 自带语义，必须读出信封上抛：配对码不对要说配对码不对。
                 guard authenticated else {
                     if let failure = envelopeFailure(in: payload) {
                         if failure.code == GatewayErrorCode.unauthenticated.rawValue {
@@ -235,10 +225,8 @@ final class GatewayClient: ObservableObject {
 // MARK: - 地址
 
 extension GatewayClient {
-    /// Mac 网关的地址 —— **全 App 唯一需要改的一行**。
-    ///
-    /// M0 的取舍就是硬编码（Plan §4.3 Step 4）：不做设备发现、不做配置界面。
-    /// 换成 `http://<Mac的主机名>.local:3081` 也行，那条路走 mDNS，IP 变了不用改。
+    /// Mac 网关的地址 —— **全 App 唯一需要改的一行**。M0 的取舍就是硬编码（Plan §4.3 Step 4）：
+    /// 不做设备发现、不做配置界面；换成 `http://<Mac的主机名>.local:3081` 走 mDNS 也行。
     static let defaultBaseURL = URL(string: "http://192.168.125.23:3081")!
 }
 
@@ -302,10 +290,8 @@ private struct SessionPromptRequest: Encodable {
 
 // MARK: - 响应
 
-/// 响应信封的公共部分（协议 §三）。
-///
-/// 载荷字段一律声明成可选：服务端拒绝时（`ok: false`）根本不会带载荷，
-/// 若声明成必选，解码会先一步失败，我们就拿不到那条有用的 `error` 了。
+/// 响应信封的公共部分（协议 §三）。载荷字段一律声明成可选：服务端拒绝时（`ok: false`）根本
+/// 不会带载荷，声明成必选会让解码先一步失败，我们就拿不到那条有用的 `error` 了。
 protocol GatewayResponse: Decodable {
     var v: Int { get }
     var ok: Bool { get }
@@ -387,7 +373,7 @@ private struct FailureEnvelope: Decodable {
     let error: GatewayFailure?
 }
 
-/// 信封里的 error（没有就 nil）—— 服务端的拒绝比解码器的报错有用得多。
+/// 信封里的 error（没有就 nil）。
 private func envelopeFailure(in payload: Data) -> GatewayFailure? {
     (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
 }
@@ -405,11 +391,9 @@ struct SessionSnapshot {
 
 // MARK: - 回溯窗口
 
-/// 一段往回读的窗口（协议 §4.3）。
-///
-/// 与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口从某个位置往回走。
-/// 打开会话时用后者取最近一段，之后用前者追新增 —— 这样客户端**不需要跨会话
-/// 记住任何位置**，冷启动永远从「现在的最新一段」开始。
+/// 一段往回读的窗口（协议 §4.3）。与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口
+/// 从某个位置往回走。打开会话用后者取最近一段，之后用前者追新增 —— 客户端**不需要跨会话记住
+/// 任何位置**，冷启动永远从「现在的最新一段」开始。
 struct SessionPage {
     /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
     let pageStart: Int
@@ -463,11 +447,9 @@ enum GatewayClientError: LocalizedError {
         }
     }
 
-    /// 把 `URLError` 翻译成人话 —— **Step 4 真正要撞的两个坑会在这里自己报出名字**。
-    ///
-    /// iOS 上有两套彼此独立的管控会拦掉到局域网的明文 HTTP，各自报不同的错：
-    /// ATS 报 `-1200`，LNP 报 `NotConnectedToInternet`。改错地方都白改，
-    /// 所以这里必须把它们分开说。
+    /// 把 `URLError` 翻译成人话 —— **Step 4 真正要撞的两个坑会在这里自己报出名字**：iOS 上有两套
+    /// 彼此独立的管控拦明文 HTTP 到局域网，ATS 报 `-1200`、LNP 报 `NotConnectedToInternet`，改错
+    /// 地方都白改，所以必须分开说。
     private static func explain(url: URL, error: Error) -> String {
         guard let urlError = error as? URLError else {
             return error.localizedDescription

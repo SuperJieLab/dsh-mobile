@@ -1,20 +1,12 @@
 /**
- * Upstream failures, read one way.
+ * Upstream failures, read one way: two pure predicates, once copied into the
+ * HTTP contract, the stream adapter, and the write adapter.
  *
- * Three copies of these two predicates had accumulated (the HTTP contract, the
- * stream adapter, the write adapter). The cost was not the lines: each copy
- * decides *which protocol code an upstream failure becomes*, so a new error
- * class added in one place would silently keep being `internal-error` in the
- * others — the HTTP path and the stream path answering differently for the
- * same failure. Pure functions, like everything else in this directory.
+ * They match the runtime's own error classes structurally — `isDSHRemoteError`
+ * and `code` — because this module lives outside the installation.
  *
- * The names are the runtime's own error classes. `isDSHRemoteError` / `code`
- * are what a `@deepseek-ai/dsh-*` remote failure carries structurally; this
- * module cannot import the host's classes (it lives outside the installation).
- *
- * Only the *predicates* are shared. Which protocol code a failure becomes
- * stays with each caller — the stream path and the write path fold a not-found
- * into different codes on purpose.
+ * Only the predicates are shared; which protocol code a failure becomes stays
+ * with each caller (the stream and write paths fold a not-found differently).
  */
 
 /** Whether an error means "stored, but this runtime will not interpret it". */
@@ -31,10 +23,9 @@ export function isRemoteError(error: unknown): error is { code: string } {
 }
 
 /**
- * Whether a remote failure means "what you named is not there" — matched by the
- * `/not-found` suffix in **any** namespace (`session/not-found`,
- * `agent/not-found`, …), so a namespace we do not know about yet still reads as
- * a missing thing rather than a server fault.
+ * Whether a remote failure means "what you named is not there": the
+ * `/not-found` suffix in **any** namespace, even one we do not know yet —
+ * a missing thing, not a server fault.
  */
 export function isNotFound(error: unknown): boolean {
   return isRemoteError(error) && error.code.endsWith('/not-found')

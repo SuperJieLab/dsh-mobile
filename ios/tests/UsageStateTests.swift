@@ -1,10 +1,7 @@
 /**
- * UsageState 的吸收测试（O1–O2）。
+ * UsageState 的吸收测试（O1–O2）：纯值类型，不碰网络 / UI / 持久化。
  *
- * 与 `SessionMirrorTests` / `TransientChannelTests` 同一手法：占用值是纯值类型，
- * 不碰网络、不碰 UI、不碰持久化 —— 这里没有服务器，也没有 WebSocket。
- *
- * 判据与出处：docs/dev/plans/M6-presentation-layer.md §五（O1）。吸收规则照上游
+ * 判据与出处：docs/dev/plans/M6-presentation-layer.md §五。吸收规则照上游
  * `api/session-controller/src/client/sessions/projection-store.ts:136` ——
  * **严格高 seq 胜，相等也丢**。
  */
@@ -23,31 +20,25 @@ struct UsageStateTests {
     }
 
     static func main() {
-        // O1a：空状态没有任何可显示的东西。
         var state = UsageState()
         expect(state.usage == nil, "O1a 初始无占用值")
 
-        // O1b：第一帧落地。
         var verdict = state.apply(snapshot(120, 52_300, window: 128_000))
         expect(verdict == .accepted && state.usage?.usedTokens == 52_300, "O1b 首帧落地")
 
-        // O1c：水位更小的帧被丢弃 —— 迟到的旧帧不能把显示往回拽。
         verdict = state.apply(snapshot(90, 10_000, window: 128_000))
         expect(verdict == .stale && state.usage?.usedTokens == 52_300, "O1c 小水位被丢，显示不倒退")
 
-        // O1d：同一水位的重放被丢弃 —— 显示不变。
         verdict = state.apply(snapshot(120, 999, window: 128_000))
         expect(verdict == .stale && state.usage?.usedTokens == 52_300, "O1d 同水位重放被丢")
 
-        // O1e：水位更大的帧照常覆盖（新水位不被误拒）。
         verdict = state.apply(snapshot(121, 60_000, window: 128_000))
         expect(verdict == .accepted && state.usage?.usedTokens == 60_000, "O1e 大水位照常覆盖")
 
-        // O1f：占用消失也是一次推进 —— 显示随之清空。
+        // O1f：占用消失也算一次推进。
         verdict = state.apply(snapshot(122))
         expect(verdict == .accepted && state.usage == nil, "O1f 清空帧被接受")
 
-        // O1g：清空之后，旧帧不能把它复活。
         verdict = state.apply(snapshot(100, 5_000, window: 128_000))
         expect(verdict == .stale && state.usage == nil, "O1g 清空后旧帧不能复活它")
 

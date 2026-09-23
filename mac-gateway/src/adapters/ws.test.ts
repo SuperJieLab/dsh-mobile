@@ -1,12 +1,10 @@
 /**
- * Stream adapter tests: a real listener, a real WebSocket client (Node's
- * built-in, the same RFC 6455 an iOS client speaks), a fake follow source.
+ * Stream adapter tests: a real listener, a real WebSocket client (Node's built-in, the
+ * same RFC 6455 an iOS client speaks), a fake follow source.
  *
- * What these prove beyond the contract tests: the upgrade negotiation works, the
- * mux survives a real socket, the pump's unwrapping produces openings and
- * events a `page` could have produced, continuity witnessing fires on a lying
- * source, and a hostile source still answers with frames instead of killing
- * the process.
+ * Beyond the contract tests these prove: upgrade negotiation, the mux over a real
+ * socket, openings and events a `page` could have produced, continuity witnessing
+ * firing on a lying source, and a hostile source answered with frames.
  */
 
 import assert from 'node:assert/strict'
@@ -47,10 +45,8 @@ async function connect(server: Server): Promise<WebSocket> {
 }
 
 /**
- * One event from the client socket.
- *
- * Node's built-in WebSocket is an EventTarget, not an EventEmitter — the
- * `events.once` helper never sees its events, which is a hang, not an error.
+ * One event from the client socket. Node's built-in WebSocket is an EventTarget, not
+ * an EventEmitter — `events.once` never sees its events, which is a hang, not an error.
  */
 function socketEvent(socket: WebSocket, type: string): Promise<{ data?: unknown; code?: unknown }> {
   return new Promise((resolve, reject) => {
@@ -66,15 +62,11 @@ async function receive(socket: WebSocket): Promise<Record<string, unknown>> {
   return receiverFor(socket).receive()
 }
 
-/**
- * The per-socket frame receiver: one continuous listener, a queue, and
- * receive-with-timeout.
+/** The per-socket frame receiver: one continuous listener, a queue, receive-with-timeout.
  *
- * The pump writes frames back-to-back, so several `message` events can fire
- * between two `receive` calls — a listen-only-when-asked helper would miss
- * them and hang forever. The queue is what makes receiving order-sensitive
- * but timing-insensitive; the WeakMap is what keeps a second `receive` from
- * attaching a second listener and double-queuing every frame.
+ * The pump writes frames back-to-back, so several `message` events can fire between two
+ * `receive` calls — a listen-only-when-asked helper would miss them and hang. Hence the
+ * queue (order-sensitive, not timing-sensitive) and one listener per socket.
  */
 const receivers = new WeakMap<WebSocket, { receive: (timeoutMs?: number) => Promise<Record<string, unknown>> }>()
 

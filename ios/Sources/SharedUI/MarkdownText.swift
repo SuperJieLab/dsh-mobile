@@ -1,25 +1,20 @@
 import SwiftUI
 
-/// 助手文本的渲染：`[Block]` → 视图。
-///
-/// 它**只认 `[Block]`，不认 markdown 源文** —— 解析与渲染分层隔离，将来若把自写解析器
-/// 换成成熟库（触发条件见 `docs/dev/plans/M6-presentation-layer.md` §3.3 决定 15），
-/// 换掉的是 `MarkdownParser` 那一层，这里一行都不用动。
+/// 助手文本的渲染：`[Block]` → 视图。它**只认 `[Block]`，不认 markdown 源文** —— 将来若把
+/// 自写解析器换成成熟库（触发条件见 `docs/dev/plans/M6-presentation-layer.md` §3.3 决定 15），
+/// 换的是 `MarkdownParser` 那一层，这里一行都不用动。
 ///
 /// ## 流式：解析结果随源文增量演进
 ///
-/// 正文在瞬态通道上逐 chunk 增长（M2 的打字机）。这里的做法是：
-///
-/// - 解析结果放在 `@State` 里，**只在视图第一次出现时全量解析**（`State(initialValue:)`
-///   在身份不变的重建里会被忽略 —— 于是父视图每次重算 body 都不会重解析）。
-/// - 源文变化时走 `MarkdownParser.parse(_:extending:)`：**已冻结的块原样搬运，只重解析尾部**。
-/// - 块的 `id` 是它的源偏移，冻结块的 id 不变 ⇒ SwiftUI 不重挂载那一行，界面不闪（判据 M3/R4）。
+/// 正文在瞬态通道上逐 chunk 增长（M2 的打字机）。解析结果放在 `@State` 里，**只在视图第一次
+/// 出现时全量解析**（`State(initialValue:)` 在身份不变的重建里被忽略，故父视图重算 body 不会
+/// 重解析）；源文变化走 `MarkdownParser.parse(_:extending:)` —— **冻结块原样搬运、只重解析尾部**。
+/// 块的 `id` 是源偏移，冻结块 id 不变 ⇒ SwiftUI 不重挂载、界面不闪（判据 M3/R4）。
 ///
 /// ## 行内交给系统，块级自己画
 ///
-/// 行内（粗体 / 斜体 / 行内码 / 链接）由 `MarkdownParser.attributed` 交给系统的
-/// `AttributedString(markdown:)`；块级的排版（标题字号、代码块、列表圆点与序号、引用竖线、
-/// 分隔线）必须自己画 —— 系统在 `Text` 上不做块级排版。
+/// 行内（粗体 / 斜体 / 行内码 / 链接）由 `MarkdownParser.attributed` 交给系统；块级排版
+/// （标题字号、代码块、列表圆点与序号、引用竖线、分隔线）必须自己画 —— 系统在 `Text` 上不做。
 struct MarkdownText: View {
     let source: String
 
@@ -97,9 +92,8 @@ private struct BlockView: View {
     }
 }
 
-/// 围栏代码块：等宽、带底、可横向滚动（长行不折行、不撑破窄屏）。
-///
-/// 语言标记只用来留痕（放右上角的小字）—— 本期不做语法高亮（§1.3 不做清单）。
+/// 围栏代码块：等宽、带底、可横向滚动（长行不折行）。语言标记只用来留痕（右上角小字）——
+/// 本期不做高亮（§1.3）。
 private struct CodeBlockView: View {
     let language: String?
     let code: String

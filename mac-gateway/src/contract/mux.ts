@@ -1,28 +1,17 @@
 /**
  * The stream contract: the mux framing and the follow opening, as pure functions.
  *
- * This layer owns everything about the new transport that is NOT a protocol
- * message: the frame envelope (which carries `streamId` and nothing else), the
- * follow request's shape, and the window assembly the opening frame serves.
- * Everything that IS a protocol message — records, events, error objects — is
- * produced by `rpc.ts` and passed through here **verbatim**: that pass-through
- * is the executable form of "the same messages, one word unchanged, on the new
- * carrier" (docs/dev/plans/M2-realtime-transient.md §3.3).
+ * Owns what is not a protocol message: the frame envelope (`streamId` and nothing else), the follow
+ * request's shape, the window assembly. Protocol messages come from `rpc.ts` **verbatim** (§3.3).
  *
- * Frame shapes mirror the reference mux exactly (upstream `stream-protocol.ts`,
- * pinned at `0d1f5000`): a client sends `{type:'open'|'cancel', streamId,
- * payload}`, the server answers `{type:'item'|'end'|'error', streamId, payload}`.
- * One logical stream is one AsyncIterable; there is no request/response
- * correlation to get wrong. The HTTP envelope's `{v, op, ok}` shell does not
- * enter this channel — a stream has no reply to mark ok, and the version gate
- * lives in the `mux v1` framing contract instead (docs/dev/plans/M2-realtime-transient.md
- * §3.3, "the precise scope of 'word for word'").
+ * Frame shapes mirror the reference mux (upstream `stream-protocol.ts`, `0d1f5000`); one stream is
+ * one AsyncIterable — nothing to correlate.
+ * The HTTP envelope's `{v, op, ok}` shell stays out, since
+ * a stream has no reply to mark ok; the version gate lives in the `mux v1` framing contract
+ * (§3.3, "word for word").
  *
- * The opening's records share `pageWindow` with `page` (rpc.ts) — one window
- * function, so "the follow opening is the same window a `page` returns" is a
- * structural fact, not a promise to keep in sync.
- *
- * See docs/dev/plans/M2-realtime-transient.md §3.2/§3.3/§4.4.
+ * The opening shares `pageWindow` with `page` (rpc.ts), so "the opening is the same window a `page`
+ * returns" is structural (docs/dev/plans/M2-realtime-transient.md §3.2/§4.4).
  */
 
 import { pageWindow, type WireEvent } from './rpc.ts'
@@ -72,12 +61,10 @@ export interface MuxApprovalFrame {
 }
 
 /**
- * Server → client: the occupancy reading for one stream (M6).
- *
- * Stream-scoped, unlike `approval`: occupancy belongs to the session this
- * stream follows, and the water mark it carries is the projection's cut, not
- * the window's `cursor` — the two are different axes and a client must not
- * subtract them (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+ * Server → client: the occupancy reading for one stream (M6) — stream-scoped, unlike
+ * `approval`: occupancy belongs to the session this stream follows. ⚠️ The water mark is the
+ * projection's cut, not the window's `cursor`, and a client must not subtract the two
+ * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
  */
 export interface MuxUsageFrame {
   type: 'usage'
@@ -92,11 +79,9 @@ export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApp
 /**
  * Parse one client frame from its wire text.
  *
- * @returns `undefined` for anything that is not a well-formed client frame —
- *   unparsable JSON, an unknown `type`, a non-integral `streamId`, or an `open`
- *   whose payload is not a follow request. The caller answers `undefined` with
- *   a transport-level close, not a protocol error frame: a thing that cannot be
- *   parsed is not a message and has no stream to be refused on.
+ * @returns `undefined` for unparsable JSON, an unknown `type`, a non-integral `streamId`, an `open`
+ *   whose payload is not a follow request — answered with a transport-level close: something
+ *   unparsable is not a message and has no stream to refuse it on.
  */
 export function parseClientFrame(text: string): MuxClientFrame | undefined {
   let parsed: unknown
@@ -126,12 +111,10 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
 }
 
 /**
- * The follow request carried by an `open` payload.
- *
- * Deliberately small — the reference request is `{address, maxMessages?,
- * assistantStream?}` (upstream `types.ts:449`), and the notable absence is a
- * water mark: a reconnect re-opens and rebuilds its window from the new opening
- * rather than resuming from a cursor (docs/dev/plans/M2-realtime-transient.md §3.4).
+ * The follow request carried by an `open` payload — deliberately small. The reference request
+ * is `{address, maxMessages?, assistantStream?}` (upstream `types.ts:449`); the notable absence
+ * is a water mark: a reconnect re-opens and rebuilds its window from the new opening rather than
+ * resuming from a cursor (docs/dev/plans/M2-realtime-transient.md §3.4).
  */
 export interface FollowRequest {
   sessionId: string
@@ -142,15 +125,12 @@ export interface FollowRequest {
 /**
  * Validate an `open` payload as a follow request.
  *
- * The op set is shared with the HTTP envelope by name and meaning; M2 adds
- * exactly one op, `follow` (docs/dev/plans/M2-realtime-transient.md §3.3). A
- * payload naming any other op — or none — is not a follow request and comes
- * back `undefined`.
+ * The op set is shared with the HTTP envelope by name and meaning; M2 adds one op, `follow`
+ * (docs/dev/plans/M2-realtime-transient.md §3.3) — any other, or none, is not a follow request.
  *
- * @returns the request, or `undefined` when it cannot name a session — the
- *   same leniency boundary as `page`: a malformed `maxMessages` degrades to the
- *   default (the worst case is one window the caller did not need), but a
- *   payload without a usable `sessionId` is not a follow request at all.
+ * @returns the request, or `undefined` when it cannot name a session — the same leniency boundary
+ *   as `page`: a malformed `maxMessages` degrades to the default; no usable `sessionId` is not a
+ *   follow request.
  */
 export function followRequestOf(payload: unknown): FollowRequest | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
@@ -167,10 +147,9 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
 export interface FollowOpening {
   sessionId: string
   /**
-   * The exclusive upper bound the log had reached when the opening was cut —
-   * the position the event frames that follow start *after*. Present so the
-   * client can state "everything from here on arrived live" without comparing
-   * window contents.
+   * The exclusive upper bound the log reached when the opening was cut — the position the event
+   * frames that follow start *after*, so a client can say "everything from here on arrived live"
+   * without comparing window contents.
    */
   cursor: number
   /** First seq of the window — the client's next `beforeSeq` when paging back. */
@@ -180,21 +159,19 @@ export interface FollowOpening {
   /** The window — serialized identically to a `page` reply's `events`. */
   events: readonly WireEvent[]
   /**
-   * The transient baseline, carried through verbatim when one is live: an
-   * in-progress assistant attempt with its accumulated text and next chunk
-   * index. Opaque here — the client's `TransientChannel` owns its semantics
-   * (docs/dev/plans/M2-realtime-transient.md §3.4); the contract only promises that
-   * what the source gave arrives unchanged.
+   * The transient baseline, carried through verbatim when one is live: an in-progress assistant
+   * attempt with its accumulated text and next chunk index. Opaque here — the client's
+   * `TransientChannel` owns the semantics (docs/dev/plans/M2-realtime-transient.md §3.4); the
+   * contract only promises what the source gave arrives unchanged.
    */
   assistantStream?: unknown
   /**
-   * The occupancy baseline, read at the moment this opening was assembled (M6).
-   * Absent when the projections held nothing displayable — a statement, not a
-   * fault (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+   * Occupancy as read when this opening was assembled (M6); absent when the projections held
+   * nothing displayable — a statement, not a fault (§3.1 决定 2).
    *
-   * ⚠️ `occupancy.asOfSeq` is the projection's cut, **not** this opening's
-   * `cursor`: the window is cut by message count and may trail or lead the log
-   * the projections were folded over. The two water marks are independent.
+   * ⚠️ `occupancy.asOfSeq` is the projection's cut, **not** this opening's `cursor`: the window is
+   * cut by message count, so it may trail or lead the projections' log — independent water marks
+   * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
    */
   occupancy?: UsageSnapshot
 }
@@ -202,17 +179,13 @@ export interface FollowOpening {
 /**
  * Assemble a follow opening from one session's whole log.
  *
- * The whole-log input is the same price `page` already pays (the stored-read
- * API walks forward only), and it is what makes the window assembly identical
- * to a `page`'s: same function, same density precondition, same boundary rule.
+ * The whole-log input is the same price `page` pays (the stored-read API is forward-only), and it
+ * makes the window assembly identical to a `page`'s: same function, same density precondition,
+ * same boundary rule. `occupancy` is carried through as read by the caller, so window and state
+ * come from one moment (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
  *
- * `occupancy` is carried through as read: this function does not know where the
- * projections live, and the caller reads them at the moment it assembles the
- * opening so the client gets a window and a state from one moment
- * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
- *
- * @throws the errors {@link pageWindow} throws — the adapter turns them into an
- *   `error` frame carrying the same code a `page` would have refused with.
+ * @throws the errors {@link pageWindow} throws — the adapter turns them into an `error` frame
+ *   with the same code a `page` would have refused with.
  */
 export function followOpening(
   request: FollowRequest,
@@ -231,8 +204,8 @@ export function followOpening(
 }
 
 /**
- * Window size for a follow opening when the caller does not say — the same
- * default a `page` uses, because the opening IS the first page.
+ * Window size for a follow opening when the caller does not say — the same default a `page` uses,
+ * because the opening IS the first page.
  */
 export const DEFAULT_FOLLOW_MESSAGES = 50
 

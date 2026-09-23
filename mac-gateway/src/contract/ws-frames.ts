@@ -1,21 +1,14 @@
 /**
- * The WebSocket framing contract: the RFC 6455 subset this gateway speaks, as pure
- * functions.
+ * The WebSocket framing contract: the RFC 6455 subset this gateway speaks, as pure functions —
+ * byte-level and side-effect-free, hence testable without a socket.
  *
- * Why hand-rolled: the plugin imports Node builtins only (docs/dev/plans/M0 §5.1 —
- * bare specifiers do not resolve from outside the dsh installation), so there
- * is no `ws` library. The subset is exactly what the mux needs — text frames
- * both ways, ping/pong for the heartbeat, close — and nothing else: no
- * extensions, no binary frames, no permessage-deflate. Everything here is
- * byte-level and side-effect-free, which is what makes it testable without a
- * socket.
+ * Hand-rolled: the plugin imports Node builtins only (docs/dev/plans/M0 §5.1 — no bare specifiers
+ * outside the dsh installation), so no `ws`; the subset is exactly what the mux needs — text both
+ * ways, ping/pong heartbeat, close — no extensions, no binary, no deflate.
  *
- * Two asymmetries of RFC 6455 are handled, not absorbed: client frames are
- * MASKED and must be unmasked, server frames are never masked; and a client
- * message may arrive fragmented, so the parser is incremental — it consumes
- * buffer chunks and reports what it consumed.
- *
- * See docs/dev/plans/M2-realtime-transient.md §3.2 and §4.4 step 1.
+ * Two RFC 6455 asymmetries are handled, not absorbed: client frames are MASKED and must be
+ * unmasked, server frames never are; and a message may arrive fragmented, so the parser is
+ * incremental (docs/dev/plans/M2-realtime-transient.md §3.2/§4.4 step 1).
  */
 
 import { createHash } from 'node:crypto'
@@ -26,8 +19,7 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 /**
  * The `Sec-WebSocket-Accept` value for a handshake request.
  *
- * @returns the base64 digest, or `undefined` when the request is not a
- *   well-formed RFC 6455 upgrade for this gateway's expectations (missing key).
+ * @returns the base64 digest, or `undefined` when the key is missing.
  */
 export function acceptKeyOf(headers: Readonly<Record<string, string | string[] | undefined>>): string | undefined {
   const key = headerOf(headers, 'sec-websocket-key')
@@ -63,11 +55,8 @@ const OP_PING = 0x9
 const OP_PONG = 0xa
 
 /**
- * One frame parsed out of the client's byte stream.
- *
- * Control frames (ping/pong/close) may interleave between fragments of a text
- * message; only text frames (and continuations of one) carry payloads that
- * reach the mux.
+ * One frame parsed out of the client's byte stream. Control frames may interleave between fragments
+ * of a text message; only text (and its continuations) carries payload that reaches the mux.
  */
 export interface WsTextFrame {
   kind: 'text'
@@ -95,12 +84,8 @@ export interface WsCloseFrame {
 export type WsFrame = WsTextFrame | WsPingFrame | WsPongFrame | WsCloseFrame
 
 /**
- * An incremental parser for the client side of one WebSocket connection.
- *
- * The socket delivers chunks, not frames; this object holds the fragments of
- * an unfinished text message across them. `push` returns the messages that
- * completed in this chunk and reports how many bytes were consumed, so a
- * partial frame at the buffer's end survives until the next chunk.
+ * An incremental parser for the client side of one WebSocket connection: the socket delivers
+ * chunks, not frames, and unfinished text fragments live here across them.
  */
 export class WsFrameParser {
   /** Assembled so far of an unfinished text message. */
@@ -109,12 +94,10 @@ export class WsFrameParser {
   /**
    * Consume bytes, completing as many messages as they hold.
    *
-   * @returns the completed frames and the number of bytes consumed; everything
-   *   past `consumed` belongs to an unfinished frame and must be re-presented
-   *   with the next chunk. A protocol violation (reserved opcode, unmasked
-   *   client frame, oversized length) returns `error` — the caller closes the
-   *   connection, because a peer that breaks framing is not speaking this
-   *   protocol at all.
+   * @returns the completed frames and the bytes consumed — everything past that belongs to an
+   *   unfinished frame and must be re-presented with the next chunk. A protocol violation (reserved
+   *   opcode, unmasked client frame, oversized length) returns `error`: the caller closes, because
+   *   a peer that breaks framing is not speaking this protocol.
    */
   push(chunk: Buffer): { frames: WsFrame[]; consumed: number; error?: string } {
     const frames: WsFrame[] = []
@@ -138,11 +121,7 @@ export class WsFrameParser {
     return { frames, consumed: offset }
   }
 
-  /**
-   * Parse one frame starting at `offset`.
-   *
-   * `frame: undefined` with no error means "need more bytes".
-   */
+  /** Parse one frame at `offset`; no frame and no error means "need more bytes". */
   private static parseOne(
     chunk: Buffer,
     offset: number,
@@ -221,8 +200,8 @@ export function encodeClose(): Buffer {
 }
 
 function encodeFrame(opcode: number, payload: Buffer): Buffer {
-  // Server frames are never masked. Lengths: <126 inline, <65536 as 16-bit,
-  // anything the demo will actually produce as 64-bit.
+  // Server frames are never masked. Lengths: inline <126, 16-bit <65536,
+  // 64-bit beyond (not expected in practice).
   if (payload.length < 126) {
     const head = Buffer.from([0x80 | opcode, payload.length])
     return Buffer.concat([head, payload])

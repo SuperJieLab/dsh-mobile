@@ -1,21 +1,17 @@
 /**
- * The auth contract: three tickets, all decisions as pure functions.
- *
- * Model (docs/dev/plans/M4-identity-credentials.md §4.2) — each ticket answers one
- * question, so leaking any one of them is not losing all three:
+ * The auth contract: three tickets, each answering one question, so leaking one
+ * is not losing all three (docs/dev/plans/M4-identity-credentials.md §4.2).
  *
  *   pairing code   one-shot · 10 min · dead after 5 wrong tries — establishes
  *                  the relationship; only ever answered with a device token
- *   device token   the relationship itself · long-lived · revocable — stored as
- *                  a SHA-256 hash; only ever used to obtain access tokens
- *   access token   a time slice · 15 min · held in memory on both ends — the
- *                  only ticket that may ride a business request
+ *   device token   the relationship · long-lived · revocable — stored as a
+ *                  SHA-256 hash; only ever used to obtain access tokens
+ *   access token   a time slice · 15 min · in memory on both ends — the only
+ *                  ticket that may ride a business request
  *
- * Like `rpc.ts`, nothing here touches sockets, files, or the runtime: `random`
- * and `now` are injected, so every rule below is assertable without a network.
- * Hashing uses `node:crypto` — a Node builtin is the one dependency this
- * out-of-tree module may take, and a stored hash (not the raw token) is what
- * makes the credentials file readable without being usable.
+ * Pure functions with `random` and `now` injected, so every rule is assertable
+ * without a network. Hashing uses `node:crypto` — the one dependency this
+ * out-of-tree module may take — and only the hash is stored, never the token.
  */
 
 import { createHash } from 'node:crypto'
@@ -55,9 +51,8 @@ export function sha256Hex(text: string): string {
 }
 
 /**
- * A 6-digit pairing code. Six digits rather than more because the threat is a
- * bystander at pairing time, not an online brute force — the attempt cap is
- * what bounds that, and it is persistent.
+ * A 6-digit pairing code: the threat is a bystander at pairing time, not online
+ * brute force — the persistent attempt cap is what bounds it.
  */
 export function newPairingCode(random: () => number): string {
   const value = Math.floor(random() * 1_000_000)
@@ -74,11 +69,9 @@ export function newToken(random: () => number): string {
 }
 
 /**
- * `Authorization: Bearer <token>` → the token; anything else → nothing.
- *
- * The header is the only place identity rides (docs/dev/protocol.md §「身份」):
- * putting it in the envelope would weld it to one transport, which is the one
- * thing the protocol's first constraint forbids.
+ * `Authorization: Bearer <token>` → the token; anything else → nothing. The
+ * header is the only place identity rides (docs/dev/protocol.md §「身份」) — in
+ * the envelope it would weld to one transport, which the first constraint forbids.
  */
 export function bearerTokenOf(header: string | undefined): string | undefined {
   if (header === undefined) return undefined
@@ -92,13 +85,10 @@ export function isPlausiblePairingCode(code: unknown): code is string {
 }
 
 /**
- * One pairing attempt, in and out — the file this call leaves behind is part of
- * the verdict, because both the attempt counter and the consumption are state.
- *
- * The code dies three ways: consumed (a successful pair), expired (10 minutes),
- * exhausted (5 wrong tries — including malformed input, which is exactly what
- * a brute force sends). A dead code is removed from the file: a code that can
- * no longer be answered must not linger on disk.
+ * One pairing attempt, in and out — the file left behind is part of the verdict,
+ * since both the attempt counter and the consumption are state. The code dies
+ * three ways: consumed, expired (10 minutes), exhausted (5 wrong tries, malformed
+ * input included). A dead code is removed — it can no longer be answered.
  */
 export type PairingOutcome =
   | { status: 'paired'; file: StoredCredentials; deviceToken: string }
@@ -154,10 +144,9 @@ function withoutPairing(file: StoredCredentials): StoredCredentials {
 }
 
 /**
- * Issue one access token against a presented device token.
- *
- * Returns the raw token exactly once — the server keeps only the hash, so a
- * leaked credentials file cannot mint access tokens.
+ * Issue one access token against a presented device token. The raw token
+ * returns exactly once — the server keeps only the hash, so a leaked
+ * credentials file cannot mint access tokens.
  */
 export function issueAccess(
   file: StoredCredentials,

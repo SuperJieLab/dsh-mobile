@@ -1,31 +1,18 @@
 /**
  * The protocol contract: one wire message in, one wire message out.
  *
- * `handle` is deliberately a plain async function with its data source injected.
- * It knows nothing about HTTP, sockets, the DSH runtime, or the session store —
- * so the same function is exercised by the contract tests, by `curl` over real HTTP,
- * and by the iPhone client, and it is what a future transport (WebSocket, raw
- * TCP) would call unchanged. That is the executable form of the first constraint
- * in docs/dev/protocol.md: the protocol is defined as messages, not as URLs.
+ * `handle` is a plain async function with its data source injected: no HTTP,
+ * sockets, DSH runtime, or session store. Every transport runs it unchanged —
+ * the protocol is messages, not URLs (docs/dev/protocol.md;
+ * docs/dev/plans/M0-reachability-spike.md §4.3 Step 3). Water marks (§五): both
+ * bounds half-open. `since` is the client's *next expected seq* (`0` = "I have
+ * nothing"); `asOfSeq` is covered up to, exclusive, and sent back as `since`
+ * never misses or re-fetches. Two non-overlapping reads: `snapshot` forward from
+ * a cursor, `page` backward to a window to open on (§4.2 / §4.3).
  *
- * Water-mark semantics (docs/dev/protocol.md §五): both bounds are half-open.
- *   - `since` is the client's *next expected seq* — the server returns `seq >= since`.
- *     `0` therefore means "I have nothing", which is why the client can send it
- *     unconditionally.
- *   - `asOfSeq` is the position this reply covers up to, exclusive. A client that
- *     stores it and sends it back as `since` never misses and never re-fetches.
- *
- * Two read directions live here and they do not overlap: `snapshot` walks
- * forward from a cursor, `page` walks backwards from a position to build a
- * window to open on (docs/dev/protocol.md §4.2 / §4.3).
- *
- * Reply caps (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 4): one reply carries
- * at most `maxDeltaEvents` events and, softly, `maxDeltaBytes` of serialized
- * `events`; a reply that stops early says so with `hasMore` so the client can
- * loop. The caps bound one reply's size — they never change what the sequence of
- * replies adds up to, which is what the chunking test pins down.
- *
- * See docs/dev/plans/M0-reachability-spike.md §4.3 Step 3 and docs/dev/protocol.md.
+ * Reply caps: one reply ≤ `maxDeltaEvents` events and, softly, `maxDeltaBytes`;
+ * an early stop says so with `hasMore`. Caps bound one reply, never what a
+ * sequence adds up to (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 4).
  */
 
 import { describeError, isUnreadable } from './errors.ts'
@@ -39,10 +26,9 @@ import {
 export const PROTOCOL_VERSION = 2
 
 /**
- * One session event as it travels on the wire: the DSH event object passed
- * through verbatim, unknown fields included. The protocol promises the fields
- * below; it does not promise their absence-of-extras, so clients must tolerate
- * fields they do not know.
+ * One session event on the wire: the DSH event object verbatim, unknown fields
+ * included. The protocol promises the fields below, not their exclusivity, so
+ * clients must tolerate unknown fields.
  */
 export interface WireEvent {
   /** DSH event type, e.g. `user/message`. */
@@ -57,26 +43,23 @@ export interface WireEvent {
 }
 
 /**
- * One row of the session list — the fields the list path promises (v2).
- *
- * Every field here comes from a session header or from a projection the host
- * already keeps. That is what makes listing zero-I/O: **nothing in this shape
- * requires reading a log** (docs/dev/protocol.md §4.1).
+ * One row of the session list — the fields the list path promises (v2). Every
+ * field comes from a session header or an already-kept projection, so listing
+ * is zero-I/O: nothing here needs a log read (docs/dev/protocol.md §4.1).
  */
 export interface SessionRow {
   /** Stored session id. */
   id: string
   /**
-   * Current title. Absent when the session has none *and* when no projection was
-   * available — a missing title is part of the contract, not a fault.
+   * Current title. Absent when the session has none *and* when no projection
+   * was available — a missing title is the contract, not a fault.
    */
   title?: string
   /** Unix epoch milliseconds the session was created. */
   createdAt: number
   /**
    * Unix epoch milliseconds of the last user prompt; creation time when there is
-   * none. **Not** the newest event's time — assistant output and tool calls do
-   * not move it (v1 promised the latter, which forced a log read).
+   * none. **Not** the newest event's time (v1 promised that, forcing a log read).
    */
   updatedAt: number
   /** Whether an agent is currently running for this session. */
@@ -85,9 +68,8 @@ export interface SessionRow {
   blank: boolean
   /**
    * `'subagent'` when this session is another session's child; absent otherwise.
-   *
-   * Carried so a client can apply the reference UI's visibility rule itself. The
-   * server states the fact; what to draw stays the client's decision.
+   * Carried so the client can apply the reference UI's visibility rule itself —
+   * the server states the fact, the drawing stays the client's call.
    */
   origin?: string
 }
@@ -102,42 +84,36 @@ export interface SessionSlice {
   hasMore: boolean
   /**
    * The client's cursor names a position that cannot exist: the log is empty
-   * while `since` is positive. This is the only wrong cursor the data source can
-   * prove — a `since` merely past the water mark looks exactly like "caught up"
-   * from here (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
+   * while `since` is positive. The only wrong cursor the data source can prove —
+   * a `since` past the water mark reads as "caught up"
+   * (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
    */
   staleCursor: boolean
 }
 
 /**
  * The data source the protocol layer is written against — the contract's only
- * dependency. Swapping the DSH-backed adapter for a fake is how the tests stay
- * free of any runtime, filesystem, or network.
+ * dependency; a fake keeps the tests free of runtime, filesystem, and network.
  */
 export interface SessionPort {
   /** Every session visible to this process. Order carries no meaning. */
   list(): Promise<readonly SessionRow[]>
   /**
    * At most `limit` events with `seq >= since`, or `undefined` when no such
-   * session exists. The slice reports whether more remain, so the caller never
-   * has to guess where the log ends.
+   * session exists. The slice reports whether more remain.
    */
   read(id: string, since: number, limit: number): Promise<SessionSlice | undefined>
   /**
-   * The entire log, or `undefined` when no such session exists.
-   *
-   * Backwards windows need the end of the log, and the storage read API only
-   * walks forward from an offset — so the whole log is the price of reaching
-   * the tail. The list path no longer pays this (v2 reads projections instead);
-   * `page` still does.
+   * The entire log, or `undefined` when no such session exists. Backwards
+   * windows need the log's end, and the storage read API only walks forward from
+   * an offset — the whole log is the price of reaching the tail. The list path
+   * no longer pays it (v2 reads projections); `page` still does.
    */
   readAll(id: string): Promise<readonly WireEvent[] | undefined>
 }
 
 /**
- * How large one `snapshot` reply may get. Constants by nature: they bound a
- * single reply and leave the sequence of replies — the part that carries meaning
- * — untouched, which is why tuning them cannot change a client's final view.
+ * How large one `snapshot` reply may get; one reply only, never a client's view.
  */
 export interface Limits {
   /** Most events one reply may carry. Must be positive. */
@@ -150,37 +126,29 @@ export interface Limits {
 export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_048_576 }
 
 /**
- * Messages one `page` returns when the caller does not say.
- *
- * Mirrors the reference client's page size. It is a *window* size, not a cap:
- * one page is delivered whole, so there is no `hasMore` loop on this path.
+ * Messages one `page` returns when the caller does not say; mirrors the
+ * reference client's page size. A *window*, not a cap: no `hasMore` loop here.
  */
 export const DEFAULT_PAGE_MESSAGES = 50
 
 /**
- * How much wider than its target a window may get while it walks back to a
- * `turn/start`.
+ * How much wider than its target a window may get while walking back to a
+ * `turn/start`. `maxMessages` is a target, not a promise: the caller gets a
+ * window that **starts on a turn boundary** — one opening mid-turn has no fold
+ * header so it lies flat, and paging back to that turn's opening folds the same
+ * run up instead (same content, two shapes; spec §8.5 B6 二次裁决).
  *
- * `maxMessages` is a target, not a promise: the caller asks for roughly that
- * many messages and gets a window that **starts on a turn boundary**. A window
- * that opens mid-turn hands the client a process group whose opening is not in
- * the window — it has no fold header, so it lies flat; when the user pages back
- * to that turn's opening the same run of events folds up instead. Same content,
- * two shapes, reproduced on a real phone (spec §8.5 B6 二次裁决).
- *
- * Twice the target is where the walk stops: an unreachable boundary must not
- * widen the window without limit. Real logs do not reach it — aligning cost
- * 5–18 events (+1.5%, worst case +88) across four sessions.
+ * Twice the target stops the walk, so an unreachable boundary cannot widen
+ * the window without limit. Real logs never reach it — aligning cost 5–18
+ * events across four sessions.
  */
 const TURN_ALIGN_CEILING = 2
 
 /**
- * The event types that count as a message when a page boundary is drawn.
- *
- * This is a boundary-drawing rule, not a display rule. A client shows fewer
- * messages than this (a `user/message` injected by the runtime carries
- * `source.kind !== "user"` and does not belong in a conversation), and that is
- * fine: a window may be wider than what gets drawn, never narrower.
+ * The event types that count as a message when a page boundary is drawn. A
+ * boundary-drawing rule, not a display rule: a client draws fewer (an injected
+ * `user/message` has `source.kind !== "user"`), and a window may be wider than
+ * what gets drawn, never narrower.
  */
 const MESSAGE_EVENT_TYPES: ReadonlySet<string> = new Set(['user/message', 'assistant/message'])
 
@@ -215,9 +183,8 @@ export type Response = OkResponse | ErrorResponse
  * @param now - clock for `serverTime`, injectable so tests are deterministic.
  * @param limits - reply caps; nonsense values fall back to {@link DEFAULT_LIMITS}
  *   rather than producing a reply the client could never advance past.
- * @returns the response envelope. This function does not throw: a hostile or
- *   wedged data source becomes a refusal, because "the process must not crash"
- *   is one of the criteria this step is judged by.
+ * @returns the response envelope. Never throws: a hostile or wedged data source
+ *   becomes a refusal ("the process must not crash" is a judged criterion).
  */
 export async function handle(
   message: unknown,
@@ -254,9 +221,8 @@ export async function handle(
         return failure('unknown-op', `unsupported op "${op}"`)
     }
   } catch (error) {
-    // Two distinct refusals, because they need different client behaviour: a
-    // log this runtime refuses to interpret is a stored session that cannot be
-    // shown, while anything else is our own failure.
+    // Two refusals, needing different client behaviour: a log this runtime will
+    // not interpret is a session that cannot be shown, anything else is ours.
     return isUnreadable(error)
       ? failure('unreadable-session', describeError(error))
       : failure('internal-error', describeError(error))
@@ -264,9 +230,9 @@ export async function handle(
 }
 
 /**
- * Deliver one approval answer (M5). `ok` here means *delivered to the pending
- * question* — the authoritative outcome is the `approval/decided` audit event,
- * which the client reconciles from the stream (Plan §3.3 决定 3).
+ * Deliver one approval answer (M5). `ok` means *delivered to the pending
+ * question* — the authoritative outcome is the `approval/decided` audit event
+ * the client reconciles from the stream (Plan §3.3 决定 3).
  */
 async function approvalAnswer(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
   const answer = approvalAnswerOf(envelope)
@@ -280,7 +246,10 @@ async function approvalAnswer(envelope: Record<string, unknown>, write: WritePor
   return { v: PROTOCOL_VERSION, ok: true, eventId: answer.eventId }
 }
 
-/** Admit one prompt (M5). `ok` means *accepted into the inbox* — the reply itself arrives via the stream. */
+/**
+ * Admit one prompt (M5). `ok` means *accepted into the inbox* — the reply itself arrives
+ * via the stream.
+ */
 async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
   const prompt = sessionPromptOf(envelope)
   if (prompt === undefined) {
@@ -296,8 +265,7 @@ async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort
 /** The list path: cheap per-session metadata, newest first. */
 async function listSessions(port: SessionPort, now: () => number): Promise<Response> {
   const summaries = [...await port.list()]
-  // Newest first is a promise the client can rely on instead of guessing, and
-  // it is decided here rather than in the client so every client agrees.
+  // Sorted here rather than in the client, so every client agrees on the order.
   summaries.sort((left, right) => right.updatedAt - left.updatedAt)
   return {
     v: PROTOCOL_VERSION,
@@ -309,9 +277,8 @@ async function listSessions(port: SessionPort, now: () => number): Promise<Respo
 
 /**
  * One row as the wire shape, omitting `title` rather than sending null.
- *
- * `eventCount` is deliberately absent: it is a log-derived fact, and promising
- * one would put the log back on the list path (docs/dev/protocol.md §4.1).
+ * `eventCount` is deliberately absent: a log-derived fact would put the log
+ * back on the list path (docs/dev/protocol.md §4.1).
  */
 function toWireSummary(row: SessionRow): Record<string, unknown> {
   return {
@@ -339,9 +306,8 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
   if (slice === undefined) return failure('unknown-session', `no stored session "${sessionId}"`)
 
   if (slice.staleCursor) {
-    // An error code rather than a silent empty reply: the client's whole view is
-    // untrustworthy, and a boolean field would be swallowed by clients that
-    // tolerate unknown fields (docs/dev/protocol.md §六).
+    // An error code, not a silent empty reply: the whole view is untrustworthy,
+    // and a boolean would be swallowed (docs/dev/protocol.md §六).
     return failure('resync-required', `since ${since} cannot exist: this session's log is empty`)
   }
 
@@ -359,11 +325,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
 
 /**
  * The backwards window: the newest `maxMessages` messages, or the run ending
- * just before `beforeSeq`.
- *
- * Bounded by *messages* but delivered as the whole interval — a caller drawing
- * seq N needs its neighbours too, and those neighbours are frequently not
- * messages themselves (docs/dev/protocol.md §4.3).
+ * just before `beforeSeq` — see {@link pageWindow} for the boundary rules.
  */
 async function page(envelope: Record<string, unknown>, port: SessionPort): Promise<Response> {
   const sessionId = envelope.sessionId
@@ -375,9 +337,8 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
     ? envelope.maxMessages
     : DEFAULT_PAGE_MESSAGES
 
-  // A malformed `beforeSeq` degrades to the newest window, the same way a
-  // malformed `since` degrades to `0`: the caller gets a legal answer, and the
-  // worst case is one window it did not need.
+  // A malformed `beforeSeq` degrades to the newest window, as a malformed
+  // `since` degrades to `0`: a legal answer, at worst one window too many.
   const requested = envelope.beforeSeq
   const beforeSeq = Number.isSafeInteger(requested) && (requested as number) >= 0
     ? requested as number
@@ -390,9 +351,9 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
   try {
     window = pageWindow(sessionId, events, beforeSeq, maxMessages)
   } catch (error) {
-    // Two distinct refusals, same codes as before the extraction: a log this
-    // runtime cannot interpret is `unreadable-session`, a cursor past the end
-    // is `resync-required` (docs/dev/plans/M1-consistency-delta.md 判据 P4).
+    // Two refusals, same codes as before the extraction: an uninterpretable log
+    // is `unreadable-session`, a cursor past the end is `resync-required`
+    // (docs/dev/plans/M1-consistency-delta.md 判据 P4).
     if (error instanceof LogNotDenseError) return failure('unreadable-session', error.message)
     if (error instanceof CursorPastEndError) return failure('resync-required', error.message)
     throw error
@@ -426,25 +387,16 @@ export class CursorPastEndError extends Error {
 }
 
 /**
- * One backwards window over a whole log — the arithmetic both `page` and the
- * follow opening share.
+ * One backwards window over a whole log — the arithmetic `page` and the follow
+ * opening share, so they cannot drift apart. Bounded by *messages* but delivered
+ * as the whole interval, since a drawn seq's neighbours are frequently not
+ * messages (docs/dev/protocol.md §4.3). Its **start** moves back to the nearest
+ * `turn/start` so it never opens mid-turn — {@link TURN_ALIGN_CEILING} covers
+ * why and how far.
  *
- * Bounded by *messages* but delivered as the whole interval — a caller drawing
- * seq N needs its neighbours too, and those neighbours are frequently not
- * messages themselves (docs/dev/protocol.md §4.3). Sharing this one function is
- * what makes "the follow opening is the same window a `page` returns" a
- * structural fact rather than a promise: there is no second implementation to
- * drift from.
- *
- * The window's **start** is then moved back to the nearest `turn/start`, so a
- * window never opens mid-turn — see {@link TURN_ALIGN_CEILING} for why that is
- * worth widening the window for, and how far it may widen.
- *
- * @throws {@link LogNotDenseError} when the log's seqs are not `0..n-1` — the
- *   window arithmetic reads positions as seqs, so density is a precondition
- *   here rather than a hope. Both callers refuse on it: `page` with
- *   `unreadable-session`, the follow path likewise, rather than handing back a
- *   window whose boundary means something different than it says.
+ * @throws {@link LogNotDenseError} when seqs are not `0..n-1`: the arithmetic
+ *   reads positions as seqs, so density is a precondition. Both callers refuse
+ *   with `unreadable-session`.
  */
 export function pageWindow(
   sessionId: string,
@@ -459,9 +411,8 @@ export function pageWindow(
 
   const end = beforeSeq ?? events.length
   if (end > events.length) {
-    // Unlike `snapshot`, this bound is knowable: the whole log is in hand. So a
-    // position past the end is refused rather than answered with an empty
-    // window that looks exactly like "you have reached the beginning".
+    // Unlike `snapshot` this bound is knowable — the whole log is in hand — so a
+    // position past the end is refused, not answered with an empty window.
     throw new CursorPastEndError(sessionId, end, events.length)
   }
 
@@ -469,9 +420,8 @@ export function pageWindow(
   let counted = 0
   for (let index = end - 1; index >= 0; index -= 1) {
     const event = events[index]
-    // A turn boundary wins over the count: once the target is met, walk on to
-    // the *nearest* `turn/start` rather than stopping inside a turn. `turn/start`
-    // is not a message, so this branch never disturbs the count.
+    // A turn boundary wins over the count: once the target is met, walk on to the
+    // *nearest* `turn/start`. `turn/start` is not a message, so the count holds.
     if (event?.type === 'turn/start' && counted >= maxMessages) {
       start = index
       break
@@ -500,15 +450,13 @@ export interface PageWindow {
 }
 
 /**
- * The reference host's spelling of the same window rule, derived from the one
- * target {@link pageWindow} takes.
+ * The reference host's spelling of the same window rule, from the one target
+ * {@link pageWindow} takes.
  *
- * The reference splits the rule into two numbers — a floor it may stop after
- * and a ceiling it must stop at — while our own function takes a single target
- * and derives the ceiling ({@link TURN_ALIGN_CEILING}). This is where the two
- * spellings meet, so the follow opening and `page` cannot drift apart: both ask
- * for a window that starts on a turn boundary, and both cap the walk at twice
- * the target.
+ * The reference splits the rule into a floor it may stop after and a ceiling it
+ * must stop at; ours derives the ceiling from the target
+ * ({@link TURN_ALIGN_CEILING}). Both cap the walk at twice the target, so the
+ * follow opening and `page` stay aligned.
  */
 export function upstreamWindow(targetMessages: number): {
   maxMessages: number
@@ -516,20 +464,17 @@ export function upstreamWindow(targetMessages: number): {
 } {
   return {
     maxMessages: targetMessages * TURN_ALIGN_CEILING,
-    // The reference counts a turn the moment it meets one, so its `minTurns`
-    // of 1 already means "the nearest boundary wins" — the same thing our own
-    // walk does by stopping at the first qualifying `turn/start`.
+    // The reference counts a turn the moment it meets one, so `minTurns: 1`
+    // means "the nearest boundary wins" — what our walk does too.
     turnWindow: { minMessages: targetMessages, minTurns: 1 },
   }
 }
 
 /**
- * Keep the longest prefix of `events` that fits under the byte cap.
- *
- * The cap is deliberately soft: dropping every event would leave the client with
- * an empty reply and no way to advance, so the first event is delivered even
- * when it alone exceeds the cap. This bounds the ordinary reply, not the
- * pathological one — the pathological one is bounded by being exactly one event.
+ * Keep the longest prefix of `events` that fits under the byte cap. The cap is
+ * soft: dropping every event would leave the client unable to advance, so the
+ * first event goes even if it alone exceeds the cap — which is exactly what
+ * bounds the pathological reply.
  */
 function fitToByteCap(events: readonly WireEvent[], maxBytes: number): readonly WireEvent[] {
   const kept: WireEvent[] = []
@@ -544,11 +489,8 @@ function fitToByteCap(events: readonly WireEvent[], maxBytes: number): readonly 
 }
 
 /**
- * One event's serialized size.
- *
- * `TextEncoder` rather than `Buffer`: this layer is the protocol, and it stays
- * free of host-specific APIs so the same function can run anywhere the messages
- * travel.
+ * One event's serialized size. `TextEncoder`, not `Buffer`: no host-specific
+ * APIs, so it runs wherever the messages travel.
  */
 function wireBytesOf(event: WireEvent): number {
   return ENCODER.encode(JSON.stringify(event)).length
@@ -557,9 +499,8 @@ function wireBytesOf(event: WireEvent): number {
 const ENCODER = new TextEncoder()
 
 /**
- * Caps are configuration, so a nonsense one must not become a stall: a
- * non-positive or non-integer cap falls back to the default rather than
- * producing replies the client can never finish reading.
+ * A nonsense cap must not become a stall: a non-positive or non-integer one
+ * falls back to the default, never to a reply no client can finish reading.
  */
 function normalizeLimits(limits: Limits): Limits {
   return {
@@ -578,9 +519,9 @@ function isPositiveInteger(value: number): boolean {
 }
 
 /**
- * A missing or nonsense `since` reads as `0` — "send me everything" — instead of
- * a new error code. The client de-duplicates by `seq`, so the cost of the
- * lenient reading is a redundant payload, never a wrong view.
+ * A missing or nonsense `since` reads as `0` — "send me everything" — rather
+ * than a new error code: the client de-duplicates by `seq`, so leniency costs a
+ * redundant payload, never a wrong view.
  */
 function normalizeSince(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0

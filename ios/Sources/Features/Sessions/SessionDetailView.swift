@@ -2,20 +2,17 @@ import SwiftUI
 
 /// 单个会话的消息视图。
 ///
-/// 数据来自 `SessionSync` —— 它负责「先取一个窗口、再往后追新增、按需往回翻」，
-/// 这个屏只负责画出来，以及把同步状态如实显示在底部。
+/// 数据来自 `SessionSync` —— 它负责「先取一个窗口、再往后追新增、按需往回翻」，这个屏只管
+/// 画出来，以及把同步状态如实显示在底部。**往回翻是显式的**（列表第一行那个入口）：只在
+/// 用户要的时候才拉，不偷偷多拉一批；`hasOlder` 由服务端给，客户端不自己猜。
 ///
-/// **往回翻是显式的**（列表第一行那个入口）：历史只在用户要的时候才拉，而不是偷偷
-/// 多拉一批。`hasOlder` 由服务端给，客户端不自己猜还有没有。
-///
-/// 对话流 = 消息气泡 + **折起的过程行**（M6 起工具调用与轮次边界进流，但默认收起成
-/// 一行摘要，点开才是工具行与思考行）；打字机、占位行与审批卡另占各自的位置。
+/// 对话流 = 消息气泡 + **折起的过程行**（M6 起工具调用与轮次边界进流，默认收起成一行摘要，
+/// 点开才是工具行与思考行）；打字机、占位行与审批卡另占各自的位置。
 struct SessionDetailView: View {
     let client: GatewayClient
     let session: SessionSummary
 
-    /// 同步编排。视图重建时会新建一个，于是窗口重取一次 —— 这是刻意的：
-    /// 窗口是服务端此刻给的，比任何本地残留都可信（见 `SessionMirror` 的说明）。
+    /// 同步编排。视图重建时会新建一个、窗口重取一次 —— 重取的理由见 `SessionSync`。
     @StateObject private var sync: SessionSync
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
@@ -63,18 +60,15 @@ struct SessionDetailView: View {
                     case .message(let message):
                         MessageBubble(message: message)
                     case .process(let process):
-                        // 一轮的过程：默认收起成一行摘要，点开是工具行与思考行。
-                        // 它不是「消息」，所以不套气泡 —— 视觉上要和对话区分开。
+                        // 一轮的过程：它不是「消息」，所以不套气泡 —— 视觉上要与对话区分开。
                         TurnProcessRow(process: process)
                             .listRowSeparator(.hidden)
                     }
                 }
 
-                // 打字机：正在生成的回复。它不在镜像里 —— 瞬态内容没有 seq，
-                // 不属于「已读到的位置」（M2 的第一条纪律）。
-                //
-                // 它逐 chunk 增长，所以这里正是「尾部冻结」的用武之地：源文变化时
-                // `MarkdownText` 只重解析尾部，已渲染的那几块原样留着（判据 M3）。
+                // 打字机：正在生成的回复。它不在镜像里 —— 瞬态内容没有 seq，不属于「已读到的
+                // 位置」（M2 的第一条纪律）。它逐 chunk 增长，源文变化时 `MarkdownText` 只重
+                // 解析尾部、已渲染的块原样留着（判据 M3）。
                 if !sync.transientText.isEmpty {
                     Text("DSH 正在输入…")
                         .font(.caption2)
@@ -128,9 +122,8 @@ struct SessionDetailView: View {
                 sync.reconnectNow()
             }
             .safeAreaInset(edge: .bottom) {
-                // 底栏：审批卡（M5）→ 说明行 → 输入框 → 连接态。审批面板挂
-                // composer 上方是上游 Web UI 的原生位置（conversation.composer
-                // 槽位）——「正在问我的事」永远在输入框旁边，不在消息流里。
+                // 底栏：审批卡（M5）→ 说明行 → 输入框 → 连接态。审批面板挂在 composer 上方是
+                // 上游的原生位置（conversation.composer 槽位）——「正在问我的事」永远在输入框旁。
                 VStack(spacing: 0) {
                     ForEach(sync.approvals.pending) { approval in
                         ApprovalCard(approval: approval, state: sync.approvals.states[approval.id]) { allow in
@@ -147,9 +140,8 @@ struct SessionDetailView: View {
                             .padding(.vertical, 2)
                     }
 
-                    // 上下文占用（M6）：上游把它放在 composer 旁，这里同位置。
-                    // 没有读数就整行不出现 —— 不画一个 0%（与判据 U2 同一条纪律：
-                    // 「不知道」不该被显示成「空」）。
+                    // 上下文占用（M6）：上游把它放在 composer 旁，这里同位置；
+                    // 没有读数就整行不出现（判据 U2）。
                     if let usage = sync.usage {
                         OccupancyBar(usage: usage)
                             .padding(.horizontal, 12)
@@ -182,7 +174,7 @@ struct SessionDetailView: View {
         }
     }
 
-    /// 底部滚动锚点的 id。`private` 的静态值即可 —— 只有这个视图需要它。
+    /// 底部滚动锚点的 id。
     private static let bottomAnchor = "session-detail-bottom"
 }
 
@@ -198,8 +190,8 @@ private struct MessageBubble: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            // 助手的话按 Markdown 排版（标题 / 列表 / 代码块 / 引用 / 分隔线由块级自己画，
-            // 行内交给系统）；用户输入是纯文本，不值得解一遍。M6 步骤 5。
+            // 助手的话按 Markdown 排版（块级自己画、行内交给系统）；用户输入是纯文本，
+            // 不值得解一遍。M6 步骤 5。
             Group {
                 if isUser {
                     Text(message.text)

@@ -1,47 +1,29 @@
 /**
  * Markdown 解析器 —— 源文 → `[Block]`。
  *
- * **纯状态机：不 import SwiftUI / UIKit**，于是它和 `SessionMirror`、`TranscriptAssembler`、
- * `UsageState` 同待遇 —— 能被 `swiftc` 编成 macOS 命令行程序跑断言
- * （`ios/tests/run-markdown.sh`）。渲染层（`MarkdownText`）只认 `[Block]`，不认 markdown 源文。
- *
- * ## 为什么自写解析
- *
- * 上游 Web UI 走「成熟库解析 + 自写增量调度与渲染」，我们连解析也自写 —— 差别不在偏好：
- * 上游能直接依赖 micromark 生态，而我们引任何 Swift 包都会断掉编译验证链
- * （`swiftc -typecheck` 直编源码，不经 xcodeproj、不解析 SPM）。取舍与代价见
+ * **纯状态机：不 import SwiftUI / UIKit**，故能被 `swiftc` 编成命令行程序跑断言
+ * （`ios/tests/run-markdown.sh`）。渲染层（`MarkdownText`）只认 `[Block]`，不认源文。
+ * 引任何 Swift 包都会断掉编译验证链（`swiftc -typecheck` 直编源码，不经 xcodeproj、
+ * 不解析 SPM），所以连解析也自写。**分层是为留门** —— 将来换成熟库只替换这一层，把库的
+ * AST 映射成同一个 `[Block]`，渲染与流式策略不动。见
  * `docs/dev/plans/M6-presentation-layer.md` §3.3 决定 15。
  *
- * **分层的意义是留门**：解析只吐 `[Block]`，渲染只认 `[Block]`；将来若判定该换成熟库，
- * 只替换这一层（把库的 AST 映射成同一个 `[Block]`），渲染层与流式策略一律不动。
- *
- * ## 覆盖的子集（六种，其余登记不做）
+ * ## 子集（六种，其余登记不做）
  *
  * 围栏代码块（```）· 标题（`#` 1–6 级）· 无序列表（`-` `*` `+`）· 有序列表（`1.` / `1)`）·
- * 引用（`>`）· 分隔线（`---` `***` `___`）。
- *
- * **不做**（显示为纯文本，见 §1.3）：表格 / 嵌套列表 / 任务列表 / 脚注 / 数学公式 / 原始 HTML /
- * setext 标题（`标题` 下跟一行 `---`，会被读成段落 + 分隔线）/ 引用式链接定义（`[ref]: url`，
- * 行内片段逐个单独解析，收不到别处的定义）。
+ * 引用（`>`）· 分隔线（`---` `***` `___`）。**不做**（显示为纯文本，见 §1.3）：表格 /
+ * 嵌套列表 / 任务列表 / 脚注 / 数学公式 / 原始 HTML / setext 标题（`标题` 下行 `---` 会读成
+ * 段落 + 分隔线）/ 引用式链接定义（`[ref]: url`，行内片段逐个单独解析，收不到别处定义）。
  *
  * ## 流式：尾部冻结
  *
- * 文本是在瞬态通道上逐 chunk 增长的。每 chunk 重解析整篇 ⇒ 工作量 ∝ 全文长度，长回答越打越卡。
- * 照上游的语义（`ui-primitives/src/markdown/incremental.ts:1-29`）：**除尾部之外全部冻结，
- * 每 chunk 只重解析尾部**。
- *
- * 这里的「冻结」是**结果上的**：`parse(_:extending:)` 收下上一次的解析结果，若新源文是旧源文的
- * 前缀，就把冻结那一段原样搬过来，只从冻结边界之后重扫（`reparsedFrom` 记下重扫起点，供断言）。
- * 新内容只能接在末尾，所以「最后一块是活的、其余封口」是安全下界；源文以空行结尾时最后一块
- * 也已封口，可以一起冻结。
- *
- * **与上游的差异**：上游按「尾部两块」重解析，我们按「尾部一块」—— 级联条件不同（它要处理
- * 引用式定义与脚注的双向依赖），我们的子集里新内容只影响最后一块，故取更窄的界。
- *
- * ## 未闭合的围栏
- *
- * 流式期间结构必然是未闭合的：`` ``` `` 开了还没关。它**当场就按代码块渲染**（不是先按段落、
- * 闭合后再跳变更）—— 于是那个块的身份（源偏移）在整个生长过程中稳定，界面不闪。判据 M4。
+ * 照上游语义（`ui-primitives/src/markdown/incremental.ts:1-29`）：**除尾部之外全部冻结，每
+ * chunk 只重解析尾部** —— 上游按两块、我们按一块（它要处理引用式定义与脚注的双向依赖，我们
+ * 的子集里新内容只影响最后一块）。「冻结」是**结果上的**：`parse(_:extending:)` 收下上一次
+ * 的结果，新源文是旧源文前缀时搬运冻结段、只从冻结边界之后重扫（`reparsedFrom` 记下重扫
+ * 起点，供断言）；源文以空行结尾时最后一块也已封口，可一起冻结。未闭合围栏**当场按代码块
+ * 渲染**，其身份（源偏移）在生长过程中稳定、界面不闪（不是先按段落、闭合后再跳变更）。
+ * 判据 M4。
  */
 
 import Foundation
@@ -50,8 +32,8 @@ import Foundation
 
 /// 一个块级元素。
 ///
-/// `offset` 是这一块**起始行在源文里的字符偏移**，它同时是身份 —— 渲染层用它做 key：
-/// 已冻结的块 offset 不变，于是 SwiftUI 不重挂载、不重排（判据 M3）。
+/// `offset` 是**起始行在源文里的字符偏移**，也是它的身份 —— 渲染层用它做 key，冻结块的
+/// offset 不变，SwiftUI 便不重挂载、不重排（判据 M3）。
 struct Block: Equatable {
 
     enum Kind: Equatable {
@@ -61,8 +43,7 @@ struct Block: Equatable {
         case paragraph
         /// 围栏代码块。`language` 是围栏后那串标记（`nil` = 没写）。
         case code(language: String?)
-        /// **一级**列表项。`marker` 原样保留（`-` / `*` / `+` / `1.` / `2)`），
-        /// 圆点与序号由渲染层自己画 —— 系统的行内解析不给这个。
+        /// **一级**列表项。`marker` 原样保留；圆点与序号由渲染层画 —— 系统的行内解析不给。
         case listItem(ordered: Bool, marker: String)
         /// 引用（连续的 `>` 行合成一块，`text` 里的行以换行分隔）。
         case quote
@@ -73,7 +54,7 @@ struct Block: Equatable {
     let kind: Kind
     /// 块的正文。代码块是代码原文（不含围栏），列表项是项文本（不含标记）。
     let text: String
-    /// 起始行在源文里的字符偏移 —— 也是这一块的身份。
+    /// 起始行偏移 —— 也是这一块的身份。
     let offset: Int
 }
 
@@ -113,13 +94,12 @@ enum MarkdownParser {
 
     /// 增量解析：`previous` 是同一份文本更早的解析结果。
     ///
-    /// 新源文是旧源文的前缀延长时，冻结段原样搬运、只重扫尾部；否则（内容被改写、
-    /// 或换了一份文本）老实全量重解 —— 宁可多算，不可算错。
+    /// 新源文是旧源文的前缀延长时，冻结段原样搬运、只重扫尾部；否则老实全量重解 ——
+    /// 宁可多算，不可算错。
     static func parse(_ source: String, extending previous: MarkdownParse) -> MarkdownParse {
         guard source.hasPrefix(previous.source) else { return parse(source) }
 
-        // 冻结边界之后第一块的起点；全部冻结（源文以空行结尾）时从旧源文的末尾接着扫，
-        // 那个位置在新源文里同样是一行的开头。
+        // 冻结边界之后第一块的起点；全部冻结（源文以空行结尾）时从旧源文末尾接着扫，位置仍是行首。
         let resume = previous.blocks.count > previous.frozenCount
             ? previous.blocks[previous.frozenCount].offset
             : previous.source.count
@@ -137,12 +117,10 @@ enum MarkdownParser {
 
     /// 行内：一段行内 markdown → 富文本。
     ///
-    /// 块级自己做（系统在 `Text` 上不做块级排版），行内**交给系统**：粗体 / 斜体 /
-    /// 行内码 / 链接。它也是纯函数（`AttributedString` 来自 Foundation），所以放在这一侧、
-    /// 一并进 CLI 断言（判据 M2）；渲染层只负责把它摆出来。
-    ///
-    /// `inlineOnlyPreservingWhitespace` 是关键：**只解行内**，块级语法留给上面那层；
-    /// 空白原样保留，于是「一段里既有文字又有标记」时不会被系统重新断行。
+    /// 块级自己做（系统在 `Text` 上不做块级排版），行内**交给系统**（粗体 / 斜体 / 行内码 /
+    /// 链接）。它是纯函数（`AttributedString` 来自 Foundation），故进 CLI 断言（判据 M2）。
+    /// `inlineOnlyPreservingWhitespace` 是关键：**只解行内**、空白原样保留，于是「一段里既有
+    /// 文字又有标记」时不会被系统重新断行。
     static func attributed(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
@@ -165,9 +143,8 @@ enum MarkdownParser {
         let offset: Int
     }
 
-    /// 按 `\n` 切行，逐行记住起始偏移（含前面的换行，所以偏移 = 上一行偏移 + 上一行字数 + 1）。
-    ///
-    /// `omittingEmptySubsequences: false` 是有意的：空行是分段的依据，不能丢。
+    /// 按 `\n` 切行，逐行记住起始偏移。`omittingEmptySubsequences: false` 有意 ——
+    /// 空行是分段的依据。
     private static func lines(of source: String) -> [SourceLine] {
         var result: [SourceLine] = []
         var offset = 0
@@ -182,7 +159,7 @@ enum MarkdownParser {
     // MARK: - 扫描
 
     /// 从第 `start` 行开始扫描出块。增量解析时 `start` 就是冻结边界之后那一行 ——
-    /// 这也是「只重解析尾部」在执行上的全部含义。
+    /// 这就是「只重解析尾部」。
     private static func scan(_ lines: [SourceLine], from start: Int) -> [Block] {
         var blocks: [Block] = []
         var index = start
@@ -323,7 +300,7 @@ enum MarkdownParser {
         return (true, String(digits) + String(punctuation), digits.count + 1)
     }
 
-    /// 引用行的正文：去掉一个 `>`，再去掉紧随其后的一个空格。
+    /// 引用行的正文。
     private static func quoteBody(_ trimmed: String) -> String {
         let body = trimmed.dropFirst()
         return String(body.hasPrefix(" ") ? body.dropFirst() : body)

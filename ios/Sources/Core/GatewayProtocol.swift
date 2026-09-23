@@ -1,15 +1,11 @@
 import Foundation
 
-/// 协议版本。请求与响应都必须带它 —— 这是版本协商的位置，现在就留好。
-///
-/// 对应 `docs/dev/protocol.md` §三。
+/// 协议版本，请求与响应都必须带它 —— 版本协商的位置（`docs/dev/protocol.md` §三）。
 let gatewayProtocolVersion = 2
 
-/// 失败信封里的错误码。协议 v2 有这六个，M4 起新增 `unauthenticated`（鉴权域），
-/// M5 起新增 `unknown-approval` / `invalid-request`（写操作域）。
-///
-/// 但收的时候刻意用 `String` 而不是这个枚举：上游日后加码时，
-/// 客户端应当照原样显示，而不是因为解不出来就崩掉。
+/// 失败信封里的错误码（协议 v2 六个 + M4 `unauthenticated` + M5 `unknown-approval` /
+/// `invalid-request`）。收的时候刻意用 `String` 而非本枚举：上游加码时照原样显示，
+/// 不能解不出来就崩。
 enum GatewayErrorCode: String {
     case unsupportedVersion = "unsupported-version"
     case unknownOp = "unknown-op"
@@ -59,17 +55,14 @@ struct GatewayFailure: Decodable {
 
 // MARK: - 会话
 
-/// 列表里的一行（协议 v2）。
-///
-/// 这里每个字段都来自会话 header 或 host 已经维护的投影 —— **没有一个是读日志
-/// 算出来的**，这正是列表能做到零 I/O 的原因（`docs/dev/protocol.md` §4.1）。
+/// 列表里的一行（协议 v2）。字段全来自会话 header 或 host 已维护的投影，没有一个读日志算出来
+/// —— 列表因而零 I/O（`docs/dev/protocol.md` §4.1）。
 struct SessionSummary: Decodable, Identifiable, Hashable {
     let id: String
     /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——
     /// 既不是 `null` 也不是空串。这是契约的一部分，不是故障。
     let title: String?
-    /// 会话创建时间。**客户端当前不读它** —— 留作协议行的完整镜像（协议给了哪几个
-    /// 时间，看这里就知道；删掉不会让解码更快，只会让口径少一处）。
+    /// 会话创建时间。**客户端当前不读它** —— 留作协议行的完整镜像。
     let createdAt: Double
     /// **最后一次用户发言的时间**，没有则等于 `createdAt`。
     /// ⚠️ 不是「最后一次事件的时间」—— 助手输出与工具调用不推进它。
@@ -84,11 +77,8 @@ struct SessionSummary: Decodable, Identifiable, Hashable {
 
 // MARK: - 事件
 
-/// 一条会话事件。
-///
-/// 协议承诺**事件体原样透传**，服务端不裁剪、不翻译、不改名，
-/// 且日后会带上客户端还不认识的字段。所以这里只声明我们确实用到的四个，
-/// 其余的靠 `JSONValue` 原样收下文、不解析。
+/// 一条会话事件。协议承诺**事件体原样透传**（不裁剪、不翻译、不改名，且日后会带我们不认识的
+/// 字段），所以只声明用到的四个，其余靠 `JSONValue` 原样收下不解析。
 struct SessionEvent: Decodable, Equatable {
     let type: String
     let seq: Int
@@ -96,10 +86,8 @@ struct SessionEvent: Decodable, Equatable {
     let data: JSONValue
 }
 
-/// 任意 JSON。存在的理由只有一条：**容忍不认识的字段**。
-///
-/// 若把 `data` 声明成固定的结构体，上游每加一个字段我们就得跟着改 ——
-/// 那正是协议里「桥接而非翻译」这条约束要避免的事。
+/// 任意 JSON。存在的理由只有一条：**容忍不认识的字段** —— 声明成固定结构体的话，上游每加一个
+/// 字段我们就得跟着改，那正是「桥接而非翻译」要避免的。
 enum JSONValue: Decodable, Encodable, Equatable {
     case string(String)
     case number(Double)
@@ -167,11 +155,8 @@ enum JSONValue: Decodable, Encodable, Equatable {
     /// 取对象里的一个键；拿不到就是 nil。
     subscript(key: String) -> JSONValue? { object?[key] }
 
-    /// 拿一个整数字段；拿不到就是 `nil`。
-    ///
-    /// 与 `JSONValue` 同层：它是这个类型自己的取值辅助，凡是要读协议对象的
-    /// 地方都要用（原先寄居在 `TransientChannel` 里，会让只编协议层的测试脚本
-    /// 连带编译一个用不到的状态机）。
+    /// 拿一个整数字段；拿不到就是 `nil`。凡要读协议对象的地方都用它（原先寄居在
+    /// `TransientChannel`，会让只编协议层的测试脚本连带编译一个用不到的状态机）。
     var int: Int? {
         if case .number(let value) = self, value == value.rounded(), value >= 0 { return Int(value) }
         return nil
@@ -196,16 +181,15 @@ struct DisplayMessage: Hashable {
 extension SessionEvent {
     /// 把一条事件变成一条可显示的消息；变不出来就是 `nil`。
     ///
-    /// ⚠️ **两种事件的消息不是一个形状**（实测得出，不是猜的）：
-    /// - `user/message` —— 消息对象**直接在 `data` 上**：`data.content` / `data.role` / `data.source`
-    /// - `assistant/message` —— 消息包在 **`data.message`** 里，与 `data.usage` / `data.stream` 并列
+    /// ⚠️ **两种事件的消息不是一个形状**（实测得出）：
+    /// - `user/message` —— 消息对象直接在 `data` 上：`data.content` / `data.role` / `data.source`
+    /// - `assistant/message` —— 消息包在 `data.message` 里，与 `data.usage` / `data.stream` 并列
     ///
-    /// 把这个不对称当成对称处理，症状是**用户消息被静默吞掉**（探针实测：6 条消息事件只认出 1 条）。
-    ///
-    /// 两条显示规则（都是**显示**决策，不是协议规则 —— 协议只管原样透传）：
-    /// - 只取 `text` 块。助手的 `reasoning`（思考）与 `tool-call`（工具调用）属于过程，不属于对话内容。
-    /// - `user/message` 只认 `source.kind == "user"` 的。**插件注入的运行时上下文也走这个事件类型**
-    ///   （`source.kind == "plugin"`，内容是整段沙箱与审批策略），它不是人打的字，不该进对话流。
+    /// 当成对称处理，症状是**用户消息被静默吞掉**。两条显示规则（都是显示决策，不是协议规则）：
+    /// - 只取 `text` 块（`reasoning` 与 `tool-call` 属于过程，不属于对话内容）；`user/message` 只认
+    ///   `source.kind == "user"` —— 插件注入的运行时上下文也走这个事件类型
+    ///   （`kind == "plugin"`，整段
+    ///   沙箱与审批策略），不是人打的字，不该进对话流。
     var displayMessage: DisplayMessage? {
         switch type {
         case "user/message":
@@ -249,20 +233,17 @@ struct UsagePayload: Decodable, Equatable {
     let usedTokens: Int
     /// 分母 —— 路由声明的上下文容量。
     let contextWindow: Int
-    /// 组成三项。服务端认为「不知道」时整个缺失 —— 缺它**不减损**上面那个比例。
+    /// 组成三项。服务端「不知道」时整个缺失 —— 缺它**不减损**上面那个比例。
     ///
-    /// ⚠️ 写成带默认值的 `var` 只为让构造时能省略它 —— Swift 的 memberwise init
-    /// 不给 `let` + Optional 隐含缺省，而这两个类型构造出来就不再被改。
+    /// ⚠️ 写成带默认值的 `var` 只为构造时能省略：memberwise init 不给 `let` + Optional 隐含缺省。
     var breakdown: UsageBreakdown? = nil
 }
 
-/// 一个水位上的一份占用读数。
-///
-/// `usage` 缺失是一个**陈述**而不是故障：这个 cut 上没有可显示的东西，
-/// 正在显示的旧值应当被清掉（`docs/dev/plans/M6-presentation-layer.md` §3.1 决定 4）。
+/// 一个水位上的一份占用读数。`usage` 缺失是一个**陈述**而不是故障：这个 cut 上没有可显示的
+/// 东西，正在显示的旧值应当被清掉（`docs/dev/plans/M6-presentation-layer.md` §3.1 决定 4）。
 struct UsageSnapshot: Decodable, Equatable {
-    /// 这份读数取自日志的哪个水位。⚠️ 与窗口的 `cursor` 是两条轴，**不要相减** ——
-    /// 窗口按消息数切，可能落后或领先投影折叠到的位置。
+    /// 这份读数取自日志的哪个水位。⚠️ 与窗口的 `cursor` 是两条轴，**不要相减** —— 窗口按消息数切，
+    /// 可能落后或领先投影折叠到的位置。
     let asOfSeq: Int
     /// 缺省 = 这个水位上没有可显示的东西（构造时可省略，理由同 `UsagePayload.breakdown`）。
     var usage: UsagePayload? = nil

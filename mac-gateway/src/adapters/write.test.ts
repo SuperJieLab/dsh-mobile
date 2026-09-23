@@ -1,8 +1,7 @@
 /**
- * The approval relay's behaviour tests (M5, 实施期修正 11): waterfall frames
- * held and broadcast, one-shot delivery through the result door, replay, and
- * the cancel path. The gateway is a fake `$events` stream — the same contract the
- * real gateway service presents in-process.
+ * The approval relay's behaviour tests (M5, 实施期修正 11): waterfall frames held and
+ * broadcast, one-shot delivery through the result door, replay, and the cancel path.
+ * The gateway is a fake `$events` stream — the same contract the real one presents.
  */
 
 import assert from 'node:assert/strict'
@@ -181,9 +180,8 @@ test('pump: any not-found namespace folds to unknown-session; other failures ret
   const prompt = { sessionId: 's', text: 'hi', promptId: 'p' }
   const remote = (code: string) => Object.assign(new Error(code), { isDSHRemoteError: true, code })
 
-  // The predicate is the shared `/not-found` one, not a hard-coded session
-  // code: the namespace belongs to the host, and every call this pump makes is
-  // addressed by session anyway.
+  // The predicate is the shared `/not-found` one, not a hard-coded session code: the
+  // namespace belongs to the host, and every call this pump makes is session-addressed.
   assert.equal(await pumpPrompt(failing(remote('session/not-found')), prompt), 'unknown-session')
   assert.equal(await pumpPrompt(failing(remote('agent/not-found')), prompt), 'unknown-session')
 
@@ -196,13 +194,11 @@ test('pump: any not-found namespace folds to unknown-session; other failures ret
 // -- 实施期修正 15: the opener's parameter *positions* move -------------------
 
 /**
- * The runtime gateway's opener, mirrored from
- * dsh-api-gateway/lib/index.js:779 at 0.1.7-alpha.2 —
- * `openWireStream(endpoint, payload, uplink, peer, signal, control)` — with the
- * `AbortSignal.any` its `$events` branch performs (index.js:805). A caller that
- * feeds the arguments by position breaks here exactly as the phone-side relay
- * did on the real machine: the signal lands in the uplink slot and the
- * cancellation argument is `undefined`.
+ * The runtime gateway's opener, mirrored from dsh-api-gateway/lib/index.js:779 at
+ * 0.1.7-alpha.2 — `openWireStream(endpoint, payload, uplink, peer, signal, control)`
+ * — with the `AbortSignal.any` its `$events` branch performs (index.js:805). A caller
+ * feeding arguments by position breaks here exactly as the phone-side relay did: the
+ * signal lands in the uplink slot and cancellation is `undefined`.
  */
 function runtimeOpenerLike() {
   const opened: { endpoint: unknown; payload: unknown; uplink: unknown; peer: unknown; signal: unknown; control: unknown }[] = []

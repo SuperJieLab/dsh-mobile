@@ -1,13 +1,9 @@
 import SwiftUI
 
-/// 会话列表。
-///
-/// 它做两件事：调 `list-sessions`、按本屏的规则决定显示哪些行。
-/// 按协议，**排序是服务端的承诺**，所以这里一行排序代码都没有；
-/// 而「显示哪些」是客户端的事，所以过滤留在这里。
+/// 会话列表。它做两件事：调 `list-sessions`、按本屏的规则决定显示哪些行。按协议
+/// **排序是服务端的承诺**（这里一行排序代码都没有），而「显示哪些」是客户端的事，故过滤在此。
 struct SessionListView: View {
-    /// `@ObservedObject`（M4）：`isPaired` 是可变共享状态 —— 被撤销时这一屏
-    /// 要立刻让位给配对屏。
+    /// `@ObservedObject`（M4）：`isPaired` 是可变共享状态 —— 被撤销时这一屏要立刻让位给配对屏。
     @ObservedObject var client: GatewayClient
 
     @State private var sessions: [SessionSummary] = []
@@ -61,8 +57,7 @@ struct SessionListView: View {
         }
         .refreshable { await reload() }
         .task { await reload() }
-        // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应（M3）。
-        // 失败时旧列表照常保留（reload 的既有纪律），指示器转「已断开」。
+        // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应（M3）。失败时旧列表照常保留。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await reload() }
@@ -86,10 +81,10 @@ struct SessionListView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            // 服务端给出事实（`blank` / `origin`），**显示哪些是客户端的事**，所以过滤写在这里：
-            // `blank` 是工作区里那行候补的「新会话」，点进去只有策略事件；`subagent` 是别的
-            // 会话的子会话，不是一段独立的对话。（与上游 Web UI 的可见性规则同源，见
-            // `docs/dev/spec.md` §8.5 A7；服务端另有一条「没有 cwd 的会话不列」，在适配器里。）
+            // 服务端给出事实（`blank` / `origin`），**显示哪些是客户端的事**，故过滤在此：`blank`
+            // 点进去只有策略事件；`subagent` 是别的会话的子会话，不是独立对话。（与上游可见性规则
+            // 同源，见 `docs/dev/spec.md` §8.5 A7；
+            // 服务端另有「没有 cwd 的会话不列」，在适配器里。）
             sessions = try await client.listSessions()
                 .filter { !$0.blank && $0.origin != "subagent" }
             failure = nil
@@ -131,10 +126,8 @@ private struct SessionRow: View {
     }
 }
 
-/// 把失败原因摊在屏幕上。
-///
-/// 刻意把服务端的拒绝与网络层的失败都显示成**原文**：M0 的价值有一半在
-/// 「看得见为什么不行」，把它藏成一句「加载失败」就白做了。
+/// 把失败原因摊在屏幕上。服务端的拒绝与网络层的失败都显示成**原文** ——
+/// M0 的价值有一半在「看得见为什么不行」。
 struct FailureBanner: View {
     let text: String
 

@@ -1,10 +1,8 @@
 /**
  * RFC 6455 subset tests: handshake derivation, frame round-trips, masking,
  * fragmentation, interleaved control frames, and the refusals.
- *
- * The round-trip tests run every frame through a *real client encoding* —
- * masked, as a browser or URLSessionWebSocketTask would send — so the parser
- * is exercised against the wire, not against our own encoder.
+ * Round-trips run every frame through a *real client encoding* — masked, as a browser
+ * or URLSessionWebSocketTask sends — so the parser meets the wire, not our encoder.
  */
 
 import assert from 'node:assert/strict'
@@ -21,8 +19,8 @@ import {
 } from './ws-frames.ts'
 
 /**
- * Encode one client frame the way a real client would: masked, standard
- * length encoding. This is the encoder the round-trip tests trust.
+ * Encode one client frame the way a real client would: masked, standard length
+ * encoding — the encoder the round-trip tests trust.
  */
 function clientFrame(opcode: number, payload: Buffer, fin = true): Buffer {
   const maskKey = Buffer.from([0x11, 0x22, 0x33, 0x44])
@@ -151,11 +149,9 @@ test('server encoders produce unmasked frames a real client can read', () => {
   // A pong echoes its ping payload.
   assert.equal(encodePong(Buffer.from('p')).subarray(2).toString(), 'p')
 
-  // The encoder's own output fed back into our parser: refused for the one
-  // reason that matters here — a server frame carries no mask, and our parser
-  // only accepts masked client frames (RFC 6455 §5.1). That a *real* client
-  // can read this encoder is covered in the adapter tests, where a live
-  // WebSocket consumes it.
+  // The encoder's own output fed back into our parser: refused because a server frame
+  // carries no mask and our parser only accepts masked client frames (RFC 6455 §5.1).
+  // That a *real* client can read this encoder is covered in the adapter tests.
   const roundTrip = new WsFrameParser().push(encodeTextFrame('回声'))
   assert.match(roundTrip.error ?? '', /not masked/)
 })

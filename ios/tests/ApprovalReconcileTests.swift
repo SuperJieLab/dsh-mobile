@@ -1,16 +1,12 @@
 /**
- * 审批对账的重建测试（Q1–Q7）。
- *
- * 与 `SessionMirrorTests` / `UsageStateTests` 同一手法：状态机不碰网络、不碰 UI，
- * 这里只喂事件序列与对账名单，看建出几张卡。
+ * 审批对账的重建测试（Q1–Q7）：状态机不碰网络 / UI，只喂事件序列与对账名单，看建出几张卡。
  *
  * 判据与出处：docs/dev/plans/M5-remote-intervention.md §3.3 表 + 实施期修正 14。
  *
- * 事实来源（`approval/asked` − `approval/decided`）本身不足以判定「还挂着」——
- * 真机上抓到两条 `asked` 没有 `decided`，它们的同一 turn 里 `turn/end` 已经落下、
- * 紧随的 `tool/result` 写着 `TOOL_OUTCOME_UNKNOWN`：进程在等 outcome 的中途被杀，
- * `decided` 没来得及落。上游保证 `approval.request()` 在 turn 内阻塞到 outcome
- * 落盘，所以 **turn 闭合而 decided 缺席 = 残骸**，不是待批。
+ * 事实来源（`approval/asked` − `approval/decided`）不足以判定「还挂着」：真机上两条
+ * `asked` 无 `decided`，其同一 turn 里 `turn/end` 已落、紧随的 `tool/result` 写着
+ * `TOOL_OUTCOME_UNKNOWN` —— 进程在等 outcome 的中途被杀。上游 `approval.request()` 在
+ * turn 内阻塞到 outcome 落盘，故 **turn 闭合而 decided 缺席 = 残骸**，不是待批。
  */
 import Foundation
 
@@ -31,8 +27,8 @@ struct ApprovalReconcileTests {
         ev(seq, "approval/decided", ["id": .string(id), "outcome": .string("rejected")])
     }
 
-    /// 真机抓到的残骸形态（原样：`approval/asked` 后紧跟带错的 `tool/result`，
-    /// 再 `step/end` → `turn/end`，中间没有任何 `approval/decided`）。
+    /// 残骸形态（真机原样）：`approval/asked` 后紧跟带错的 `tool/result`，
+    /// 再 `step/end` → `turn/end`，中间无 `decided`。
     private static func wreck(_ base: Int, id: String, callId: String) -> [SessionEvent] {
         [
             ev(base, "assistant/message"),

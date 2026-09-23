@@ -1,32 +1,23 @@
 /**
  * 会话详情组装器 —— 事件窗口 → 显示节点。
  *
- * 它不碰网络、不碰 UI、不碰磁盘：输入是一段事件（镜像里本来就有全量的原始事件），
- * 输出是「这一屏要画什么」。把它单独拿出来，是因为**配对与分组是最容易错的一环**
- * ——工具调用跨两条事件、轮次边界要收口悬挂的调用、窗口边界会切出半截形态——
- * 而这些判断一旦缠进 SwiftUI 视图就没法单独验。分开之后，它既能被 iOS target 编，
- * 也能被 `swiftc` 编成 macOS 命令行程序跑断言（`ios/tests/run-assembler.sh`）。
+ * 它不碰网络、不碰 UI、不碰磁盘：输入一段事件，输出「这一屏要画什么」。单独拿出来是因为**配对与
+ * 分组最容易错**（工具调用跨两条事件、轮次边界要收口悬挂的调用、窗口边界切出半截形态），缠进视图
+ * 就没法单独验；分开后也能被 `swiftc` 编成命令行程序跑断言（`ios/tests/run-assembler.sh`）。
  *
- * ## 三种输入，一条输出轴
+ * 事件窗口进来，出去的是**有序**的节点：用户消息、一轮的过程、一轮的最终答案，顺序恒等于
+ * 事件顺序 —— 中间的思考块与工具调用不按类型分组，否则交替场景（思考 → 工具 → 思考）会串位。
  *
- * 事件窗口进来，出去的是**有序**的节点：用户消息、一轮的过程、一轮的最终答案。
- * 顺序永远等于事件顺序 —— 中间的思考块与工具调用不按类型分组，否则「思考 → 工具
- * → 思考 → 工具」这种交替会串位。
+ * 配对与状态判定照**运行时产物**（`@deepseek-ai/dsh-client-ui-chat`，
+ * 经 `~/.npm/_npx/<hash>/node_modules/` 实读），不是照仓库源码
+ * —— 两者在 `isError` 的读法上已经不一致过一次。四条判定：
+ * 配对键 `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`；
+ * 成败看 `tool/result.data.message.isError`（在 `message` 上，不在 `content[0]`）；
+ * 中断 = 所在 step / turn 已关闭而这条 call
+ * 一直没有结果；「最终答案」= 该轮最后一个 step 的助手消息，且含真正的回复内容、不含工具调用块。
  *
- * ## 判定的出处
- *
- * 配对与状态判定照**运行时产物**（`@deepseek-ai/dsh-client-ui-chat`，经
- * `~/.npm/_npx/<hash>/node_modules/` 实读），不是照仓库源码 —— 两者在 `isError` 的
- * 读法上已经不一致过一次：
- *
- * - 配对键：`tool/call.data.callId` ↔ `tool/result.data.message.source.callId`
- * - 成败：`tool/result.data.message.isError`（在 `message` 上，不在 `content[0]`）
- * - 中断：所在 step / turn 已关闭而这条 call 一直没有结果
- * - 「最终答案」：该轮**最后一个 step** 的助手消息，且它含真正的回复内容、不含工具调用块
- *
- * 上游那套「事件 → 节点」的注册表不复用、也不照搬：它是给可插拔前端用的扩展面，
- * 这里只需要它的语义（配对、分组、退化）。出处见
- * `docs/dev/plans/M6-presentation-layer.md` §3.2 决定 8–14。
+ * 上游那套「事件 → 节点」的注册表不复用、也不照搬（它是给可插拔前端的扩展面），只需要它的
+ * 语义。出处见 `docs/dev/plans/M6-presentation-layer.md` §3.2 决定 8–14。
  */
 
 import Foundation
@@ -42,14 +33,13 @@ enum TranscriptNode: Equatable {
 }
 
 extension TranscriptNode: Identifiable {
-    /// 列表里的身份。取**这一组首个过程**的身份，而不是在节点数组里的序号 ——
-    /// 往回翻是往前面插内容，序号会整体错位，屏上的行就会被全部重挂载。
+    /// 列表里的身份。取**这一组首个过程**的身份，不取节点数组里的序号 —— 往回翻是往前面插
+    /// 内容，序号会整体错位，屏上的行就会被全部重挂载。
     ///
-    /// ⚠️ 这条保证的**适用范围**（真机日志切片实跑核过）：前插只落在一处 —— 窗口
-    /// 头部那一组。其余各组的 `turn/start` 都在窗口里，前插的内容排在它们之前，
-    /// 碰不到它们，所以身份逐条不变。头部那一组本身会被前插改（见 `ProcessEntry`），
-    /// 而它由「无头」变「有头」时形态本来就变了，重挂载一次没有状态可丢 ——
-    /// 无头组不可展开（`TurnProcessRow` 的 `hasHeader` 分支）。
+    /// ⚠️ **适用范围**（真机日志切片实跑核过）：前插只落在窗口头部那一组 —— 其余各组的
+    /// `turn/start` 都在窗口里，前插排在它们之前，碰不到，身份逐条不变。头部那一组本身会被
+    /// 前插改（见 `ProcessEntry`），但它由「无头」变「有头」时形态本就变了、重挂载没有状态
+    /// 可丢 —— 无头组不可展开（`TurnProcessRow` 的 `hasHeader` 分支）。
     var id: String {
         switch self {
         case .message(let message):
@@ -69,19 +59,17 @@ extension TranscriptNode: Identifiable {
 struct NodeProcess: Equatable {
     /// 这一轮的编号。`nil` = 连编号都取不到。
     let turn: Int?
-    /// 这一组的开头（`turn/start`）在不在窗口里 —— 不在就不画折叠头。
-    ///
-    /// 窗口边界会把一轮切掉半截：那时过程仍要如实显示（不丢行），但它缺了开头，
-    /// 画一个「本轮摘要」等于假装这一轮完整（§3.2 决定 11、判据 A7）。
+    /// 这一组的开头（`turn/start`）在不在窗口里 —— 不在就不画折叠头。窗口边界会把一轮切掉
+    /// 半截：过程仍如实显示（不丢行），但缺了开头，画「本轮摘要」等于假装这一轮完整
+    /// （§3.2 决定 11、判据 A7）。
     let hasHeader: Bool
     let entries: [ProcessEntry]
 
     /// 折叠头上的一句话；没有可说的就是 `nil`。
     ///
-    /// 两组计数、**只写非零的那些** —— 只有工具调用时不写成「2 次工具调用 · 0 条消息」
-    /// （零是噪音，不是信息）。两个数都是 0 而这轮确实有过程（只想了没做）时，
-    /// 用兜底文案而不是「0 次工具调用」。文案照上游 locale
-    /// （`message.turnProcess.toolCalls` / `.messages` / `.thoughtForAWhile` / `.separator`）。
+    /// 两组计数、**只写非零的那些**（零是噪音，不是信息）；两个数都是 0 而这一轮确实有过程
+    /// （只想了没做）时用兜底文案。文案照上游 locale（`message.turnProcess.toolCalls` /
+    /// `.messages` / `.thoughtForAWhile` / `.separator`）。
     var summary: String? {
         var toolCalls = 0
         var midMessages = 0
@@ -113,12 +101,11 @@ enum ProcessEntry: Equatable {
 }
 
 extension ProcessEntry: Identifiable {
-    /// 这一行的身份。取**事件 seq**，不取它在组内的偏移 —— 往回翻会往窗口头部那一组里
-    /// 插入更早的行，偏移会整体挪位（行被重挂载，展开的工具行与思考会自己收回去），
-    /// seq 不会。理由与节点身份同一条。
+    /// 这一行的身份。取**事件 seq**，不取组内偏移 —— 往回翻会往这一组插入更早的行，偏移
+    /// 整体挪位（行被重挂载，展开的工具行与思考会自己收回去），seq 不会。理由同节点身份。
     ///
-    /// 前缀带上种类：同一条助手消息能同时产出「思考」与「文本」两行，两行的 seq 相同。
-    /// 带上种类才在组内唯一（`tool` 那行只可能来自它自己那条事件）。
+    /// 前缀带上种类：同一条助手消息能同时产出「思考」与「文本」两行、seq 相同，带种类才在
+    /// 组内唯一（`tool` 那行只可能来自它自己那条事件）。
     var id: String {
         switch self {
         case .thinking(let seq, _, _): return "thinking-\(seq)"
@@ -128,20 +115,16 @@ extension ProcessEntry: Identifiable {
     }
 }
 
-/// 一次工具调用的显示行。
-///
-/// 四种状态齐全，半截配对如实退化、不猜（§3.2 决定 11）：
-/// 有结果且 `isError` 假 → 成功；真 → 失败；只有调用 → 运行中；
-/// 轮次关闭而始终没有结果 → 中断。
+    /// 一次工具调用的显示行。四种状态齐全，半截配对如实退化、不猜（§3.2 决定 11）：有结果且
+    /// `isError` 假 → 成功；真 → 失败；只有调用 → 运行中；轮次关闭而始终没有结果 → 中断。
 struct ToolRow: Equatable {
 
     enum Status: Equatable {
         case running
         case succeeded
         case failed
-        /// 轮次 / 步骤已关闭，这条调用一直没有结果 —— 上游把它合成为一条
-        /// `error.code = 'interrupted'` 的失败结果，这里保留成一个独立状态，
-        /// 因为它要说的不是「工具失败」，是「我们不知道它怎么了」。
+        /// 轮次 / 步骤已关闭，这条调用一直没有结果 —— 上游合成为一条
+        /// `error.code = 'interrupted'` 失败结果，这里独立成态：它说的不是「工具失败」。
         case interrupted
     }
 
@@ -167,14 +150,11 @@ struct ToolRow: Equatable {
 
 // MARK: - 组装器
 
-/// 把一段事件组装成显示节点。**纯状态机**：不 import SwiftUI / UIKit。
-///
-/// 唯一的状态是「已经上报过哪些不认识的类型」—— 按类型去重，让每次打开会话
-/// 重放整段窗口时只留一条痕。
+    /// 把一段事件组装成显示节点。**纯状态机**：不 import SwiftUI / UIKit。唯一的状态是
+    /// 「已上报过哪些不认识的类型」—— 按类型去重，每次重放整段窗口只留一条痕。
 struct TranscriptAssembler {
 
-    /// 组装结果里出现不认识的 `type` 时调一次（按类型去重）。上游加新事件类型时，
-    /// 会话照常显示，而日志里留下线索（§3.2 决定 14）。
+    /// 出现不认识的 `type` 时调一次（按类型去重）—— 会话照常显示，日志里留线索（§3.2 决定 14）。
     private let onUnknownEventType: ((String) -> Void)?
     private var reportedUnknownTypes: Set<String> = []
 
@@ -190,10 +170,10 @@ struct TranscriptAssembler {
 
         /// 收口：把攒下的过程行变成节点（空的不产生节点）。
         ///
-        /// - Parameter endingTurn: 这一轮是不是就此结束。**用户消息夹在 `turn/start`
-        ///   与助手的首个输出之间是常态**，那时过程要收口（否则用户那句会排到过程后面，
-        ///   顺序就错了），但这一轮并没有结束 —— 所以「有头」这个身份得留着。
-        ///   真机实测过：把它一起清掉的话，窗口里 13 个 `turn/start` 全被判成无头。
+        /// - Parameter endingTurn: 这一轮是不是就此结束。**用户消息夹在 `turn/start` 与助手
+        ///   首个输出之间是常态**，那时过程要收口（否则用户那句会排到过程后面），但这一轮
+        ///   并未结束 —— 「有头」这身份得留着（真机实测：一起清掉会让窗口里 13 个
+        ///   `turn/start` 全被判成无头）。
         func flush(endingTurn: Bool = false) {
             if let current = draft, !current.entries.isEmpty {
                 nodes.append(.process(NodeProcess(turn: current.turn, hasHeader: current.hasHeader, entries: current.entries)))
@@ -202,8 +182,8 @@ struct TranscriptAssembler {
             if endingTurn { draft = nil }
         }
 
-        /// 确保有一个可写的草稿。事件里带的 `turn` 是**真实的轮次号**，但这一组的
-        /// 开头不在窗口里 —— 所以它是「无头」的（不画折叠头）。
+        /// 确保有一个可写的草稿。事件里带的 `turn` 是**真实轮次号**，但这一组开头不在窗口里 ——
+        /// 故「无头」。
         func open(turn: Int?) {
             if draft == nil { draft = ProcessDraft(turn: turn, hasHeader: false) }
         }
@@ -259,7 +239,7 @@ struct TranscriptAssembler {
                     }
                 } else {
                     // `tool/call` 不在窗口里（往回翻的边界）—— 用结果自带的信息出一行，
-                    // 参数与工具名都留空，不假装有。
+                    // 参数与工具名留空。
                     draft?.entries.append(.tool(Self.toolRow(fromResult: event)))
                 }
 
@@ -323,16 +303,13 @@ private extension TranscriptAssembler {
         }
     }
 
-    /// 每个 `turn` 的「最终答案」事件 seq。
+    /// 每个 `turn` 的「最终答案」事件 seq。照上游 `latestAnswer`，两步：
+    /// 1. 先定这一轮的**最后一个 step**（由 `step/start` 与助手消息共同界定 —— 一个 step
+    ///    存不存在不取决于它有没有产出一条消息）；
+    /// 2. 再在那个 step 里找助手消息，它必须（a）含真正的回复内容、（b）不含工具调用块。
     ///
-    /// 照上游 `latestAnswer`，两步：
-    /// 1. 先定这一轮的**最后一个 step** —— 由 `step/start` 与助手消息共同界定，
-    ///    因为一个 step 存不存在不取决于它有没有产出一条消息；
-    /// 2. 再在那个 step 里找助手消息，它必须（a）含真正的回复内容、
-    ///    （b）不含工具调用块。
-    ///
-    /// 两步缺一不可：只做第 2 步的话，「最后一步开了头就出事」的轮次会拿前面
-    /// step 说过的话冒充最终回答 —— 那是**编出来一条回答**，比不显示更坏。
+    /// 两步缺一不可：只做第 2 步的话，「最后一步开了头就出事」的轮次会拿前面 step 说过的
+    /// 话冒充最终回答 —— 那是**编出来一条回答**，比不显示更坏。
     static func answerSeqs(in events: [SessionEvent]) -> Set<Int> {
         var lastStep: [Int: Int] = [:]
         for event in events {
@@ -362,8 +339,7 @@ private extension TranscriptAssembler {
         return answers
     }
 
-    /// 上游 `hasAssistantReplyContent`：除思考与工具调用之外的块才算「回复内容」；
-    /// 文本块还要非空白（一条只写了几个空格的消息不是回答）。
+    /// 上游 `hasAssistantReplyContent`：除思考与工具调用之外的块才算「回复内容」；文本块要非空白。
     static func hasReplyContent(_ blocks: [Block]) -> Bool {
         blocks.contains { block in
             if block.type == "reasoning" || block.type == "tool-call" { return false }
@@ -462,8 +438,8 @@ private extension TranscriptAssembler {
 
     // MARK: 参数摘要
 
-    /// 候选键，**有序** —— 照上游运行时的列表取第一个规范化后非空的值。
-    /// 顺序本身就是规则：`description` 比 `command` 更可读，所以它排在前面。
+    /// 候选键，**有序**（照上游运行时的列表）—— 取第一个规范化后非空的值；顺序即规则：`description`
+    /// 比 `command` 可读。
     static let detailKeys = [
         "title", "description", "objective", "task", "task_name", "name",
         "question", "questions", "prompt", "message", "command", "cmd",
@@ -514,7 +490,7 @@ private extension TranscriptAssembler {
         }
     }
 
-    /// 空白折叠成单空格后截断。截断位置按**字素**数，不是 UTF-8 字节 ——
+    /// 空白折叠成单空格后截断。按**字素**数截，不是 UTF-8 字节 ——
     /// 否则中文与 emoji 会被切成半个字符。
     static func normalizeDetail(_ text: String) -> String {
         let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -533,11 +509,9 @@ private extension TranscriptAssembler {
         "tool/call", "tool/result",
     ]
 
-    /// 会话日志里必然出现、但归别的链路管的事件类型前缀（审批、投影、沙箱、
-    /// 子代理、用量…）。
-    ///
-    /// 这不是「支持的清单」，是**降噪的清单** —— 没有它，「不认识就上报」会把
-    /// 每次打开会话都变成一片噪音，真正该看见的那条新类型反而被埋了。
+        /// 会话日志里必然出现、但归别的链路管的事件类型前缀（审批、投影、沙箱、子代理、用量…）。
+        /// 这不是「支持的清单」，是**降噪的清单** —— 没有它「不认识就上报」会让每次打开会话变成
+        /// 一片噪音，真正该看见的那条新类型反而被埋了。
     static let knownBypassPrefixes = [
         "approval/", "session/", "session-log", "request/", "agent/",
         "web/", "sandbox/", "permission/", "system/", "assistant/",

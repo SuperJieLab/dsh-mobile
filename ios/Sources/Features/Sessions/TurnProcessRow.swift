@@ -2,9 +2,8 @@ import SwiftUI
 
 /// 一轮的过程：折叠头（一行摘要）+ 展开后的过程行。
 ///
-/// 默认收起 —— 一轮里二十次工具调用、几千字思考，铺开来会把对话本身淹掉。
-/// 最终答案**不在**折叠里（组装器已把它划成独立的节点），所以收起后这一屏
-/// 读起来就是「你说什么 → 它做了什么 → 它答什么」（§3.2 决定 10）。
+/// 默认收起 —— 一轮里二十次工具调用、几千字思考，铺开会把对话本身淹掉。最终答案**不在**折叠里
+/// （组装器已划成独立节点），故收起后读起来是「你说什么 → 它做了什么 → 它答什么」（§3.2 决定 10）。
 struct TurnProcessRow: View {
 
     let process: NodeProcess
@@ -17,8 +16,8 @@ struct TurnProcessRow: View {
                 header(summary)
                 if expanded { entries }
             } else {
-                // 没有折叠头就收起不了 —— 窗口切半的那一组（`turn/start` 不在窗口里）
-                // 仍如实平铺：它的过程是真的发生了，只是这一轮的开头不在这里（判据 A7）。
+                // 没有折叠头就收起不了 ——
+                // 窗口切半的那一组（`turn/start` 不在窗口里）仍如实平铺（判据 A7）。
                 entries
             }
         }
@@ -44,8 +43,8 @@ struct TurnProcessRow: View {
 
     private var entries: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // 身份取事件 seq（`ProcessEntry.id`），不取偏移 —— 往回翻会往这一组里插
-            // 更早的行，偏移一挪，已经展开的工具行会自己收回去。
+            // 身份取事件 seq（`ProcessEntry.id`），不取偏移 —— 往回翻插行会让偏移挪位、
+            // 展开行自己收回去。
             ForEach(process.entries) { entry in
                 switch entry {
                 case .thinking(_, let text, _):
@@ -53,9 +52,8 @@ struct TurnProcessRow: View {
                 case .tool(let row):
                     ToolRowView(row: row)
                 case .text(_, let text, _):
-                    // 一轮中间的助手文本（不是最终答案的那部分）—— 它也是「说过的话」，
-                    // 所以按正文排版，不缩成一行摘要。正文与最终答案同为 markdown 源文，
-                    // 于是走同一套解析与渲染。
+                    // 一轮中间的助手文本（不是最终答案的那部分）—— 它也是「说过的话」，按正文
+                    // 排版、不缩成一行摘要。与最终答案同为 markdown 源文，故走同一套解析与渲染。
                     MarkdownText(source: text)
                         .font(.callout)
                         .textSelection(.enabled)

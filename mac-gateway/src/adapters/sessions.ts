@@ -1,37 +1,23 @@
 /**
  * The DSH adapter: the only module that knows the session store exists.
  *
- * It implements the contract's `SessionPort` on top of the host's own services, so
- * `rpc.ts` stays free of both DSH and I/O. The adapter declares only the shapes
- * it actually uses rather than importing the real types: this module lives
- * outside the dsh installation, where a bare specifier such as
- * `@deepseek-ai/dsh-session-persistence` does not resolve (verified:
- * MODULE_NOT_FOUND — no `node_modules` in any parent directory).
+ * It implements the contract's `SessionPort` over the host's services, so `rpc.ts` stays free
+ * of both DSH and I/O, and declares its own shapes because the real types do not resolve outside
+ * the dsh installation (`@deepseek-ai/dsh-session-persistence`: MODULE_NOT_FOUND).
  *
- * ## The list is zero-I/O (v2), and here is what that costs
+ * ## The list is zero-I/O (v2)
  *
- * v1 built each row by opening the session log and reading it whole — O(sessions)
- * full reads per list. v2 does not read a log at all:
+ * v1 read each log whole (O(sessions) full reads); v2 reads no log. Records are a header
+ * plus "is it live"; values come from memory when live and the durable checkpoint when
+ * cold; a missing projection stays missing — no `title`, `updatedAt` falls back to
+ * `createdAt`, never a log read to fill a cell.
  *
- * - **records**: the corpus lists every session as a header plus "is it live",
- *   without touching the stored bodies;
- * - **values**: a live session's projection comes from memory (real time), a cold
- *   session's from the durable checkpoint the host already maintains;
- * - **missing is missing**: when no projection is available the row simply has no
- *   `title` and `updatedAt` falls back to `createdAt`. It never reaches for the
- *   log to fill a cell in.
+ * The price: `updatedAt` means "the last time you spoke", not "the newest event", and no
+ * event count is promised (docs/dev/protocol.md §4.1) — a field computable only from a log
+ * cannot also be served without reading one. Hence v2.
  *
- * The price is that the list promises less. `updatedAt` now means "the last time
- * you spoke" instead of "the newest event", and an event count is not promised at
- * all — because a field that can only be computed from a log cannot also be
- * served without reading one (docs/dev/protocol.md §4.1). Those are contract changes,
- * so the protocol went to v2.
- *
- * ## Why one visibility rule lives here
- *
- * `cwd === undefined` skips a session the reference list also hides. The other
- * rules (subagent, archived, blank) belong to the client, so only this one — a
- * fact the header already carries — is applied here.
+ * `cwd === undefined` skips a session the reference list also hides; the other rules
+ * (subagent, archived, blank) are the client's, and this one is already a header fact.
  */
 import type { SessionPort, SessionRow, SessionSlice, WireEvent } from '../contract/rpc.ts'
 
@@ -75,20 +61,16 @@ export interface ListRecord {
 }
 
 /**
- * One session's projection values, keyed by projection name.
- *
- * The shape belongs to the host (`title`, `sessionListMetadata`, …) and stays
- * opaque here: this file reads the two cells it needs and ignores the rest, so a
- * projection added upstream tomorrow cannot break the list.
+ * One session's projection values, keyed by projection name. The shape belongs to the host
+ * (`title`, `sessionListMetadata`, …) and stays opaque here: this file reads the two cells it
+ * needs and ignores the rest, so a projection added upstream tomorrow cannot break the list.
  */
 export type ProjectionValues = Readonly<Record<string, unknown>>
 
 /**
- * Where one list row's raw material comes from.
- *
- * Four narrow methods rather than the services themselves: the branch between a
- * live and a cold session is the adapter's decision (and is tested), while how
- * each value is obtained is the host's business.
+ * Where one list row's raw material comes from: four narrow methods rather than the services
+ * themselves, because the live/cold branch is the adapter's decision (and is tested), while how
+ * each value is obtained is the host's.
  */
 export interface ListSource {
   /** Every session, as a header plus its liveness. */
@@ -100,13 +82,9 @@ export interface ListSource {
   /** Whether an agent is running for this session right now. */
   isRunning(sessionId: string): boolean
   /**
-   * Called once per `list()` when one or more rows went out without their
-   * projection cells.
-   *
-   * Degrading a row is right — a projection is a hint — but degrading it
-   * *silently* is how a drifted upstream call stayed invisible until a user
-   * reported a blank screen, so the count is handed back to whoever assembles
-   * this source rather than swallowed here.
+   * Called once per `list()` when one or more rows went out without their projection cells —
+   * the count is handed back to whoever assembles this source rather than swallowed here,
+   * because silent degradation is how a drifted upstream call stays invisible.
    */
   onProjectionFailure?(failures: number, first: unknown): void
 }
@@ -118,10 +96,9 @@ interface SessionListMetadataLike {
 }
 
 /**
- * Build the session port over the host's services.
- * @param persistence - reads session logs, for `snapshot` and `page`.
- * @param listing - the list path's material (headers, projections, liveness).
- * @returns the port `handle()` reads through.
+ * Build the session port over the host's services: `persistence` reads logs (for `snapshot`
+ * and `page`), `listing` supplies the list path's material, and the returned port is what
+ * `handle()` reads through.
  */
 export function createSessionPort(persistence: PersistenceLike, listing: ListSource): SessionPort {
   return {
@@ -130,20 +107,18 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
       let failures = 0
       let firstFailure: unknown
       for (const record of await listing.records()) {
-        // Hidden the same way the reference list hides it — and skipped *before*
-        // any projection lookup, so an invisible session costs nothing.
+        // Hidden the same way the reference list hides it, and skipped *before* any projection
+        // lookup — an invisible session costs nothing.
         if (record.header.cwd === undefined) continue
 
         let values: ProjectionValues | undefined
         try {
           values = valuesFor(record, listing)
         } catch (error) {
-          // A projection is a *hint*, so one row's read failing costs that row
-          // its cells and never the whole list — the same line upstream's own
-          // listing draws (`session-controller/src/list.ts` `projectionsFor`,
-          // which returns the block as `undefined` and logs a warning). Without
-          // it, a single unreadable checkpoint blanks the screen: that is what
-          // the drifted cache call did on the real machine (实施期修正 16).
+          // A projection is a *hint*: one row's read failing costs that row its cells, never
+          // the whole list — the line upstream's listing draws (`session-controller/src/list.ts`
+          // `projectionsFor`, returns `undefined` and warns). Without it one unreadable
+          // checkpoint blanks the screen (实施期修正 16).
           failures += 1
           firstFailure ??= error
         }
@@ -168,25 +143,23 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
       try {
         handle = await persistence.open(id, 'read')
       } catch (error) {
-        // A missing session is a normal answer (`unknown-session`), not a fault.
-        // Every other open failure — a format this build refuses, corruption,
-        // ownership trouble — propagates and becomes a refusal at the contract.
+        // A missing session is a normal answer (`unknown-session`), not a fault. Every
+        // other open failure propagates and becomes a refusal at the contract.
         if ((error as { name?: unknown } | null)?.name === 'SessionPersistenceNotFoundError') return undefined
         throw error
       }
 
       try {
-        // One event past the cap: its presence is what proves there is more,
-        // so the contract never has to guess where the log ends.
+        // One event past the cap: its presence proves there is more, so the contract never
+        // has to guess where the log ends.
         const { events } = await handle.read(since, limit + 1)
 
         if (events.length === 0 && since > 0) {
-          // Caught up, or a cursor past the end? Only the log can tell them
-          // apart, and only for the case it can actually prove: an empty log
-          // cannot contain position 1. A `since` merely beyond the water mark is
-          // indistinguishable from "caught up" from here and stays a normal
-          // empty answer (docs/dev/protocol.md §五, docs/dev/plans/M1-consistency-delta.md
-          // §3.3.2 决定 5).
+          // Caught up, or a cursor past the end? Only the log can tell, and only what it
+          // can prove: an empty log cannot contain position 1. A `since` merely past the
+          // water mark is indistinguishable from "caught up" and stays a normal empty
+          // answer (docs/dev/protocol.md §五,
+          // docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
           const head = await handle.read(0, 1)
           if (head.events.length === 0) {
             return { events: [], asOfSeq: 0, hasMore: false, staleCursor: true }
@@ -221,15 +194,9 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
 }
 
 /**
- * Where one record's projection comes from.
- *
- * The branch is the whole reason a running session stays current while a finished
- * one can be served from disk: a live session's values are in memory and move as
- * it works; a finished session's log no longer changes, so its last checkpoint is
- * the final answer rather than a stale one.
- *
- * May throw — the upstream reads behind it do. Callers degrade the row rather
- * than the list (see `list`).
+ * Where one record's projection comes from: memory for a live session (its values move as it
+ * works), the durable checkpoint for a finished one (its log no longer changes, so the checkpoint
+ * is final, not stale). May throw; callers degrade the row rather than the list (see `list`).
  */
 function valuesFor(record: ListRecord, listing: ListSource): ProjectionValues | undefined {
   if (record.live) return listing.liveValues(record.header.id)
@@ -245,11 +212,8 @@ function metadataOf(values: ProjectionValues | undefined): SessionListMetadataLi
 }
 
 /**
- * The title cell, as an optional wire field.
- *
- * Anything that is not a string — including the `null` a title-less session
- * carries — means "no title", so the field is absent rather than empty
- * (docs/dev/protocol.md §4.1).
+ * The title cell: anything not a string — including the `null` a title-less session carries —
+ * means "no title", so the field is absent rather than empty (docs/dev/protocol.md §4.1).
  */
 function titleOf(values: ProjectionValues | undefined): { title?: string } {
   const cell = values?.title
@@ -257,10 +221,8 @@ function titleOf(values: ProjectionValues | undefined): { title?: string } {
 }
 
 /**
- * The row's activity time: the last user prompt, never before creation.
- *
- * Deliberately not "the newest event's time". That value needs the log, and not
- * needing the log is the entire point of v2's list.
+ * The row's activity time: the last user prompt, never before creation — deliberately not "the
+ * newest event's time", which would need the log the v2 list exists to avoid.
  */
 function lastPromptAt(header: HeaderLike, metadata: SessionListMetadataLike | undefined): number {
   const promptAt = metadata?.lastPromptAt

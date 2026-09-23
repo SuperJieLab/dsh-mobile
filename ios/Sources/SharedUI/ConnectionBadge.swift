@@ -1,15 +1,13 @@
 import SwiftUI
 
-/// 连接态指示器（M3）—— 上游 Web UI `connecting` / `disconnected` 指示器的复现
+/// 连接态指示器（M3）—— 上游 `connecting` / `disconnected` 指示器的复现
 /// （`ui-settings-general/src/client/SettingsRoot.tsx:203-228`）。
 ///
-/// 两半语义照抄上游：断连要诚实（正在连接 / 已断开如实标注，旧内容照常展示，
-/// 不清屏不弹错误页）；短尝试要防闪烁（指示器一旦显示，至少停留
-/// `minDisplaySeconds`，期间恢复也不会一闪而过）。
+/// 两半语义照抄上游：断连要诚实（如实标注、旧内容照常展示、不清屏不弹错误页）；短尝试要
+/// 防闪烁（一旦显示至少停留 `minDisplaySeconds`，期间恢复也不一闪而过）。
 ///
-/// 状态由各屏自己映射后传入，本组件不知道列表与详情的区别：
-/// - 列表域：刷新请求成败（`isLoading` / `failure`）；
-/// - 详情域：跟随流的连接阶段（`SessionSync.connectionPhase`）。
+/// 状态由各屏自己映射后传入，本组件不知道列表与详情的区别：列表域看刷新请求成败
+/// （`isLoading` / `failure`），详情域看跟随流连接阶段（`SessionSync.connectionPhase`）。
 struct ConnectionBadge: View {
     enum Status: Equatable {
         /// 数据源可达 —— 不显示。
@@ -30,8 +28,8 @@ struct ConnectionBadge: View {
     /// 指示器一旦显示，至少停留此时长 —— 照抄上游的最短显示时长。
     private static let minDisplaySeconds: TimeInterval = 2
 
-    /// 实际渲染的状态。与 `state` 的差值就是防闪烁窗口：`state` 已回 hidden、
-    /// 显示还没停满最短时长时，这里暂时保留旧值。
+    /// 实际渲染的状态。与 `state` 的差值就是防闪烁窗口：
+    /// `state` 已回 hidden 而未停满最短时长时保留旧值。
     @State private var shown: Status?
     @State private var shownAt = Date.distantPast
 

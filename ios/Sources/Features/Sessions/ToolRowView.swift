@@ -2,11 +2,9 @@ import SwiftUI
 
 /// 一次工具调用的行。
 ///
-/// 两级：这一行自己管「细节显示不显示」（点开看模型给的原始参数与工具返回的结果）。
-/// 至于「本轮的过程显示不显示」，由外层的 `TurnProcessRow` 管（§3.2 决定 9）。
-///
-/// 形态对所有工具统一 —— 不按工具类型做专用卡片：手机屏幕窄，专用卡片带来的
-/// 信息密度提升抵不过要维护的十几种形态（§1.3）。
+/// 两级：这一行管「细节显示不显示」（点开看原始参数与工具结果），「本轮的过程显示不显示」
+/// 由外层 `TurnProcessRow` 管（§3.2 决定 9）。形态对所有工具统一，不按类型做专用卡片 ——
+/// 窄屏上那点信息密度抵不过要维护的十几种形态（§1.3）。
 struct ToolRowView: View {
 
     let row: ToolRow
@@ -55,7 +53,7 @@ struct ToolRowView: View {
                     }
                     if row.argumentsRaw == nil && row.resultText == nil && row.errorCode == nil {
                         // 半截形态（`tool/call` 在窗口外）：如实说「不知道」，
-                        // 而不是画一个空的展开区让人以为工具什么都没返回。
+                        // 而不是画一个空的展开区。
                         Text("这一行来自窗口之外 —— 它的调用参数不在本地。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)

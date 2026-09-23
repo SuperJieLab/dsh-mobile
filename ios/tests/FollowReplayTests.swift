@@ -1,17 +1,14 @@
 /**
- * 跟随承载下的镜像重放测试（C3）与退避曲线测试（C1 可测部分）。
+ * 跟随承载下的镜像重放（C3）与退避曲线（C1 可测部分）。
  *
- * ## C3 —— 「连接必然断」对新承载的压力测试（docs/dev/plans/M2-realtime-transient.md §5.2）
- *
- * 跟随流喂给镜像的形状是刻意选的：opening 就是 `page` 的窗口（`Window`），
- * 一条事件帧就是一次覆盖到 `seq + 1` 的快照（`Snapshot`）。所以这里**不碰
- * `SessionSync`、不碰网络**，直接按跟随流的投喂顺序重放 —— M1 的那台状态机
- * 若需要为 WebSocket 改任何一行，这里的断言就会先红。
+ * ## C3（docs/dev/plans/M2-realtime-transient.md §5.2）
+ * 跟随流的形状：opening 即 `page` 的窗口（`Window`），一条事件帧即一次覆盖到
+ * `seq + 1` 的快照（`Snapshot`）。不碰 `SessionSync`、不碰网络，按投喂顺序重放 ——
+ * M1 那台状态机若为 WebSocket 改任何一行，这里先红。
  *
  * ## C1 的可测部分
- *
- * `FollowClient` 的重连编排需要真网络，完整行为由真机判据 R3/R4 覆盖；这里
- * 测它的**退避曲线**（纯函数）：指数爬升、抖动边界、封顶。
+ * `FollowClient` 的重连编排需真网络，完整行为由真机判据 R3/R4 覆盖；这里测它的
+ * **退避曲线**（纯函数）：指数爬升、抖动边界、封顶。
  */
 import Foundation
 
@@ -53,8 +50,8 @@ struct FollowReplayTests {
             return false
         }(), "C3-5 重复投递被幂等吸收（重连竞态的必然后果）")
 
-        // ③ 断线 → 重新 open：新 opening **替换**窗口（不做水位续传）。
-        //    断线期间服务端发生了 7..10 的事件，新 opening 的窗口覆盖 4..11。
+        // ③ 断线 → 重新 open：新 opening **替换**窗口（不做水位续传）；
+        // 断线期间服务端发生了 7..10 的事件，新 opening 覆盖 4..11。
         let rebuildEvents = [event(4), event(5), event(6), event(7), event(8), event(9), event(10)]
         let rebuilt = Window(pageStart: 4, asOfSeq: 11, hasOlder: true, events: rebuildEvents)
         expect({

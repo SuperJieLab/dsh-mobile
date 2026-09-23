@@ -1,25 +1,15 @@
 /**
- * mac-gateway — the Mac-side DSH plugin for dsh-mobile.
+ * mac-gateway — the Mac-side DSH plugin for dsh-mobile (M0 Steps 2–3): own an
+ * HTTP listener answering the message protocol; decisions in `rpc.ts`, reads in `sessions.ts`.
  *
- * M0 Steps 2–3: own an HTTP listener on the LAN and answer the message
- * protocol on it. The listener is the transport; every protocol decision lives
- * in `rpc.ts` (a pure function this module only wires up), and every read of
- * the session store lives in `sessions.ts`.
+ * The list path (v2) is zero-I/O — headers plus a host-kept projection, never a
+ * log — and its four services are declared in `inject`: without them the fiber
+ * stays pending, the right failure for a gateway that cannot read sessions
+ * (docs/dev/protocol.md §4.1).
  *
- * The list path (v2) is zero-I/O: it reads session headers plus a projection the
- * host already keeps, and never opens a session log. That needs four services
- * the base bundle provides, so all of them are declared in `inject` rather than
- * assumed — without them the fiber stays pending and the listener never starts,
- * which is the right failure: a gateway that cannot read sessions has nothing to
- * serve. See docs/dev/protocol.md §4.1 for why the list can be served this way.
- *
- * Runtime imports are deliberately limited to Node builtins plus our own
- * modules. This module lives outside the dsh installation, so a bare specifier
- * such as `@deepseek-ai/cordis` does NOT resolve from here (verified:
- * MODULE_NOT_FOUND — no `node_modules` exists in any parent directory). The
- * cordis import below is type-only and therefore erased by Node's type stripping.
- *
- * See docs/dev/plans/M0-reachability-spike.md §4.3 Steps 2–3 and docs/dev/protocol.md.
+ * Imports are Node builtins plus our own modules only; cordis is type-only, as
+ * bare specifiers do not resolve outside the dsh installation.
+ * See docs/dev/plans/M0-reachability-spike.md §4.3 Steps 2–3, docs/dev/protocol.md.
  */
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -36,9 +26,8 @@ import { ApprovalRelay, callThrough, openStreamThrough, parameterNamesOf, pumpPr
 export const name = 'mac-gateway'
 
 /**
- * Services this plugin requires before it starts. Cordis holds the fiber until
- * they are available — see the module comment for why that is the honest
- * behaviour here rather than a fallback.
+ * Services this plugin requires before it starts;
+ * cordis holds the fiber until they are available (see the module comment).
  */
 export const inject = [
   // The read paths (snapshot / page) go straight to the stored log.
@@ -63,23 +52,16 @@ export interface Config {
   host?: string
   /** Bind port. @default 3081 */
   port?: number
-  /**
-   * Most events one `snapshot` reply may carry. Config rather than a constant so
-   * the caps are observable end to end (see docs/dev/protocol.md §五). @default 500
-   */
+  /** Most events one `snapshot` reply may carry. Config so the caps are observable end
+   * to end (docs/dev/protocol.md §五). @default 500 */
   maxDeltaEvents?: number
   /** Soft ceiling on one reply's serialized `events`, in bytes. @default 1048576 */
   maxDeltaBytes?: number
-  /**
-   * Where the credentials file lives. Overridable so the assembly smoke tests
-   * never touch the real home directory. @default '~/.dsh/dsh-mobile/credentials.json'
-   */
+  /** Where the credentials file lives; overridable so assembly smoke tests never touch
+   * the real home. @default '~/.dsh/dsh-mobile/credentials.json' */
   credentialsPath?: string
-  /**
-   * Pre-pair the vault with this device token (tests only). Production pairing
-   * goes through the pairing code; this shortcut exists so an assembly test can
-   * hold a token without parsing console output.
-   */
+  /** Pre-pair the vault with this device token (tests only) — production pairing goes
+   * through the pairing code. */
   deviceTokenSeed?: string
 }
 
@@ -89,19 +71,16 @@ const DEFAULT_HOST = '0.0.0.0'
 /** Deliberately not 3080 — that is the dsh web profile's own port. */
 const DEFAULT_PORT = 3081
 
-/**
- * Request-body ceiling. Not a protocol rule but a transport guard: the port is
- * reachable by anyone on the Wi-Fi, and an unbounded read is a trivial
- * memory-exhaustion lever. 1 MiB is far above any v2 request.
- */
+/** Request-body ceiling — a transport guard, not a protocol rule: the port is
+ * LAN-reachable and an unbounded read is a memory-exhaustion lever. 1 MiB is far
+ * above any v2 request. */
 const MAX_BODY_BYTES = 1_048_576
 
 /**
- * Cordis calls this with the plugin's context and the config from its tree row.
- *
- * Host and port are config rather than constants so that switching the
- * reachability scheme stays a one-line patch edit — the reversibility claim in
- * §3.2 only holds while the bind address is not compiled in.
+ * Cordis calls this with the plugin's context and the config from its tree row. Host
+ * and port are config, not constants, so switching the reachability scheme stays a
+ * one-line patch edit — the §3.2 reversibility claim needs the bind address to stay
+ * uncompiled.
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const host = config.host ?? DEFAULT_HOST
@@ -118,8 +97,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
 
   // The vault owns the three tickets (docs/dev/plans/M4-identity-credentials.md §4.2).
-  // `pair` / `refresh` are answered before the auth gate — the gate exists to
-  // protect everything *else* — and both carry their own credential in the body.
+  // `pair` / `refresh` bypass the gate — they carry their own credential.
   const vault = new CredentialVault(config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH)
   if (config.deviceTokenSeed !== undefined) {
     // Tests only: pre-pair without walking through the pairing code.
@@ -127,11 +105,10 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
   console.log(`[mac-gateway] pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
 
-  // The write channel (M5): the relay stands between `approval-answer` and the
-  // gateway's `$events` stream as a remote event client (实施期修正 11 — the
-  // host-side waterfall listener approach proved structurally dead); the pump
-  // forwards `session-prompt` through the controller's own prompt door
-  // (docs/dev/plans/M5-remote-intervention.md §四).
+  // The write channel (M5): the relay bridges `approval-answer` to the gateway's
+  // `$events` stream (实施期修正 11 — the host-side waterfall listener approach was
+  // structurally dead); the pump forwards `session-prompt` through the controller's
+  // own door (docs/dev/plans/M5-remote-intervention.md §四).
   const relayLifetime = new AbortController()
   const approvalFace = broadcasterOver()
   const relay = new ApprovalRelay(gatewayOver(ctx), approvalFace)
@@ -146,22 +123,17 @@ export function apply(ctx: Context, config: Config = {}): void {
       void respond(request, response, sessionPort, limits, vault, writePort)
     })
 
-    // The stream channel shares the listener: same port, `POST /rpc` for the
-    // one-way calls, `/rpc/stream` upgrade for the follow stream. The upgrade
-    // is gated like any request (M4): no live access token, no 101.
+    // The stream channel shares the listener: same port, `POST /rpc` for one-way
+    // calls, `/rpc/stream` upgrade gated like any request (M4): no live access token, no 101.
     const broadcaster = attachStreamHandler(server, streamSourceOver(ctx), vault, {
-      // A freshly connected phone first gets the reconciliation frame — the
-      // ids of every question still standing — then each one replayed. The
-      // sync is what lets the client drop forwarded cards whose cancel frame
-      // fired while it was offline (the gateway only delivers `cancel` to
-      // clients that were connected at settle time, so an absent id on a
-      // fresh connection is authoritative: that question is gone).
+      // A freshly connected phone gets the reconciliation frame (the ids of every
+      // standing question), then a replay of each — so it can drop forwarded cards
+      // whose `cancel` fired while it was offline: an absent id is authoritative.
       onClientConnected: (send) => {
         const held = relay.held()
         if (!relay.ready) {
-          // The relay has no live `$events` identity, so its held set proves
-          // nothing. Say so: a `stale` sync tells the client to keep its
-          // cards instead of pruning against an empty (lying) list.
+          // No live `$events` identity, so the held set proves nothing: a `stale`
+          // sync tells the client to keep its cards rather than prune against a lying list.
           send({ type: 'approval', payload: { kind: 'sync', eventIds: [], callIds: [], stale: true } })
           return
         }
@@ -170,10 +142,9 @@ export function apply(ctx: Context, config: Config = {}): void {
           payload: {
             kind: 'sync',
             eventIds: held.map(h => h.eventId),
-            // callIds ride along so the client can also reconcile its
-            // audit-rebuilt cards (asked − decided in the log) against what
-            // the gateway actually still holds: a dangling asked (host died
-            // mid-ask, the decided never gets written) must not resurrect.
+            // callIds ride along so audit-rebuilt cards (asked − decided in the log)
+            // reconcile against what the gateway still holds: a dangling asked
+            // (host died mid-ask) must not resurrect.
             callIds: held.flatMap(h => h.callId === undefined ? [] : [h.callId]),
           },
         })
@@ -184,11 +155,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
     approvalFace.connect((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
 
-    // console.* rather than ctx.logger: in our non-TTY verification runs
-    // `ctx.logger.info` produced no stdout line at all (dsh's own startup line
-    // was missing too), and a bind failure that cannot be seen is worse than a
-    // non-idiomatic one. Whether the logger is merely TTY-gated is unverified —
-    // see docs/dev/plans/M0-reachability-spike.md §5.1.
+    // console.* rather than ctx.logger: in non-TTY runs `ctx.logger.info` emitted
+    // nothing (dsh's own startup line too), and an invisible bind failure beats a
+    // non-idiomatic log; TTY-gating is unverified (docs/dev/plans/M0-reachability-spike.md §5.1).
     server.on('error', (error) => {
       console.error(`[mac-gateway] listener error: ${String(error)}`)
     })
@@ -199,8 +168,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     return () => {
       relayLifetime.abort()
-      // close() alone leaves idle keep-alive sockets open since Node 19, which
-      // would keep the port occupied across a live patch reload.
+      // close() alone leaves idle keep-alive sockets open since Node 19, keeping
+      // the port occupied across a live patch reload.
       server.closeAllConnections()
       server.close()
     }
@@ -208,17 +177,14 @@ export function apply(ctx: Context, config: Config = {}): void {
 }
 
 /**
- * The list path's sources, assembled from the host services.
+ * The list path's sources, assembled from the host services — each mirrors one thing
+ * the reference list does (docs/dev/plans/M1-consistency-delta.md §2.2): records from
+ * the corpus (headers + liveness), values from the live projection for a running
+ * session and the stored checkpoint for a cold one, liveness from the agent registry.
  *
- * Each method mirrors one thing the reference list does (docs/dev/plans/M1-consistency-delta.md
- * §2.2): records come from the corpus (headers plus a liveness flag), values come
- * from the live projection for a running session and from the stored checkpoint
- * for a cold one, and liveness itself comes from the agent registry.
- *
- * Nothing here reads a log — that is the whole point. The casts are deliberate:
- * this module lives outside the dsh installation, where the service types are not
- * resolvable, so each service is asserted to the narrow shape the adapter
- * declares and no further.
+ * Nothing here reads a log. The casts are deliberate: the service types are not
+ * resolvable outside the dsh installation, so each service is asserted to the narrow
+ * shape the adapter declares and no further.
  */
 function listSourceOver(ctx: Context): ListSource {
   return {
@@ -243,10 +209,9 @@ function listSourceOver(ctx: Context): ListSource {
       return (ctx.agents as unknown as AgentsLike).get(sessionId)?.status === 'running'
     },
 
-    // A row without projections is still the right row — but degrading *quietly*
-    // is how the cache-parameter drift below stayed invisible until the phone
-    // showed a blank screen, so the count goes to a log the operator can read
-    // (实施期修正 16).
+    // A row without projections is still the right row, but degrading *quietly* kept
+    // the cache-parameter drift below invisible until the phone showed a blank screen,
+    // so the count goes to a log (实施期修正 16).
     onProjectionFailure: (failures, first) => {
       console.warn(
         `[mac-gateway] ${failures} session row(s) served without projections — first failure: ${String(first)}`,
@@ -256,16 +221,12 @@ function listSourceOver(ctx: Context): ListSource {
 }
 
 /**
- * The follow stream's source, assembled from the host's session controller.
- *
- * One cast to the narrow face the pump uses (see `FollowSource`); the controller
- * is only present in the web-app bundle, where cordis holds this plugin until
- * it appears — the same honest wait the list path's services get.
+ * The follow stream's source, from the host's session controller. One cast to the narrow
+ * face the pump uses (`FollowSource`); the controller exists only in the web-app bundle,
+ * where cordis holds this plugin until it appears.
  */
-/**
- * The projection keys the occupancy reading is built from — named so the read
- * does not materialize views nothing consumes (M6).
- */
+/** The projection keys the occupancy reading is built from — named so the read
+ * does not materialize views nothing consumes (M6). */
 const OCCUPANCY_KEYS = ['contextPressure', 'contextBreakdown'] as const
 
 function streamSourceOver(ctx: Context): FollowSource {
@@ -296,18 +257,13 @@ interface SessionsLike {
 
 /** The part of `ctx.sessionProjections` this module uses. */
 interface ProjectionsLike {
-  /**
-   * The zero-I/O read the list path uses: already-materialized cells only, and
-   * a water mark that is the *lowest* cached cut (upstream
-   * `dsh-session-projection`: `cachedSnapshot`, whose values may trail the live
-   * session and are documented as hints).
-   */
+  /** The zero-I/O read the list path uses: already-materialized cells only, with a water
+   * mark that is the *lowest* cached cut. Upstream `dsh-session-projection`
+   * `cachedSnapshot` documents the values as hints that may trail the live session. */
   cachedSnapshot(session: unknown): ProjectionSnapshotLike | undefined
-  /**
-   * One consistent cut over the registered units, cut at the log's current
-   * water mark — the read the occupancy frames use, because their `asOfSeq`
-   * must advance (docs/dev/plans/M6-presentation-layer.md §3.1 决定 3).
-   */
+  /** One consistent cut over the registered units at the log's current water mark —
+   * the read the occupancy frames use, whose `asOfSeq` must advance
+   * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 3). */
   snapshot(session: unknown, keys?: readonly string[]): ProjectionSnapshotLike | undefined
 }
 
@@ -318,29 +274,15 @@ interface ProjectionSnapshotLike {
 }
 
 /**
- * The part of `ctx.sessionProjectionCache` this module uses.
- *
- * ⚠️ **This face lost a parameter between the baseline and the runtime we run
- * against** (实施期修正 16). The baseline spells it
- *
- * ```ts
- * cachedSnapshot(meta: SessionHeader, inheritedEventCount: SessionLogOffset, keys?: …)
- * cachedPredecessorTitle(meta: SessionHeader, inheritedEventCount: SessionLogOffset)
- * ```
- *
- * and 0.1.7-alpha.2 spells it
- *
- * ```ts
- * cachedSnapshot(meta: SessionHeader, keys?: readonly string[])
- * cachedPredecessorTitle(meta: SessionHeader)          // dsh-session-projection-cache/lib/index.js:193,214
- * ```
- *
- * — the inherited prefix is gone because the header alone now carries the
- * lifecycle identity. Anything passed positionally after the header therefore
- * moves one slot, which is why the header is the *only* argument given here;
- * the runtime's own listing does the same
- * (`dsh-api-session-controller/lib/index.js:1917`). Passing a second argument
- * is not "more explicit", it is a bet on a position that has already moved once.
+ * The part of `ctx.sessionProjectionCache` this module uses. ⚠️ **This face lost a
+ * parameter** between baseline and runtime (实施期修正 16). Baseline:
+ * `cachedSnapshot(meta, inheritedEventCount, keys?)` /
+ * `cachedPredecessorTitle(meta, inheritedEventCount)`. 0.1.7-alpha.2:
+ * `cachedSnapshot(meta, keys?)` / `cachedPredecessorTitle(meta)`
+ * (dsh-session-projection-cache/lib/index.js:193,214). The inherited prefix is
+ * gone — the header alone carries the lifecycle identity — so positional
+ * arguments after the header move one slot; the header is the *only* argument
+ * given here, as the runtime's own listing does (dsh-api-session-controller/lib/index.js:1917).
  */
 interface ProjectionCacheLike {
   cachedSnapshot(header: never): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
@@ -352,14 +294,11 @@ interface AgentsLike {
   get(id: string): { status?: string } | undefined
 }
 
-/**
- * Route one request.
+/** Route one request.
  *
- * `/rpc` carries protocol messages; everything else here exists only so a human
- * can tell "the listener is up" from "nothing is listening" with a browser.
- * Neither the liveness line nor the status codes are part of the protocol —
- * the envelope carries the outcome of a message, which is why a protocol-level
- * refusal is still HTTP 200.
+ * `/rpc` carries protocol messages; the rest only tells a human "the listener is up" from
+ * "nothing is listening". Status codes are not protocol — the envelope carries the outcome,
+ * so a protocol-level refusal is still HTTP 200.
  */
 async function respond(
   request: IncomingMessage,
@@ -405,9 +344,8 @@ async function respond(
     return
   }
 
-  // Identity (M4): the auth ops carry their own credential in the body; every
-  // other op needs a live access token. A denial is HTTP 401 with a protocol
-  // envelope — the status codes the client keys its refresh flow on.
+  // Identity (M4): the auth ops carry their credential in the body, every other
+  // op needs a live access token; a denial is HTTP 401 with a protocol envelope.
   const op = (message as { op?: unknown } | null)?.op
   if (op === 'pair' || op === 'refresh') {
     const answer = await handleAuthOp(op, message, vault)
@@ -438,14 +376,11 @@ function refusal(code: string, message: string): { v: number; ok: false; error: 
 }
 
 /**
- * The write channel as the protocol layer sees it (M5), assembled from the host
- * like every other source here.
+ * The write channel as the protocol layer sees it (M5), from the host like every other source.
  *
- * `approval-answer` goes to the relay; `session-prompt` goes through the
- * controller's prompt door, with `session/not-found` folded into the protocol's
- * `unknown-session` and every other upstream failure rethrown so `handle`
- * answers `internal-error` — conditions a retry cannot fix are our side's to
- * explain, not the client's to guess at.
+ * `approval-answer` goes to the relay; `session-prompt` through the controller's prompt door,
+ * with `session/not-found` folded to `unknown-session` and other upstream failures rethrown so
+ * `handle` answers `internal-error`.
  */
 function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
   return {
@@ -455,23 +390,18 @@ function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
 }
 
 /**
- * The part of the gateway service the approval relay drives.
+ * 审批中继所驱动的网关服务切面。
  *
- * 实施期修正 13（真机日志 `openWireStream is not a function or its return
- * value is not async iterable`）：`ctx.typertGateway` 交到插件手里的不是
- * 服务原始实例 —— 每个成员可能被 traceable/严格视图包过一层，异步生成器
- * 方法经包装后不再返回可迭代对象。`Symbol.for('cordis.original')` 是全局
- * 注册表 symbol（cordis 的 `originalOf` 逃生口），无需 import 即可解出原始
- * 实例。
+ * 实施期修正 13：`ctx.typertGateway` 拿到的是被 traceable/严格视图包过的成员，
+ * 异步生成器方法包装后不再可迭代（真机日志 `openWireStream is not a function or
+ * its return value is not async iterable`）—— 用全局注册表 symbol
+ * `Symbol.for('cordis.original')`（cordis 的 `originalOf` 逃生口）即可解出原始实例。
  *
- * 实施期修正 15（真机日志 `signals[0] is not of type AbortSignal.`）：拿到
- * 原始实例还不够 —— 收流面的**形参位置**会变。0.1.7 把 `uplink` / `peer`
- * 插在了 `signal` 前面，按位置传的取消信号落进 uplink 槽，网关内部
- * `AbortSignal.any([undefined, ...])` 当场抛错。两条对策：
- * 1. 收流优先走**声明面** `wireStream.open`（types.d.ts:87，有注释的 carrier
- *    适配口），只在它缺席时才碰私有成员 `openWireStream`；
- * 2. 实参一律**按形参名**填（`openStreamThrough`）—— 位置随便挪，名字不会。
- *    读不出形参表（被 bind/native 包过）时按 arity 兜底并显式告警。
+ * 实施期修正 15：原始实例的**形参位置**也会变 —— 0.1.7 把 `uplink` / `peer` 插在 `signal`
+ * 前，按位置传的取消信号落进 uplink 槽，`AbortSignal.any([undefined, ...])` 当场抛错
+ * （真机日志 `signals[0] is not of type AbortSignal.`）。对策：收流优先走**声明面**
+ * `wireStream.open`（types.d.ts:87）；缺席才碰私有 `openWireStream`，实参**按形参名**填
+ * （`openStreamThrough`），形参表读不出（bind/native 包过）时按 arity 兜底并告警。
  */
 function gatewayOver(ctx: Context): RemoteEventGatewayLike {
   const view = ctx.typertGateway as unknown as Record<PropertyKey, unknown> | undefined
@@ -523,11 +453,9 @@ function gatewayOver(ctx: Context): RemoteEventGatewayLike {
   }
 }
 
-/**
- * The broadcast face for the relay. The WS adapter owns the socket set, which
- * does not exist until the listener effect runs, so the relay is handed a face
- * it can broadcast into right away and the adapter connects itself later.
- */
+/** The broadcast face for the relay: the WS adapter's socket set does not exist until
+ * the listener effect runs, so the relay gets a face to broadcast into right away and
+ * the adapter connects itself later. */
 function broadcasterOver(): {
   broadcast(frame: unknown): void
   connect(sink: (frame: unknown) => void): void
@@ -545,10 +473,9 @@ function promptControllerOver(ctx: Context): PromptControllerLike {
 }
 
 /**
- * Answer `pair` / `refresh` — the two ops that establish and exercise the
- * relationship. Kept beside the gate rather than inside `handle` on purpose:
- * the protocol contract stays a pure read protocol, and these two are the only
- * messages whose authority comes from the body rather than the header.
+ * Answer `pair` / `refresh`. Kept beside the gate, not inside `handle`, so the
+ * protocol contract stays a pure read protocol: these two are the only messages
+ * whose authority comes from the body rather than the header.
  */
 async function handleAuthOp(
   op: 'pair' | 'refresh',
@@ -590,10 +517,8 @@ class TooLargeError extends Error {
 }
 
 /**
- * Read a request body, refusing to grow past the ceiling.
- *
- * The limit is enforced while collecting rather than after, so an oversized
- * body is never fully buffered — the point of the ceiling.
+ * Read a request body, refusing to grow past the ceiling. The limit is enforced
+ * while collecting, not after, so an oversized body is never fully buffered.
  */
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = []

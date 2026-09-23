@@ -1,10 +1,8 @@
 /**
- * Usage contract tests (M6) — the U table of
- * docs/dev/plans/M6-presentation-layer.md §五.
+ * Usage contract tests (M6) — the U table of docs/dev/plans/M6-presentation-layer.md §五.
  *
- * Every case here is about one of two promises: the number the phone shows is
- * either the host's own number or nothing at all, and a re-read that changes
- * nothing says nothing.
+ * Two promises: the number the phone shows is either the host's own or nothing at
+ * all, and a re-read that changes nothing says nothing.
  */
 
 import assert from 'node:assert/strict'
@@ -58,10 +56,9 @@ test('U3: an unchanged value earns no frame, and a value that disappears does', 
   assert.equal(usageShouldEmit(changed, gone), true, 'nothing displayable is itself a change')
   assert.equal(usageShouldEmit(gone, usageSnapshotOf(values({ contextWindow: 100 }), 9)), false)
 
-  // The composition is a value of its own: the two projection keys update
-  // independently, so the ratio can stand still while the split moves. A
-  // freshness check comparing the ratio alone would swallow it and leave the
-  // phone showing a stale split beside a fresh number.
+  // The composition is a value of its own: the two keys update independently, so the
+  // ratio can stand still while the split moves. Comparing the ratio alone would
+  // swallow it and leave a stale split beside a fresh number.
   const split = usageSnapshotOf(
     values({ projectedTokens: 51_000, contextWindow: 128_000 }, { systemTokens: 1, toolsTokens: 2, messageTokens: 3 }),
     10,

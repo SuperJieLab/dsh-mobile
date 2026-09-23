@@ -1,37 +1,23 @@
 /**
  * 瞬态帧通道 —— 打字机流的独立状态机。
  *
- * ## 为什么不进镜像
+ * 瞬态帧（`assistant-stream`）没有 `seq`，只有 attemptId / revision / index，不进水位体系：
+ * 推进游标等于把「没落盘的东西」当成「已读到的位置」。所以它有自己的通道与校验，与
+ * `SessionMirror` 平行互不触碰（docs/dev/plans/M2-realtime-transient.md §3.4）。
  *
- * 瞬态帧（`assistant-stream`）**没有 `seq`**（上游契约如此），只有 attemptId /
- * revision / index —— 它们不进水位体系：推进游标等于把「没落盘的东西」当成了
- * 「已读到的位置」。所以它有自己的通道、自己的校验，与 `SessionMirror` 平行，
- * 互不触碰（docs/dev/plans/M2-realtime-transient.md §3.4）。
+ * `revision` 来自 agent 级全局单调计数器（`() => ++assistantStreamRevision`）：start / chunk /
+ * end 每帧 +1、跨 attempt 连续，是断号校验的对象；`index` 是 attempt 内 chunk 的位置。校验即
+ * 每帧 `revision` **正好等于**期望值（上帧 + 1，或基线 + 1），chunk 的 `index` 等于 attempt 内
+ * 已累积的 chunk 数 —— 早期当成 attempt 恒定代次会第一帧就误判 broken（打字机不逐字）。
  *
- * ## revision 与 index 是两个不同的序号（真机联调实测校准，2026-09-19）
+ * 任一不满足 ⇒ `broken`：后续 chunk 是**增量**，基线已丢，唯一正确动作是**重开流取新基线**
+ * （新 opening 的 `assistantStream` 带已累积内容），与上游「断号即重连」同构。
  *
- * 上游 `agent.ts` 给每个瞬态帧注入的 `revision` 来自一个 **agent 级全局单调
- * 计数器**（`() => ++assistantStreamRevision`）—— start、chunk、end **每一帧
- * 都 +1**，跨 attempt 连续不断；它才是「断号」要校验的对象。`index` 则是
- * **attempt 内 chunk 的位置**（start 后从 0 起、每 chunk +1，`end` 携带 chunk
- * 总数）。最初把 revision 当成「attempt 的恒定代次」，第一帧就误判 broken ——
- * 打字机因此整段出现、不逐字。校验即：
+ * chunk 是上游模型流的 JSON（`StreamChunk`，`llm/src/types.ts:424`）：只拼
+ * `type == "text-delta"` 的 `.text`，其余原样跳过 ——
+ * 与 `SessionEvent.displayMessage` 同一条显示规则。
  *
- * - 每帧 `revision` 必须**正好等于**期望值（上帧 + 1，或基线 revision + 1）；
- * - chunk 的 `index` 必须等于 attempt 内已累积的 chunk 数。
- *
- * 任一不满足 ⇒ `broken`：后续 chunk 是**增量**，基线已丢，干等只会残缺，唯一
- * 正确动作是**重开流取新基线**（新 opening 的 `assistantStream` 带已累积内容）——
- * 与上游「断号即重连」同构。
- *
- * ## 文本从哪来
- *
- * chunk 是上游模型流的 JSON（`StreamChunk`，`llm/src/types.ts:424`）：打字机
- * 只拼 `type == "text-delta"` 的 `.text`；reasoning / tool-call / 块边界不属于
- * 对话文本，原样跳过 —— 与 `SessionEvent.displayMessage` 的取舍同一条显示规则。
- *
- * 不碰网络、不碰 UI：与 `SessionMirror` 一样，能被 iOS target 编译，也能被
- * `swiftc` 编成 macOS 命令行程序跑断言。
+ * 不碰网络与 UI：能被 iOS target 编译，也能被 `swiftc` 编成 macOS 命令行程序跑断言。
  */
 
 /// opening 里带的瞬态基线（上游 `SessionAssistantStreamBaseline`，形状见
@@ -118,7 +104,6 @@ struct TransientChannel {
             guard active,
                   let revision = incoming,
                   let index = frame["index"]?.int else { return .broken }
-            // 两个序号都对上才收：revision 全局连续，index 是 attempt 内稠密位置。
             guard revision == expectedRevision, index == nextChunkIndex else { return .broken }
             if let delta = Self.textDelta(of: frame["chunk"]) {
                 text += delta
@@ -142,7 +127,6 @@ struct TransientChannel {
         }
     }
 
-    /// 从一个 chunk 的 JSON 里抽出对话文本；不是文本块就是 `nil`。
     private static func textDelta(of chunk: JSONValue?) -> String? {
         guard chunk?["type"]?.string == "text-delta" else { return nil }
         return chunk?["text"]?.string

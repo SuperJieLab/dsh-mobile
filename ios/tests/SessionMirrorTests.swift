@@ -1,10 +1,6 @@
 /**
- * SessionMirror 的契约测试（SM1–SM14）。
- *
- * 状态机不碰网络、不碰 UI、不碰持久化，所以这里没有服务器、没有 DSH 运行时、
- * 没有文件系统 —— 每条断言都由状态机自己决定。跑法见同目录的 `run.sh`。
- *
- * 断言清单与出处：docs/dev/plans/M1-consistency-delta.md §5.1（SM1–SM14）。
+ * SessionMirror 的契约测试（SM1–SM14）：状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
+ * 跑法见同目录 `run.sh`；出处：docs/dev/plans/M1-consistency-delta.md §5.1。
  */
 import Foundation
 
@@ -33,7 +29,7 @@ struct SessionMirrorTests {
   static func main() {
     // MARK: SM1 首次合并
 
-    // 分两批拉，覆盖「分块推进」：第一批 hasMore 为真，游标落在本批末尾。
+    // 分两批拉，覆盖「分块推进」：第一批 hasMore 为真。
     var mirror = SessionMirror()
     expect(mirror.beginRequest(), "SM1 首次请求可以发起")
     let firstBatch = mirror.apply(snapshot(2, [event(0), event(1)], hasMore: true))

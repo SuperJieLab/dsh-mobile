@@ -1,11 +1,7 @@
 /**
- * Contract tests for the protocol: one wire message in, one wire message out.
- *
- * These tests are the reason `handle` exists as a standalone function. They run
- * with `node --test src/contract/rpc.test.ts` — no server, no DSH runtime, no filesystem,
- * no network. The data source is injected, so every case below is decided by
- * the protocol layer alone.
- *
+ * Contract tests for the protocol: one wire message in, one wire message out. They
+ * are the reason `handle` exists standalone: no server, no runtime, no filesystem,
+ * no network — the data source is injected, so the protocol layer decides alone.
  * Run: node --test src/contract/rpc.test.ts
  * See docs/dev/protocol.md and docs/dev/plans/M0-reachability-spike.md §4.3 Step 3.
  */
@@ -31,9 +27,9 @@ function fakePort(sessions: readonly FakeSession[] = []): SessionPort {
       const found = byId.get(id)
       if (found === undefined) return undefined
       const remaining = found.events.filter(event => event.seq >= since)
-      // The one shape the server *can* refuse: the client claims to have read
-      // events, and the log holds none at all. A `since` merely past the water
-      // mark is indistinguishable from "caught up" and stays a normal answer
+      // The one shape the server *can* refuse: the client claims to have read events
+      // and the log holds none. A `since` past the water mark is indistinguishable
+      // from "caught up" and stays a normal answer
       // (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
       if (remaining.length === 0 && since > 0 && found.events.length === 0) {
         return { events: [], asOfSeq: 0, hasMore: false, staleCursor: true }
@@ -55,10 +51,9 @@ function event(seq: number): WireEvent {
 }
 
 /**
- * A log where the even seqs are messages and the odd seqs are not.
- *
- * The mixture is what makes a window test meaningful: if the boundary were
- * drawn by event count, every case below would pass anyway.
+ * A log where the even seqs are messages and the odd seqs are not. The mixture is
+ * what makes a window test meaningful: with the boundary drawn by event count, every
+ * case below would pass anyway.
  */
 function mixedLog(count: number): WireEvent[] {
   return Array.from({ length: count }, (_, seq) =>
@@ -70,13 +65,13 @@ function mixedLog(count: number): WireEvent[] {
 
 /**
  * A log shaped like a real session's skeleton: every turn is a burst of process
- * events carrying three messages (`user/message`, the mid-step
- * `assistant/message`, then the answer).
+ * events carrying three messages (`user/message`, the mid-step `assistant/message`,
+ * then the answer).
  *
- * The shape is the point. It is what makes a message-count boundary land
- * *inside* a turn far more often than on its edge — four real session logs put
- * that at 60–93% of cuts — which is why a window's start is aligned to a
- * `turn/start` rather than left where the count ran out (spec §8.5 B6 二次裁决).
+ * The shape is the point: it makes a message-count boundary land *inside* a turn far
+ * more often than on its edge — 60–93% of cuts across four real session logs — which
+ * is why a window's start is aligned to a `turn/start` rather than left where the
+ * count ran out (spec §8.5 B6 二次裁决).
  */
 function turnedLog(turns: number): WireEvent[] {
   const events: WireEvent[] = []
@@ -427,9 +422,8 @@ test('a window that would start mid-turn backs up to where the turn does', async
   ]), CLOCK)
 
   const page = response as { pageStart: number; events: WireEvent[] }
-  // Counting five messages back from the end runs out on seq 39 — a turn's
-  // mid-step `assistant/message`, i.e. squarely inside a turn. That is the
-  // common case, not the corner: in four real logs it is 60–93% of cuts.
+  // Counting five messages back from the end runs out on seq 39, a turn's
+  // mid-step `assistant/message`. That is the common case, not the corner.
   assert.equal(log[39]?.type, 'assistant/message', 'the count really does run out mid-turn')
   assert.equal(log[37]?.type, 'turn/start', 'and this turn opens two events earlier')
   assert.equal(page.pageStart, 37, 'the window starts where the turn does, not where the count ran out')
@@ -439,9 +433,9 @@ test('a window that would start mid-turn backs up to where the turn does', async
 })
 
 test('upstreamWindow: the reference spelling of our one-target window rule', () => {
-  // The reference splits the rule into a floor it may stop after and a ceiling
-  // it must stop at; our own function takes one target and derives the ceiling.
-  // This is where the two spellings meet (spec §8.5 B6 二次裁决).
+  // The reference splits the rule into a floor it may stop after and a ceiling it
+  // must stop at; ours takes one target and derives the ceiling. Here the two
+  // spellings meet (spec §8.5 B6 二次裁决).
   assert.deepEqual(upstreamWindow(50), {
     maxMessages: 100,
     turnWindow: { minMessages: 50, minTurns: 1 },
@@ -473,9 +467,9 @@ test('walking pages backwards covers the log exactly once', async () => {
   }
 
   assert.deepEqual(collected, log.map(event => event.seq), 'the pages must tile the log with no gap and no overlap')
-  // Alignment is what the caller walks: every page except the one that reaches
-  // the log's own beginning starts on a turn boundary, so no page opens on a
-  // half turn (spec §8.5 B6 二次裁决).
+  // Every page but the one reaching the log's own beginning starts on a turn
+  // boundary, so no page opens on a half turn — and alignment is what the caller
+  // walks (spec §8.5 B6 二次裁决).
   for (const start of starts) {
     if (start === 0) continue
     assert.equal(log[start]?.type, 'turn/start', `a page must start on a turn boundary, got seq ${start}`)
@@ -518,9 +512,8 @@ test('page defaults to the protocol page size when maxMessages is absent', async
 
   const page = response as { pageStart: number; hasOlder: boolean }
   assert.equal(page.hasOlder, true, 'an absent cap must not mean "everything"')
-  // 50 is the target and 100 the ceiling. This log is all messages with no
-  // `turn/start` anywhere, so the window walks to the ceiling and stops there:
-  // an unreachable boundary must not widen the window without limit.
+  // 50 is the target and 100 the ceiling: with no `turn/start` anywhere the window
+  // walks to the ceiling and stops — an unreachable boundary must not widen it forever.
   assert.equal(page.pageStart, 20)
 })
 

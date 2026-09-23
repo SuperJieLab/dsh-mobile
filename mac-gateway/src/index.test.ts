@@ -1,24 +1,14 @@
 /**
- * Assembly smoke test.
+ * Assembly smoke test. Run: node --test src/index.test.ts
  *
- * The wiring layer has no pure logic, which is exactly why it went untested —
- * and a mis-anchored edit once shipped a module that evaluated fine and died on
- * the first request. These tests apply the plugin to a minimal fake context and
- * hit a real loopback port with real HTTP, so "the module evaluated" and "the
- * wiring works" are separate claims, each with a failing state of its own.
+ * The wiring layer has no pure logic, so it went untested — until a mis-anchored
+ * edit shipped a module that evaluated fine and died on the first request. These
+ * tests hit a real loopback port: "evaluated" and "wired up" are separate claims.
  *
- * The fake context deliberately provides no services: `apply` must still bring
- * the listener up (inject is the host's concern), and a protocol message must
- * come back as an envelope — `internal-error` here, since nothing is behind the
- * port — rather than a crash. That is the "the process must not crash" promise,
- * checked at the wiring layer.
- *
- * M4 adds the auth gate: every business request now needs a live access token,
- * so the tests pair a seeded device token through the real `refresh` op first —
- * which also exercises the auth path end to end. The credentials file goes to a
- * temp directory; the tests never touch the real home.
- *
- * Run: node --test src/index.test.ts
+ * The fake context provides no services: `apply` must still bring the listener up (inject is
+ * the host's concern) and answer a protocol message with an envelope — `internal-error` here,
+ * since nothing is behind the port — not a crash. M4 adds the auth gate, so the tests pair a
+ * seeded device token through the real `refresh` op first; credentials live in a temp directory.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -40,22 +30,18 @@ function tempCredentialsPath(): string {
 /** Device token the tests pair with — the raw side of the vault's hash. */
 const DEVICE_TOKEN = 'test-device-token-0123456789abcdef'
 
-/**
- * The fake `typertGateway`: a controlled `$events` stream (tests push waterfall
- * frames into it) plus a result door that records what the relay delivered.
- */
+/** The fake `typertGateway`: a controlled `$events` stream (tests push waterfall frames
+ * into it) plus a result door that records what the relay delivered. */
 interface FakeGateway {
   push(frame: { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }): void
   results: { clientId: string; eventId: string; outcome: unknown }[]
 }
 
 /**
- * Install the plugin on a context that runs effects immediately. Returns its
- * teardown and the fake gateway.
- *
- * `services` adds host services to the fake context — the follow path's three
- * (sessions / sessionProjections / sessionController) arrive this way, so the
- * default stays the serviceless context the earlier tests depend on.
+ * Install the plugin on a context that runs effects immediately; returns its teardown
+ * and the fake gateway. `services` adds host services to the fake context (the follow
+ * path's three arrive this way), so the default stays the serviceless context the
+ * earlier tests depend on.
  */
 function install(
   host: string,
@@ -76,14 +62,10 @@ function install(
     {
       effect: (fn: () => () => void) => { cleanup = fn() },
       ...services,
-      /**
-       * Mirrored from the runtime gateway at 0.1.7-alpha.2: the carrier face
-       * `wireStream.open` takes `uplink` / `peer` ahead of the signal and
-       * combines the signal with a registration lifetime
-       * (`dsh-api-gateway/lib/index.js:602,805`). Feeding it positionally is how
-       * the relay died on the real machine (实施期修正 15), so the assembly
-       * smoke test speaks the same shape.
-       */
+      /** Mirrored from the runtime gateway at 0.1.7-alpha.2: `wireStream.open` takes
+       * `uplink` / `peer` ahead of the signal and combines it with a registration lifetime
+       * (`dsh-api-gateway/lib/index.js:602,805`); feeding it positionally is how the relay
+       * died on the real machine (实施期修正 15). */
       typertGateway: {
         wireStream: {
           async open(
@@ -288,9 +270,9 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
       setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
     })
 
-    // The fake context has no session controller behind the port, so the pump
-    // fails — and must fail as an error frame (the stream channel's form of
-    // "a hostile data source is still a reply"), never as a dead socket.
+    // No session controller behind the port: the pump must fail as an error frame
+    // (the stream channel's "a hostile data source is still a reply"), never as a
+    // dead socket.
     socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
     const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
       socket.addEventListener('message', event => {
@@ -487,12 +469,9 @@ test('session-prompt without a controller behind the port fails as an envelope, 
 // MARK: - the occupancy frames (M6 U6)
 
 /**
- * A scripted follow stream plus scriptable projections — the two host faces the
- * occupancy path reads for real.
- *
- * The opening is whatever the test declares; every `emit` afterwards becomes one
- * event frame. Reads are counted so a test can tell "asked again" from "asked
- * once", which is what the "no news, no frame" half of U6 turns on.
+ * A scripted follow stream plus scriptable projections — the two host faces the occupancy path.
+ * The opening is whatever the test declares, each `emit` after it one event frame; reads are
+ * counted so a test can tell "asked again" from "asked once" — U6's "no news, no frame" half.
  */
 function fakeFollowHost(opening: {
   cursor: number
@@ -659,20 +638,14 @@ test('U6: without projections the baseline is absent and no frame is ever pushed
 // MARK: - the list path against the runtime's projection faces (实施期修正 16)
 
 /**
- * The runtime's cache face, as 0.1.7-alpha.2 spells it
- * (`dsh-session-projection-cache/lib/index.js:193`):
+ * The runtime's cache face as 0.1.7-alpha.2 spells it: `cachedSnapshot(meta, keys)`
+ * (dsh-session-projection-cache/lib/index.js:193).
  *
- * ```js
- * cachedSnapshot(meta, keys) { return this.viewRecord(record, keys) }
- * ```
- *
- * The baseline our code was written against had a leading
- * `inheritedEventCount` — `cachedSnapshot(meta, inheritedEventCount, keys?)` —
- * so a positional `0` used to mean "no inherited prefix". The runtime dropped
- * that parameter, so the same `0` now lands in `keys` and upstream's own
- * iteration over it throws `number 0 is not iterable`, which is exactly what
- * killed the real list. This fixture keeps the runtime shape *including the
- * iteration*: a fixture that ignores its arguments cannot catch that drift.
+ * The baseline's leading `inheritedEventCount` made a positional `0` mean "no inherited
+ * prefix"; the runtime dropped it, so the same `0` now lands in `keys` and upstream's
+ * iteration over it throws `number 0 is not iterable` — exactly what killed the real list.
+ * This fixture keeps the runtime shape *including the iteration*, because a fixture that
+ * ignores its arguments cannot catch that drift.
  */
 function fakeProjectionCache(
   valuesFor: (id: string) => Record<string, unknown> | undefined,
@@ -763,9 +736,8 @@ test('one row whose projection read throws still lists — without its cells', {
     },
     sessions: { get: () => undefined },
     sessionProjections: { cachedSnapshot: () => undefined, snapshot: () => undefined },
-    // Mirrors upstream's own `projectionsFor` guard (session-controller/src/list.ts:
-    // 272–293): a projection is a hint, so one row's failure costs that row its
-    // cells and never the whole list.
+    // Mirrors upstream's own `projectionsFor` guard (session-controller/src/list.ts:272–293):
+    // a projection is a hint, so one row's failure costs that row its cells, never the list.
     sessionProjectionCache: fakeProjectionCache(id => {
       if (id === 'broken-1') throw new Error('projection column for broken-1 failed')
       return { title: '好的会话', sessionListMetadata: { lastPromptAt: null, blank: false } }

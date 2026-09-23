@@ -1,27 +1,17 @@
 /**
- * The stream adapter: WebSocket upgrade on our own listener, and the pump that
- * turns the session controller's follow stream into mux frames.
+ * The stream adapter: WebSocket upgrade on our own listener, and the pump turning the
+ * session controller's follow stream into mux frames.
  *
- * The upgrade hangs off the listener this plugin starts itself (`'upgrade'`
- * event, same port as `POST /rpc`) — `ctx.webServer` is not an option here: it
- * is a host-global setting whose CLI refuses `0.0.0.0`, and M0 exists precisely
- * because of that (docs/dev/plans/M0-reachability-spike.md §3.2). The reference
- * gateway's `registerUpgrade` is the same idea played on the host's server; ours
- * is the same idea played on ours.
+ * The upgrade hangs off the listener this plugin starts itself (`'upgrade'`, same port as
+ * `POST /rpc`) — `ctx.webServer` is host-global and its CLI refuses `0.0.0.0`, which is
+ * what M0 exists for (docs/dev/plans/M0-reachability-spike.md §3.2).
  *
- * The pump's contract to the wire (docs/dev/plans/M2-realtime-transient.md §3.3):
- * the reference follow frames wrap every event as `{type:'event', event}` —
- * the unwrap is the whole conversion. The opening's window arrives already cut
- * by the source's own pagination (the same message-count rule our `page` was
- * modelled on), so the adapter carries it through with only shape changes:
- * records unwrap to the event objects, the inclusive cursor becomes our
- * exclusive one. Event frames pass the DSH event object through **verbatim**;
- * transient frames pass through verbatim too, cursor-less. What this adapter
- * adds is only what the transport owes: framing, the heartbeat, seq-continuity
- * witnessing (the source promises gap-free; we refuse loudly if it ever lies —
- * §3.5), and error mapping.
- *
- * See docs/dev/plans/M2-realtime-transient.md §3.2/§4.4 step 3.
+ * The pump's contract to the wire (docs/dev/plans/M2-realtime-transient.md §3.3, §3.2/§4.4 step
+ * 3): the reference's `{type:'event', event}` wrapping unwraps, the opening's window arrives
+ * already cut by the source's pagination (its inclusive cursor becomes our exclusive one), and
+ * event and cursor-less transient frames pass through **verbatim**. The adapter adds only what
+ * the transport owes: framing, the heartbeat, seq-continuity witnessing (the source promises
+ * gap-free; we refuse loudly if it lies — §3.5) and error mapping.
  */
 
 import type { Duplex, IncomingMessage, Server } from 'node:http'
@@ -46,14 +36,10 @@ import {
 } from '../contract/ws-frames.ts'
 
 /**
- * The stream source this adapter is written against — the narrow face of the
- * host the pump uses, declared here because the services' real types do not
- * resolve from outside the dsh installation.
- *
- * Two faces, because the pump needs two kinds of fact (M6): the follow stream
- * itself, and the occupancy reading for the session that stream follows. Both
- * come from the same host, which is why they arrive as one injection rather
- * than two (docs/dev/plans/M6-presentation-layer.md §四).
+ * The narrow face of the host the pump uses, declared here because the services' real types do
+ * not resolve from outside the dsh installation. The follow stream and the occupancy reading
+ * arrive as one injection, because both come from the same host (M6,
+ * docs/dev/plans/M6-presentation-layer.md §四).
  */
 export interface FollowSource {
   follow(
@@ -61,10 +47,9 @@ export interface FollowSource {
       address: { kind: 'session'; sessionId: string }
       maxMessages?: number
       /**
-       * The boundary rule, as the reference spells it: a floor it may stop
-       * after and a ceiling it must stop at (see `upstreamWindow`). Absent means
-       * the host cuts by message count alone, which leaves the window opening
-       * mid-turn.
+       * The boundary rule as the reference spells it: a floor it may stop after and a
+       * ceiling it must stop at (see `upstreamWindow`). Absent means the host cuts by
+       * message count alone, opening the window mid-turn.
        */
       turnWindow?: { minMessages: number; minTurns: number }
       assistantStream: true
@@ -72,12 +57,9 @@ export interface FollowSource {
     signal: AbortSignal,
   ): AsyncIterable<UpstreamFollowFrame>
   /**
-   * Read the occupancy projections for one session, right now.
-   *
-   * Synchronous and in-memory — the host folds projections as events land, so
-   * this is a state read, not a log walk (docs/dev/plans/M6-presentation-layer.md
-   * §3.1 决定 3, which is also where using `snapshot()` rather than the cheaper
-   * cached read is argued).
+   * Read the occupancy projections for one session, right now — synchronous and in-memory:
+   * the host folds projections as events land, so this is a state read, not a log walk
+   * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 3).
    *
    * @returns the reading, or `undefined` when the host does not know the session.
    */
@@ -85,10 +67,8 @@ export interface FollowSource {
 }
 
 /**
- * One frame of the reference follow stream, as far as this adapter cares.
- *
- * Shapes verified at `0d1f5000` (`history.ts:119-240`): an opening `snapshot`
- * whose `records` wrap each event as `{type:'event', event}`, then `event`
+ * One frame of the reference follow stream, shapes verified at `0d1f5000` (`history.ts:119-240`):
+ * an opening `snapshot` whose `records` wrap each event as `{type:'event', event}`, then `event`
  * frames in the same wrapping, then cursor-less `assistant-stream` frames.
  */
 export type UpstreamFollowFrame =
@@ -104,27 +84,15 @@ export type UpstreamFollowFrame =
   | { type: 'event'; event: unknown }
   | { type: 'assistant-stream'; frame: unknown }
 
-/** Heartbeat cadence, matching the reference server: a ping every 2 s. */
+/** Heartbeat cadence, matching the reference server. */
 const PING_INTERVAL_MS = 2_000
 
-/** A client that misses this many consecutive pongs is gone; close the socket. */
+/** Consecutive missed pongs before the client is treated as gone. */
 const MISSED_PONG_LIMIT = 2
 
 /** The exact path this gateway serves its stream protocol on. */
 export const STREAM_PATH = '/rpc/stream'
 
-/**
- * Hang the stream protocol off the plugin's own listener.
- *
- * The handler owns negotiation (verified against the handshake key) and the
- * socket afterwards. Everything a socket does is best-effort with errors
- * swallowed at the socket boundary: a dead client is routine, not a fault.
- *
- * `gate` is the M4 auth gate: checked once at upgrade, before the handshake is
- * answered — no live access token, no 101. A connection that got through stays
- * up even after its token expires: re-authentication happens on the next
- * connect, not mid-stream (docs/dev/plans/M4-identity-credentials.md §3.3).
- */
 /** What the approval relay uses to push at connected phones. */
 export interface Broadcaster {
   /** Send one connection-level frame to every live, authenticated client. */
@@ -134,6 +102,15 @@ export interface Broadcaster {
 /** Called once per connected client, with a sender scoped to that socket. */
 export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
 
+/**
+ * Hang the stream protocol off the plugin's own listener: the handler owns negotiation (verified
+ * against the handshake key) and the socket afterwards, and socket errors are swallowed — a dead
+ * client is routine.
+ *
+ * `gate` is the M4 auth gate, checked once at upgrade, before the handshake is answered — no live
+ * access token, no 101. A connection stays up after its token expires; re-authentication happens
+ * on the next connect, not mid-stream (docs/dev/plans/M4-identity-credentials.md §3.3).
+ */
 export function attachStreamHandler(
   server: Server,
   source: FollowSource,
@@ -199,7 +176,6 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer): void {
   const parser = new WsFrameParser()
   const streams = new Map<number, { abort: AbortController }>()
 
-  // Heartbeat: a ping every 2 s; two consecutive misses end the connection.
   // The reference server terminates on the same budget (`stream-server.ts`).
   let unansweredPings = 0
   const heartbeat = setInterval(() => {
@@ -252,9 +228,8 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer): void {
 }
 
 /**
- * Route one parsed client text frame: an `open` starts a pump, a `cancel`
- * stops one. The contract's parser has already refused everything that is not a
- * well-formed client frame, so what survives to here is shape-checked.
+ * Route one parsed client text frame: `open` starts a pump, `cancel` stops one. The contract's
+ * parser has already refused malformed frames, so what survives is shape-checked.
  */
 function onClientText(
   socket: Duplex,
@@ -289,8 +264,8 @@ function onClientText(
 }
 
 /**
- * Pump one follow stream: opening first, then events, until the source ends,
- * the client cancels, or the source breaks its own contract.
+ * Pump one follow stream: opening first, then events, until the source ends, the client
+ * cancels, or the source breaks its own contract.
  */
 async function pump(
   socket: Duplex,
@@ -305,12 +280,9 @@ async function pump(
   }
 
   /**
-   * Read the occupancy projections, treating a failed read as "nothing to say".
-   *
-   * Occupancy rides the same stream as the events but is an addition to them: an
-   * unreadable projection must not cost the phone its session, so a read that
-   * throws is logged and skipped rather than turned into an `error` frame —
-   * which would end the stream (M6).
+   * Read the occupancy projections, treating a failed read as "nothing to say": occupancy is
+   * an addition to the events, so a throwing read is logged and skipped rather than turned
+   * into an `error` frame that would cost the phone its session (M6).
    */
   const readUsage = (): UsageSnapshot | undefined => {
     try {
@@ -333,9 +305,8 @@ async function pump(
   try {
     const iterable = source.follow({
       address: { kind: 'session', sessionId: request.sessionId },
-      // The window, asked for the way the reference spells it — derived from the
-      // same target our own `page` window takes, so the opening starts on a turn
-      // boundary too (spec §8.5 B6 二次裁决).
+      // The window, asked for the way the reference spells it, cut from the same target
+      // our `page` window takes — so the opening starts on a turn boundary (spec §8.5 B6 二次裁决).
       ...upstreamWindow(request.maxMessages ?? DEFAULT_FOLLOW_MESSAGES),
       assistantStream: true,
     }, signal)
@@ -354,8 +325,8 @@ async function pump(
         const cursor = frame.cursor + 1 // reference cursor is inclusive; ours is exclusive
         expectedSeq = cursor
         console.log(`[mac-gateway] follow opening for "${request.sessionId}": cursor=${cursor}, ${events.length} events`)
-        // The occupancy baseline is read in the same breath as the window, so
-        // the phone opens on a window and a state from one moment (M6 §3.1 决定 2).
+        // The occupancy baseline is read in the same breath as the window: the
+        // phone opens on a window and a state from one moment (M6 §3.1 决定 2).
         const occupancy = readUsage()
         lastUsage = occupancy
         sendItem({
@@ -408,18 +379,16 @@ async function pump(
 }
 
 /**
- * Map a source failure to the protocol's error object, with the same code the
- * HTTP path would have refused with: a log this runtime cannot interpret is
- * `unreadable-session`, a session the source does not know is
- * `unknown-session`, everything else is ours.
+ * Map a source failure to the protocol's error object, with the same codes the HTTP path
+ * uses: `unreadable-session` for an uninterpretable log, `unknown-session` for a session
+ * the source does not know, `internal-error` for the rest.
  */
 function mapError(error: unknown): { code: string; message: string } {
   if (isUnreadable(error)) {
     return { code: 'unreadable-session', message: describeError(error) }
   }
-  // Everything this channel reads is addressed by session, so a not-found is
-  // the session's — and the predicate itself is shared with the write path, so
-  // the two cannot drift on what counts as "not there".
+  // Everything this channel reads is addressed by session, so a not-found is the
+  // session's; the predicate is shared with the write path so the two cannot drift.
   if (isNotFound(error)) {
     return { code: 'unknown-session', message: describeError(error) }
   }

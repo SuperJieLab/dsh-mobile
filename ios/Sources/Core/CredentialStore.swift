@@ -14,13 +14,10 @@ private func keychainQuery() -> [String: Any] {
 /**
  * 三张票在手机侧的家（M4）。
  *
- * 分工与 Mac 侧 `CredentialVault` 对称，但持有策略相反 —— 这是两端暴露面
- * 决定的：设备凭证是**关系的本体**，要经得起杀 App / 重启（进 Keychain）；
- * 访问凭证只是**15 分钟的时间片**，丢了就换一张（只进内存，不落盘），
- * 这与「客户端不落盘位置」是同一条纪律：时间片不是资产。
+ * 设备凭证是关系的本体，要经得起杀 App / 重启（进 Keychain）；访问凭证只是 15 分钟的
+ * 时间片，丢了就换（只进内存）—— 与「客户端不落盘位置」同一条纪律：时间片不是资产。
  *
- * 单例的理由：全 App 只有一个身份。`GatewayClient` 负责签发与续期，
- * `FollowClient` 只在 upgrade 时读一张有效的 access —— 两者都指向这里。
+ * 单例：全 App 只有一个身份。`GatewayClient` 签发与续期，`FollowClient` 升级时读。
  */
 @MainActor
 final class CredentialStore {

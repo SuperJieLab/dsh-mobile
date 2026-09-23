@@ -1,7 +1,6 @@
 /**
- * Auth contract tests (M4): every rule the three tickets promise, asserted on pure
- * functions with injected randomness and clock — no filesystem, no socket.
- *
+ * Auth contract tests (M4): every rule the three tickets promise, on pure functions
+ * with injected randomness and clock — no filesystem, no socket.
  * Run: node --test src/contract/auth.test.ts
  */
 import { test } from 'node:test'

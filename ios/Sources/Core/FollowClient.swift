@@ -3,18 +3,16 @@ import Foundation
 /**
  * 跟随流的连接编排 —— `URLSessionWebSocketTask` 上的三件事：
  *
- * 1. **代次**：本地单调计数。每一次（重）连接都是新代次，旧代次的任何回调一律
- *    丢弃 —— 重连竞态下，迟到的一条旧帧不能污染新代次的视图。
- * 2. **退避重连**：base 500ms × 2^n，抖动取 50–100%，封顶 10s，就绪硬超时 15s
- *    —— 参数照抄上游（`recovery-config.ts:26-30`）。**重连即重新 open**：新
- *    opening 重建窗口，不做水位续传（docs/dev/plans/M2-realtime-transient.md §3.4）。
- * 3. **心跳**：2s 一次 ping，连续 2 次没等到 pong 就当连接已死，走重连 ——
- *    参数照抄上游（`stream-server.ts`）。URLSession 会自动回服务端的 ping，
- *    这里管的是「对面还活着吗」这一侧。
- *
- * 它不解释任何帧：解析成 JSON 后原样递给回调，形状与语义都在编排层之外
- * （`SessionSync`）。协议名、端口全从 `GatewayClient.baseURL` 推导 ——
- * 全 App 仍然只有一个要改的地址。
+ * 1. **代次**：本地单调计数；每次（重）连接都是新代次，旧代次回调一律丢弃 ——
+ * 迟到的旧帧不能污染新代次视图。
+ * 2. **退避重连**：base 500ms × 2^n、抖动 50–100%、封顶 10s、
+ * 就绪硬超时 15s（照抄上游 `recovery-config.ts:26-30`）；
+ *    **重连即重新 open**，新 opening 重建窗口、
+ *    不做水位续传（docs/dev/plans/M2-realtime-transient.md §3.4）。
+ * 3. **心跳**：2s ping 一次，连续 2 次没等到 pong 就当它死了走重连（照抄上游 `stream-server.ts`）；
+ *    URLSession 自动回服务端的 ping，这里只管「对面还活着吗」。
+ * 不解释任何帧：解析成 JSON 原样递回调，形状与语义都在 `SessionSync`；协议名与端口全从
+ * `GatewayClient.baseURL` 推导 —— 全 App 只有一个要改的地址。
  */
 @MainActor
 final class FollowClient: NSObject {
@@ -36,11 +34,9 @@ final class FollowClient: NSObject {
     var onTransient: ((JSONValue) -> Void)?
     /// 一条连接级审批帧（M5 实施期修正 11：`{kind:'request'|'cancel', ...}` 原样）。
     var onApproval: ((JSONValue) -> Void)?
-    /// 一份上下文占用读数（M6）。
-    ///
-    /// 两个来源、同一个形状：opening 里的基线，以及随后的 `usage` 帧。缺席的含义
-    /// 与「空」不同 —— 字段**不在** = 服务端读不出（保留手里那份），字段在而
-    /// `usage` 为空 = 这个水位上确实没有可显示的东西（清空）。
+    /// 一份上下文占用读数（M6）。两个来源、同一个形状：opening 里的基线，以及随后的 `usage` 帧。
+    /// 缺席的含义与「空」不同 —— 字段**不在** = 服务端读不出（保留手里那份），字段在而 `usage` 为空
+    /// = 这个水位上确实没有可显示的东西（清空）。
     var onUsage: ((UsageSnapshot) -> Void)?
     /// 一条 error 帧 —— 流通道里的协议内拒绝。
     var onRefused: ((GatewayFailure) -> Void)?
@@ -51,11 +47,10 @@ final class FollowClient: NSObject {
 
     // MARK: - 状态
 
-    /// 连接阶段 —— 对外的连接态由 `onPhaseChange` 转发出去（`SessionSync.connectionPhase`）。
-    ///
-    /// 通知挂在 setter 上，不在各处赋值点手写：`connect`、`openFollowStream`、收到
-    /// opening、退避等待、`stop` 五处都会改它，手写就一定会漏接一处，漏接的那条路径
-    /// 上指示器会停在上一个状态（曾经就是全都没接，指示器恒定 idle 从不显示）。
+    /// 连接阶段 —— 对外由 `onPhaseChange` 转发（`SessionSync.connectionPhase`）。
+    /// 通知挂在 setter 上：
+    /// `connect`、`openFollowStream`、收到 opening、退避等待、`stop` 五处都会改它，
+    /// 手写必定漏接一处。
     private(set) var phase: Phase = .idle {
         didSet {
             guard phase != oldValue else { return }
@@ -114,9 +109,8 @@ final class FollowClient: NSObject {
         openFollowStream(sessionId: sessionId)
     }
 
-    /// 回前台立即触发一次重连 —— 上游「恢复立即试」（online 事件 → 重连控制器）
-    /// 的复现（M3）。退避窗口里的等待被跳过；已在握手或就绪的连接不受影响，
-    /// 不叠加并发连接。
+    /// 回前台立即触发一次重连 —— 上游「恢复立即试」（online 事件 → 重连控制器）的复现（M3）。
+    /// 退避窗口里的等待被跳过；已在握手或就绪的连接不受影响，不叠加并发连接。
     func reconnectNow() {
         guard following, sessionId != nil else { return }
         guard phase != .ready, phase != .connecting else { return }
@@ -167,9 +161,8 @@ final class FollowClient: NSObject {
             openFollowStream(sessionId: sessionId)
         }
 
-        // 就绪硬超时：15s 内没收到 opening 就断开走重连。
-        // ⚠️ 括号必须显式：`?? 15 * 1e9` 会把「15」当纳秒传进去（真机抓到过 ——
-        // 每次连接立即超时，open 帧被 cancel 成 -999，永远收不到 opening）。
+        // ⚠️ 括号必须显式：`?? 15 * 1e9` 会把「15」当纳秒传进去（真机抓到过 —— 每次连接立即
+        // 超时，open 帧被 cancel 成 -999，永远收不到 opening）。
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64((self?.readyTimeout ?? 15) * 1_000_000_000))
             guard let self, self.generation == current, self.task === webSocketTask, self.phase != .ready else { return }
@@ -335,11 +328,8 @@ final class FollowClient: NSObject {
     }
 
     /**
-     * 重连延迟：base 500ms × 2^n，抖动取封顶值的 50–100%，封顶 10s。
-     *
-     * 抽成纯函数（`random` 注入）是因为它是这段编排里唯一**可断言**的行为：
-     * 曲线对不对、抖动范围对不对，都能在不碰 socket 的情况下验证。完整的
-     * 「断线 → 退避 → 重连 → 代次递增」编排需要真网络，由真机判据 R3/R4 覆盖。
+     * 重连延迟的纯函数（`random` 注入）—— 曲线与抖动范围是这段编排里唯一**可断言**的行为：不碰
+     * socket 就能验证。完整的「断线 → 退避 → 重连 → 代次递增」需要真网络，由真机判据 R3/R4 覆盖。
      *
      * - Parameters:
      *   - attempt: 第几次重连（从 1 起）。
@@ -352,7 +342,7 @@ final class FollowClient: NSObject {
         return Int(Double(cap) * (0.5 + min(max(random, 0), 1) * 0.5))
     }
 
-    /// 退避重连：base 500ms × 2^n，抖动 50–100%，封顶 10s。
+    /// 退避重连 —— 延迟由 `backoffDelayMs` 决定。
     private func scheduleReconnect() {
         guard following, sessionId != nil else { return }
         reconnectAttempt += 1

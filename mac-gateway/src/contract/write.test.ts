@@ -1,8 +1,7 @@
 /**
  * The write contract's tests (M5, docs/dev/plans/M5-remote-intervention.md §五 W1–W3
- * plus the `handle` dispatch; W4's server-side rebuild was retired by 实施期
- * 修正 11 — rebuilding is the phone's display concern now). The port is a
- * fake; no runtime, no network.
+ * plus the `handle` dispatch; W4's server-side rebuild was retired by 实施期修正 11 —
+ * rebuilding is the phone's display concern now). The port is a fake; no network.
  */
 
 import assert from 'node:assert/strict'
