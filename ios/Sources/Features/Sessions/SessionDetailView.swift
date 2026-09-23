@@ -52,14 +52,22 @@ struct SessionDetailView: View {
                     .listRowSeparator(.hidden)
                 }
 
-                if sync.eventCount > 0 && sync.messages.isEmpty {
-                    Text("这个会话里没有可显示的消息。")
+                if sync.eventCount > 0 && sync.nodes.isEmpty {
+                    Text("这个会话里没有可显示的内容。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
-                ForEach(sync.messages) { message in
-                    MessageBubble(message: message)
+                ForEach(sync.nodes) { node in
+                    switch node {
+                    case .message(let message):
+                        MessageBubble(message: message)
+                    case .process(let process):
+                        // 一轮的过程：默认收起成一行摘要，点开是工具行与思考行。
+                        // 它不是「消息」，所以不套气泡 —— 视觉上要和对话区分开。
+                        TurnProcessRow(process: process)
+                            .listRowSeparator(.hidden)
+                    }
                 }
 
                 // 打字机：正在生成的回复。它不在镜像里 —— 瞬态内容没有 seq，
@@ -92,7 +100,7 @@ struct SessionDetailView: View {
             .listStyle(.plain)
             // 打开会话 = 停在最新的消息上（对话的阅读方向），而不是列表的开头。
             .defaultScrollAnchor(.bottom)
-            .onChange(of: sync.messages.count) { _, count in
+            .onChange(of: sync.nodes.count) { _, count in
                 // 只在**首次**有内容时滚一次：往回翻（前插）不能把用户的视口拽走。
                 guard !didInitialScroll, count > 0 else { return }
                 didInitialScroll = true

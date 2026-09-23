@@ -27,6 +27,9 @@ final class SessionSync: ObservableObject {
 
     /// 屏幕上要画的消息。
     @Published private(set) var messages: [DisplayMessage] = []
+    /// 屏幕上要画的东西 —— 消息**与过程**（M6）：一轮的工具调用与思考折进一行，
+    /// 最终答案留在原位。由组装器从同一批事件算出来（判据 A1–A9）。
+    @Published private(set) var nodes: [TranscriptNode] = []
     /// 视图里的事件条数（消息只是其中一部分）。
     @Published private(set) var eventCount = 0
     /// 还能往回翻吗。为真时界面给出入口。
@@ -66,6 +69,15 @@ final class SessionSync: ObservableObject {
         return followClient
     }()
     private var transient = TransientChannel()
+    /// 事件 → 显示节点（M6）。唯一的状态是「已上报过哪些不认识的类型」，
+    /// 所以它跨刷新保留：每次刷新都重放整段窗口，不去重就会刷屏。
+    private var assembler = TranscriptAssembler { type in
+        // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
+        print("[TranscriptAssembler] 不认识的事件类型：\(type)")
+    }
+    /// 占用值的吸收（M6）。判定（严格高水位胜）全在值类型里（判据 O1），
+    /// 这里只持有它、把采纳的结果转发给视图。
+    private var usageState = UsageState()
     /// 把嵌套状态机的变化冒泡成自己的 objectWillChange：视图只观察
     /// `SessionSync`，而 `ApprovalStore` 是独立的 ObservableObject ——
     /// 不转发的话，审批卡的增删根本不会触发视图重算（真机踩实）。
@@ -358,8 +370,13 @@ final class SessionSync: ObservableObject {
     }
 
     /// 刷新界面可见的部分。状态机是唯一的事实来源。
+    ///
+    /// 组装每次都从**整段事件**重算，不做增量：窗口是几十到几百条，重算的代价
+    /// 远低于「增量组装写错一处就静默少一行」的风险（往回翻会前插内容，增量
+    /// 还得处理插入位置）。真机上窗口大到手感有变化时再谈（登记在 §8.5）。
     private func refreshView() {
         messages = mirror.events.compactMap(\.displayMessage)
+        nodes = assembler.assemble(mirror.events)
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
         approvals.rebuild(from: mirror.events)
