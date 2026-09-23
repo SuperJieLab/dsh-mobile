@@ -157,6 +157,23 @@ export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_04
 export const DEFAULT_PAGE_MESSAGES = 50
 
 /**
+ * How much wider than its target a window may get while it walks back to a
+ * `turn/start`.
+ *
+ * `maxMessages` is a target, not a promise: the caller asks for roughly that
+ * many messages and gets a window that **starts on a turn boundary**. A window
+ * that opens mid-turn hands the client a process group whose opening is not in
+ * the window — it has no fold header, so it lies flat; when the user pages back
+ * to that turn's opening the same run of events folds up instead. Same content,
+ * two shapes, reproduced on a real phone (spec §8.5 B6 二次裁决).
+ *
+ * Twice the target is where the walk stops: an unreachable boundary must not
+ * widen the window without limit. Real logs do not reach it — aligning cost
+ * 5–18 events (+1.5%, worst case +88) across four sessions.
+ */
+const TURN_ALIGN_CEILING = 2
+
+/**
  * The event types that count as a message when a page boundary is drawn.
  *
  * This is a boundary-drawing rule, not a display rule. A client shows fewer
@@ -418,6 +435,10 @@ export class CursorPastEndError extends Error {
  * structural fact rather than a promise: there is no second implementation to
  * drift from.
  *
+ * The window's **start** is then moved back to the nearest `turn/start`, so a
+ * window never opens mid-turn — see {@link TURN_ALIGN_CEILING} for why that is
+ * worth widening the window for, and how far it may widen.
+ *
  * @throws {@link LogNotDenseError} when the log's seqs are not `0..n-1` — the
  *   window arithmetic reads positions as seqs, so density is a precondition
  *   here rather than a hope. Both callers refuse on it: `page` with
@@ -447,9 +468,16 @@ export function pageWindow(
   let counted = 0
   for (let index = end - 1; index >= 0; index -= 1) {
     const event = events[index]
+    // A turn boundary wins over the count: once the target is met, walk on to
+    // the *nearest* `turn/start` rather than stopping inside a turn. `turn/start`
+    // is not a message, so this branch never disturbs the count.
+    if (event?.type === 'turn/start' && counted >= maxMessages) {
+      start = index
+      break
+    }
     if (event === undefined || !MESSAGE_EVENT_TYPES.has(event.type)) continue
     counted += 1
-    if (counted >= maxMessages) {
+    if (counted >= maxMessages * TURN_ALIGN_CEILING) {
       start = index
       break
     }
@@ -468,6 +496,30 @@ export interface PageWindow {
   hasOlder: boolean
   /** The window's events, in seq order. */
   events: readonly WireEvent[]
+}
+
+/**
+ * The reference host's spelling of the same window rule, derived from the one
+ * target {@link pageWindow} takes.
+ *
+ * The reference splits the rule into two numbers — a floor it may stop after
+ * and a ceiling it must stop at — while our own function takes a single target
+ * and derives the ceiling ({@link TURN_ALIGN_CEILING}). This is where the two
+ * spellings meet, so the follow opening and `page` cannot drift apart: both ask
+ * for a window that starts on a turn boundary, and both cap the walk at twice
+ * the target.
+ */
+export function upstreamWindow(targetMessages: number): {
+  maxMessages: number
+  turnWindow: { minMessages: number; minTurns: number }
+} {
+  return {
+    maxMessages: targetMessages * TURN_ALIGN_CEILING,
+    // The reference counts a turn the moment it meets one, so its `minTurns`
+    // of 1 already means "the nearest boundary wins" — the same thing our own
+    // walk does by stopping at the first qualifying `turn/start`.
+    turnWindow: { minMessages: targetMessages, minTurns: 1 },
+  }
 }
 
 /**

@@ -11,7 +11,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle } from './rpc.ts'
+import { handle, upstreamWindow } from './rpc.ts'
 import type { SessionPort, SessionRow, WireEvent } from './rpc.ts'
 
 /** One fake session: the row the list path sees, and the log the read path sees. */
@@ -66,6 +66,35 @@ function mixedLog(count: number): WireEvent[] {
       ? event(seq)
       : { type: 'policy/marker', seq, time: 1_758_000_000_000 + seq, data: {} },
   )
+}
+
+/**
+ * A log shaped like a real session's skeleton: every turn is a burst of process
+ * events carrying three messages (`user/message`, the mid-step
+ * `assistant/message`, then the answer).
+ *
+ * The shape is the point. It is what makes a message-count boundary land
+ * *inside* a turn far more often than on its edge — four real session logs put
+ * that at 60–93% of cuts — which is why a window's start is aligned to a
+ * `turn/start` rather than left where the count ran out (spec §8.5 B6 二次裁决).
+ */
+function turnedLog(turns: number): WireEvent[] {
+  const events: WireEvent[] = []
+  const at = (type: string, data: Record<string, unknown> = {}): void => {
+    events.push({ type, seq: events.length, time: 1_758_000_000_000 + events.length, data })
+  }
+  for (let turn = 0; turn < turns; turn += 1) {
+    at('user/message', { body: `问 ${turn}` })
+    at('turn/start', { turn })
+    at('step/start', { turn, step: 0 })
+    at('assistant/message', { message: { content: [{ type: 'reasoning', text: '想一下' }] } })
+    at('tool/call', { callId: `c${turn}`, name: '读文件' })
+    at('tool/result', { message: { source: { callId: `c${turn}` }, content: [{ type: 'text', text: '好' }] } })
+    at('step/end', { turn, step: 0 })
+    at('assistant/message', { message: { content: [{ type: 'text', text: `答 ${turn}` }] } })
+    at('turn/end', { turn })
+  }
+  return events
 }
 
 /** A list row with the optional field made explicit. */
@@ -381,34 +410,77 @@ test('page with no beforeSeq hands back the newest message window', async () => 
     v: 2,
     ok: true,
     sessionId: 's-1',
-    pageStart: 6,
+    // Two is the target; this log has no `turn/start` to align to, so the window
+    // walks on to the ceiling (four messages) and stops at seq 2.
+    pageStart: 2,
     asOfSeq: 10,
     hasOlder: true,
-    // The whole interval, not just the two messages: a caller rendering
-    // seq 6 needs seq 7 too, even though seq 7 is not a message itself.
-    events: log.slice(6, 10),
+    // The whole interval, not just the four messages: a caller rendering
+    // seq 2 needs seq 3 too, even though seq 3 is not a message itself.
+    events: log.slice(2, 10),
+  })
+})
+
+test('a window that would start mid-turn backs up to where the turn does', async () => {
+  const log = turnedLog(6) // 54 events, 3 messages per turn
+  const response = await handle({ v: 2, op: 'page', sessionId: 's-1', maxMessages: 5 }, fakePort([
+    { row: row('s-1', 100), events: log },
+  ]), CLOCK)
+
+  const page = response as { pageStart: number; events: WireEvent[] }
+  // Counting five messages back from the end runs out on seq 39 — a turn's
+  // mid-step `assistant/message`, i.e. squarely inside a turn. That is the
+  // common case, not the corner: in four real logs it is 60–93% of cuts.
+  assert.equal(log[39]?.type, 'assistant/message', 'the count really does run out mid-turn')
+  assert.equal(log[37]?.type, 'turn/start', 'and this turn opens two events earlier')
+  assert.equal(page.pageStart, 37, 'the window starts where the turn does, not where the count ran out')
+  assert.equal(page.events[0]?.type, 'turn/start')
+  // The price of aligning, measured: two extra events, still one interval.
+  assert.equal(page.events.length, 54 - 37)
+})
+
+test('upstreamWindow: the reference spelling of our one-target window rule', () => {
+  // The reference splits the rule into a floor it may stop after and a ceiling
+  // it must stop at; our own function takes one target and derives the ceiling.
+  // This is where the two spellings meet (spec §8.5 B6 二次裁决).
+  assert.deepEqual(upstreamWindow(50), {
+    maxMessages: 100,
+    turnWindow: { minMessages: 50, minTurns: 1 },
+  })
+  assert.deepEqual(upstreamWindow(7), {
+    maxMessages: 14,
+    turnWindow: { minMessages: 7, minTurns: 1 },
   })
 })
 
 test('walking pages backwards covers the log exactly once', async () => {
-  const log = mixedLog(10)
+  const log = turnedLog(6)
   const port = fakePort([{ row: row('s-1', 100), events: log }])
 
   const collected: number[] = []
+  const starts: number[] = []
   let beforeSeq: number | undefined
   let rounds = 0
   for (;;) {
     rounds += 1
-    assert.ok(rounds <= 5, 'paging backwards did not terminate')
+    assert.ok(rounds <= 8, 'paging backwards did not terminate')
     const response = await handle({ v: 2, op: 'page', sessionId: 's-1', beforeSeq, maxMessages: 2 }, port, CLOCK)
     assert.equal(response.ok, true)
     const page = response as { events: WireEvent[]; pageStart: number; hasOlder: boolean }
     collected.unshift(...page.events.map(event => event.seq))
+    starts.unshift(page.pageStart)
     if (!page.hasOlder) break
     beforeSeq = page.pageStart
   }
 
   assert.deepEqual(collected, log.map(event => event.seq), 'the pages must tile the log with no gap and no overlap')
+  // Alignment is what the caller walks: every page except the one that reaches
+  // the log's own beginning starts on a turn boundary, so no page opens on a
+  // half turn (spec §8.5 B6 二次裁决).
+  for (const start of starts) {
+    if (start === 0) continue
+    assert.equal(log[start]?.type, 'turn/start', `a page must start on a turn boundary, got seq ${start}`)
+  }
 })
 
 test('a log with no messages at all is still a window, not an empty one', async () => {
@@ -447,7 +519,10 @@ test('page defaults to the protocol page size when maxMessages is absent', async
 
   const page = response as { pageStart: number; hasOlder: boolean }
   assert.equal(page.hasOlder, true, 'an absent cap must not mean "everything"')
-  assert.equal(page.pageStart, 70, 'the default leaves the newest 50 messages in the window')
+  // 50 is the target and 100 the ceiling. This log is all messages with no
+  // `turn/start` anywhere, so the window walks to the ceiling and stops there:
+  // an unreachable boundary must not widen the window without limit.
+  assert.equal(page.pageStart, 20)
 })
 
 test('a beforeSeq past the end of the log is refused, not silently clamped', async () => {
@@ -465,7 +540,7 @@ test('a malformed beforeSeq falls back to the newest window rather than failing'
       { row: row('s-1', 100), events: mixedLog(10) },
     ]), CLOCK)
     assert.equal(response.ok, true, `beforeSeq=${String(beforeSeq)} should degrade, not fail`)
-    assert.equal((response as { pageStart: number }).pageStart, 6)
+    assert.equal((response as { pageStart: number }).pageStart, 2)
   }
 })
 

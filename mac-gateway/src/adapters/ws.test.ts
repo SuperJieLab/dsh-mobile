@@ -17,11 +17,16 @@ import { attachStreamHandler, STREAM_PATH, type FollowSource, type UpstreamFollo
 import type { WireEvent } from '../contract/rpc.ts'
 
 /** A follow source replaying scripted frames, optionally lying. */
-function fakeSource(frames: UpstreamFollowFrame[], options: { failWith?: unknown } = {}): FollowSource & { calls: number } {
+function fakeSource(
+  frames: UpstreamFollowFrame[],
+  options: { failWith?: unknown } = {},
+): FollowSource & { calls: number; requests: unknown[] } {
   return {
     calls: 0,
+    requests: [],
     async *follow(request, signal) {
       this.calls += 1
+      this.requests.push(request)
       if (request.address.kind !== 'session') throw new Error('test only supports session follows')
       if (options.failWith !== undefined) throw options.failWith
       for (const frame of frames) {
@@ -288,6 +293,33 @@ test('an unreadable-session failure maps to its own code, like the HTTP path', {
     server.closeAllConnections()
     server.close()
   }
+})
+
+test('the opening asks upstream for a window that starts on a turn boundary', { timeout: 10_000 }, async () => {
+  const source = fakeSource([snapshotFrame([event(0)], 1)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true })
+  server.listen(0)
+
+  const socket = await connect(server)
+  try {
+    send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+    await receive(socket) // the opening frame
+  } finally {
+    socket.close()
+    server.closeAllConnections()
+    server.close()
+  }
+
+  // The reference spells the rule as a floor and a ceiling; both come from the
+  // one target our own window function takes, so the opening and `page` ask for
+  // the same window (spec §8.5 B6 二次裁决).
+  assert.deepEqual(source.requests, [{
+    address: { kind: 'session', sessionId: 's1' },
+    maxMessages: 100,
+    turnWindow: { minMessages: 50, minTurns: 1 },
+    assistantStream: true,
+  }])
 })
 
 test('cancel stops the stream; the pump yields no further frames for it', { timeout: 10_000 }, async () => {

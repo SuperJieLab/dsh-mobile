@@ -26,11 +26,13 @@
 
 import type { Duplex, IncomingMessage, Server } from 'node:http'
 import {
+  DEFAULT_FOLLOW_MESSAGES,
   encodeServerFrame,
   followRequestOf,
   parseClientFrame,
   type MuxServerFrame,
 } from '../contract/mux.ts'
+import { upstreamWindow } from '../contract/rpc.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import {
   WsFrameParser,
@@ -54,7 +56,18 @@ import {
  */
 export interface FollowSource {
   follow(
-    request: { address: { kind: 'session'; sessionId: string }; maxMessages?: number; assistantStream: true },
+    request: {
+      address: { kind: 'session'; sessionId: string }
+      maxMessages?: number
+      /**
+       * The boundary rule, as the reference spells it: a floor it may stop
+       * after and a ceiling it must stop at (see `upstreamWindow`). Absent means
+       * the host cuts by message count alone, which leaves the window opening
+       * mid-turn.
+       */
+      turnWindow?: { minMessages: number; minTurns: number }
+      assistantStream: true
+    },
     signal: AbortSignal,
   ): AsyncIterable<UpstreamFollowFrame>
   /**
@@ -319,7 +332,10 @@ async function pump(
   try {
     const iterable = source.follow({
       address: { kind: 'session', sessionId: request.sessionId },
-      maxMessages: request.maxMessages,
+      // The window, asked for the way the reference spells it — derived from the
+      // same target our own `page` window takes, so the opening starts on a turn
+      // boundary too (spec §8.5 B6 二次裁决).
+      ...upstreamWindow(request.maxMessages ?? DEFAULT_FOLLOW_MESSAGES),
       assistantStream: true,
     }, signal)
 

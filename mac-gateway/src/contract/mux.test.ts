@@ -33,6 +33,33 @@ function fakeLog(): WireEvent[] {
   }))
 }
 
+/**
+ * A log with real turn boundaries: every turn is `user/message`, `turn/start`,
+ * `assistant/message`, `turn/end`.
+ *
+ * `followOpening`'s geometry is only meaningful against a log that has turns:
+ * a window's start is aligned back to one (spec §8.5 B6 二次裁决), and a log
+ * with no `turn/start` anywhere can only exercise the ceiling.
+ */
+function turnedLog(turns: number): WireEvent[] {
+  const events: WireEvent[] = []
+  const at = (type: string): void => {
+    events.push({ type, seq: events.length, time: 1_700_000_000_000 + events.length, data: {} })
+  }
+  for (let turn = 0; turn < turns; turn += 1) {
+    at('user/message')
+    at('turn/start')
+    at('assistant/message')
+    at('turn/end')
+  }
+  return events
+}
+
+/** How many of these events count as messages when a boundary is drawn. */
+function messageCount(events: readonly WireEvent[]): number {
+  return events.filter(event => event.type === 'user/message' || event.type === 'assistant/message').length
+}
+
 function fakePort(log: readonly WireEvent[]): SessionPort {
   const rows: SessionRow[] = [{
     id: 's1', createdAt: 1, updatedAt: 1, running: false, blank: false,
@@ -81,29 +108,34 @@ test('S1: the identity also holds for an explicitly sized, verbatim-typed window
   assert.equal(JSON.stringify(opening.events), JSON.stringify((reply as { events: WireEvent[] }).events))
 })
 
-test('followOpening: geometry — tail window, cursor at the log end, hasOlder honest', () => {
-  const log = fakeLog() // 120 events, every one a message (user/assistant alternating)
+test('followOpening: geometry — the start lands on a turn, cursor at the log end', () => {
+  const log = turnedLog(40) // 160 events, 80 messages, 40 turns
   const opening = followOpening({ sessionId: 's1' }, log)
 
-  assert.equal(opening.cursor, 120, 'cursor is the exclusive log end')
+  assert.equal(opening.cursor, log.length, 'cursor is the exclusive log end')
   assert.equal(opening.hasOlder, true, 'only a tail window taken')
-  assert.equal(opening.events.length, 50, 'default window = 50 messages')
-  assert.equal(opening.pageStart, 70)
-  assert.equal(opening.events[0]?.seq, 70)
-  assert.equal(opening.events.at(-1)?.seq, 119)
+  // The count stops somewhere inside a turn; the window's start is walked back
+  // to that turn's own opening, so no window opens on a half turn.
+  assert.equal(log[opening.pageStart]?.type, 'turn/start')
+  assert.equal(opening.events[0]?.seq, opening.pageStart)
+  assert.equal(opening.events.at(-1)?.seq, log.length - 1)
+  assert.deepEqual(opening.events, log.slice(opening.pageStart))
+  // The target is a floor, and the ceiling keeps the walk bounded.
+  assert.ok(messageCount(opening.events) >= DEFAULT_FOLLOW_MESSAGES, 'the default target is a floor')
+  assert.ok(messageCount(opening.events) <= DEFAULT_FOLLOW_MESSAGES * 2, 'and twice it is the ceiling')
 })
 
-test('followOpening: an explicit maxMessages widens or narrows the window', () => {
-  const log = fakeLog()
+test('followOpening: an explicit maxMessages moves the boundary — still onto a turn', () => {
+  const log = turnedLog(40)
   const wide = followOpening({ sessionId: 's1', maxMessages: 60 }, log)
-  assert.equal(wide.events.length, 60, '60 of the 120 message events')
-  assert.equal(wide.hasOlder, true)
-  assert.equal(wide.pageStart, 60)
+  assert.equal(log[wide.pageStart]?.type, 'turn/start')
+  assert.ok(messageCount(wide.events) >= 60, 'a wider target really does widen the window')
 
   const narrow = followOpening({ sessionId: 's1', maxMessages: 1 }, log)
-  assert.equal(narrow.events.length, 1)
+  assert.equal(log[narrow.pageStart]?.type, 'turn/start')
+  assert.ok(messageCount(narrow.events) >= 1)
+  assert.ok(narrow.events.length < wide.events.length, 'the explicit sizes really do differ')
   assert.equal(narrow.hasOlder, true)
-  assert.equal(narrow.pageStart, 119)
 })
 
 test('followOpening: default window size matches the page default', async () => {
