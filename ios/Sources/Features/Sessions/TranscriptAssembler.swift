@@ -42,9 +42,14 @@ enum TranscriptNode: Equatable {
 }
 
 extension TranscriptNode: Identifiable {
-    /// 列表里的身份。取**这一组首个过程**的身份，而不是序号 ——
-    /// 往回翻是往前面插内容，序号会整体错位，屏上的行就会被全部重挂载，
-    /// 滚动位置与展开状态跟着一起丢。
+    /// 列表里的身份。取**这一组首个过程**的身份，而不是在节点数组里的序号 ——
+    /// 往回翻是往前面插内容，序号会整体错位，屏上的行就会被全部重挂载。
+    ///
+    /// ⚠️ 这条保证的**适用范围**（真机日志切片实跑核过）：前插只落在一处 —— 窗口
+    /// 头部那一组。其余各组的 `turn/start` 都在窗口里，前插的内容排在它们之前，
+    /// 碰不到它们，所以身份逐条不变。头部那一组本身会被前插改（见 `ProcessEntry`），
+    /// 而它由「无头」变「有头」时形态本来就变了，重挂载一次没有状态可丢 ——
+    /// 无头组不可展开（`TurnProcessRow` 的 `hasHeader` 分支）。
     var id: String {
         switch self {
         case .message(let message):
@@ -108,6 +113,22 @@ enum ProcessEntry: Equatable {
     case tool(ToolRow)
     /// 一轮中间的助手文本（不是最终答案的那部分）。
     case text(seq: Int, text: String, time: Double)
+}
+
+extension ProcessEntry: Identifiable {
+    /// 这一行的身份。取**事件 seq**，不取它在组内的偏移 —— 往回翻会往窗口头部那一组里
+    /// 插入更早的行，偏移会整体挪位（行被重挂载，展开的工具行与思考会自己收回去），
+    /// seq 不会。理由与节点身份同一条。
+    ///
+    /// 前缀带上种类：同一条助手消息能同时产出「思考」与「文本」两行，两行的 seq 相同。
+    /// 带上种类才在组内唯一（`tool` 那行只可能来自它自己那条事件）。
+    var id: String {
+        switch self {
+        case .thinking(let seq, _, _): return "thinking-\(seq)"
+        case .text(let seq, _, _): return "text-\(seq)"
+        case .tool(let row): return "tool-\(row.seq)"
+        }
+    }
 }
 
 /// 一次工具调用的显示行。

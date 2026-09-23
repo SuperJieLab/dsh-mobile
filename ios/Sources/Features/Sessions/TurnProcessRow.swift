@@ -44,7 +44,9 @@ struct TurnProcessRow: View {
 
     private var entries: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(process.entries.enumerated()), id: \.offset) { _, entry in
+            // 身份取事件 seq（`ProcessEntry.id`），不取偏移 —— 往回翻会往这一组里插
+            // 更早的行，偏移一挪，已经展开的工具行会自己收回去。
+            ForEach(process.entries) { entry in
                 switch entry {
                 case .thinking(_, let text, _):
                     ThinkingRow(text: text)

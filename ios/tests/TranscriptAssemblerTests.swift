@@ -1,11 +1,14 @@
 /**
- * 会话详情组装器的测试（A1–A4、A8）。
+ * 会话详情组装器的测试（A1–A9、切片 S1–S5）。
  *
  * 与 `SessionMirrorTests` / `UsageStateTests` 同一手法：组装器是纯状态机，
  * 不 import SwiftUI / UIKit、不碰网络、不碰磁盘 —— 这里直接喂事件数组、
  * 断言显示节点。所以「配对、状态、退化」这些最容易错的判断都能离线验。
  *
- * 判据与出处：docs/dev/plans/M6-presentation-layer.md §五（A1–A4、A8）。
+ * 两段：**A 类**喂一段定死的事件；**切片那一段**（`sliceChecks`）把镜像也编进来，
+ * 让窗口真的动起来（打开 / 往回翻 / 冷启动重取）—— 「输入会变」是另一类问题。
+ *
+ * 判据与出处：docs/dev/plans/M6-presentation-layer.md §五（A1–A9、S1–S5）。
  * 配对与状态判定照**运行时产物**（`@deepseek-ai/dsh-client-ui-chat`）：
  * - 配对 id = `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`
  * - 失败标记 = `tool/result.data.message.isError`（**不是** `content[0].isError` ——
@@ -330,7 +333,152 @@ struct TranscriptAssemblerTests {
         expect(processes(in: interleavedInput.nodes).first?.hasHeader == true, "A7e 输入夹在中间也不该把这一组判成无头")
         expect(messages(in: interleavedInput.nodes).first?.text == "帮我看看", "A7f 那句用户消息排在过程之前")
 
+        sliceChecks()
+
         print("—— \(passed) passed, \(failed) failed ——")
         if failed > 0 { exit(1) }
+    }
+
+    // MARK: - 切片：窗口会变（打开 / 往回翻 / 冷启动重取）
+
+    /// 组装一段**已经是 `SessionEvent`** 的事件（切片那几条判据从镜像里取事件，
+    /// 不再走 JSON 串）。
+    private static func assemble(_ events: [SessionEvent]) -> (nodes: [TranscriptNode], unknown: [String]) {
+        var unknown: [String] = []
+        var assembler = TranscriptAssembler(onUnknownEventType: { unknown.append($0) })
+        return (assembler.assemble(events), unknown)
+    }
+
+    /// 一页：取 `[startSeq, endSeq)` 这一段，末尾接在 `endSeq` 上 —— 这正是
+    /// 服务端的响应形状（`pageStart` 是本页首条、`asOfSeq` 是本页末尾之后）。
+    private static func page(_ events: [SessionEvent], from startSeq: Int, to endSeq: Int, hasOlder: Bool) -> Window {
+        let slice = events.filter { $0.seq >= startSeq && $0.seq < endSeq }
+        return Window(
+            pageStart: slice.first?.seq ?? 0,
+            asOfSeq: endSeq,
+            hasOlder: hasOlder,
+            events: slice
+        )
+    }
+
+    private static func sliceResult(seq: Int, callId: String, turn: Int, step: Int, text: String) -> String {
+        #"{"type":"tool/result","seq":\#(seq),"time":\#(seq * 10),"data":{"turn":\#(turn),"step":\#(step),"message":{"role":"tool","source":{"kind":"tool","callId":"\#(callId)"},"toolCallId":"\#(callId)","content":[{"type":"text","text":"\#(text)"}],"isError":false,"id":"m\#(seq)"}}}"#
+    }
+
+    private static func sliceAssistant(seq: Int, turn: Int, step: Int, text: String) -> String {
+        #"{"type":"assistant/message","seq":\#(seq),"time":\#(seq * 10),"data":{"turn":\#(turn),"step":\#(step),"message":{"role":"assistant","source":{"kind":"assistant"},"content":[{"type":"text","text":"\#(text)"}]}}}"#
+    }
+
+    /// 一份两页的事件流：第 7 轮完整，**第 8 轮被切口切成两页**（切口落在它的
+    /// 过程行中间）。形状照真机会话 —— 用户消息排在轮次之前，第 8 轮中间还有
+    /// 一次助手文本（不是答案），答案是第二步那条。
+    private static var sliceStream: [SessionEvent] {
+        [
+            #"{"type":"user/message","seq":300,"time":3000,"data":{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"第一问"}]}}"#,
+            #"{"type":"turn/start","seq":301,"time":3010,"data":{"turn":7}}"#,
+            #"{"type":"step/start","seq":302,"time":3020,"data":{"turn":7,"step":1}}"#,
+            #"{"type":"tool/call","seq":303,"time":3030,"data":{"turn":7,"step":1,"callId":"c7","name":"bash","arguments":"{\"command\": \"ls\"}"}}"#,
+            sliceResult(seq: 304, callId: "c7", turn: 7, step: 1, text: "文件列表"),
+            sliceAssistant(seq: 305, turn: 7, step: 1, text: "第一答"),
+            #"{"type":"step/end","seq":306,"time":3060,"data":{"turn":7,"step":1}}"#,
+            #"{"type":"turn/end","seq":307,"time":3070,"data":{"turn":7,"reason":{"kind":"completed"}}}"#,
+            #"{"type":"user/message","seq":308,"time":3080,"data":{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"第二问"}]}}"#,
+            #"{"type":"turn/start","seq":309,"time":3090,"data":{"turn":8}}"#,
+            #"{"type":"step/start","seq":310,"time":3100,"data":{"turn":8,"step":1}}"#,
+            #"{"type":"tool/call","seq":311,"time":3110,"data":{"turn":8,"step":1,"callId":"c8","name":"bash","arguments":"{\"command\": \"pwd\"}"}}"#,
+            sliceResult(seq: 312, callId: "c8", turn: 8, step: 1, text: "/tmp"),
+            sliceAssistant(seq: 313, turn: 8, step: 1, text: "去看一眼"),
+            #"{"type":"step/start","seq":314,"time":3140,"data":{"turn":8,"step":2}}"#,
+            #"{"type":"tool/call","seq":315,"time":3150,"data":{"turn":8,"step":2,"callId":"c9","name":"bash","arguments":"{\"command\": \"ls -la\"}"}}"#,
+            sliceResult(seq: 316, callId: "c9", turn: 8, step: 2, text: "ok"),
+            sliceAssistant(seq: 317, turn: 8, step: 2, text: "第二答"),
+            #"{"type":"step/end","seq":318,"time":3180,"data":{"turn":8,"step":2}}"#,
+            #"{"type":"turn/end","seq":319,"time":3190,"data":{"turn":8,"reason":{"kind":"completed"}}}"#,
+        ].map(event)
+    }
+
+    /// 判据 S1–S5：**同一批事件换一个窗口再看一遍，屏上会变什么。**
+    ///
+    /// A1–A9 验的是「一段定死的事件」，这里验的是「窗口会动」—— 打开是最新的一页、
+    /// 往回翻是前插、冷启动是重取。三者里只有前插会改已渲染的内容，而它只落在**一处**：
+    /// 窗口头部那一组（其余各组的开头都在窗口里，前插的内容排在它们之前）。这条结论
+    /// 先由真机日志实跑得到（会话 a 取 30–200 各种窗口尺寸，逐个比对前插前后的节点），
+    /// 这里把它钉住。
+    private static func sliceChecks() {
+        let stream = sliceStream
+
+        // S1：打开最新的那一页 —— 切口在一轮中间。
+        var openMirror = SessionMirror()
+        let openVerdict = openMirror.open(with: page(stream, from: 313, to: 9_999, hasOlder: true))
+        let opened = assemble(openMirror.events)
+        expect(openVerdict == .merged(added: 7), "S1a 打开窗口：镜像收下这一页")
+        expect(processes(in: opened.nodes).count == 1, "S1b 切口在一轮中间 → 仍出一组过程")
+        expect(processes(in: opened.nodes).first?.hasHeader == false, "S1c 这一轮的开头不在窗口里 → 无头，不假装完整")
+        expect(toolRows(in: opened.nodes).count == 1, "S1d 头组里的工具行不丢")
+        expect(messages(in: opened.nodes).map(\.seq) == [317], "S1e 答案仍单独成节点")
+
+        // S2：往回翻一页 —— 第 8 轮的开头在这一页里。
+        var pagedMirror = SessionMirror()
+        _ = pagedMirror.open(with: page(stream, from: 313, to: 9_999, hasOlder: true))
+        let prependVerdict = pagedMirror.prepend(page(stream, from: 308, to: 313, hasOlder: true))
+        let paged = assemble(pagedMirror.events)
+        expect(prependVerdict == .merged(added: 5), "S2a 前插：紧邻的一段接得上")
+        expect(toolRows(in: paged.nodes).count == 2, "S2b 前插只往头组里加行，不吞掉原有的")
+        expect(messages(in: paged.nodes).map(\.seq) == [308, 317], "S2c 前插后消息顺序照旧")
+
+        // S2 的要害：**前插不改动屏上其余各行。**
+        let openedTail = Array(opened.nodes.dropFirst())
+        expect(Array(paged.nodes.suffix(openedTail.count)) == openedTail, "S2d 除头组外逐条相同（值相等）")
+        let openedIds = Set(opened.nodes.dropFirst().map(\.id))
+        expect(openedIds.subtracting(Set(paged.nodes.map(\.id))).isEmpty, "S2e 除头组外的身份全部保留（不重挂载）")
+        expect(processes(in: paged.nodes).first?.hasHeader == true, "S2f 头组由无头变有头 —— 它的形态本来就变了")
+
+        // S3：过程行的身份取「种类 + 事件 seq」，不取组内偏移 —— 前插会往头组里插行，
+        //     偏移整体挪位，seq 不挪。否则头组里已展开的工具行会在每次往回翻时收回去。
+        let openedEntries = processes(in: opened.nodes).first?.entries.map(\.id) ?? []
+        let pagedEntries = processes(in: paged.nodes).first?.entries.map(\.id) ?? []
+        expect(openedEntries == ["text-313", "tool-315"], "S3a 过程行身份 = 种类 + 事件 seq")
+        expect(pagedEntries.prefix(3) == ["tool-311", "text-313", "tool-315"], "S3b 前插把新行插在前面，不打乱既有行的身份")
+        expect(pagedEntries.suffix(openedEntries.count) == openedEntries, "S3c 头组里原有的行身份不变")
+
+        // S3 的另一面：身份在组内**唯一**。同一条助手消息能同时产出「思考」与「文本」
+        // 两行（seq 相同），靠种类前缀才区分得开 —— 不区分就是两个同 id 的行，
+        // SwiftUI 的 diff 会错乱（少了/多了/串位，都从这里来）。
+        let twin = assemble([
+            #"{"type":"turn/start","seq":400,"time":4000,"data":{"turn":20}}"#,
+            #"{"type":"step/start","seq":401,"time":4010,"data":{"turn":20,"step":1}}"#,
+            #"{"type":"assistant/message","seq":402,"time":4020,"data":{"turn":20,"step":1,"message":{"content":[{"type":"reasoning","text":"想一想"},{"type":"text","text":"去看一眼"}]}}}"#,
+            #"{"type":"step/end","seq":403,"time":4030,"data":{"turn":20,"step":1}}"#,
+            #"{"type":"step/start","seq":404,"time":4040,"data":{"turn":20,"step":2}}"#,
+            #"{"type":"tool/call","seq":405,"time":4050,"data":{"turn":20,"step":2,"callId":"f2","name":"bash","arguments":"{}"}}"#,
+        ])
+        let twinEntries = processes(in: twin.nodes).first?.entries.map(\.id) ?? []
+        expect(twinEntries == ["thinking-402", "text-402", "tool-405"], "S3d 同一条消息的两行 seq 相同、靠种类区分")
+        expect(Set(twinEntries).count == twinEntries.count, "S3e 组内身份唯一")
+
+        // S4：冷启动 —— 重取同一个窗口（新镜像、同一批事件）。
+        var coldMirror = SessionMirror()
+        _ = coldMirror.open(with: page(stream, from: 313, to: 9_999, hasOlder: true))
+        let cold = assemble(coldMirror.events)
+        expect(cold.nodes == opened.nodes, "S4a 冷启动重取同一窗口 → 组装结果逐条相同（不因重取而漂）")
+        expect(toolRows(in: cold.nodes).count == 1, "S4b 冷启动后工具行重新出现（R5 的静态形态）")
+
+        // S5：边界正好切在 `tool/call` 与它的结果之间 —— 真机日志里这类窗口确实存在
+        //     （会话 a 的窗口 44 / 58 / 72 / 93 / 184 都挑出了一行「只有结果」）。
+        var cutMirror = SessionMirror()
+        _ = cutMirror.open(with: page(stream, from: 316, to: 9_999, hasOlder: true))
+        let cut = assemble(cutMirror.events)
+        expect(toolRows(in: cut.nodes).count == 1, "S5a 调用在窗口外 → 仍出一行，不丢")
+        expect(toolRows(in: cut.nodes).first?.name == nil, "S5b 不知道工具名就不编一个")
+        expect(toolRows(in: cut.nodes).first?.argumentsRaw == nil, "S5c 也不假装有参数")
+        expect(toolRows(in: cut.nodes).first?.resultText == "ok", "S5d 结果本身照常显示")
+
+        // S5 的另一半：往回翻把那条调用带进来 → 同一行从「不知道」变「知道」。
+        var healedMirror = SessionMirror()
+        _ = healedMirror.open(with: page(stream, from: 316, to: 9_999, hasOlder: true))
+        _ = healedMirror.prepend(page(stream, from: 315, to: 316, hasOlder: true))
+        let healed = toolRows(in: assemble(healedMirror.events).nodes)
+        expect(healed.first?.name == "bash", "S5e 前插带回那条调用 → 同一行补上工具名")
+        expect(healed.first?.argumentsRaw?.isEmpty == false, "S5f 参数也补上了")
     }
 }
