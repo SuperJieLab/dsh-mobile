@@ -1,5 +1,5 @@
 /**
- * Seam tests for the protocol: one wire message in, one wire message out.
+ * Contract tests for the protocol: one wire message in, one wire message out.
  *
  * These tests are the reason `handle` exists as a standalone function. They run
  * with `node --test src/contract/rpc.test.ts` — no server, no DSH runtime, no filesystem,
