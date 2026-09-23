@@ -1,5 +1,5 @@
 /**
- * Assembly smoke test. Run: node --test src/index.test.ts
+ * Assembly smoke test. Run: node --test tests/index.test.ts
  *
  * The wiring layer has no pure logic, so it went untested — until a mis-anchored
  * edit shipped a module that evaluated fine and died on the first request. These
@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply } from './index.ts'
+import { apply } from '../src/index.ts'
 
 /** Random high port: two tests must not race each other or anything real. */
 function freshPort(base: number): number {

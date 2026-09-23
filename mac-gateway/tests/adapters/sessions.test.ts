@@ -4,13 +4,13 @@
  * The row comes from a header plus a host-kept projection, never from reading a log.
  * Two things need pinning: where each field comes from, and that no log is ever
  * opened — proved by a persistence stub that throws if anything opens a handle.
- * Run: node --test src/adapters/sessions.test.ts
+ * Run: node --test tests/adapters/sessions.test.ts
  * See docs/dev/protocol.md §4.1 and docs/dev/plans/M1-consistency-delta.md §3.2.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createSessionPort } from './sessions.ts'
-import type { ListRecord, ListSource, PersistenceLike } from './sessions.ts'
+import { createSessionPort } from '../../src/adapters/sessions.ts'
+import type { ListRecord, ListSource, PersistenceLike } from '../../src/adapters/sessions.ts'
 
 /** A session header as the adapter sees it. `cwd` decides visibility (v2 keeps v1's rule). */
 function header(

@@ -11,8 +11,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer, request as httpRequest, type Server } from 'node:http'
 import { once } from 'node:events'
-import { attachStreamHandler, STREAM_PATH, type FollowSource, type UpstreamFollowFrame } from './ws.ts'
-import type { WireEvent } from '../contract/rpc.ts'
+import { attachStreamHandler, STREAM_PATH, type FollowSource, type UpstreamFollowFrame } from '../../src/adapters/ws.ts'
+import type { WireEvent } from '../../src/contract/rpc.ts'
 
 /** A follow source replaying scripted frames, optionally lying. */
 function fakeSource(

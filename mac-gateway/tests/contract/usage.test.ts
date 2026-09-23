@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { usageIsTrigger, usageShouldEmit, usageSnapshotOf } from './usage.ts'
+import { usageIsTrigger, usageShouldEmit, usageSnapshotOf } from '../../src/contract/usage.ts'
 
 /** A values record shaped the way the projection publishes the two keys. */
 function values(pressure: unknown, breakdown?: unknown): Record<string, unknown> {

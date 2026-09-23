@@ -2,13 +2,13 @@
  * Contract tests for the protocol: one wire message in, one wire message out. They
  * are the reason `handle` exists standalone: no server, no runtime, no filesystem,
  * no network — the data source is injected, so the protocol layer decides alone.
- * Run: node --test src/contract/rpc.test.ts
+ * Run: node --test tests/contract/rpc.test.ts
  * See docs/dev/protocol.md and docs/dev/plans/M0-reachability-spike.md §4.3 Step 3.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, upstreamWindow, DEFAULT_LIMITS } from './rpc.ts'
-import type { Limits, SessionPort, SessionRow, WireEvent } from './rpc.ts'
+import { handle, upstreamWindow, DEFAULT_LIMITS } from '../../src/contract/rpc.ts'
+import type { Limits, SessionPort, SessionRow, WireEvent } from '../../src/contract/rpc.ts'
 
 /** One fake session: the row the list path sees, and the log the read path sees. */
 interface FakeSession {

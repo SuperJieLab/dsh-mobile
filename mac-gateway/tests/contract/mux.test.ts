@@ -8,15 +8,15 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { handle } from './rpc.ts'
+import { handle } from '../../src/contract/rpc.ts'
 import {
   DEFAULT_FOLLOW_MESSAGES,
   encodeServerFrame,
   followOpening,
   followRequestOf,
   parseClientFrame,
-} from './mux.ts'
-import type { SessionPort, WireEvent } from './rpc.ts'
+} from '../../src/contract/mux.ts'
+import type { SessionPort, WireEvent } from '../../src/contract/rpc.ts'
 
 /** A dense fake log with unicode, extra fields, and both message types. */
 function fakeLog(): WireEvent[] {

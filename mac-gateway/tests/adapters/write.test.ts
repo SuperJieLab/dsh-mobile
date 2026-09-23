@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ApprovalRelay, callThrough, openStreamThrough, parameterNamesOf, pumpPrompt, type RemoteEventGatewayLike, type UpstreamWireFrame } from './write.ts'
+import { ApprovalRelay, callThrough, openStreamThrough, parameterNamesOf, pumpPrompt, type RemoteEventGatewayLike, type UpstreamWireFrame } from '../../src/adapters/write.ts'
 
 // -- helpers -----------------------------------------------------------------
 

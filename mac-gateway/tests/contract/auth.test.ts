@@ -1,7 +1,7 @@
 /**
  * Auth contract tests (M4): every rule the three tickets promise, on pure functions
  * with injected randomness and clock — no filesystem, no socket.
- * Run: node --test src/contract/auth.test.ts
+ * Run: node --test tests/contract/auth.test.ts
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,7 +19,7 @@ import {
   newToken,
   sha256Hex,
   type StoredCredentials,
-} from './auth.ts'
+} from '../../src/contract/auth.ts'
 
 /** Deterministic randomness: always returns the values, then 0 forever. */
 function seededRandom(values: number[]): () => number {
