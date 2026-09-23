@@ -661,3 +661,148 @@ test('U6: without projections the baseline is absent and no frame is ever pushed
     rmSync(credentialsPath, { force: true })
   }
 })
+
+// MARK: - the list path against the runtime's projection faces (实施期修正 16)
+
+/**
+ * The runtime's cache face, as 0.1.7-alpha.2 spells it
+ * (`dsh-session-projection-cache/lib/index.js:193`):
+ *
+ * ```js
+ * cachedSnapshot(meta, keys) { return this.viewRecord(record, keys) }
+ * ```
+ *
+ * The baseline our code was written against had a leading
+ * `inheritedEventCount` — `cachedSnapshot(meta, inheritedEventCount, keys?)` —
+ * so a positional `0` used to mean "no inherited prefix". The runtime dropped
+ * that parameter, so the same `0` now lands in `keys` and upstream's own
+ * iteration over it throws `number 0 is not iterable`, which is exactly what
+ * killed the real list. This fixture keeps the runtime shape *including the
+ * iteration*: a fixture that ignores its arguments cannot catch that drift.
+ */
+function fakeProjectionCache(
+  valuesFor: (id: string) => Record<string, unknown> | undefined,
+): {
+  cachedSnapshot: (meta: { id: string }, keys?: readonly string[]) => unknown
+  cachedPredecessorTitle: (meta: { id: string }) => unknown
+} {
+  return {
+    cachedSnapshot(meta: { id: string }, keys?: readonly string[]) {
+      // The iteration is the drift detector, not decoration.
+      for (const key of keys ?? []) void key
+      const values = valuesFor(meta.id)
+      return values === undefined ? undefined : { asOfSeq: 4, values }
+    },
+    cachedPredecessorTitle(meta: { id: string }) {
+      void meta
+      return undefined
+    },
+  }
+}
+
+/** A session row as the corpus yields it: a header plus its liveness. */
+function listRecord(id: string, createdAt: number, live: boolean): unknown {
+  return { header: { id, createdAt, cwd: '/tmp/project' }, live }
+}
+
+test('the list works against the runtime cache face that dropped inheritedEventCount', { timeout: 10_000 }, async () => {
+  const port = freshPort(47_000)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath, {
+    sessionQuery: {
+      listSessions: async () => [
+        listRecord('cold-1', 1_700_000_000_000, false),
+        listRecord('live-1', 1_700_000_200_000, true),
+      ],
+    },
+    sessions: { get: (id: string) => (id === 'live-1' ? { id } : undefined) },
+    sessionProjections: {
+      cachedSnapshot: () => ({
+        asOfSeq: 9,
+        values: { title: '在跑的会话', sessionListMetadata: { lastPromptAt: null, blank: false } },
+      }),
+      snapshot: () => undefined,
+    },
+    sessionProjectionCache: fakeProjectionCache(id => ({
+      title: `冷却的 ${id}`,
+      sessionListMetadata: { lastPromptAt: 1_700_000_100_000, blank: false },
+    })),
+    agents: { get: (id: string) => (id === 'live-1' ? { status: 'running' } : undefined) },
+  })
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json() as {
+      ok: boolean
+      error?: { code: string; message: string }
+      sessions?: { id: string; title?: string; updatedAt: number; running: boolean }[]
+    }
+    assert.equal(body.ok, true, `the list must not fail on the cache face: ${JSON.stringify(body.error)}`)
+    // Newest first: the live session's `lastPromptAt` is absent, so it falls
+    // back to its (later) creation time.
+    assert.deepEqual(body.sessions?.map(row => [row.id, row.title, row.running]), [
+      ['live-1', '在跑的会话', true],
+      ['cold-1', '冷却的 cold-1', false],
+    ])
+    assert.equal(body.sessions?.[1].updatedAt, 1_700_000_100_000)
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})
+
+test('one row whose projection read throws still lists — without its cells', { timeout: 10_000 }, async () => {
+  const port = freshPort(48_600)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath, {
+    sessionQuery: {
+      listSessions: async () => [
+        listRecord('fine-1', 1_700_000_300_000, false),
+        listRecord('broken-1', 1_700_000_400_000, false),
+      ],
+    },
+    sessions: { get: () => undefined },
+    sessionProjections: { cachedSnapshot: () => undefined, snapshot: () => undefined },
+    // Mirrors upstream's own `projectionsFor` guard (session-controller/src/list.ts:
+    // 272–293): a projection is a hint, so one row's failure costs that row its
+    // cells and never the whole list.
+    sessionProjectionCache: fakeProjectionCache(id => {
+      if (id === 'broken-1') throw new Error('projection column for broken-1 failed')
+      return { title: '好的会话', sessionListMetadata: { lastPromptAt: null, blank: false } }
+    }),
+    agents: { get: () => undefined },
+  })
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json() as {
+      ok: boolean
+      error?: { code: string }
+      sessions?: { id: string; title?: string; updatedAt: number }[]
+    }
+    assert.equal(body.ok, true, `a hint must not fail the list: ${JSON.stringify(body.error)}`)
+    assert.deepEqual(body.sessions?.map(row => [row.id, row.title]), [
+      ['broken-1', undefined],
+      ['fine-1', '好的会话'],
+    ])
+    // The degraded row keeps its header facts: only the cells are missing.
+    assert.equal(body.sessions?.[0].updatedAt, 1_700_000_400_000)
+  } finally {
+    teardown()
+    rmSync(credentialsPath, { force: true })
+  }
+})

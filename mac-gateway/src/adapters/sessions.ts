@@ -99,6 +99,16 @@ export interface ListSource {
   storedValues(header: HeaderLike): ProjectionValues | undefined
   /** Whether an agent is running for this session right now. */
   isRunning(sessionId: string): boolean
+  /**
+   * Called once per `list()` when one or more rows went out without their
+   * projection cells.
+   *
+   * Degrading a row is right — a projection is a hint — but degrading it
+   * *silently* is how a drifted upstream call stayed invisible until a user
+   * reported a blank screen, so the count is handed back to whoever assembles
+   * this source rather than swallowed here.
+   */
+  onProjectionFailure?(failures: number, first: unknown): void
 }
 
 /** The cells this adapter reads out of `sessionListMetadata`. */
@@ -117,12 +127,27 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
   return {
     async list(): Promise<readonly SessionRow[]> {
       const rows: SessionRow[] = []
+      let failures = 0
+      let firstFailure: unknown
       for (const record of await listing.records()) {
         // Hidden the same way the reference list hides it — and skipped *before*
         // any projection lookup, so an invisible session costs nothing.
         if (record.header.cwd === undefined) continue
 
-        const values = valuesFor(record, listing)
+        let values: ProjectionValues | undefined
+        try {
+          values = valuesFor(record, listing)
+        } catch (error) {
+          // A projection is a *hint*, so one row's read failing costs that row
+          // its cells and never the whole list — the same line upstream's own
+          // listing draws (`session-controller/src/list.ts` `projectionsFor`,
+          // which returns the block as `undefined` and logs a warning). Without
+          // it, a single unreadable checkpoint blanks the screen: that is what
+          // the drifted cache call did on the real machine (实施期修正 16).
+          failures += 1
+          firstFailure ??= error
+        }
+
         const metadata = metadataOf(values)
         rows.push({
           id: record.header.id,
@@ -134,6 +159,7 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
           ...record.header.origin === undefined ? {} : { origin: record.header.origin },
         })
       }
+      if (failures > 0) listing.onProjectionFailure?.(failures, firstFailure)
       return rows
     },
 
@@ -201,6 +227,9 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
  * one can be served from disk: a live session's values are in memory and move as
  * it works; a finished session's log no longer changes, so its last checkpoint is
  * the final answer rather than a stale one.
+ *
+ * May throw — the upstream reads behind it do. Callers degrade the row rather
+ * than the list (see `list`).
  */
 function valuesFor(record: ListRecord, listing: ListSource): ProjectionValues | undefined {
   if (record.live) return listing.liveValues(record.header.id)

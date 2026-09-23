@@ -234,12 +234,22 @@ function listSourceOver(ctx: Context): ListSource {
 
     storedValues(header) {
       const cache = ctx.sessionProjectionCache as unknown as ProjectionCacheLike
-      const snapshot = cache.cachedSnapshot(header, 0) ?? cache.cachedPredecessorTitle(header, 0)
+      const snapshot = cache.cachedSnapshot(header) ?? cache.cachedPredecessorTitle(header)
       return snapshot?.values
     },
 
     isRunning(sessionId) {
       return (ctx.agents as unknown as AgentsLike).get(sessionId)?.status === 'running'
+    },
+
+    // A row without projections is still the right row — but degrading *quietly*
+    // is how the cache-parameter drift below stayed invisible until the phone
+    // showed a blank screen, so the count goes to a log the operator can read
+    // (实施期修正 16).
+    onProjectionFailure: (failures, first) => {
+      console.warn(
+        `[mac-gateway] ${failures} session row(s) served without projections — first failure: ${String(first)}`,
+      )
     },
   }
 }
@@ -310,10 +320,34 @@ interface ProjectionSnapshotLike {
   values: Readonly<Record<string, unknown>>
 }
 
-/** The part of `ctx.sessionProjectionCache` this module uses. */
+/**
+ * The part of `ctx.sessionProjectionCache` this module uses.
+ *
+ * ⚠️ **This face lost a parameter between the baseline and the runtime we run
+ * against** (实施期修正 16). The baseline spells it
+ *
+ * ```ts
+ * cachedSnapshot(meta: SessionHeader, inheritedEventCount: SessionLogOffset, keys?: …)
+ * cachedPredecessorTitle(meta: SessionHeader, inheritedEventCount: SessionLogOffset)
+ * ```
+ *
+ * and 0.1.7-alpha.2 spells it
+ *
+ * ```ts
+ * cachedSnapshot(meta: SessionHeader, keys?: readonly string[])
+ * cachedPredecessorTitle(meta: SessionHeader)          // dsh-session-projection-cache/lib/index.js:193,214
+ * ```
+ *
+ * — the inherited prefix is gone because the header alone now carries the
+ * lifecycle identity. Anything passed positionally after the header therefore
+ * moves one slot, which is why the header is the *only* argument given here;
+ * the runtime's own listing does the same
+ * (`dsh-api-session-controller/lib/index.js:1917`). Passing a second argument
+ * is not "more explicit", it is a bet on a position that has already moved once.
+ */
 interface ProjectionCacheLike {
-  cachedSnapshot(header: never, inheritedEventCount: number): { values: Readonly<Record<string, unknown>> } | undefined
-  cachedPredecessorTitle(header: never, inheritedEventCount: number): { values: Readonly<Record<string, unknown>> } | undefined
+  cachedSnapshot(header: never): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
+  cachedPredecessorTitle(header: never): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
 }
 
 /** The part of `ctx.agents` this module uses. */
