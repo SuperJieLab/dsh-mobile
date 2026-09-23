@@ -16,6 +16,7 @@ swiftc -O -o "$out" \
   "$here/../Sources/Core/CredentialStore.swift" \
   "$here/../Sources/Core/GatewayClient.swift" \
   "$here/../Sources/Features/Approval/ApprovalStore.swift" \
+  "$here/TestHarness.swift" \
   "$here/ApprovalReconcileTests.swift"
 
 "$out"

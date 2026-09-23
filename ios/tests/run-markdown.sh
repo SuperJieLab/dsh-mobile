@@ -16,6 +16,7 @@ out="${TMPDIR:-/tmp}/dsh-mobile-markdown-tests"
 
 swiftc -O -o "$out" \
   "$here/../Sources/SharedUI/MarkdownParser.swift" \
+  "$here/TestHarness.swift" \
   "$here/MarkdownParserTests.swift"
 
 "$out"

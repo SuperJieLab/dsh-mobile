@@ -1,28 +1,15 @@
 /**
- * SessionMirror 的契约测试（SM1–SM8）。
+ * SessionMirror 的契约测试（SM1–SM14）。
  *
  * 状态机不碰网络、不碰 UI、不碰持久化，所以这里没有服务器、没有 DSH 运行时、
  * 没有文件系统 —— 每条断言都由状态机自己决定。跑法见同目录的 `run.sh`。
  *
- * 断言清单与出处：docs/dev/plans/M1-consistency-delta.md §5.1（SM1–SM8）。
+ * 断言清单与出处：docs/dev/plans/M1-consistency-delta.md §5.1（SM1–SM14）。
  */
 import Foundation
 
 @main
 struct SessionMirrorTests {
-
-  private static var passed = 0
-  private static var failed = 0
-
-  private static func expect(_ ok: Bool, _ label: String) {
-    if ok {
-      passed += 1
-      print("ok   \(label)")
-    } else {
-      failed += 1
-      print("FAIL \(label)")
-    }
-  }
 
   /** 一条事件：`seq` 参与判定，其余字段原样带着。 */
   private static func event(_ seq: Int) -> SessionEvent {

@@ -20,19 +20,6 @@ import Foundation
 @main
 struct TranscriptAssemblerTests {
 
-    private static var passed = 0
-    private static var failed = 0
-
-    private static func expect(_ ok: Bool, _ label: String) {
-        if ok {
-            passed += 1
-            print("ok   \(label)")
-        } else {
-            failed += 1
-            print("FAIL \(label)")
-        }
-    }
-
     /// 从线的形状直接造一条事件 —— 事件体原样透传，所以测试里也照原样写。
     private static func event(_ json: String) -> SessionEvent {
         do {

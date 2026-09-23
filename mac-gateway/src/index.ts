@@ -28,7 +28,7 @@ import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort
 import type { WritePort } from './contract/write.ts'
 import { usageSnapshotOf } from './contract/usage.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
-import { attachStreamHandler, type FollowSource, type UpstreamFollowFrame } from './adapters/ws.ts'
+import { attachStreamHandler, type FollowSource } from './adapters/ws.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
 import { ApprovalRelay, callThrough, openStreamThrough, parameterNamesOf, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './adapters/write.ts'
 
@@ -133,7 +133,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   // forwards `session-prompt` through the controller's own prompt door
   // (docs/dev/plans/M5-remote-intervention.md §四).
   const relayLifetime = new AbortController()
-  const relay = new ApprovalRelay(gatewayOver(ctx), broadcasterOver())
+  const approvalFace = broadcasterOver()
+  const relay = new ApprovalRelay(gatewayOver(ctx), approvalFace)
   relay.start(relayLifetime.signal)
   const writePort = writePortOver(ctx, relay)
 
@@ -181,7 +182,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         }
       },
     })
-    approvalBroadcasterSink?.((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
+    approvalFace.connect((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
 
     // console.* rather than ctx.logger: in our non-TTY verification runs
     // `ctx.logger.info` produced no stdout line at all (dsh's own startup line
@@ -268,13 +269,9 @@ function listSourceOver(ctx: Context): ListSource {
 const OCCUPANCY_KEYS = ['contextPressure', 'contextBreakdown'] as const
 
 function streamSourceOver(ctx: Context): FollowSource {
-  const controller = ctx.sessionController as unknown as {
-    follow(request: {
-      address: { kind: 'session'; sessionId: string }
-      maxMessages?: number
-      assistantStream: true
-    }, signal: AbortSignal): AsyncIterable<UpstreamFollowFrame>
-  }
+  // The cast names the shape from `ws.ts` rather than re-spelling it: a second
+  // copy here silently went stale once already (it missed `turnWindow`).
+  const controller = ctx.sessionController as unknown as Pick<FollowSource, 'follow'>
   return {
     follow: (request, signal) => controller.follow(request, signal),
     occupancyOf: (sessionId) => {
@@ -536,30 +533,24 @@ function gatewayOver(ctx: Context): RemoteEventGatewayLike {
 }
 
 /**
- * The broadcast face for the relay. The WS adapter owns the socket set; the
- * broadcaster handed to the relay is wired up when the listener effect runs,
- * so it forwards through a stable indirection that exists before the server.
+ * The broadcast face for the relay. The WS adapter owns the socket set, which
+ * does not exist until the listener effect runs, so the relay is handed a face
+ * it can broadcast into right away and the adapter connects itself later.
  */
-function broadcasterOver(): { broadcast(frame: unknown): void } {
+function broadcasterOver(): {
+  broadcast(frame: unknown): void
+  connect(sink: (frame: unknown) => void): void
+} {
   let sink: ((frame: unknown) => void) | undefined
-  approvalBroadcasterSink = (fn) => { sink = fn }
-  return { broadcast: (frame) => sink?.(frame) }
+  return {
+    broadcast: (frame) => sink?.(frame),
+    connect: (fn) => { sink = fn },
+  }
 }
-
-/** Wiring point for {@link broadcasterOver}; assigned once when the listener starts. */
-let approvalBroadcasterSink: ((sink: (frame: unknown) => void) => void) | undefined
 
 /** The part of `ctx.sessionController` the prompt pump calls. */
 function promptControllerOver(ctx: Context): PromptControllerLike {
-  const controller = ctx.sessionController as unknown as {
-    prompt(request: {
-      requestId: string
-      sessionId: string
-      mode: 'queue' | 'steer'
-      content: readonly { type: 'text'; text: string }[]
-    }, signal: AbortSignal): Promise<{ accepted: true }>
-  }
-  return { prompt: (request, signal) => controller.prompt(request, signal) }
+  return ctx.sessionController as unknown as PromptControllerLike
 }
 
 /**

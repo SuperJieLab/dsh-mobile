@@ -37,8 +37,6 @@ final class SessionSync: ObservableObject {
     @Published private(set) var status: Status = .idle
     /// 正在生成的回复（打字机）；没有进行中的 attempt 就是空串。
     @Published private(set) var transientText = ""
-    /// 跟随流是否活着。为假时这屏的内容就是「上一次拿到的」—— 如实显示，不装新鲜。
-    @Published private(set) var isFollowing = false
     /// 跟随流的连接阶段 —— 连接态指示器的数据源（M3），从 `FollowClient` 转发。
     @Published private(set) var connectionPhase: FollowClient.Phase = .idle
     /// 上下文占用（M6）。为 `nil` 时界面**隐藏整行** —— 「没有读数」与「占用 0%」
@@ -241,7 +239,6 @@ final class SessionSync: ObservableObject {
     /// 离开详情页：关流、清瞬态。镜像留在内存里（视图销毁时一起消失）。
     func stopFollowing() {
         follow.stop()
-        isFollowing = false
         transient = TransientChannel()
         transientText = ""
     }
@@ -253,7 +250,6 @@ final class SessionSync: ObservableObject {
     }
 
     private func applyOpening(_ payload: JSONValue) {
-        isFollowing = true
         let window = Window(
             pageStart: payload["pageStart"]?.int ?? 0,
             asOfSeq: payload["cursor"]?.int ?? 0,

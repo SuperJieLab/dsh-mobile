@@ -61,7 +61,7 @@ struct OccupancyBar: View {
             .disabled(rows.isEmpty)
             .accessibilityLabel("上下文已用 \(usage.percent)%")
 
-            if expanded && !rows.isEmpty {
+            if expanded {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(rows) { row in
                         HStack(spacing: 6) {

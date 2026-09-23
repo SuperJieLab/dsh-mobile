@@ -151,15 +151,11 @@ test('server encoders produce unmasked frames a real client can read', () => {
   // A pong echoes its ping payload.
   assert.equal(encodePong(Buffer.from('p')).subarray(2).toString(), 'p')
 
-  // A text frame survives its own round-trip through the parser (server →
-  // client is the direction our tests' Node WebSocket client consumes, so the
-  // encoder is additionally verified end-to-end in the adapter tests).
-  const { frames } = new WsFrameParser().push(mask(encodeTextFrame('回声')))
-  assert.equal(frames.length, 0, 'server frames are unmasked, so the client-side parser refuses them')
+  // The encoder's own output fed back into our parser: refused for the one
+  // reason that matters here — a server frame carries no mask, and our parser
+  // only accepts masked client frames (RFC 6455 §5.1). That a *real* client
+  // can read this encoder is covered in the adapter tests, where a live
+  // WebSocket consumes it.
+  const roundTrip = new WsFrameParser().push(encodeTextFrame('回声'))
+  assert.match(roundTrip.error ?? '', /not masked/)
 })
-
-/** Mask a server frame — the inverse of what the wire expects, but it makes the bytes parseable by our test parser. */
-function mask(buffer: Buffer): Buffer {
-  // Only used to prove the refusal above; not part of the protocol paths.
-  return buffer
-}

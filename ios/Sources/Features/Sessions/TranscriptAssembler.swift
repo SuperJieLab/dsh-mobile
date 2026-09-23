@@ -76,9 +76,6 @@ struct NodeProcess: Equatable {
     let hasHeader: Bool
     let entries: [ProcessEntry]
 
-    /// 有过程可展示吗。全是空的时候连节点都不该产生（在组装器里保证）。
-    var isEmpty: Bool { entries.isEmpty }
-
     /// 折叠头上的一句话；没有可说的就是 `nil`。
     ///
     /// 两组计数、**只写非零的那些** —— 只有工具调用时不写成「2 次工具调用 · 0 条消息」

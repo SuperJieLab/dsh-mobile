@@ -15,19 +15,6 @@ import Foundation
 @main
 struct TransientChannelTests {
 
-    private static var passed = 0
-    private static var failed = 0
-
-    private static func expect(_ ok: Bool, _ label: String) {
-        if ok {
-            passed += 1
-            print("ok   \(label)")
-        } else {
-            failed += 1
-            print("FAIL \(label)")
-        }
-    }
-
     // MARK: - JSON 便捷构造
 
     private static func object(_ pairs: (String, JSONValue)...) -> JSONValue {

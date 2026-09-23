@@ -1,5 +1,5 @@
 /**
- * UsageState 的吸收测试（O1）。
+ * UsageState 的吸收测试（O1–O2）。
  *
  * 与 `SessionMirrorTests` / `TransientChannelTests` 同一手法：占用值是纯值类型，
  * 不碰网络、不碰 UI、不碰持久化 —— 这里没有服务器，也没有 WebSocket。
@@ -12,19 +12,6 @@ import Foundation
 
 @main
 struct UsageStateTests {
-
-    private static var passed = 0
-    private static var failed = 0
-
-    private static func expect(_ ok: Bool, _ label: String) {
-        if ok {
-            passed += 1
-            print("ok   \(label)")
-        } else {
-            failed += 1
-            print("FAIL \(label)")
-        }
-    }
 
     /// 带值的快照；不给 `used`/`window` 就是「这个水位上无可显示的东西」。
     private static func snapshot(_ seq: Int, _ used: Int? = nil, window: Int? = nil) -> UsageSnapshot {

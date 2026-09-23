@@ -73,8 +73,6 @@ export function newToken(random: () => number): string {
   return hex
 }
 
-/** Used by the adapter for in-memory access hashes; exposed so there is one hashing spelling. */
-
 /**
  * `Authorization: Bearer <token>` → the token; anything else → nothing.
  *

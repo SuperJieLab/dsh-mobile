@@ -33,6 +33,7 @@ import {
   type MuxServerFrame,
 } from '../contract/mux.ts'
 import { upstreamWindow } from '../contract/rpc.ts'
+import { describeError, isUnreadable } from '../contract/errors.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import {
   WsFrameParser,
@@ -315,7 +316,7 @@ async function pump(
     try {
       return source.occupancyOf(request.sessionId)
     } catch (error) {
-      console.error(`[mac-gateway] occupancy read failed for "${request.sessionId}": ${describe(error)}`)
+      console.error(`[mac-gateway] occupancy read failed for "${request.sessionId}": ${describeError(error)}`)
       return undefined
     }
   }
@@ -413,19 +414,14 @@ async function pump(
  * `unknown-session`, everything else is ours.
  */
 function mapError(error: unknown): { code: string; message: string } {
-  const name = (error as { name?: unknown } | null)?.name
-  if (name === 'SessionFormatUnsupportedError' || name === 'SessionPersistenceCorruptionError') {
-    return { code: 'unreadable-session', message: describe(error) }
+  if (isUnreadable(error)) {
+    return { code: 'unreadable-session', message: describeError(error) }
   }
   const remote = error as { isDSHRemoteError?: boolean; code?: unknown }
   if (remote?.isDSHRemoteError === true && typeof remote.code === 'string' && remote.code.endsWith('/not-found')) {
-    return { code: 'unknown-session', message: describe(error) }
+    return { code: 'unknown-session', message: describeError(error) }
   }
-  return { code: 'internal-error', message: describe(error) }
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return { code: 'internal-error', message: describeError(error) }
 }
 
 function send(socket: Duplex, frame: MuxServerFrame): void {

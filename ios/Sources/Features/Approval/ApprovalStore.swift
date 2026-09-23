@@ -38,8 +38,6 @@ final class ApprovalStore: ObservableObject {
         case idle
         /// 已发出，回包还没到 —— 结果未知。
         case unknown
-        /// 已投递，等 `decided` 收口。
-        case delivered
     }
 
     @Published private(set) var pending: [PendingApproval] = []

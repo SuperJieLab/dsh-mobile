@@ -68,7 +68,8 @@ export class CredentialVault {
         this.file = emptyCredentials()
       }
     } catch {
-      // Absent or corrupt: the same answer either way, and the log says which.
+      // Absent or corrupt: the same answer either way — an unpaired vault (the
+      // next `pairingCode()` issues a fresh code). Fail closed, never half-open.
       this.file = emptyCredentials()
     }
   }

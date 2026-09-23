@@ -14,6 +14,8 @@ import {
   approvalAnswerOf,
   outcomeOfDecision,
   sessionPromptOf,
+  type ApprovalAnswerMessage,
+  type SessionPromptMessage,
   type WritePort,
 } from './write.ts'
 
@@ -22,9 +24,9 @@ import {
 const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
 
 /** A fake write port that records what it was asked to do. */
-function fakeWrite(): { port: WritePort; answers: ApprovalAnswerFromTest[]; prompts: SessionPromptFromTest[] } {
-  const answers: ApprovalAnswerFromTest[] = []
-  const prompts: SessionPromptFromTest[] = []
+function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; prompts: SessionPromptMessage[] } {
+  const answers: ApprovalAnswerMessage[] = []
+  const prompts: SessionPromptMessage[] = []
   return {
     answers,
     prompts,
@@ -39,17 +41,6 @@ function fakeWrite(): { port: WritePort; answers: ApprovalAnswerFromTest[]; prom
       },
     },
   }
-}
-
-interface ApprovalAnswerFromTest {
-  eventId: string
-  decision: 'allow' | 'deny'
-  answerId: string
-}
-interface SessionPromptFromTest {
-  sessionId: string
-  text: string
-  promptId: string
 }
 
 // -- parsing (fail-closed, W3) -----------------------------------------------

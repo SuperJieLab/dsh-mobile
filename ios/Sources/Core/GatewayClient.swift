@@ -102,7 +102,6 @@ final class GatewayClient: ObservableObject {
             throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 asOfSeq / events")
         }
         return SessionSnapshot(
-            sessionId: response.sessionId ?? sessionId,
             asOfSeq: asOfSeq,
             // 缺省 `false`：不带这个字段的是旧服务端，它只会一次给完（协议 §五）。
             hasMore: response.hasMore ?? false,
@@ -128,7 +127,6 @@ final class GatewayClient: ObservableObject {
             throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里缺少 pageStart / asOfSeq / hasOlder / events")
         }
         return SessionPage(
-            sessionId: response.sessionId ?? sessionId,
             pageStart: pageStart,
             asOfSeq: asOfSeq,
             hasOlder: hasOlder,
@@ -160,8 +158,7 @@ final class GatewayClient: ObservableObject {
 
     private func send<Request: Encodable, Response: Decodable>(
         _ request: Request,
-        authenticated: Bool = true,
-        as: Response.Type = Response.self
+        authenticated: Bool = true
     ) async throws -> Response {
         if let answer = try await sendOnce(request, authenticated: authenticated, type: Response.self) {
             return answer
@@ -207,8 +204,7 @@ final class GatewayClient: ObservableObject {
                 // 鉴权请求（pair / refresh）的 401 自带语义，必须读出信封上抛：
                 // 配对码不对要说「配对码不对」，不是笼统的未认证。
                 guard authenticated else {
-                    if let envelope = try? JSONDecoder().decode(FailureEnvelope.self, from: payload),
-                       let failure = envelope.error {
+                    if let failure = envelopeFailure(in: payload) {
                         if failure.code == GatewayErrorCode.unauthenticated.rawValue {
                             throw GatewayClientError.unauthenticated
                         }
@@ -228,8 +224,7 @@ final class GatewayClient: ObservableObject {
         } catch {
             // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
             // 比解码器的报错信息有用得多。
-            if let envelope = try? JSONDecoder().decode(FailureEnvelope.self, from: payload),
-               let failure = envelope.error {
+            if let failure = envelopeFailure(in: payload) {
                 throw GatewayClientError.refused(failure)
             }
             throw GatewayClientError.malformedResponse(detail: String(describing: error))
@@ -334,7 +329,6 @@ private struct ListSessionsResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
-    let serverTime: Double?
     let sessions: [SessionSummary]?
 }
 
@@ -359,7 +353,6 @@ private struct SnapshotResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
-    let sessionId: String?
     let asOfSeq: Int?
     let hasMore: Bool?
     let events: [SessionEvent]?
@@ -369,19 +362,17 @@ private struct PageResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
-    let sessionId: String?
     let pageStart: Int?
     let asOfSeq: Int?
     let hasOlder: Bool?
     let events: [SessionEvent]?
 }
 
-/// 审批应答回包（M5）：成功不带载荷，`eventId` 原样回显。
+/// 审批应答回包（M5）：成功不带载荷。
 private struct ApprovalAnswerResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
-    let eventId: String?
 }
 
 /// 下发指令回包（M5）：成功即已受理。
@@ -389,7 +380,6 @@ private struct SessionPromptResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
-    let sessionId: String?
 }
 
 /// 只用来在解码失败时兜出信封里的错误。
@@ -397,19 +387,20 @@ private struct FailureEnvelope: Decodable {
     let error: GatewayFailure?
 }
 
+/// 信封里的 error（没有就 nil）—— 服务端的拒绝比解码器的报错有用得多。
+private func envelopeFailure(in payload: Data) -> GatewayFailure? {
+    (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
+}
+
 // MARK: - 快照
 
 /// 一次快照的结果。
 struct SessionSnapshot {
-    let sessionId: String
     /// 本次覆盖到的位置（不含）—— 回传它就能拿到「空增量」，是水位不变式的用法。
     let asOfSeq: Int
     /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限（协议 §五）。
     let hasMore: Bool
     let events: [SessionEvent]
-
-    /// 能显示成消息的事件。其余事件（工具调用、轮次边界、用量……）不属于对话内容。
-    var messages: [DisplayMessage] { events.compactMap(\.displayMessage) }
 }
 
 // MARK: - 回溯窗口
@@ -420,7 +411,6 @@ struct SessionSnapshot {
 /// 打开会话时用后者取最近一段，之后用前者追新增 —— 这样客户端**不需要跨会话
 /// 记住任何位置**，冷启动永远从「现在的最新一段」开始。
 struct SessionPage {
-    let sessionId: String
     /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
     let pageStart: Int
     /// 窗口末尾（不含）。与 `SessionSnapshot.asOfSeq` 同义。

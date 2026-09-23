@@ -28,6 +28,7 @@
  * See docs/dev/plans/M0-reachability-spike.md §4.3 Step 3 and docs/dev/protocol.md.
  */
 
+import { describeError, isUnreadable } from './errors.ts'
 import {
   approvalAnswerOf,
   sessionPromptOf,
@@ -257,8 +258,8 @@ export async function handle(
     // log this runtime refuses to interpret is a stored session that cannot be
     // shown, while anything else is our own failure.
     return isUnreadable(error)
-      ? failure('unreadable-session', describe(error))
-      : failure('internal-error', describe(error))
+      ? failure('unreadable-session', describeError(error))
+      : failure('internal-error', describeError(error))
   }
 }
 
@@ -583,17 +584,6 @@ function isPositiveInteger(value: number): boolean {
  */
 function normalizeSince(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
-}
-
-/** Whether an error means "stored, but this runtime will not interpret it". */
-function isUnreadable(error: unknown): boolean {
-  const name = (error as { name?: unknown } | null)?.name
-  return name === 'SessionFormatUnsupportedError' || name === 'SessionPersistenceCorruptionError'
-}
-
-/** A human-readable reason, for the refusal message only. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** A plain object, as opposed to an array, null, or a primitive. */

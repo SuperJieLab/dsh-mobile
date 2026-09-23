@@ -34,23 +34,6 @@
  */
 
 /**
- * The pressure half of the projection, as its wire view publishes it. Every
- * field is optional: the unit drops a field when it has never observed one
- * (`dsh-token-meter`'s `pressureSchema`).
- */
-export interface PressureValues {
-  /** Provider-reported prompt size of the most recent request. */
-  pressureTokens?: number
-  /**
-   * What the next request's prompt would cost — `pressureTokens` plus the
-   * heuristic repricing of surface movement since the sample was taken.
-   */
-  projectedTokens?: number
-  /** Newest recorded route capacity; absent when no adapter advertised one. */
-  contextWindow?: number
-}
-
-/**
  * The composition half: heuristic system / tools / message split of the next
  * request. Deliberately **not** a decomposition of `usedTokens` — the
  * estimator underprices CJK text and JSON schemas, so these three never sum to

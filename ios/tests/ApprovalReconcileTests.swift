@@ -1,5 +1,5 @@
 /**
- * 审批对账的重建测试（Q1–Q6）。
+ * 审批对账的重建测试（Q1–Q7）。
  *
  * 与 `SessionMirrorTests` / `UsageStateTests` 同一手法：状态机不碰网络、不碰 UI，
  * 这里只喂事件序列与对账名单，看建出几张卡。
@@ -16,19 +16,6 @@ import Foundation
 
 @main
 struct ApprovalReconcileTests {
-
-    private static var passed = 0
-    private static var failed = 0
-
-    private static func expect(_ ok: Bool, _ label: String) {
-        if ok {
-            passed += 1
-            print("ok   \(label)")
-        } else {
-            failed += 1
-            print("FAIL \(label)")
-        }
-    }
 
     private static func ev(_ seq: Int, _ type: String, _ data: [String: JSONValue] = [:]) -> SessionEvent {
         SessionEvent(type: type, seq: seq, time: 1_789_000_000_000, data: .object(data))

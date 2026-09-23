@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# 编译并运行会话详情组装器的测试（A1–A9、切片 S1–S4）。
+# 编译并运行会话详情组装器的测试（A1–A9、切片 S1–S5）。
 #
 # TranscriptAssembler 是纯状态机，不 import SwiftUI / UIKit —— 所以同一手法可用：
 # 和 run.sh / run-follow.sh / run-transient.sh / run-usage.sh 一样编成 macOS
@@ -20,6 +20,7 @@ swiftc -O -o "$out" \
   "$here/../Sources/Core/GatewayProtocol.swift" \
   "$here/../Sources/Core/SessionMirror.swift" \
   "$here/../Sources/Features/Sessions/TranscriptAssembler.swift" \
+  "$here/TestHarness.swift" \
   "$here/TranscriptAssemblerTests.swift"
 
 "$out"

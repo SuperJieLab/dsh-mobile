@@ -125,7 +125,14 @@ function install(
     } as never,
     { host, port, credentialsPath, deviceTokenSeed: DEVICE_TOKEN },
   )
-  return { teardown: () => cleanup?.(), gateway }
+  // The credentials file lives exactly as long as the listener does.
+  return {
+    teardown: () => {
+      cleanup?.()
+      rmSync(credentialsPath, { force: true })
+    },
+    gateway,
+  }
 }
 
 /** Retry the request until the listener is up; give up after two seconds. */
@@ -165,7 +172,6 @@ test('the assembled plugin answers a real request on a real port', async () => {
     assert.match(await response.text(), /mac-gateway alive/)
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -192,7 +198,6 @@ test('a protocol message is answered with an envelope even when nothing is behin
     assert.equal(body.error?.code, 'internal-error')
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -218,7 +223,6 @@ test('a business request without credentials is refused as 401 unauthenticated',
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -241,7 +245,6 @@ test('a bad access token is refused exactly like a missing one', async () => {
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -264,7 +267,6 @@ test('a wrong device token cannot mint an access token', async () => {
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -308,7 +310,6 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
     await new Promise(resolve => setTimeout(resolve, 30)) // let the close clear the heartbeat
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -333,7 +334,6 @@ test('an upgrade without an access token is refused before the handshake', { tim
     )
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -393,7 +393,6 @@ test('a real HTTP approval-answer settles a held waterfall frame; the consumed q
     assert.equal((consumed.body.error as { code?: string }).code, 'unknown-approval')
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -440,7 +439,6 @@ test('a freshly connected phone is reconciled first: sync frame names the standi
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -461,7 +459,6 @@ test('a write op without an access token is refused exactly like a read', { time
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -484,7 +481,6 @@ test('session-prompt without a controller behind the port fails as an envelope, 
     assert.equal(body.error?.code, 'internal-error')
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -629,7 +625,6 @@ test('U6: the opening carries an occupancy baseline and a trigger event pushes a
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -658,7 +653,6 @@ test('U6: without projections the baseline is absent and no frame is ever pushed
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -754,7 +748,6 @@ test('the list works against the runtime cache face that dropped inheritedEventC
     assert.equal(body.sessions?.[1].updatedAt, 1_700_000_100_000)
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })
 
@@ -803,6 +796,5 @@ test('one row whose projection read throws still lists — without its cells', {
     assert.equal(body.sessions?.[0].updatedAt, 1_700_000_400_000)
   } finally {
     teardown()
-    rmSync(credentialsPath, { force: true })
   }
 })

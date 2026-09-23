@@ -108,7 +108,7 @@ struct SessionMirror {
   private(set) var events: [SessionEvent] = []
 
   /// 是否有在途请求。同一会话同时只允许一个。
-  private(set) var inFlight = false
+  private var inFlight = false
 
   /// 服务端表示位置不可用时使用的错误码。
   private static let resyncRequired = "resync-required"

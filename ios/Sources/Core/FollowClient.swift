@@ -51,7 +51,8 @@ final class FollowClient: NSObject {
 
     // MARK: - 状态
 
-    @Published private(set) var phase: Phase = .idle
+    /// 连接阶段 —— 只有本类读它（对外的连接态走 `SessionSync.connectionPhase`）。
+    private(set) var phase: Phase = .idle
 
     /// 连接代次 —— 每次连接递增；回调带着发起时的代次，对不上就丢。
     private var generation = 0
@@ -345,7 +346,6 @@ final class FollowClient: NSObject {
     /// 退避重连：base 500ms × 2^n，抖动 50–100%，封顶 10s。
     private func scheduleReconnect() {
         guard following, sessionId != nil else { return }
-        phase = .waiting(ms: 0)
         reconnectAttempt += 1
 
         let delay = Self.backoffDelayMs(attempt: reconnectAttempt, random: Double.random(in: 0..<1))

@@ -20,7 +20,7 @@ import {
   followRequestOf,
   parseClientFrame,
 } from './mux.ts'
-import type { SessionPort, SessionRow, WireEvent } from './rpc.ts'
+import type { SessionPort, WireEvent } from './rpc.ts'
 
 /** A dense fake log with unicode, extra fields, and both message types. */
 function fakeLog(): WireEvent[] {
@@ -60,22 +60,16 @@ function messageCount(events: readonly WireEvent[]): number {
   return events.filter(event => event.type === 'user/message' || event.type === 'assistant/message').length
 }
 
+/**
+ * Only the log matters here: every case below reaches the port through the
+ * `page` path, which reads the whole log (`readAll`). `list` / `read` are
+ * placeholders — this file does not exercise those paths, and a second copy of
+ * the slicing rule would be one more thing to keep in step with `rpc.ts`.
+ */
 function fakePort(log: readonly WireEvent[]): SessionPort {
-  const rows: SessionRow[] = [{
-    id: 's1', createdAt: 1, updatedAt: 1, running: false, blank: false,
-  }]
   return {
-    async list() { return rows },
-    async read(id, since, limit) {
-      if (id !== 's1') return undefined
-      const events = log.filter(event => event.seq >= since).slice(0, limit)
-      return {
-        asOfSeq: (events.at(-1)?.seq ?? since - 1) + 1,
-        events,
-        hasMore: since + events.length < log.length,
-        staleCursor: false,
-      }
-    },
+    async list() { return [] },
+    async read() { return undefined },
     async readAll(id) { return id === 's1' ? log : undefined },
   }
 }

@@ -15,19 +15,6 @@ import Foundation
 @main
 struct MarkdownParserTests {
 
-    private static var passed = 0
-    private static var failed = 0
-
-    private static func expect(_ ok: Bool, _ label: String) {
-        if ok {
-            passed += 1
-            print("ok   \(label)")
-        } else {
-            failed += 1
-            print("FAIL \(label)")
-        }
-    }
-
     /// 解析后各块的 kind，便于整条比。
     private static func kinds(_ source: String) -> [Block.Kind] {
         MarkdownParser.parse(source).blocks.map(\.kind)

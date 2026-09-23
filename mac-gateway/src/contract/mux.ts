@@ -28,9 +28,6 @@
 import { pageWindow, type WireEvent } from './rpc.ts'
 import type { UsageSnapshot } from './usage.ts'
 
-/** The one framing version this build speaks. */
-export const MUX_VERSION = 1
-
 /** Client → server: begin one logical stream. */
 export interface MuxOpenFrame {
   type: 'open'

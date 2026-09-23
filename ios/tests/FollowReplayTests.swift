@@ -18,19 +18,6 @@ import Foundation
 @main
 struct FollowReplayTests {
 
-    private static var passed = 0
-    private static var failed = 0
-
-    private static func expect(_ ok: Bool, _ label: String) {
-        if ok {
-            passed += 1
-            print("ok   \(label)")
-        } else {
-            failed += 1
-            print("FAIL \(label)")
-        }
-    }
-
     private static func event(_ seq: Int, text: String = "m") -> SessionEvent {
         SessionEvent(type: seq % 2 == 0 ? "user/message" : "assistant/message", seq: seq, time: 1_700_000_000_000 + Double(seq), data: .object([:]))
     }

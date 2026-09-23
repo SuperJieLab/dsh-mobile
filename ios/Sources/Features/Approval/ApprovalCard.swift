@@ -33,10 +33,6 @@ struct ApprovalCard: View {
                 Text("已发出，结果未知 —— 等待 Mac 端回执，或重新打开本会话。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            case .delivered:
-                Text("已投递，等待结果…")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             default:
                 HStack(spacing: 12) {
                     Button {

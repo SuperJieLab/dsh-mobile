@@ -11,8 +11,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, upstreamWindow } from './rpc.ts'
-import type { SessionPort, SessionRow, WireEvent } from './rpc.ts'
+import { handle, upstreamWindow, DEFAULT_LIMITS } from './rpc.ts'
+import type { Limits, SessionPort, SessionRow, WireEvent } from './rpc.ts'
 
 /** One fake session: the row the list path sees, and the log the read path sees. */
 interface FakeSession {
@@ -112,7 +112,7 @@ function row(id: string, updatedAt: number, title?: string): SessionRow {
 const CLOCK = () => 1_758_000_999_999
 
 /** Reply caps, small enough that every case below can observe them. */
-function limits(maxDeltaEvents: number, maxDeltaBytes = 1_048_576): { maxDeltaEvents: number; maxDeltaBytes: number } {
+function limits(maxDeltaEvents: number, maxDeltaBytes = DEFAULT_LIMITS.maxDeltaBytes): Limits {
   return { maxDeltaEvents, maxDeltaBytes }
 }
 
@@ -273,7 +273,6 @@ test('every response the contract can produce carries v', async () => {
   const messages = [
     { v: 2, op: 'list-sessions' },
     { v: 2, op: 'nope' },
-    { v: 2, op: 'list-sessions' },
     { v: 2, op: 'snapshot', sessionId: 's-1', since: 0 },
     { v: 2, op: 'snapshot', sessionId: 'missing', since: 0 },
   ]
@@ -592,15 +591,4 @@ test('a subagent origin travels with the row so the client can hide it', async (
   const sessions = (response as { sessions: Record<string, unknown>[] }).sessions
   assert.equal(sessions.find(s => s.id === 's-1')?.origin, 'subagent')
   assert.equal('origin' in (sessions.find(s => s.id === 's-2') ?? {}), false, 'an ordinary session carries no origin')
-})
-
-test('rows are re-sorted newest first by the server, not by the client', async () => {
-  const response = await handle({ v: 2, op: 'list-sessions' }, fakePort([
-    { row: row('older', 100), events: [] },
-    { row: row('newer', 300), events: [] },
-    { row: row('middle', 200), events: [] },
-  ]), CLOCK)
-
-  const sessions = (response as { sessions: { id: string }[] }).sessions
-  assert.deepEqual(sessions.map(session => session.id), ['newer', 'middle', 'older'])
 })

@@ -30,6 +30,7 @@
  * where the controller itself de-duplicates re-admission.
  */
 
+import { describeError } from '../contract/errors.ts'
 import {
   ReplayTable,
   outcomeOfDecision,
@@ -154,9 +155,6 @@ function positionalArguments(arity: number, values: Record<string, unknown>): un
   return [values.endpoint, values.payload, values.signal]
 }
 
-/** What `answerApproval` maps onto — the upstream outcome vocabulary. */
-export type DeliveredOutcome = 'allowed-once' | 'rejected'
-
 /** One `approval/request` frame the relay is holding for the phone. */
 interface HeldRequest {
   eventId: string
@@ -237,7 +235,7 @@ export class ApprovalRelay {
         console.warn('[mac-gateway] approval relay stream ended; reconnecting')
       } catch (error) {
         if (signal.aborted) return
-        console.error(`[mac-gateway] approval relay stream failed: ${describe(error)}; reconnecting`)
+        console.error(`[mac-gateway] approval relay stream failed: ${describeError(error)}; reconnecting`)
       }
       // The client identity died with the stream: the gateway re-delivers
       // every still-pending question to the next connection, so carrying the
@@ -354,8 +352,4 @@ function isRemoteError(error: unknown): error is { code: string } {
   return typeof error === 'object' && error !== null
     && (error as { isDSHRemoteError?: unknown }).isDSHRemoteError === true
     && typeof (error as { code?: unknown }).code === 'string'
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

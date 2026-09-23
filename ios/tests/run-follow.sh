@@ -16,6 +16,7 @@ swiftc -O -o "$out" \
   "$here/../Sources/Core/CredentialStore.swift" \
   "$here/../Sources/Core/SessionMirror.swift" \
   "$here/../Sources/Core/FollowClient.swift" \
+  "$here/TestHarness.swift" \
   "$here/FollowReplayTests.swift"
 
 "$out"
