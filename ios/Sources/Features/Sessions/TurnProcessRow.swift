@@ -52,8 +52,9 @@ struct TurnProcessRow: View {
                     ToolRowView(row: row)
                 case .text(_, let text, _):
                     // 一轮中间的助手文本（不是最终答案的那部分）—— 它也是「说过的话」，
-                    // 所以按正文排版，不缩成一行摘要。
-                    Text(text)
+                    // 所以按正文排版，不缩成一行摘要。正文与最终答案同为 markdown 源文，
+                    // 于是走同一套解析与渲染。
+                    MarkdownText(source: text)
                         .font(.callout)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)

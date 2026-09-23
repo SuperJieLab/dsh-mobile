@@ -72,11 +72,14 @@ struct SessionDetailView: View {
 
                 // 打字机：正在生成的回复。它不在镜像里 —— 瞬态内容没有 seq，
                 // 不属于「已读到的位置」（M2 的第一条纪律）。
+                //
+                // 它逐 chunk 增长，所以这里正是「尾部冻结」的用武之地：源文变化时
+                // `MarkdownText` 只重解析尾部，已渲染的那几块原样留着（判据 M3）。
                 if !sync.transientText.isEmpty {
                     Text("DSH 正在输入…")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(sync.transientText)
+                    MarkdownText(source: sync.transientText)
                         .textSelection(.enabled)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -195,14 +198,22 @@ private struct MessageBubble: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            Text(message.text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    isUser ? Color.accentColor.opacity(0.18) : Color(uiColor: .secondarySystemBackground),
-                    in: .rect(cornerRadius: 14)
-                )
+            // 助手的话按 Markdown 排版（标题 / 列表 / 代码块 / 引用 / 分隔线由块级自己画，
+            // 行内交给系统）；用户输入是纯文本，不值得解一遍。M6 步骤 5。
+            Group {
+                if isUser {
+                    Text(message.text)
+                } else {
+                    MarkdownText(source: message.text)
+                }
+            }
+            .textSelection(.enabled)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                isUser ? Color.accentColor.opacity(0.18) : Color(uiColor: .secondarySystemBackground),
+                in: .rect(cornerRadius: 14)
+            )
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
         .padding(.vertical, 2)
