@@ -49,8 +49,20 @@ interface FakeGateway {
   results: { clientId: string; eventId: string; outcome: unknown }[]
 }
 
-/** Install the plugin on a context that runs effects immediately. Returns its teardown and the fake gateway. */
-function install(host: string, port: number, credentialsPath: string): { teardown: () => void; gateway: FakeGateway } {
+/**
+ * Install the plugin on a context that runs effects immediately. Returns its
+ * teardown and the fake gateway.
+ *
+ * `services` adds host services to the fake context — the follow path's three
+ * (sessions / sessionProjections / sessionController) arrive this way, so the
+ * default stays the serviceless context the earlier tests depend on.
+ */
+function install(
+  host: string,
+  port: number,
+  credentialsPath: string,
+  services: Record<string, unknown> = {},
+): { teardown: () => void; gateway: FakeGateway } {
   let cleanup: (() => void) | undefined
   const pushes: ((frame: { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }) => void)[] = []
   const results: { clientId: string; eventId: string; outcome: unknown }[] = []
@@ -63,17 +75,49 @@ function install(host: string, port: number, credentialsPath: string): { teardow
   apply(
     {
       effect: (fn: () => () => void) => { cleanup = fn() },
+      ...services,
+      /**
+       * Mirrored from the runtime gateway at 0.1.7-alpha.2: the carrier face
+       * `wireStream.open` takes `uplink` / `peer` ahead of the signal and
+       * combines the signal with a registration lifetime
+       * (`dsh-api-gateway/lib/index.js:602,805`). Feeding it positionally is how
+       * the relay died on the real machine (实施期修正 15), so the assembly
+       * smoke test speaks the same shape.
+       */
       typertGateway: {
-        async *openWireStream(_endpoint: string, _payload: unknown, signal: AbortSignal) {
-          yield { type: 'ready', clientId: 'fake-client' }
-          const queue: Array<{ type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }> = []
-          pushes.push((frame) => queue.push(frame))
-          while (!signal.aborted) {
-            while (queue.length > 0) yield queue.shift()!
-            await new Promise((resolve) => setTimeout(resolve, 5))
-          }
+        wireStream: {
+          async open(
+            endpoint: string,
+            payload: unknown,
+            uplink: AsyncIterable<unknown>,
+            peer: unknown,
+            signal: AbortSignal,
+          ) {
+            // The names are upstream's own, so this fixture exercises the
+            // named path the wrong way round just as faithfully as the right one.
+            void [endpoint, payload, uplink, peer]
+            AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+            return (async function* () {
+              yield { type: 'ready', clientId: 'fake-client' }
+              const queue: Array<{ type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }> = []
+              pushes.push((frame) => queue.push(frame))
+              while (!signal.aborted) {
+                while (queue.length > 0) yield queue.shift()!
+                await new Promise((resolve) => setTimeout(resolve, 5))
+              }
+            })()
+          },
         },
-        async dispatchRpc(_endpoint: string, payload: { args: { clientId: string; eventId: string; outcome: unknown } }) {
+        // Same treatment as the opener: upstream's own names, and the same
+        // `AbortSignal.any` guard, so a misplaced cancellation fails here too.
+        async dispatchRpc(
+          endpoint: string,
+          payload: { args: { clientId: string; eventId: string; outcome: unknown } },
+          signal: AbortSignal,
+          peer: unknown,
+        ) {
+          void [endpoint, peer]
+          AbortSignal.any([signal, AbortSignal.timeout(60_000)])
           results.push(payload.args)
           return { ok: true, value: undefined }
         },

@@ -29,7 +29,7 @@ import type { WritePort } from './contract/write.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
 import { attachStreamHandler, type FollowSource, type UpstreamFollowFrame } from './adapters/ws.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
-import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './adapters/write.ts'
+import { ApprovalRelay, callThrough, openStreamThrough, parameterNamesOf, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './adapters/write.ts'
 
 /** Display metadata used by dsh diagnostics. */
 export const name = 'mac-gateway'
@@ -404,13 +404,18 @@ function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
  * 实施期修正 13（真机日志 `openWireStream is not a function or its return
  * value is not async iterable`）：`ctx.typertGateway` 交到插件手里的不是
  * 服务原始实例 —— 每个成员可能被 traceable/严格视图包过一层，异步生成器
- * 方法经包装后不再返回可迭代对象。两级防御：
- * 1. `Symbol.for('cordis.original')` 是全局注册表 symbol（cordis 的
- *    `originalOf` 逃生口），无需 import 即可解出原始实例 —— 原始实例上
- *    `openWireStream` / `dispatchRpc` 都是真实方法；
- * 2. 解不出来时退到声明面：`wireStream.open` 是官方闭包（内部直通真实
- *    方法），用它适配收流；`dispatchRpc` 若仍不在则显式告警 —— 应答门
- *    缺失必须在对齐时暴露，而不是等第一次审批应答才炸。
+ * 方法经包装后不再返回可迭代对象。`Symbol.for('cordis.original')` 是全局
+ * 注册表 symbol（cordis 的 `originalOf` 逃生口），无需 import 即可解出原始
+ * 实例。
+ *
+ * 实施期修正 15（真机日志 `signals[0] is not of type AbortSignal.`）：拿到
+ * 原始实例还不够 —— 收流面的**形参位置**会变。0.1.7 把 `uplink` / `peer`
+ * 插在了 `signal` 前面，按位置传的取消信号落进 uplink 槽，网关内部
+ * `AbortSignal.any([undefined, ...])` 当场抛错。两条对策：
+ * 1. 收流优先走**声明面** `wireStream.open`（types.d.ts:87，有注释的 carrier
+ *    适配口），只在它缺席时才碰私有成员 `openWireStream`；
+ * 2. 实参一律**按形参名**填（`openStreamThrough`）—— 位置随便挪，名字不会。
+ *    读不出形参表（被 bind/native 包过）时按 arity 兜底并显式告警。
  */
 function gatewayOver(ctx: Context): RemoteEventGatewayLike {
   const view = ctx.typertGateway as unknown as Record<PropertyKey, unknown> | undefined
@@ -421,24 +426,45 @@ function gatewayOver(ctx: Context): RemoteEventGatewayLike {
     ? view[Symbol.for('cordis.original')]
     : view) as Record<PropertyKey, unknown>
 
-  if (typeof raw.openWireStream === 'function' && typeof raw.dispatchRpc === 'function') {
-    console.log('[mac-gateway] approval relay gateway: raw service (openWireStream + dispatchRpc)')
-    return raw as unknown as RemoteEventGatewayLike
+  const members = `openWireStream=${typeof raw.openWireStream}, wireStream=${typeof raw.wireStream}, dispatchRpc=${typeof raw.dispatchRpc}`
+  const dispatchRpc = raw.dispatchRpc
+  if (typeof dispatchRpc !== 'function') {
+    // The answer door is the relay's whole reason to exist: missing it has to
+    // surface at alignment time, not on the first tapped answer.
+    console.error(`[mac-gateway] approval relay gateway members: ${members}`)
+    throw new Error('ctx.typertGateway exposes no dispatchRpc — the approval relay cannot answer without it')
   }
 
-  const wireStream = (typeof raw.wireStream === 'object' && raw.wireStream !== null ? raw.wireStream : undefined) as
-    | { open?(endpoint: string, payload: { args: Record<string, never> }, signal: AbortSignal): AsyncIterable<unknown> }
+  const declared = (typeof raw.wireStream === 'object' && raw.wireStream !== null ? raw.wireStream : undefined) as
+    | { open?: unknown }
     | undefined
-  if (typeof wireStream?.open === 'function' && typeof raw.dispatchRpc === 'function') {
-    console.log('[mac-gateway] approval relay gateway: raw service via wireStream.open + dispatchRpc')
-    return {
-      openWireStream: (endpoint, payload, signal) => wireStream.open!(endpoint, payload, signal) as AsyncIterable<UpstreamWireFrame>,
-      dispatchRpc: raw.dispatchRpc as RemoteEventGatewayLike['dispatchRpc'],
-    }
+  const opening = typeof declared?.open === 'function' ? declared.open : raw.openWireStream
+  if (typeof opening !== 'function') {
+    console.error(`[mac-gateway] approval relay gateway members: ${members}`)
+    throw new Error('ctx.typertGateway exposes neither wireStream.open nor openWireStream — approval relay cannot run')
+  }
+  const opener = opening as (...args: unknown[]) => Promise<AsyncIterable<unknown>>
+  console.log(
+    `[mac-gateway] approval relay gateway: ${opener === declared?.open ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
+  )
+  // The one argument the relay cannot work without is cancellation: if this
+  // build spells it differently, say so here rather than in a reconnect loop.
+  const names = parameterNamesOf(opener)
+  if (names === undefined || !names.includes('signal')) {
+    console.warn(
+      `[mac-gateway] approval relay: the stream opener declares ${names === undefined ? 'no readable parameters' : `no \`signal\` (${names.join(', ')})`}; feeding it positionally, cancellation last. reads: ${Function.prototype.toString.call(opener).slice(0, 160)}`,
+    )
   }
 
-  console.error(`[mac-gateway] approval relay gateway members: openWireStream=${typeof raw.openWireStream}, wireStream=${typeof raw.wireStream}, dispatchRpc=${typeof raw.dispatchRpc}`)
-  throw new Error('ctx.typertGateway exposes neither the raw gateway nor the wireStream/dispatchRpc surface — approval relay cannot run')
+  return {
+    // `$events` speaks the relay's own vocabulary, so the stream is typed as
+    // such at this one boundary — the opener itself is untyped upstream.
+    openWireStream: (endpoint, payload, signal) =>
+      openStreamThrough(opener, { endpoint, payload, signal }) as Promise<AsyncIterable<UpstreamWireFrame>>,
+    // Same reason as the opener: the answer door is a private member too, and
+    // its parameters may move (实施期修正 15).
+    dispatchRpc: (endpoint, payload, signal) => callThrough(dispatchRpc, { endpoint, payload, signal }),
+  }
 }
 
 /**
