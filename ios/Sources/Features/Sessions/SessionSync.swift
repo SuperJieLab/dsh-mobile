@@ -62,6 +62,9 @@ final class SessionSync: ObservableObject {
         followClient.onApproval = { [weak self] payload in self?.approvals.receive(payload) }
         followClient.onUsage = { [weak self] snapshot in self?.applyUsage(snapshot) }
         followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
+        // 连接态指示器的唯一来源（M3）：`FollowClient` 改了阶段就转发过来，界面直读
+        // `connectionPhase`。不接的话指示器永远停在 idle、`ConnectionBadge` 恒隐藏。
+        followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
         // M4：upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
         followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
         return followClient

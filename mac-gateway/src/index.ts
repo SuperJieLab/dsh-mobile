@@ -450,16 +450,7 @@ function refusal(code: string, message: string): { v: number; ok: false; error: 
 function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
   return {
     answerApproval: (answer) => relay.answerApproval(answer),
-    promptSession: async (prompt) => {
-      try {
-        return await pumpPrompt(promptControllerOver(ctx), prompt)
-      } catch (error) {
-        // Diagnostic (2026-09-19): the phone only sees `internal-error`; the
-        // stack here is the evidence. Remove once the cause is fixed.
-        console.error('[mac-gateway] prompt pump threw:', error)
-        throw error
-      }
-    },
+    promptSession: async (prompt) => pumpPrompt(promptControllerOver(ctx), prompt),
   }
 }
 

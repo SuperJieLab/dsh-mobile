@@ -30,7 +30,7 @@
  * where the controller itself de-duplicates re-admission.
  */
 
-import { describeError } from '../contract/errors.ts'
+import { describeError, isNotFound } from '../contract/errors.ts'
 import {
   ReplayTable,
   outcomeOfDecision,
@@ -342,14 +342,7 @@ export async function pumpPrompt(controller: PromptControllerLike, prompt: Sessi
     }, signal)
     return 'accepted'
   } catch (error) {
-    if (isRemoteError(error) && error.code === 'session/not-found') return 'unknown-session'
+    if (isNotFound(error)) return 'unknown-session'
     throw error
   }
-}
-
-/** Structural RemoteError check — this module cannot import the host's class. */
-function isRemoteError(error: unknown): error is { code: string } {
-  return typeof error === 'object' && error !== null
-    && (error as { isDSHRemoteError?: unknown }).isDSHRemoteError === true
-    && typeof (error as { code?: unknown }).code === 'string'
 }

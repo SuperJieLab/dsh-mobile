@@ -33,7 +33,7 @@ import {
   type MuxServerFrame,
 } from '../contract/mux.ts'
 import { upstreamWindow } from '../contract/rpc.ts'
-import { describeError, isUnreadable } from '../contract/errors.ts'
+import { describeError, isNotFound, isUnreadable } from '../contract/errors.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import {
   WsFrameParser,
@@ -417,8 +417,10 @@ function mapError(error: unknown): { code: string; message: string } {
   if (isUnreadable(error)) {
     return { code: 'unreadable-session', message: describeError(error) }
   }
-  const remote = error as { isDSHRemoteError?: boolean; code?: unknown }
-  if (remote?.isDSHRemoteError === true && typeof remote.code === 'string' && remote.code.endsWith('/not-found')) {
+  // Everything this channel reads is addressed by session, so a not-found is
+  // the session's — and the predicate itself is shared with the write path, so
+  // the two cannot drift on what counts as "not there".
+  if (isNotFound(error)) {
     return { code: 'unknown-session', message: describeError(error) }
   }
   return { code: 'internal-error', message: describeError(error) }

@@ -68,6 +68,8 @@ struct SessionSummary: Decodable, Identifiable, Hashable {
     /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——
     /// 既不是 `null` 也不是空串。这是契约的一部分，不是故障。
     let title: String?
+    /// 会话创建时间。**客户端当前不读它** —— 留作协议行的完整镜像（协议给了哪几个
+    /// 时间，看这里就知道；删掉不会让解码更快，只会让口径少一处）。
     let createdAt: Double
     /// **最后一次用户发言的时间**，没有则等于 `createdAt`。
     /// ⚠️ 不是「最后一次事件的时间」—— 助手输出与工具调用不推进它。
@@ -87,13 +89,11 @@ struct SessionSummary: Decodable, Identifiable, Hashable {
 /// 协议承诺**事件体原样透传**，服务端不裁剪、不翻译、不改名，
 /// 且日后会带上客户端还不认识的字段。所以这里只声明我们确实用到的四个，
 /// 其余的靠 `JSONValue` 原样收下文、不解析。
-struct SessionEvent: Decodable, Equatable, Identifiable {
+struct SessionEvent: Decodable, Equatable {
     let type: String
     let seq: Int
     let time: Double
     let data: JSONValue
-
-    var id: Int { seq }
 }
 
 /// 任意 JSON。存在的理由只有一条：**容忍不认识的字段**。
@@ -181,14 +181,11 @@ enum JSONValue: Decodable, Encodable, Equatable {
 // MARK: - 从事件里抽出可显示的消息
 
 /// 屏幕上显示的一条消息气泡。
-struct DisplayMessage: Identifiable, Hashable {
+struct DisplayMessage: Hashable {
     enum Role: Hashable {
         case user
         case assistant
     }
-
-    /// 直接用事件 `seq` 当身份 —— 它在会话内唯一且稳定，不需要另造 id。
-    var id: Int { seq }
 
     let seq: Int
     let role: Role

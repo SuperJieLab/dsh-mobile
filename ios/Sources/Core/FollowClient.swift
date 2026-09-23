@@ -51,8 +51,17 @@ final class FollowClient: NSObject {
 
     // MARK: - 状态
 
-    /// 连接阶段 —— 只有本类读它（对外的连接态走 `SessionSync.connectionPhase`）。
-    private(set) var phase: Phase = .idle
+    /// 连接阶段 —— 对外的连接态由 `onPhaseChange` 转发出去（`SessionSync.connectionPhase`）。
+    ///
+    /// 通知挂在 setter 上，不在各处赋值点手写：`connect`、`openFollowStream`、收到
+    /// opening、退避等待、`stop` 五处都会改它，手写就一定会漏接一处，漏接的那条路径
+    /// 上指示器会停在上一个状态（曾经就是全都没接，指示器恒定 idle 从不显示）。
+    private(set) var phase: Phase = .idle {
+        didSet {
+            guard phase != oldValue else { return }
+            onPhaseChange?(phase)
+        }
+    }
 
     /// 连接代次 —— 每次连接递增；回调带着发起时的代次，对不上就丢。
     private var generation = 0

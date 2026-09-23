@@ -176,12 +176,21 @@ test('pump: accepted prompt forwards through the controller door', async () => {
   assert.deepEqual(seen, [{ requestId: 'p', sessionId: 's', mode: 'queue', content: [{ type: 'text', text: 'hi' }] }])
 })
 
-test('pump: not-found folds to unknown-session; other failures rethrow', async () => {
-  const controller = { async prompt() { throw Object.assign(new Error('gone'), { isDSHRemoteError: true, code: 'session/not-found' }) } }
-  assert.equal(await pumpPrompt(controller, { sessionId: 's', text: 'hi', promptId: 'p' }), 'unknown-session')
+test('pump: any not-found namespace folds to unknown-session; other failures rethrow', async () => {
+  const failing = (thrown: unknown) => ({ async prompt() { throw thrown } })
+  const prompt = { sessionId: 's', text: 'hi', promptId: 'p' }
+  const remote = (code: string) => Object.assign(new Error(code), { isDSHRemoteError: true, code })
 
-  const broken = { async prompt() { throw new Error('boom') } }
-  await assert.rejects(pumpPrompt(broken, { sessionId: 's', text: 'hi', promptId: 'p' }), /boom/)
+  // The predicate is the shared `/not-found` one, not a hard-coded session
+  // code: the namespace belongs to the host, and every call this pump makes is
+  // addressed by session anyway.
+  assert.equal(await pumpPrompt(failing(remote('session/not-found')), prompt), 'unknown-session')
+  assert.equal(await pumpPrompt(failing(remote('agent/not-found')), prompt), 'unknown-session')
+
+  // A remote failure that is not a not-found, and a plain failure, are not the
+  // client's to fix by resending.
+  await assert.rejects(pumpPrompt(failing(remote('session/busy')), prompt), /session\/busy/)
+  await assert.rejects(pumpPrompt(failing(new Error('boom')), prompt), /boom/)
 })
 
 // -- 实施期修正 15: the opener's parameter *positions* move -------------------

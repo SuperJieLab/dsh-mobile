@@ -5,12 +5,13 @@
  * this module owns only state and I/O — the credentials file under
  * `~/.dsh/dsh-mobile/`, and the in-memory table of live access tokens.
  *
- * Fail-closed is the standing rule: a credentials file that cannot be read or
- * parsed is treated as unpaired (the worst case is one re-pairing, never an
- * unintended grant), and every write is best-effort with the failure logged —
- * a vault that cannot persist must refuse, not silently downgrade to
- * in-memory-only, because a relationship that vanishes on restart is not the
- * relationship the user paired.
+ * Fail-closed is the standing rule on the read side: a credentials file that
+ * cannot be read or parsed is treated as unpaired (the worst case is one
+ * re-pairing, never an unintended grant). The write side is best-effort but
+ * never silent — a persist failure is logged and the in-memory relationship
+ * stays usable for this run, at the cost of not surviving a restart. Refusing
+ * outright was considered and rejected: the disk being unwritable is not a
+ * reason to deny a pairing that is otherwise valid.
  *
  * The access table is deliberately in memory: a 15-minute ticket does not need
  * to survive a restart, and the client's refresh flow makes re-issuing one an
@@ -131,13 +132,6 @@ export class CredentialVault {
     const token = bearerTokenOf(authorizationHeader)
     if (token === undefined) return false
     return isLiveAccess(this.access.get(sha256Hex(token)), this.now())
-  }
-
-  /** Tear the relationship down: back to the empty file, every live access dies. */
-  revoke(): void {
-    this.file = emptyCredentials()
-    this.access.clear()
-    this.persist()
   }
 
   /**
