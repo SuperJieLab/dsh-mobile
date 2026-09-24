@@ -44,16 +44,25 @@ struct ModelProtocolTests {
     // MARK: - 目录解码（§4.7）
 
     private static func decodeCatalog() {
-        // 上游原样 + 宿主私有字段 routableProviders：客户端必须容忍不认识的字段。
+        // 上游原样（catalog.js:20-44）：reasoning.efforts 是对象数组、宿主私有字段
+        // routableProviders 在场 —— T8 真机教训：fixture 必须逐字复刻上游形状，
+        // 自造的 `[String]` efforts 让整份目录解码失败、菜单全空。
         let json = """
         {"default":{"provider":"deepseek","model":"v3.2"},
-         "groups":[{"id":"deepseek","name":"DeepSeek","models":[{"id":"v3.2","name":"V3.2"}]}],
+         "groups":[{"id":"deepseek","name":"DeepSeek","models":[
+            {"id":"v3.2","name":"V3.2",
+             "reasoning":{"efforts":[{"id":"high","name":"High"},{"id":"low","name":"Low"}],"defaultEffort":"high"}}],
+         }],
          "failures":[{"id":"x","name":"X","message":"no credentials"}],
          "routableProviders":["deepseek"]}
         """
         let catalog = try? decoder.decode(ModelCatalog.self, from: Data(json.utf8))
         expect(catalog?.default?.model == "v3.2", "D2a default 落地")
         expect(catalog?.groups?.first?.models.first?.id == "v3.2", "D2b groups.models 落地")
+        expect(catalog?.groups?.first?.models.first?.reasoning?.efforts.first?.id == "high",
+               "D2b' reasoning.efforts 按上游对象数组形状落地")
+        expect(catalog?.groups?.first?.models.first?.reasoning?.defaultEffort == "high",
+               "D2b'' defaultEffort 落地")
         expect(catalog?.failures?.first?.message == "no credentials", "D2c failures 失败隔离落地")
         expect(true, "D2d 宿主私有字段（routableProviders）被容忍不炸")
 

@@ -37,6 +37,8 @@ final class SessionSync: ObservableObject {
     @Published private(set) var connectionPhase: FollowClient.Phase = .idle
     /// 上下文占用（M6）。为 `nil` 时界面**隐藏整行**（判据 U2）。
     @Published private(set) var usage: UsagePayload? = nil
+    /// 当前显示的模型（M7）：状态机的镜像，经既有的刷新路径冒泡。
+    @Published private(set) var displayedModel: ModelSelection? = nil
 
     private let client: GatewayClient
     private let sessionId: String
@@ -71,6 +73,8 @@ final class SessionSync: ObservableObject {
     }
     /// 占用值的吸收（M6）。判定（严格高水位胜）全在值类型里（判据 O1），这里只持有并转发结果。
     private var usageState = UsageState()
+    /// 当前模型的跟随更新（M7）。判定全在值类型里（V1–V4），这里只持有并转发结果。
+    private var modelState = ModelSelectionState()
     /// 把嵌套状态机的变化冒泡成自己的 objectWillChange ——
     /// 不转发的话审批卡的增删不触发视图重算（真机踩实）。
     private var approvalsObservation: AnyCancellable?
@@ -93,6 +97,39 @@ final class SessionSync: ObservableObject {
         } catch {
             status = .failed("指令没能送达：\(error.localizedDescription)")
             refreshView()
+        }
+    }
+
+    // MARK: - 模型选择（M7）
+
+    /// 拉一次目录（打开选择器时现拉，不订阅刷新——重开即新）。失败返回 `nil` 并如实进状态行。
+    func loadModelCatalog() async -> ModelCatalog? {
+        do {
+            return try await client.modelCatalog()
+        } catch let error as GatewayClientError {
+            if case .refused(let failure) = error {
+                status = .failed("目录没取到：\(failure.readableDescription)")
+            } else {
+                status = .failed("目录没取到 —— 没连上网关。")
+            }
+            return nil
+        } catch {
+            status = .failed("目录没取到 —— 没连上网关。")
+            return nil
+        }
+    }
+
+    /// 安装一次会话级选择（决定 3/4）：本地先记代号，回包对号落地；事件流的
+    /// `model/selection` 随后照常进来 —— 与本地即时显示一致，界面不动。失败如实进状态行。
+    func selectModel(_ selection: ModelSelection) async {
+        let generation = modelState.beginSelect()
+        do {
+            let selected = try await client.modelSelect(sessionId: sessionId, selection: selection)
+            if modelState.settle(generation: generation, selected: selected) {
+                displayedModel = modelState.displayed
+            }
+        } catch {
+            status = .failed("模型没换成：\(error.localizedDescription)")
         }
     }
 
@@ -257,6 +294,16 @@ final class SessionSync: ObservableObject {
             transient = TransientChannel()
         }
         transientText = transient.text
+
+        // 模型基线（M7）：opening 的可选 `model` 字段是进会话那一刻权威的「下一轮用什么」
+        // —— 状态机无条件落地（全会话投影比窗口推断权威）。缺省 = 不知道，不猜。
+        if let raw = payload["model"],
+           let data = try? JSONEncoder().encode(raw),
+           let baseline = try? JSONDecoder().decode(ModelSelection.self, from: data) {
+            modelState.absorb(baseline: baseline)
+            displayedModel = modelState.displayed
+        }
+
         status = .done(added: window.events.count, recovered: false)
         refreshView()
     }
@@ -264,6 +311,9 @@ final class SessionSync: ObservableObject {
     private func applyLiveEvent(_ event: SessionEvent) {
         // 一条事件 = 一次覆盖到 seq+1 的快照；上游 gap-free 是契约（网关另有目击），幂等照旧生效。
         _ = mirror.apply(.received(Snapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])))
+        // 模型选择的两类事件照同一条流进来（M7）——状态机自己判水位与顺序。
+        modelState.absorb(event: event)
+        displayedModel = modelState.displayed
         refreshView()
     }
 
@@ -323,6 +373,10 @@ final class SessionSync: ObservableObject {
     private func fetchSnapshot() async -> Outcome {
         do {
             let snapshot = try await client.snapshot(sessionId: sessionId, since: mirror.cursor)
+            // opening 基线（M7 决定 1）：snapshot 回应带着「下一轮用什么」——
+            // 进会话前的选择客户端窗口里没有，只有这一路能补上。
+            modelState.absorb(baseline: snapshot.model)
+            displayedModel = modelState.displayed
             return .received(Snapshot(
                 asOfSeq: snapshot.asOfSeq,
                 hasMore: snapshot.hasMore,

@@ -283,9 +283,17 @@ struct ModelCatalogEntry: Decodable, Equatable {
     let name: String
     var reasoning: Reasoning? = nil
 
+    /// 上游形状（catalog.js:20-27）：`efforts` 是**对象数组**，不是 id 串 ——
+    /// T8 真机教训：按想象造的 `[String]` 让整份目录解码失败、菜单全空。
     struct Reasoning: Decodable, Equatable {
-        let efforts: [String]
+        let efforts: [Effort]
         var defaultEffort: String? = nil
+
+        struct Effort: Decodable, Equatable {
+            let id: String
+            let name: String
+            var description: String? = nil
+        }
     }
 }
 

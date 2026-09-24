@@ -149,6 +149,8 @@ struct SessionDetailView: View {
                     }
 
                     HStack(spacing: 8) {
+                        // 当前模型（M7）：选择器住在发送区旁（上游 composer 槽位），不占消息流。
+                        ModelPickerView(sync: sync)
                         TextField("发一条指令给 DSH…", text: $draft, axis: .vertical)
                             .lineLimit(1...4)
                             .textFieldStyle(.roundedBorder)

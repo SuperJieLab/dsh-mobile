@@ -64,6 +64,14 @@ export interface FollowSource {
    * @returns the reading, or `undefined` when the host does not know the session.
    */
   occupancyOf(sessionId: string): UsageSnapshot | undefined
+
+  /**
+   * The session's model baseline (M7): the `modelSelection` projection's wire view,
+   * or undefined when unknown. Read in the same breath as the window so the phone
+   * opens knowing what the next request will use — the HTTP snapshot carries the
+   * same field, but the follow opening is the path a live session actually takes.
+   */
+  modelOf?(sessionId: string): unknown
 }
 
 /**
@@ -293,8 +301,21 @@ async function pump(
     }
   }
 
-  /** The last reading this stream sent — the baseline counts, so it is not repeated. */
-  let lastUsage: UsageSnapshot | undefined
+  /**
+   * Read the model baseline (M7), same rule as occupancy: an addition to the events,
+   * so a throwing read is logged and skipped, never an `error` frame.
+   */
+  const readModel = (): unknown => {
+    if (source.modelOf === undefined) return undefined
+    try {
+      return source.modelOf(request.sessionId)
+    } catch (error) {
+      console.error(`[mac-gateway] model read failed for "${request.sessionId}": ${describeError(error)}`)
+      return undefined
+    }
+  }
+
+  /** The last reading this stream sent — the baseline counts, so it is not repeated. */  let lastUsage: UsageSnapshot | undefined
   const pushUsage = (): void => {
     const reading = readUsage()
     if (reading === undefined || !usageShouldEmit(lastUsage, reading)) return
@@ -329,6 +350,7 @@ async function pump(
         // phone opens on a window and a state from one moment (M6 §3.1 决定 2).
         const occupancy = readUsage()
         lastUsage = occupancy
+        const model = readModel()
         sendItem({
           sessionId: request.sessionId,
           cursor,
@@ -337,6 +359,7 @@ async function pump(
           events,
           ...(frame.assistantStream === undefined ? {} : { assistantStream: frame.assistantStream }),
           ...(occupancy === undefined ? {} : { occupancy }),
+          ...(model === undefined ? {} : { model }),
         })
         continue
       }

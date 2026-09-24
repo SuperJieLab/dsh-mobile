@@ -248,6 +248,9 @@ function streamSourceOver(ctx: Context): FollowSource {
       const snapshot = read.snapshot(session, OCCUPANCY_KEYS)
       return snapshot === undefined ? undefined : usageSnapshotOf(snapshot.values, snapshot.asOfSeq)
     },
+    // The model baseline rides the opening (M7): same projection read as the
+    // snapshot path, one moment earlier — the opening is the path a live session takes.
+    modelOf: (sessionId) => modelSelectionViewOf(ctx, sessionId),
   }
 }
 
@@ -305,17 +308,25 @@ interface AgentsLike {
  * same live-read pattern as the occupancy frames. Absence (session not live) is honest
  * — the field stays out of the reply rather than guessing a default (决定 1/7).
  */
+/**
+ * The `modelSelection` projection's wire view for one session — the one read both
+ * the snapshot baseline (M7 T4) and the follow opening's `model` field serve from.
+ * Absence (session not live) is honest — the field stays out rather than guessing
+ * a default (决定 1/7).
+ */
+function modelSelectionViewOf(ctx: Context, sessionId: string): ModelSelectionView | undefined {
+  const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
+  if (session === undefined) return undefined
+  const read = ctx.sessionProjections as unknown as ProjectionsLike
+  const snapshot = read.snapshot(session, ['modelSelection'])
+  const view = snapshot?.values.modelSelection
+  if (typeof view !== 'object' || view === null) return undefined
+  return view as ModelSelectionView
+}
+
 function modelSelectionSourceOver(ctx: Context): ModelSelectionSource {
   return {
-    of(sessionId) {
-      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
-      if (session === undefined) return undefined
-      const read = ctx.sessionProjections as unknown as ProjectionsLike
-      const snapshot = read.snapshot(session, ['modelSelection'])
-      const view = snapshot?.values.modelSelection
-      if (typeof view !== 'object' || view === null) return undefined
-      return view as ModelSelectionView
-    },
+    of: (sessionId) => modelSelectionViewOf(ctx, sessionId),
   }
 }
 
@@ -387,10 +398,11 @@ async function respond(
   }
 
   const answer = await handle(message, port, Date.now, limits, writePort, modelPort)
-  // Write ops are the one place a refusal is not self-evident from the phone:
-  // the client only shows a status line, so the server side keeps the evidence.
-  if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer' || op === 'model-select')) {
-    console.error(`[mac-gateway] write op "${op}" refused: ${JSON.stringify(answer.error)}`)
+  // Refusals keep evidence server-side: write ops because the phone only shows a
+  // status line, model ops because the T8 device run showed a silently-empty catalog
+  // — a read op that dies must not be quieter than a write op that fails.
+  if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer' || op === 'model-select' || op === 'model-catalog')) {
+    console.error(`[mac-gateway] op "${op}" refused: ${JSON.stringify(answer.error)}`)
   }
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   response.end(`${JSON.stringify(answer)}\n`)

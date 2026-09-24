@@ -376,3 +376,35 @@ test('an unknown upgrade path is declined without speaking WebSocket', { timeout
     server.close()
   }
 })
+
+test('the opening carries the model baseline when the source knows it, absent otherwise', { timeout: 10_000 }, async () => {
+  const source = {
+    ...fakeSource([snapshotFrame([event(0)], 1)]),
+    modelOf: (sessionId: string) => sessionId === 's1' ? { provider: 'p', model: 'A' } : undefined,
+  }
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true })
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+
+    const first = await connect(server)
+    send(first, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+    const known = await receive(first)
+    assert.deepEqual((known.payload as Record<string, unknown>).model, { provider: 'p', model: 'A' },
+      'the baseline rides the opening, same breath as the window')
+    first.close()
+
+    const second = await connect(server)
+    send(second, { type: 'open', streamId: 2, payload: { op: 'follow', sessionId: 's-unknown' } })
+    const unknown = await receive(second)
+    assert.equal('model' in (unknown.payload as Record<string, unknown>), false,
+      'an unknown baseline stays out of the payload, never guessed')
+    second.close()
+
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
