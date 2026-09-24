@@ -585,3 +585,21 @@ test('a subagent origin travels with the row so the client can hide it', async (
   assert.equal(sessions.find(s => s.id === 's-1')?.origin, 'subagent')
   assert.equal('origin' in (sessions.find(s => s.id === 's-2') ?? {}), false, 'an ordinary session carries no origin')
 })
+
+// MARK: - the opening model baseline rides the snapshot reply (M7 T4)
+
+test('a slice carrying a model baseline publishes it; a bare slice leaves the field absent', async () => {
+  const portWithModel: SessionPort = {
+    ...fakePort([{ row: { id: 's-1', createdAt: 1 }, events: [event(0)] }]),
+    async read() {
+      return { events: [event(0)], asOfSeq: 1, hasMore: false, staleCursor: false, model: { provider: 'deepseek', model: 'v3.2' } }
+    },
+  }
+  const withModel = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, portWithModel, CLOCK)
+  assert.ok(withModel.ok)
+  assert.deepEqual(withModel.model, { provider: 'deepseek', model: 'v3.2' })
+
+  const withoutModel = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, fakePort([{ row: { id: 's-1', createdAt: 1 }, events: [event(0)] }]), CLOCK)
+  assert.ok(withoutModel.ok)
+  assert.equal('model' in withoutModel, false)
+})

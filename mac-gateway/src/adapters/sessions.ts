@@ -19,6 +19,7 @@
  * `cwd === undefined` skips a session the reference list also hides; the other rules
  * (subagent, archived, blank) are the client's, and this one is already a header fact.
  */
+import type { ModelSelection } from '../contract/model.ts'
 import type { SessionPort, SessionRow, SessionSlice, WireEvent } from '../contract/rpc.ts'
 
 /** The header fields this adapter reads. */
@@ -96,11 +97,29 @@ interface SessionListMetadataLike {
 }
 
 /**
+ * The `modelSelection` projection's wire view, as the host serves it (`{lastUsed, next}`);
+ * only `next` is the baseline (决定 1) — what the *next* request will use.
+ */
+export interface ModelSelectionView {
+  next?: ModelSelection | null
+}
+
+/**
+ * Where a session's model baseline comes from, `ListSource`-style: a narrow face the
+ * assembly fills from the live projection registry. Absence (no session object, no
+ * projection) stays absence — the baseline only ever carries what the server can prove.
+ */
+export interface ModelSelectionSource {
+  of(sessionId: string): ModelSelectionView | undefined
+}
+
+/**
  * Build the session port over the host's services: `persistence` reads logs (for `snapshot`
  * and `page`), `listing` supplies the list path's material, and the returned port is what
- * `handle()` reads through.
+ * `handle()` reads through. `modelSelection` is optional: absent means every slice goes out
+ * without a baseline, which is the honest answer for an assembly without projections.
  */
-export function createSessionPort(persistence: PersistenceLike, listing: ListSource): SessionPort {
+export function createSessionPort(persistence: PersistenceLike, listing: ListSource, modelSelection?: ModelSelectionSource): SessionPort {
   return {
     async list(): Promise<readonly SessionRow[]> {
       const rows: SessionRow[] = []
@@ -169,7 +188,15 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
         const hasMore = events.length > limit
         const kept = hasMore ? events.slice(0, limit) : events
         const last = kept.at(-1)
-        return { events: kept, asOfSeq: last === undefined ? since : last.seq + 1, hasMore, staleCursor: false }
+        return {
+          events: kept,
+          asOfSeq: last === undefined ? since : last.seq + 1,
+          hasMore,
+          staleCursor: false,
+          // The model baseline (M7 决定 1): the projection's `next` verbatim, absent
+          // when the projection is — never a null, never a guessed default.
+          ...baselineOf(id, modelSelection),
+        }
       } finally {
         await handle.close().catch(() => {})
       }
@@ -191,6 +218,12 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
       }
     },
   }
+}
+
+/** The slice's optional `model` field: the projection's `next`, or nothing at all. */
+function baselineOf(id: string, modelSelection: ModelSelectionSource | undefined): { model?: ModelSelection } {
+  const next = modelSelection?.of(id)?.next
+  return next === undefined || next === null ? {} : { model: next }
 }
 
 /**

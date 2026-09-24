@@ -16,7 +16,7 @@
  */
 
 import { describeError, isUnreadable } from './errors.ts'
-import type { ModelPort } from './model.ts'
+import type { ModelPort, ModelSelection } from './model.ts'
 import { modelSelectRequestOf } from './model.ts'
 import {
   approvalAnswerOf,
@@ -91,6 +91,12 @@ export interface SessionSlice {
    * (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
    */
   staleCursor: boolean
+  /**
+   * The session's model baseline (M7): the model the *next* request will use,
+   * read from the host's `modelSelection` projection. Absent when unknown —
+   * the client falls back to the catalog default, never guesses (决定 1/7).
+   */
+  model?: ModelSelection
 }
 
 /**
@@ -361,6 +367,8 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
     asOfSeq: last === undefined ? since : last.seq + 1,
     hasMore: slice.hasMore || events.length < slice.events.length,
     events: [...events],
+    // The baseline rides on every snapshot answer; absence stays absence (§4.2).
+    ...slice.model === undefined ? {} : { model: slice.model },
   }
 }
 

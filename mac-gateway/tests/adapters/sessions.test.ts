@@ -185,3 +185,55 @@ test('origin comes from the header and is absent for an ordinary session', async
   assert.equal(rows.find(row => row.id === 'child')?.origin, 'subagent')
   assert.equal('origin' in (rows.find(row => row.id === 'parent') ?? {}), false)
 })
+
+// MARK: - the opening model baseline (M7 T4, G3)
+
+/** A persistence serving exactly one event, so `read` reaches the slice path. */
+function oneEventPersistence(): PersistenceLike {
+  return {
+    async open() {
+      return {
+        async read() {
+          return { events: [{ type: 'user/message', seq: 0, time: 1, data: {} }] }
+        },
+        async close() {},
+      }
+    },
+  }
+}
+
+/** A record the read path can find by id. */
+const READ_RECORD: ListRecord = { header: header('s-1', 1000), live: true }
+
+test('the slice carries the projection next as the model baseline', async () => {
+  const port = createSessionPort(oneEventPersistence(), sourceOf([READ_RECORD]), {
+    of() {
+      return { next: { provider: 'deepseek', model: 'v3.2' } }
+    },
+  })
+  const slice = await port.read('s-1', 0, 10)
+  assert.ok(slice)
+  assert.deepEqual(slice.model, { provider: 'deepseek', model: 'v3.2' })
+})
+
+test('an absent projection leaves the model field absent, never guessed', async () => {
+  const port = createSessionPort(oneEventPersistence(), sourceOf([READ_RECORD]), {
+    of() {
+      return undefined
+    },
+  })
+  const slice = await port.read('s-1', 0, 10)
+  assert.ok(slice)
+  assert.equal('model' in slice, false)
+})
+
+test('a null next is no baseline — the field is absent, not null', async () => {
+  const port = createSessionPort(oneEventPersistence(), sourceOf([READ_RECORD]), {
+    of() {
+      return { next: null }
+    },
+  })
+  const slice = await port.read('s-1', 0, 10)
+  assert.ok(slice)
+  assert.equal('model' in slice, false)
+})

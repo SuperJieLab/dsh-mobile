@@ -17,7 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort } from './contract/rpc.ts'
 import type { WritePort } from './contract/write.ts'
 import { usageSnapshotOf } from './contract/usage.ts'
-import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
+import { createSessionPort, type ListSource, type ModelSelectionSource, type ModelSelectionView, type PersistenceLike } from './adapters/sessions.ts'
 import { attachStreamHandler, type FollowSource } from './adapters/ws.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
 import { modelPortOver, type ModelControllerLike } from './adapters/model.ts'
@@ -90,6 +90,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const sessionPort = createSessionPort(
     ctx.sessionPersistence as unknown as PersistenceLike,
     listSourceOver(ctx),
+    modelSelectionSourceOver(ctx),
   )
   // Caps are configuration, not constants: they exist to be lowered until a
   // chunked read is observable, which is exactly how they are verified.
@@ -297,6 +298,25 @@ interface ProjectionCacheLike {
 /** The part of `ctx.agents` this module uses. */
 interface AgentsLike {
   get(id: string): { status?: string } | undefined
+}
+
+/**
+ * The snapshot's model baseline (M7): the live `modelSelection` projection's wire view,
+ * same live-read pattern as the occupancy frames. Absence (session not live) is honest
+ * — the field stays out of the reply rather than guessing a default (决定 1/7).
+ */
+function modelSelectionSourceOver(ctx: Context): ModelSelectionSource {
+  return {
+    of(sessionId) {
+      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
+      if (session === undefined) return undefined
+      const read = ctx.sessionProjections as unknown as ProjectionsLike
+      const snapshot = read.snapshot(session, ['modelSelection'])
+      const view = snapshot?.values.modelSelection
+      if (typeof view !== 'object' || view === null) return undefined
+      return view as ModelSelectionView
+    },
+  }
 }
 
 /** Route one request.
