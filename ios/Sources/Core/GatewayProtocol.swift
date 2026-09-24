@@ -4,7 +4,7 @@ import Foundation
 let gatewayProtocolVersion = 2
 
 /// 失败信封里的错误码（协议 v2 六个 + M4 `unauthenticated` + M5 `unknown-approval` /
-/// `invalid-request`）。收的时候刻意用 `String` 而非本枚举：上游加码时照原样显示，
+/// `invalid-request` + M7 `session/model-unavailable`）。收的时候刻意用 `String` 而非本枚举：上游加码时照原样显示，
 /// 不能解不出来就崩。
 enum GatewayErrorCode: String {
     case unsupportedVersion = "unsupported-version"
@@ -16,6 +16,7 @@ enum GatewayErrorCode: String {
     case unauthenticated = "unauthenticated"
     case unknownApproval = "unknown-approval"
     case invalidRequest = "invalid-request"
+    case sessionModelUnavailable = "session/model-unavailable"
 
     /// 人话解释，用于把服务端的拒绝变成用户看得懂的一句话。未知码返回 nil。
     var explanation: String? {
@@ -38,6 +39,8 @@ enum GatewayErrorCode: String {
             return "这条审批已经不在了 —— 可能已被取消或在 Mac 上处理过。"
         case .invalidRequest:
             return "网关拒绝了这条写请求的载荷 —— 两端版本可能不一致。"
+        case .sessionModelUnavailable:
+            return "这个模型现在路由不过去 —— 换一个模型，或在 Mac 上检查凭证。"
         }
     }
 }
@@ -247,6 +250,67 @@ struct UsageSnapshot: Decodable, Equatable {
     let asOfSeq: Int
     /// 缺省 = 这个水位上没有可显示的东西（构造时可省略，理由同 `UsagePayload.breakdown`）。
     var usage: UsagePayload? = nil
+}
+
+// MARK: - 模型选择（M7）
+
+/// 一次模型选择（协议 §4.7）。`reasoningEffort` 缺省 = 不指定推理力度 ——
+/// 字段缺省是协议的一部分（`encodeIfPresent`），不是故障。
+struct ModelSelection: Codable, Equatable {
+    let provider: String
+    let model: String
+    var reasoningEffort: String? = nil
+}
+
+/// 打开选择器时现拉一次的目录（协议 §4.7）。服务端只转发与剥除宿主私有字段，
+/// 不重排不补齐；`default` 整个缺省 = 无部署默认，客户端显示时不猜。
+struct ModelCatalog: Decodable, Equatable {
+    var `default`: ModelSelection? = nil
+    var groups: [ModelCatalogGroup]? = nil
+    var failures: [ModelCatalogFailure]? = nil
+}
+
+/// 目录里的一个 provider 分组。
+struct ModelCatalogGroup: Decodable, Equatable {
+    let id: String
+    let name: String
+    let models: [ModelCatalogEntry]
+}
+
+/// 分组里的一个可选项。`reasoning` 缺省 = 该模型不暴露推理力度选择。
+struct ModelCatalogEntry: Decodable, Equatable {
+    let id: String
+    let name: String
+    var reasoning: Reasoning? = nil
+
+    struct Reasoning: Decodable, Equatable {
+        let efforts: [String]
+        var defaultEffort: String? = nil
+    }
+}
+
+/// 目录里的一个拉取失败的 provider —— 失败隔离，不炸整体（上游同语义）。
+struct ModelCatalogFailure: Decodable, Equatable {
+    let id: String
+    let name: String
+    let message: String
+}
+
+/// `model-catalog` 请求：只带信封。
+struct ModelCatalogRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "model-catalog"
+}
+
+/// `model-select` 请求：`reasoningEffort` 为 `nil` 时整个字段不出现在 JSON 里
+/// （合成编码用 `encodeIfPresent`）—— 「没指定」与「空串」是两回事（§4.6 严格校验）。
+struct ModelSelectRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "model-select"
+    let sessionId: String
+    let provider: String
+    let model: String
+    var reasoningEffort: String? = nil
 }
 
 // MARK: - 时刻

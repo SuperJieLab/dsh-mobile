@@ -97,7 +97,9 @@ final class GatewayClient: ObservableObject {
             asOfSeq: asOfSeq,
             // 缺省 `false`：不带这个字段的是旧服务端，它只会一次给完（协议 §五）。
             hasMore: response.hasMore ?? false,
-            events: events
+            events: events,
+            // 基线（M7）：服务端「不知道」时整个缺省 —— 客户端退到目录默认，不猜（§4.2）。
+            model: response.model
         )
     }
 
@@ -143,6 +145,34 @@ final class GatewayClient: ObservableObject {
             SessionPromptRequest(sessionId: sessionId, text: text, promptId: promptId)
         )
         try response.validate()
+    }
+
+    // MARK: - 模型选择（M7）
+
+    /// 拉模型目录（§4.7）：打开选择器时现拉一次，不订阅刷新 —— 重开即新。
+    func modelCatalog() async throws -> ModelCatalog {
+        let response: ModelCatalogResponse = try await send(ModelCatalogRequest())
+        try response.validate()
+        return ModelCatalog(default: response.default, groups: response.groups, failures: response.failures)
+    }
+
+    /// 安装一次会话级选择。`ok` = **已安装给下一轮**，不是「已生效」——
+    /// 生效的证据是流里的 `model/selection` 与随后的 `request/header`（决定 3）。
+    @discardableResult
+    func modelSelect(sessionId: String, selection: ModelSelection) async throws -> ModelSelection {
+        let response: ModelSelectResponse = try await send(
+            ModelSelectRequest(
+                sessionId: sessionId,
+                provider: selection.provider,
+                model: selection.model,
+                reasoningEffort: selection.reasoningEffort
+            )
+        )
+        try response.validate()
+        guard let selected = response.selected else {
+            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 selected")
+        }
+        return selected
     }
 
     // MARK: - 发一次请求（带身份）
@@ -335,13 +365,17 @@ private struct RefreshResponse: GatewayResponse {
     let expiresAt: Double?
 }
 
-private struct SnapshotResponse: GatewayResponse {
+/// 快照回包（M7 起不再是 private）：opening 的 `model` 字段是协议面（§4.2），
+/// 解码行为要能被 `run-model.sh` 直接断言 —— 单模块编译下 internal 即可测。
+struct SnapshotResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
     let asOfSeq: Int?
     let hasMore: Bool?
     let events: [SessionEvent]?
+    /// 下一轮将使用的模型；整个缺省 = 服务端不知道。
+    var model: ModelSelection? = nil
 }
 
 private struct PageResponse: GatewayResponse {
@@ -368,6 +402,24 @@ private struct SessionPromptResponse: GatewayResponse {
     let error: GatewayFailure?
 }
 
+/// 目录回包（M7）：转发原样，只剥了宿主私有字段。
+private struct ModelCatalogResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var `default`: ModelSelection? = nil
+    var groups: [ModelCatalogGroup]? = nil
+    var failures: [ModelCatalogFailure]? = nil
+}
+
+/// 选择回包（M7）：`selected` 是上游归一化后的选择（不含 sessionId），透传不重推。
+private struct ModelSelectResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var selected: ModelSelection? = nil
+}
+
 /// 只用来在解码失败时兜出信封里的错误。
 private struct FailureEnvelope: Decodable {
     let error: GatewayFailure?
@@ -387,6 +439,9 @@ struct SessionSnapshot {
     /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限（协议 §五）。
     let hasMore: Bool
     let events: [SessionEvent]
+    /// 会话的模型基线（M7）：**下一轮**将使用的模型。缺省 = 服务端不知道，
+    /// 客户端退到目录默认；进会话后的增量走跟随流（决定 1/2）。
+    var model: ModelSelection? = nil
 }
 
 // MARK: - 回溯窗口
