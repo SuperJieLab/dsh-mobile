@@ -15,6 +15,7 @@ struct ModelProtocolTests {
         decodeCatalog()
         decodeOpening()
         encodeRequests()
+        followUpdates()
 
         print("—— \(passed) passed, \(failed) failed ——")
         if failed > 0 { exit(1) }
@@ -78,6 +79,66 @@ struct ModelProtocolTests {
         {"v":2,"ok":true,"asOfSeq":128,"hasMore":false,"events":[]}
         """.utf8))
         expect(withoutModel?.model == nil, "D3b opening 不带 model = 服务端不知道，字段缺省不是故障")
+    }
+
+    // MARK: - 跟随更新状态机（V1–V4）
+
+    /// 造一条 `model/selection` 事件（data = 选择本身，投影源码逐字核实）。
+    private static func selectionEvent(_ seq: Int, _ provider: String, _ model: String) -> SessionEvent {
+        SessionEvent(
+            type: "model/selection",
+            seq: seq,
+            time: Double(1_758_000_000_000 + seq),
+            data: .object(["provider": .string(provider), "model": .string(model)])
+        )
+    }
+
+    /// 造一条 `request/header` 事件（模型在 data.header.config 下）。
+    private static func headerEvent(_ seq: Int, _ provider: String, _ model: String) -> SessionEvent {
+        SessionEvent(
+            type: "request/header",
+            seq: seq,
+            time: Double(1_758_000_000_000 + seq),
+            data: .object(["header": .object(["config": .object([
+                "provider": .string(provider),
+                "model": .string(model),
+            ])])])
+        )
+    }
+
+    private static func followUpdates() {
+        // V1：opening 基线 A → selection B → header C，显示序列 A → B → C。
+        var state = ModelSelectionState()
+        state.absorb(baseline: ModelSelection(provider: "p", model: "A"))
+        expect(state.displayed?.model == "A", "V1a opening 基线直接落地")
+        state.absorb(event: selectionEvent(10, "p", "B"))
+        expect(state.displayed?.model == "B", "V1b selection 事件覆盖基线")
+        state.absorb(event: headerEvent(11, "p", "C"))
+        expect(state.displayed?.model == "C", "V1c header 事件再覆盖 —— 后到覆盖先到")
+
+        // V2：selection B 之后来一个不匹配 B 的 header C → 显示 C，不回跳。
+        state = ModelSelectionState()
+        state.absorb(event: selectionEvent(10, "p", "B"))
+        state.absorb(event: headerEvent(11, "p", "C"))
+        expect(state.displayed?.model == "C", "V2 选择没被兑现时显示实际落地值")
+
+        // V3：重放旧 seq / 同 seq 的事件 → 显示不变（严格高 seq 胜，M6 同纪律）。
+        state.absorb(event: selectionEvent(10, "p", "OLD"))
+        expect(state.displayed?.model == "C", "V3a 旧 seq 重放不倒退")
+        state.absorb(event: headerEvent(11, "p", "DUP"))
+        expect(state.displayed?.model == "C", "V3b 同 seq 重放被丢")
+        state.absorb(event: SessionEvent(type: "user/message", seq: 12, time: 0, data: .object([:])))
+        expect(state.displayed?.model == "C", "V3c 无关事件类型被忽略")
+
+        // V4：两连发 select（代号 1→2），响应 2 先回、响应 1 后回 → 显示响应 2 的选择。
+        state = ModelSelectionState()
+        let g1 = state.beginSelect()
+        let g2 = state.beginSelect()
+        expect(g2 != g1, "V4a 每次发起选择递增代号")
+        let settledNew = state.settle(generation: g2, selected: ModelSelection(provider: "p", model: "NEW"))
+        expect(settledNew && state.displayed?.model == "NEW", "V4b 最新代号的响应落地")
+        let settledOld = state.settle(generation: g1, selected: ModelSelection(provider: "p", model: "OLD"))
+        expect(!settledOld && state.displayed?.model == "NEW", "V4c 迟到的旧响应被守卫丢弃，显示不倒退")
     }
 
     // MARK: - 请求编码（§4.7）
