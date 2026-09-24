@@ -14,7 +14,7 @@
  */
 
 import { isRemoteError, isNotFound } from '../contract/errors.ts'
-import type { ModelCatalog, ModelPort, ModelSelection, ModelSelectMessage, ModelSelectOutcome } from '../contract/model.ts'
+import type { ModelCatalog, ModelPort, ModelSelection, ModelSelectMessage, ModelSelectOutcome } from '../contract/model-selection.ts'
 
 /**
  * The part of the session controller this adapter calls. The signatures are the

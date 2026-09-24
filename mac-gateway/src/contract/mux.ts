@@ -14,7 +14,8 @@
  * returns" is structural (docs/dev/plans/M2-realtime-transient.md §3.2/§4.4).
  */
 
-import { pageWindow, type WireEvent } from './rpc.ts'
+import { pageWindow } from './window.ts'
+import type { WireEvent } from './rpc.ts'
 import type { UsageSnapshot } from './usage.ts'
 
 /** Client → server: begin one logical stream. */

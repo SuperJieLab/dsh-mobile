@@ -19,7 +19,7 @@
  * `cwd === undefined` skips a session the reference list also hides; the other rules
  * (subagent, archived, blank) are the client's, and this one is already a header fact.
  */
-import type { ModelSelection } from '../contract/model.ts'
+import type { ModelSelection } from '../contract/model-selection.ts'
 import type { SessionPort, SessionRow, SessionSlice, WireEvent } from '../contract/rpc.ts'
 
 /** The header fields this adapter reads. */

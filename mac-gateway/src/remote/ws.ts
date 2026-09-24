@@ -22,7 +22,7 @@ import {
   parseClientFrame,
   type MuxServerFrame,
 } from '../contract/mux.ts'
-import { upstreamWindow } from '../contract/rpc.ts'
+import { upstreamWindow } from '../contract/window.ts'
 import { describeError, isNotFound, isUnreadable } from '../contract/errors.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import {

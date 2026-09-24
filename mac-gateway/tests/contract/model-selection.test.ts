@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { handle, type SessionPort } from '../../src/contract/rpc.ts'
-import { modelSelectRequestOf, type ModelPort } from '../../src/contract/model.ts'
+import { modelSelectRequestOf, type ModelPort } from '../../src/contract/model-selection.ts'
 
 // -- helpers -----------------------------------------------------------------
 

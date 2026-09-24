@@ -16,7 +16,7 @@ import {
   type ApprovalAnswerMessage,
   type SessionPromptMessage,
   type WritePort,
-} from '../../src/contract/write.ts'
+} from '../../src/contract/write-channel.ts'
 
 // -- helpers -----------------------------------------------------------------
 

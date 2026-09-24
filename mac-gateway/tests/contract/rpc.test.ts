@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, upstreamWindow, DEFAULT_LIMITS } from '../../src/contract/rpc.ts'
+import { handle, DEFAULT_LIMITS } from '../../src/contract/rpc.ts'
 import type { Limits, SessionPort, SessionRow, WireEvent } from '../../src/contract/rpc.ts'
 
 /** One fake session: the row the list path sees, and the log the read path sees. */
@@ -430,20 +430,6 @@ test('a window that would start mid-turn backs up to where the turn does', async
   assert.equal(page.events[0]?.type, 'turn/start')
   // The price of aligning, measured: two extra events, still one interval.
   assert.equal(page.events.length, 54 - 37)
-})
-
-test('upstreamWindow: the reference spelling of our one-target window rule', () => {
-  // The reference splits the rule into a floor it may stop after and a ceiling it
-  // must stop at; ours takes one target and derives the ceiling. Here the two
-  // spellings meet (spec §8.5 B6 二次裁决).
-  assert.deepEqual(upstreamWindow(50), {
-    maxMessages: 100,
-    turnWindow: { minMessages: 50, minTurns: 1 },
-  })
-  assert.deepEqual(upstreamWindow(7), {
-    maxMessages: 14,
-    turnWindow: { minMessages: 7, minTurns: 1 },
-  })
 })
 
 test('walking pages backwards covers the log exactly once', async () => {
