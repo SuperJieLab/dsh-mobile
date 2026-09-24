@@ -18,6 +18,8 @@ out="${TMPDIR:-/tmp}/dsh-mobile-assembler-tests"
 
 swiftc -O -o "$out" \
   "$here/../Sources/Core/GatewayProtocol.swift" \
+  "$here/../Sources/Core/GatewayTransport.swift" \
+  "$here/../Sources/Core/CredentialStore.swift" \
   "$here/../Sources/Core/SessionMirror.swift" \
   "$here/../Sources/Features/Sessions/TranscriptAssembler.swift" \
   "$here/TestHarness.swift" \

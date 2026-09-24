@@ -13,6 +13,8 @@ out="${TMPDIR:-/tmp}/dsh-mobile-usage-tests"
 
 swiftc -O -o "$out" \
   "$here/../Sources/Core/GatewayProtocol.swift" \
+  "$here/../Sources/Core/GatewayTransport.swift" \
+  "$here/../Sources/Core/CredentialStore.swift" \
   "$here/../Sources/Features/Sessions/UsageState.swift" \
   "$here/TestHarness.swift" \
   "$here/UsageStateTests.swift"

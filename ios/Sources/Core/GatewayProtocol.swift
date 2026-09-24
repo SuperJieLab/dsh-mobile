@@ -335,3 +335,192 @@ func relativeTime(_ value: Double) -> String {
     formatter.unitsStyle = .short
     return formatter.localizedString(for: epochMilliseconds(value), relativeTo: Date())
 }
+
+// MARK: - 请求（R2 归拢：协议形状的唯一出处，原散在 GatewayClient）
+
+struct ListSessionsRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "list-sessions"
+}
+
+/// 配对（M4）：一次性配对码换设备凭证。身份不进消息体之外的位置 ——
+/// 配对码就是这条消息的载荷，走与业务同一端点。
+struct PairRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "pair"
+    let code: String
+}
+
+/// 续期（M4）：设备凭证换访问凭证。
+struct RefreshRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "refresh"
+    let deviceToken: String
+}
+
+struct SnapshotRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "snapshot"
+    let sessionId: String
+    let since: Int
+}
+
+/// 可选字段为 `nil` 时不会出现在 JSON 里（合成实现用的是 `encodeIfPresent`），
+/// 这正是协议要的形状：不传 `beforeSeq` 的意思是「从最新往回」，而不是「空值」。
+struct PageRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "page"
+    let sessionId: String
+    let beforeSeq: Int?
+    let maxMessages: Int?
+}
+
+/// 审批应答（M5）：应答词汇表只有两键，映射在服务端完成 ——
+/// `allow` → `allowed-once`（一次性，绝不推断持久授权）。
+struct ApprovalAnswerRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "approval-answer"
+    let eventId: String
+    let decision: String
+    let answerId: String
+}
+
+/// 下发指令（M5）：`promptId` 是幂等键，服务端按它去重重复投递。
+struct SessionPromptRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "session-prompt"
+    let sessionId: String
+    let text: String
+    let promptId: String
+}
+
+// MARK: - 响应信封（R2 归拢）
+
+/// 响应信封的公共部分（协议 §三）。载荷字段一律声明成可选：服务端拒绝时（`ok: false`）根本
+/// 不会带载荷，声明成必选会让解码先一步失败，我们就拿不到那条有用的 `error` 了。
+protocol GatewayResponse: Decodable {
+    var v: Int { get }
+    var ok: Bool { get }
+    var error: GatewayFailure? { get }
+}
+
+extension GatewayResponse {
+    func validate() throws {
+        guard v == gatewayProtocolVersion else {
+            throw GatewayClientError.versionMismatch(v)
+        }
+        guard ok else {
+            throw GatewayClientError.refused(
+                error ?? GatewayFailure(code: "internal-error", message: "服务端拒绝了请求，但没带 error")
+            )
+        }
+    }
+}
+
+struct ListSessionsResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let sessions: [SessionSummary]?
+}
+
+/// 配对回包（M4）：设备凭证只在这里出现一次。
+struct PairResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let deviceToken: String?
+}
+
+/// 续期回包（M4）：访问凭证与过期时刻（epoch 毫秒）。
+struct RefreshResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let accessToken: String?
+    let expiresAt: Double?
+}
+
+/// 快照回包：opening 的 `model` 字段是协议面（§4.2），
+/// 解码行为要能被 `run-model.sh` 直接断言 —— 单模块编译下 internal 即可测。
+struct SnapshotResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let asOfSeq: Int?
+    let hasMore: Bool?
+    let events: [SessionEvent]?
+    /// 下一轮将使用的模型；整个缺省 = 服务端不知道。
+    var model: ModelSelection? = nil
+}
+
+struct PageResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    let pageStart: Int?
+    let asOfSeq: Int?
+    let hasOlder: Bool?
+    let events: [SessionEvent]?
+}
+
+/// 审批应答回包（M5）：成功不带载荷。
+struct ApprovalAnswerResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+}
+
+/// 下发指令回包（M5）：成功即已受理。
+struct SessionPromptResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+}
+
+/// 目录回包（M7）：转发原样，只剥了宿主私有字段。
+struct ModelCatalogResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var `default`: ModelSelection? = nil
+    var groups: [ModelCatalogGroup]? = nil
+    var failures: [ModelCatalogFailure]? = nil
+}
+
+/// 选择回包（M7）：`selected` 是上游归一化后的选择（不含 sessionId），透传不重推。
+struct ModelSelectResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var selected: ModelSelection? = nil
+}
+
+// MARK: - 快照结果（R2 归拢）
+
+/// 一次快照的结果。
+struct SessionSnapshot {
+    /// 本次覆盖到的位置（不含）—— 回传它就能拿到「空增量」，是水位不变式的用法。
+    let asOfSeq: Int
+    /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限（协议 §五）。
+    let hasMore: Bool
+    let events: [SessionEvent]
+    /// 会话的模型基线（M7）：**下一轮**将使用的模型。缺省 = 服务端不知道，
+    /// 客户端退到目录默认；进会话后的增量走跟随流（决定 1/2）。
+    var model: ModelSelection? = nil
+}
+
+// MARK: - 回溯窗口结果（R2 归拢）
+
+/// 一段往回读的窗口（协议 §4.3）。与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口
+/// 从某个位置往回走。打开会话用后者取最近一段，之后用前者追新增 —— 客户端**不需要跨会话记住
+/// 任何位置**，冷启动永远从「现在的最新一段」开始。
+struct SessionPage {
+    /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
+    let pageStart: Int
+    /// 窗口末尾（不含）。与 `SessionSnapshot.asOfSeq` 同义。
+    let asOfSeq: Int
+    /// 窗口之前还有事件吗。`false` 表示已经到日志开头。
+    let hasOlder: Bool
+    let events: [SessionEvent]
+}

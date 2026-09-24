@@ -14,6 +14,7 @@ out="${TMPDIR:-/tmp}/dsh-mobile-model-tests"
 
 swiftc -O -o "$out" \
   "$here/../Sources/Core/GatewayProtocol.swift" \
+  "$here/../Sources/Core/GatewayTransport.swift" \
   "$here/../Sources/Core/CredentialStore.swift" \
   "$here/../Sources/Core/GatewayClient.swift" \
   "$here/../Sources/Features/Sessions/ModelSelectionState.swift" \

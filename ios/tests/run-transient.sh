@@ -9,6 +9,8 @@ out="${TMPDIR:-/tmp}/dsh-mobile-transient-tests"
 
 swiftc -O -o "$out" \
   "$here/../Sources/Core/GatewayProtocol.swift" \
+  "$here/../Sources/Core/GatewayTransport.swift" \
+  "$here/../Sources/Core/CredentialStore.swift" \
   "$here/../Sources/Core/TransientChannel.swift" \
   "$here/TestHarness.swift" \
   "$here/TransientChannelTests.swift"
