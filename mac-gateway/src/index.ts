@@ -20,6 +20,8 @@ import { usageSnapshotOf } from './contract/usage.ts'
 import { createSessionPort, type ListSource, type PersistenceLike } from './adapters/sessions.ts'
 import { attachStreamHandler, type FollowSource } from './adapters/ws.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './adapters/credentials.ts'
+import { modelPortOver, type ModelControllerLike } from './adapters/model.ts'
+import type { ModelPort } from './contract/model.ts'
 import { ApprovalRelay, callThrough, openStreamThrough, parameterNamesOf, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './adapters/write.ts'
 
 /** Display metadata used by dsh diagnostics. */
@@ -114,13 +116,16 @@ export function apply(ctx: Context, config: Config = {}): void {
   const relay = new ApprovalRelay(gatewayOver(ctx), approvalFace)
   relay.start(relayLifetime.signal)
   const writePort = writePortOver(ctx, relay)
+  // The model channel (M7): declared-face calls into the same controller the relay
+  // and the pump use; absent service must say so at assembly, not on first tap.
+  const modelPort = modelChannelOver(ctx)
 
-  console.log('[mac-gateway] plugin loaded — M5 build, auth on both channels, write channel on')
+  console.log('[mac-gateway] plugin loaded — M7 build, auth on both channels, write + model channels on')
 
   ctx.effect(() => {
     const server = createServer((request, response) => {
       // `respond` never rejects; a throw here would be an unhandled rejection.
-      void respond(request, response, sessionPort, limits, vault, writePort)
+      void respond(request, response, sessionPort, limits, vault, writePort, modelPort)
     })
 
     // The stream channel shares the listener: same port, `POST /rpc` for one-way
@@ -307,6 +312,7 @@ async function respond(
   limits: Limits,
   vault: CredentialVault,
   writePort: WritePort,
+  modelPort: ModelPort | undefined,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
 
@@ -360,10 +366,10 @@ async function respond(
     return
   }
 
-  const answer = await handle(message, port, Date.now, limits, writePort)
+  const answer = await handle(message, port, Date.now, limits, writePort, modelPort)
   // Write ops are the one place a refusal is not self-evident from the phone:
   // the client only shows a status line, so the server side keeps the evidence.
-  if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer')) {
+  if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer' || op === 'model-select')) {
     console.error(`[mac-gateway] write op "${op}" refused: ${JSON.stringify(answer.error)}`)
   }
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
@@ -387,6 +393,25 @@ function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
     answerApproval: (answer) => relay.answerApproval(answer),
     promptSession: async (prompt) => pumpPrompt(promptControllerOver(ctx), prompt),
   }
+}
+
+/**
+ * The model channel as the protocol layer sees it (M7), over the same controller the
+ * relay and the pump use. Absence is an assembly fact, so it is announced at assembly
+ * (G2's no-silent-degradation rule) and the ops then answer `internal-error` envelopes
+ * — a phone must never see a dead connection where a refusal was meant.
+ */
+function modelChannelOver(ctx: Context): ModelPort | undefined {
+  const controller = ctx.sessionController as unknown as Partial<ModelControllerLike> | undefined
+  if (
+    controller === undefined ||
+    typeof controller.selectModel !== 'function' ||
+    typeof controller.modelCatalog !== 'function'
+  ) {
+    console.warn('[mac-gateway] sessionController has no model face — model-catalog/model-select will refuse as internal-error')
+    return undefined
+  }
+  return modelPortOver(controller as ModelControllerLike)
 }
 
 /**

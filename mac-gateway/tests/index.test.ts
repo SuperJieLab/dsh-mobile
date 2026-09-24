@@ -183,6 +183,126 @@ test('a protocol message is answered with an envelope even when nothing is behin
   }
 })
 
+// MARK: - the model channel (M7 T3, G4)
+
+/** A fake session controller whose model face is the runtime's, verbatim: `selectModel`
+ * answers the *normalized* selection (no sessionId — commands.js:155-160), and
+ * `modelCatalog` answers the raw host catalog with `routableProviders` still on it. */
+function fakeModelController(): {
+  controller: { selectModel: (request: unknown) => Promise<{ selected: unknown }>; modelCatalog: () => Promise<unknown> }
+  received: unknown[]
+} {
+  const received: unknown[] = []
+  return {
+    received,
+    controller: {
+      async selectModel(request) {
+        received.push(request)
+        const { sessionId, ...rest } = request as { sessionId: string; provider: string; model: string }
+        void sessionId
+        return { selected: rest }
+      },
+      async modelCatalog() {
+        return {
+          default: { provider: 'deepseek', model: 'v3.2' },
+          groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'v3.2', name: 'V3.2' }] }],
+          failures: [{ id: 'x', name: 'X', message: 'no credentials' }],
+          routableProviders: ['deepseek'],
+        }
+      },
+    },
+  }
+}
+
+test('model-catalog is answered with the host catalog over real HTTP when the controller is wired', async () => {
+  const port = freshPort(42_400)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath, {
+    sessionController: fakeModelController().controller,
+  })
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+      body: JSON.stringify({ v: 2, op: 'model-catalog' }),
+    })
+
+    assert.equal(response.status, 200)
+    const body = await response.json() as {
+      ok: boolean
+      default?: { provider: string; model: string }
+      groups?: unknown[]
+      failures?: unknown[]
+      routableProviders?: unknown
+    }
+    assert.equal(body.ok, true)
+    assert.deepEqual(body.default, { provider: 'deepseek', model: 'v3.2' })
+    assert.equal(body.groups?.length, 1)
+    assert.equal(body.failures?.length, 1)
+    // The host-only field must not leak to the phone (决定 7).
+    assert.equal('routableProviders' in body, false)
+  } finally {
+    teardown()
+  }
+})
+
+test('model-select reaches the controller and answers the normalized selection', async () => {
+  const port = freshPort(43_900)
+  const credentialsPath = tempCredentialsPath()
+  const fake = fakeModelController()
+  const { teardown } = install('127.0.0.1', port, credentialsPath, {
+    sessionController: fake.controller,
+  })
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+      body: JSON.stringify({ v: 2, op: 'model-select', sessionId: 's1', provider: 'deepseek', model: 'v3.2' }),
+    })
+
+    assert.equal(response.status, 200)
+    const body = await response.json() as { ok: boolean; selected?: unknown }
+    assert.equal(body.ok, true)
+    // Upstream's answer is the normalized pair — relayed, not re-derived (决定 3).
+    assert.deepEqual(body.selected, { provider: 'deepseek', model: 'v3.2' })
+    assert.deepEqual(fake.received, [{ sessionId: 's1', provider: 'deepseek', model: 'v3.2' }])
+  } finally {
+    teardown()
+  }
+})
+
+test('model ops are answered with an envelope even when no controller is behind the port', async () => {
+  const port = freshPort(44_500)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+      body: JSON.stringify({ v: 2, op: 'model-catalog' }),
+    })
+
+    assert.equal(response.status, 200)
+    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    assert.equal(body.ok, false)
+    assert.equal(body.error?.code, 'internal-error')
+  } finally {
+    teardown()
+  }
+})
+
 // MARK: - the auth gate (M4 A4)
 
 test('a business request without credentials is refused as 401 unauthenticated', async () => {
