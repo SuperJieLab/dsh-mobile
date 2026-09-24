@@ -16,6 +16,8 @@
  */
 
 import { describeError, isUnreadable } from './errors.ts'
+import type { ModelPort } from './model.ts'
+import { modelSelectRequestOf } from './model.ts'
 import {
   approvalAnswerOf,
   sessionPromptOf,
@@ -192,6 +194,7 @@ export async function handle(
   now: () => number = Date.now,
   limits: Limits = DEFAULT_LIMITS,
   write?: WritePort,
+  model?: ModelPort,
 ): Promise<Response> {
   const envelope = asRecord(message)
   if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
@@ -209,6 +212,15 @@ export async function handle(
         return await snapshot(envelope, port, normalizeLimits(limits))
       case 'page':
         return await page(envelope, port)
+      case 'model-catalog':
+        // Read op (M7). The port is absent only in read-only test assemblies;
+        // production always wires it, so this refusal is unreachable there.
+        if (model === undefined) return failure('internal-error', 'model channel not wired for "model-catalog"')
+        return await modelCatalog(model)
+      case 'model-select':
+        // Write op (M7), same channel discipline as M5's write ops.
+        if (model === undefined) return failure('internal-error', 'model channel not wired for "model-select"')
+        return await modelSelect(envelope, model)
       case 'approval-answer':
       case 'session-prompt':
         // Write ops (M5). `write` is absent only in read-only test assemblies;
@@ -260,6 +272,35 @@ async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort
     return failure('unknown-session', `no stored session "${prompt.sessionId}"`)
   }
   return { v: PROTOCOL_VERSION, ok: true, sessionId: prompt.sessionId }
+}
+
+/**
+ * Install one session-local model selection (M7). `ok` means *installed for the
+ * next request* — the durable `model/selection` event reaches the client via
+ * the stream, and that is what the display reconciles against (决定 2).
+ * Upstream's refusal keeps its own code: `session/model-unavailable` says the
+ * model is not routable, which is a different remedy than a malformed request.
+ */
+async function modelSelect(envelope: Record<string, unknown>, model: ModelPort): Promise<Response> {
+  const request = modelSelectRequestOf(envelope)
+  if (request === undefined) {
+    return failure('invalid-request', 'model-select needs sessionId, provider, and model')
+  }
+  const outcome = await model.select(request)
+  if (!outcome.ok) return failure(outcome.code, outcome.message)
+  return { v: PROTOCOL_VERSION, ok: true, selected: { ...outcome.selected } }
+}
+
+/** The model catalog path (M7): the Host catalog verbatim, minus client-useless fields. */
+async function modelCatalog(model: ModelPort): Promise<Response> {
+  const catalog = await model.catalog()
+  return {
+    v: PROTOCOL_VERSION,
+    ok: true,
+    ...catalog.default === undefined ? {} : { default: catalog.default },
+    groups: [...catalog.groups],
+    failures: [...catalog.failures],
+  }
 }
 
 /** The list path: cheap per-session metadata, newest first. */
