@@ -86,6 +86,16 @@ final class TailnetNode: ObservableObject {
         case .registering:
             await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
         case .running:
+            // 幂等（真机 2026-10-10：同一进程内二次 launch——旧 socket 全被杀，
+            // socks5/localapi 报 use of closed network connection，徽章掉路径标签）：
+            // 节点已验证 Running 且承载 session 还活着时不再 re-up，只把激活
+            // 回调补到位。冷启动（新进程、gatewaySession 必为 nil）不受影响。
+            if let session = gatewaySession {
+                Log.info(Log.Module.mesh, "launch: node already running with live session — skip re-up")
+                onVerifiedRunning?(session)
+                startPathPolling()
+                return
+            }
             // 重开也照喂 key（在才喂）：状态目录健康 ≠ 注册完成——上次起节点可能只写
             // 了目录就退出，残缺状态 + 不喂 key ⇒ 注册请求不带 key，headscale 落
             // 交互注册回 AuthURL，永远不上节点表。后端已 Running 时

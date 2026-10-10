@@ -71,6 +71,9 @@ final class ConnectionStore: ObservableObject {
     /// VerifiedRunning 回调读它而不是读 start 时刻的快照（收口审查 M1：
     /// 旧版每次 firing 重读 MeshConfig.load()，换地址后重入要打到新地址）。
     private var config: MeshConfig?
+    /// 启动编排的进程内幂等闸（真机 2026-10-10：列表页 `.task` 随视图重入重放，
+    /// 二次 start 会经 node.launch 重启 tsnet、杀掉活连接并清掉路径展示）。
+    private var started = false
 
     init(client: GatewayActivating, node: MeshNodeControlling) {
         self.client = client
@@ -86,6 +89,13 @@ final class ConnectionStore: ObservableObject {
     /// ② 激活内化 —— 回调在本方法里挂上，消费方是 store 而非视图层；
     /// ③ 拉起节点。判定逻辑全部在节点层状态机，这里只管调用顺序。
     func start(config: MeshConfig) async {
+        // 幂等：启动编排一次进程只该走一遍。重入（视图重放 .task）只刷新投影，
+        // 不重兜底激活、不重拉节点。回前台的恢复走 sceneActive，与此无关。
+        guard !started else {
+            nodeChanged()
+            return
+        }
+        started = true
         self.config = config
         if let baseURL = config.gatewayBaseURL {
             client.activate(session: .shared, baseURL: baseURL)

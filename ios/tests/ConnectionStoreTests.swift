@@ -67,6 +67,15 @@ struct ConnectionStoreTests {
                "N2b VerifiedRunning 回调内化：client 收到隧道承载激活（不穿视图层）")
         expect(store.phase == .ready, "N2c 激活后阶段投影为 ready")
 
+        // —— N2d/N2e：start 进程内幂等（真机 2026-10-10：列表页 .task 重入触发
+        // 第二次 start → 节点重启 → 活连接被杀 + 徽章掉直连标签）——
+        let activationsBefore = client.activations.count
+        await store.start(config: config)
+        expect(client.activations.count == activationsBefore,
+               "N2d start 幂等：重复 start 不重复兜底激活（承载切换只此一次）")
+        expect(node.launchCount == 1,
+               "N2e start 幂等：重复 start 不再拉起节点（tsnet 重启会杀活连接）")
+
         // —— N3：回前台探活归属 store（决定 6）——
         node.reviveShouldFail = true
         await store.sceneActive()
@@ -113,7 +122,10 @@ private final class FakeClient: GatewayActivating, @unchecked Sendable {
     var onVerifiedRunning: ((URLSession) -> Void)?
     var onNodeChanged: (() -> Void)?
     var reviveShouldFail = false
-    func launchNode(config: MeshConfig) async {}
+    var launchCount = 0
+    func launchNode(config: MeshConfig) async {
+        launchCount += 1
+    }
     func reviveNode() async {
         if reviveShouldFail { nodeState = .failed(.unreachable) }
         // 真实节点在状态迁移与路径刷新处推送（TailnetNode.transition / refreshPathNow）；
