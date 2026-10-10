@@ -79,6 +79,15 @@ struct ConnectionStoreTests {
         expect(store.phase == .ready && store.meshPath == .direct,
                "N3b 探活可读 → 阶段保持 ready 且路径已刷新")
 
+        // —— 推送通道：节点侧状态变化回灌 store（收口审查 C1 的关闭判据）——
+        // 视图已不观察节点的 @Published；轮询探到的失败 / 路径切换必须经
+        // onNodeChanged 推到 store，否则投影冻结在最近一次 store 调用的快照上。
+        node.nodeState = .failed(.unreachable)
+        node.carrierPath = nil
+        node.onNodeChanged?()
+        expect(store.phase == .failed(.unreachable) && store.meshPath == nil,
+               "N3c 节点侧状态变化经 onNodeChanged 回灌：store 投影随即跟随（不经显式 store 调用）")
+
         print("")
         print("passed=\(passed) failed=\(failed)")
         if failed > 0 { exit(1) }
@@ -102,10 +111,14 @@ private final class FakeClient: GatewayActivating, @unchecked Sendable {
     var nodeState: TailnetNodeState = .noKey
     var carrierPath: CarrierPath?
     var onVerifiedRunning: ((URLSession) -> Void)?
+    var onNodeChanged: (() -> Void)?
     var reviveShouldFail = false
     func launchNode(config: MeshConfig) async {}
     func reviveNode() async {
         if reviveShouldFail { nodeState = .failed(.unreachable) }
+        // 真实节点在状态迁移与路径刷新处推送（TailnetNode.transition / refreshPathNow）；
+        // 假件在事实变化点同样推送，回灌链路才被测到。
+        onNodeChanged?()
     }
     func submitKey(_ key: String, config: MeshConfig) async {}
     func retry(config: MeshConfig) async {}

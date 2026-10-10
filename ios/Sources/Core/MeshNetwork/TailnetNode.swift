@@ -41,6 +41,10 @@ final class TailnetNode: ObservableObject {
     /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调。
     var onVerifiedRunning: ((URLSession) -> Void)?
 
+    /// 对外可见事实变化的推送通道（R3 起 ConnectionStore 消费）：状态迁移与
+    /// 路径刷新处调用。通知本身零成本，重复通知由接收方投影吸收。
+    var onNodeChanged: (() -> Void)?
+
     private var node: TailscaleNode?
     private var pathPollTask: Task<Void, Never>?
 
@@ -169,7 +173,11 @@ final class TailnetNode: ObservableObject {
     }
 
     private func refreshPathNow() {
-        Task { [weak self] in self?.meshPath = await self?.pathKind() }
+        Task { [weak self] in
+            guard let self else { return }
+            self.meshPath = await self.pathKind()
+            self.onNodeChanged?()
+        }
     }
 
     /// Running 期间按固定节奏轮询路径；掉出 Running 即停并清值。
@@ -189,8 +197,10 @@ final class TailnetNode: ObservableObject {
                             continue
                         }
                         self.meshPath = await self.pathKind()
+                        self.onNodeChanged?()
                     } else if self.meshPath != nil {
                         self.meshPath = nil
+                        self.onNodeChanged?()
                     }
                     try? await Task.sleep(nanoseconds: 15_000_000_000)
                 }
@@ -200,7 +210,10 @@ final class TailnetNode: ObservableObject {
     private func stopPathPolling() {
         pathPollTask?.cancel()
         pathPollTask = nil
-        meshPath = nil
+        if meshPath != nil {
+            meshPath = nil
+            onNodeChanged?()
+        }
     }
 
     // MARK: - 节点起停（上游调用 + 事件归类）
@@ -268,6 +281,7 @@ final class TailnetNode: ObservableObject {
         let old = state
         state = TailnetNodeState.handle(event, from: state)
         Log.info(Log.Module.mesh, "state: \(old) --\(event)--> \(state)")
+        onNodeChanged?()
     }
 
     // MARK: - tsnet 状态目录（损坏 → noKey，fail-closed）
@@ -286,13 +300,5 @@ final class TailnetNode: ObservableObject {
             return false   // 首启：走 registering（有 key 时）
         }
         return isDirectory.boolValue && FileManager.default.isReadableFile(atPath: dir.path)
-    }
-}
-
-/// 展示适配：节点层的路径值喂给指示器。放在节点文件（而非 `ConnectionBadge`）——
-/// 徽章保持不认识任何具体类型，CLI 测试编译面才不受牵连。
-extension ConnectionBadge.MeshPath {
-    init(_ path: TailnetNode.MeshPath) {
-        self = path == .direct ? .direct : .relay
     }
 }

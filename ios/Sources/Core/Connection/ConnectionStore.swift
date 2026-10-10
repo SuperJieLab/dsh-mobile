@@ -19,7 +19,7 @@ import Combine
 // 因此 TailscaleKit / GatewayClient 全链路都不进测试编译面）。
 
 /// 承载激活能力：`GatewayClient.activate` 的窄面。
-protocol GatewayActivating: AnyObject {
+@MainActor protocol GatewayActivating: AnyObject {
     /// 当前身份关系是否存在（投影输入；身份轴不并入连接阶段，决定 5）。
     var isPaired: Bool { get }
     func activate(session: URLSession, baseURL: URL)
@@ -34,6 +34,10 @@ protocol GatewayActivating: AnyObject {
     /// 节点验证 Running、tailnet session 建成的那一刻（同值迁移不触发 onChange，
     /// 激活只能挂回调 —— 机制沿用 M8 T8 排障结论，消费方从视图根部改为本 store）。
     var onVerifiedRunning: ((URLSession) -> Void)? { get set }
+    /// 节点侧任何对外可见事实变化（状态迁移 / 路径刷新）的推送通道：视图已不观察
+    /// 节点的 @Published，store 的投影靠它回灌 —— 没有它，轮询探到的失败与
+    /// direct↔relay 切换会冻结在最近一次 store 调用的快照上（R3 收口审查 C1）。
+    var onNodeChanged: (() -> Void)? { get set }
     func launchNode(config: MeshConfig) async
     func reviveNode() async
     /// 组网管理动作（设置页）：提交接入 key / failed 后重试。判定仍在节点层状态机。
@@ -63,6 +67,10 @@ final class ConnectionStore: ObservableObject {
     private let node: MeshNodeControlling
     /// tailnet 承载是否已激活（回调已 firing 且 activate 已调）。
     private var tailnetActivated = false
+    /// 组网配置的当前值：start 存底，组网管理动作（submitKey / retry）刷新 ——
+    /// VerifiedRunning 回调读它而不是读 start 时刻的快照（收口审查 M1：
+    /// 旧版每次 firing 重读 MeshConfig.load()，换地址后重入要打到新地址）。
+    private var config: MeshConfig?
 
     init(client: GatewayActivating, node: MeshNodeControlling) {
         self.client = client
@@ -78,38 +86,46 @@ final class ConnectionStore: ObservableObject {
     /// ② 激活内化 —— 回调在本方法里挂上，消费方是 store 而非视图层；
     /// ③ 拉起节点。判定逻辑全部在节点层状态机，这里只管调用顺序。
     func start(config: MeshConfig) async {
+        self.config = config
         if let baseURL = config.gatewayBaseURL {
             client.activate(session: .shared, baseURL: baseURL)
         }
         node.onVerifiedRunning = { [weak self] session in
-            guard let self, let baseURL = config.gatewayBaseURL else { return }
+            guard let self, let baseURL = self.config?.gatewayBaseURL else { return }
             self.client.activate(session: session, baseURL: baseURL)
             self.tailnetActivated = true
             self.reproject()
         }
+        node.onNodeChanged = { [weak self] in self?.nodeChanged() }
         await node.launchNode(config: config)
         reproject()
         meshPath = node.carrierPath
     }
 
     /// 回前台探活（原 DshMobileApp.onChange(scenePhase) 段）：探活判定在节点层，
-    /// 失败如实落 failed、不自动重试（重试入口在设置页）。
+    /// 失败如实落 failed、不自动重试（重试入口在设置页）。路径刷新以节点推送为准
+    /// （revive 成功路径的刷新是异步的，这里只兜一次同步读，收口审查 C2）。
     func sceneActive() async {
         await node.reviveNode()
-        reproject()
-        meshPath = node.carrierPath
+        nodeChanged()
     }
 
     // MARK: - 组网管理（设置页动作透传；判定在节点层，这里只接顺序）
 
     func submitMeshKey(_ key: String, config: MeshConfig) async {
+        self.config = config
         await node.submitKey(key, config: config)
-        reproject()
-        meshPath = node.carrierPath
+        nodeChanged()
     }
 
     func retryMesh(config: MeshConfig) async {
+        self.config = config
         await node.retry(config: config)
+        nodeChanged()
+    }
+
+    /// 节点侧事实变化的统一回灌口：重投影 + 刷路径。
+    private func nodeChanged() {
         reproject()
         meshPath = node.carrierPath
     }
