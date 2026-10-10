@@ -14,8 +14,8 @@
  * （§3.1 决定 4，判据 U2）；两键共用一个水位，即切点的 `asOfSeq`，客户端
  * 因此不可能拿新鲜比值配陈旧分解（§3.1 决定 6，判据 U7）。
  *
- * 线上形状见 docs/dev/protocol.md §4.4；`asOfSeq` 盖哪个读、以及为何保守的
- * 缓存读是错的，见 docs/dev/plans/M6-presentation-layer.md §3.1 决定 3。
+ * 线上形状见 dev/protocol.md §4.4；`asOfSeq` 盖哪个读、以及为何保守的
+ * 缓存读是错的，见 dev/plans/M6-presentation-layer.md §3.1 决定 3。
  */
 
 /**

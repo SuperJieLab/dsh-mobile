@@ -1,5 +1,5 @@
 /**
- * Usage contract tests (M6) — the U table of docs/dev/plans/M6-presentation-layer.md §五.
+ * Usage contract tests (M6) — the U table of dev/plans/M6-presentation-layer.md §五.
  *
  * Two promises: the number the phone shows is either the host's own or nothing at
  * all, and a re-read that changes nothing says nothing.

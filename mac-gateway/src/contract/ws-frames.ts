@@ -2,13 +2,13 @@
  * WebSocket 成帧契约：本网关使用的 RFC 6455 子集，全是纯函数 —— 字节级、
  * 无副作用，因此无需 socket 即可测试。
  *
- * 手写实现：插件只引 Node 内建（docs/dev/plans/M0 §5.1 —— dsh 安装树之外
+ * 手写实现：插件只引 Node 内建（dev/plans/M0 §5.1 —— dsh 安装树之外
  * 不允许裸 specifier），所以没有 `ws`；子集恰好是 mux 所需 —— 双向文本、
  * ping/pong 心跳、close —— 无扩展、无二进制、无 deflate。
  *
  * 处理了 RFC 6455 的两处不对称，而非吸收掉：客户端帧是 MASKED 的、必须
  * 去掩码，服务端帧从不掩码；消息可能分片到达，解析器因此是增量的
- * （docs/dev/plans/M2-realtime-transient.md §3.2/§4.4 step 1）。
+ * （dev/plans/M2-realtime-transient.md §3.2/§4.4 step 1）。
  */
 
 import { createHash } from 'node:crypto'

@@ -1,6 +1,6 @@
 /**
  * 写契约 (M5)：两条写 op 的解析与重放簿记 ——
- * docs/dev/plans/M5-remote-intervention.md §四。写载荷从严校验，与读路径
+ * dev/plans/M5-remote-intervention.md §四。写载荷从严校验，与读路径
  * 不同：畸形决定被静默执行，等于凭猜测运行一条远程命令，因此每条畸形写
  * 都以 `invalid-request` 拒绝（Plan §3.3 决定 8）。
  *

@@ -1,7 +1,7 @@
 /**
  * UsageState 的吸收测试（O1–O2）：纯值类型，不碰网络 / UI / 持久化。
  *
- * 判据与出处：docs/dev/plans/M6-presentation-layer.md §五。吸收规则照上游
+ * 判据与出处：dev/plans/M6-presentation-layer.md §五。吸收规则照上游
  * `api/session-controller/src/client/sessions/projection-store.ts:136` ——
  * **严格高 seq 胜，相等也丢**。
  */

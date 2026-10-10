@@ -1,5 +1,5 @@
 /**
- * The model adapter's tests (M7, docs/dev/plans/M7-model-selection.md §4.1 T2,
+ * The model adapter's tests (M7, dev/plans/M7-model-selection.md §4.1 T2,
  * 判据 G2). The controller fake replicates the **runtime** signatures verbatim
  * (`dsh-api-session-controller/lib/types/index.js` — `selectModel(request)`,
  * `modelCatalog()`); a fake that differs from the real face would let a drift
@@ -55,7 +55,7 @@ const REQUEST: ModelSelectMessage = { sessionId: 's', provider: 'deepseek', mode
 /** Run `body` with console.warn captured; returns what was warned. */
 async function captureWarn(body: () => Promise<void>): Promise<string[]> {
   const warnings: string[] = []
-  // warn 级经统一 logger 走 stderr（console.error），见 docs/specs/2026-10-10-engineering-conventions.md §2.1。
+  // warn 级经统一 logger 走 stderr（console.error），见 dev/CONVENTIONS.md §2.1。
   const spy = mock.method(console, 'error', (...parts: unknown[]) => { warnings.push(parts.map(String).join(' ')) })
   try {
     await body()

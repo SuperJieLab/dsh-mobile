@@ -4,8 +4,8 @@ deepseek-harness/
 # agent 记忆
 .workbuddy/
 
-# 开发期文档（约束与计划，不随仓库发布）
-docs/
+# 开发工作区（约束与计划，不随仓库发布）
+dev/
 
 # Node
 node_modules/

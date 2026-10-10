@@ -101,7 +101,7 @@ struct SessionListView: View {
         do {
             // 服务端给出事实（`blank` / `origin`），**显示哪些是客户端的事**，故过滤在此：`blank`
             // 点进去只有策略事件；`subagent` 是别的会话的子会话，不是独立对话。（与上游可见性规则
-            // 同源，见 `docs/dev/spec.md` §8.5 A7；
+            // 同源，见 `dev/spec.md` §8.5 A7；
             // 服务端另有「没有 cwd 的会话不列」，在适配器里。）
             sessions = try await client.listSessions()
                 .filter { !$0.blank && $0.origin != "subagent" }

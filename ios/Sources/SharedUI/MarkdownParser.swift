@@ -6,7 +6,7 @@
  * 引任何 Swift 包都会断掉编译验证链（`swiftc -typecheck` 直编源码，不经 xcodeproj、
  * 不解析 SPM），所以连解析也自写。**分层是为留门** —— 将来换成熟库只替换这一层，把库的
  * AST 映射成同一个 `[Block]`，渲染与流式策略不动。见
- * `docs/dev/plans/M6-presentation-layer.md` §3.3 决定 15。
+ * `dev/plans/M6-presentation-layer.md` §3.3 决定 15。
  *
  * ## 子集（六种，其余登记不做）
  *

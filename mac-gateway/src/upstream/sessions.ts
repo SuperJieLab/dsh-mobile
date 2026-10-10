@@ -12,7 +12,7 @@
  * —— 无 `title` 时 `updatedAt` 回退为 `createdAt`，绝不为了填一格去读日志。
  *
  * 代价：`updatedAt` 表示「上次说话的时间」，而非「最新事件时间」，且不承诺
- * 事件数（docs/dev/protocol.md §4.1）—— 只能从日志算出的字段不可能不读日志
+ * 事件数（dev/protocol.md §4.1）—— 只能从日志算出的字段不可能不读日志
  * 就给出。这就是 v2。
  *
  * `cwd === undefined` 的会话跳过，参照列表同样隐藏它；其余规则（subagent、
@@ -170,8 +170,8 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
         if (events.length === 0 && since > 0) {
           // 是追平了，还是游标越过末尾？只有日志能回答，也只能按日志能证明的答：
           // 空日志不可能包含位置 1。`since` 仅越过水位时与「追平」不可区分，
-          // 保持为正常的空答案（docs/dev/protocol.md §五,
-          // docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5）。
+          // 保持为正常的空答案（dev/protocol.md §五,
+          // dev/plans/M1-consistency-delta.md §3.3.2 决定 5）。
           const head = await handle.read(0, 1)
           if (head.events.length === 0) {
             return { events: [], asOfSeq: 0, hasMore: false, staleCursor: true }
@@ -239,7 +239,7 @@ function metadataOf(values: ProjectionValues | undefined): SessionListMetadataLi
 
 /**
  * 标题格：凡不是字符串 —— 包括无标题会话携带的 `null` —— 一律视为「无标题」，
- * 字段因此缺席而非空串（docs/dev/protocol.md §4.1）。
+ * 字段因此缺席而非空串（dev/protocol.md §4.1）。
  */
 function titleOf(values: ProjectionValues | undefined): { title?: string } {
   const cell = values?.title

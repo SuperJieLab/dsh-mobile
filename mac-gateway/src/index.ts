@@ -2,11 +2,11 @@
  * mac-gateway —— dsh-mobile 的 Mac 侧 DSH 插件：只做装配。协议在
  * `contract/`，面向手机的传输在 `remote/`，所有面向宿主的端口工厂在
  * `upstream/faces.ts` —— 本文件把它们接起来，并管监听器的生命周期
- * （docs/dev/protocol.md、docs/dev/plans/R1-gateway-layout.md）。
+ * （dev/protocol.md、dev/plans/R1-gateway-layout.md）。
  *
  * 列表路径 (v2) 是零 I/O —— 头加宿主保留的投影，绝不读日志 —— 其四项
  * 服务在 `inject` 中声明：缺了它们 fiber 保持 pending，这对一个读不了
- * 会话的网关是正确的失败（docs/dev/protocol.md §4.1）。
+ * 会话的网关是正确的失败（dev/protocol.md §4.1）。
  *
  * 导入仅限 Node 内建与自有模块；cordis 只作类型引入，因为裸 specifier
  * 在 dsh 安装树之外无法解析。
@@ -53,7 +53,7 @@ export interface Config {
   /** 绑定端口。 @default 3081 */
   port?: number
   /** 一条 `snapshot` 应答至多携带的事件数。做成配置是为了让上限可被端到端
-   * 观测（docs/dev/protocol.md §五）。 @default 500 */
+   * 观测（dev/protocol.md §五）。 @default 500 */
   maxDeltaEvents?: number
   /** 一条应答 `events` 序列化尺寸的软上限，字节。 @default 1048576 */
   maxDeltaBytes?: number
@@ -90,7 +90,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
   }
 
-  // 保险库持有三张票（docs/dev/plans/M4-identity-credentials.md §4.2）。
+  // 保险库持有三张票（dev/plans/M4-identity-credentials.md §4.2）。
   // `pair` / `refresh` 绕过闸门 —— 它们自带凭据。
   const vault = new CredentialVault(config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH)
   if (config.deviceTokenSeed !== undefined) {
@@ -102,7 +102,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // 写通道 (M5)：中继把 `approval-answer` 桥接到网关的 `$events` 流
   // （宿主侧 waterfall 监听器收不到远程应答 —— api-remotes 会把它们挂起，
   // 直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`
-  // （docs/dev/plans/M5-remote-intervention.md §四）。
+  // （dev/plans/M5-remote-intervention.md §四）。
   const relayLifetime = new AbortController()
   const approvalFace = broadcasterOver()
   const relay = new ApprovalRelay(gatewayOver(ctx), approvalFace)
@@ -152,7 +152,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     // 用我们的 logger（底层是 console）而非 ctx.logger：非 TTY 运行中
     // `ctx.logger.info` 什么也不输出（dsh 自己的启动行同样如此），绑定
     // 失败不可见比日志不合惯例更糟；TTY 门控未验证
-    // （docs/dev/plans/M0-reachability-spike.md §5.1）。
+    // （dev/plans/M0-reachability-spike.md §5.1）。
     server.on('error', (error) => {
       log.error(`listener error: ${String(error)}`)
     })

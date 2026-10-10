@@ -50,7 +50,7 @@ export interface PageWindow {
 /**
  * 在整条日志上取一个反向窗口 —— `page` 与 follow 打开共享的算术，两者因此
  * 不会漂移。按*消息数*约束，但按整个区间交付，因为被画 seq 的邻居常常不是
- * 消息（docs/dev/protocol.md §4.3）。**起点**回退到最近的 `turn/start`，
+ * 消息（dev/protocol.md §4.3）。**起点**回退到最近的 `turn/start`，
  * 因此绝不会在一轮中间打开 —— {@link TURN_ALIGN_CEILING} 说明原因与幅度。
  *
  * @throws {@link LogNotDenseError} 当 seq 不是 `0..n-1`：算术把位置当 seq 读，

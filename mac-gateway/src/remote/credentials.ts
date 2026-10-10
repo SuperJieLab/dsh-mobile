@@ -9,7 +9,7 @@
  *
  * access 表刻意放内存：15 分钟的票不必活过重启，客户端的刷新流程让
  * 重签一枚票成为不可见的无事
- * （docs/dev/plans/M4-identity-credentials.md §3.3）。
+ * （dev/plans/M4-identity-credentials.md §3.3）。
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'

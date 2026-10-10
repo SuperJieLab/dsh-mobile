@@ -5,7 +5,7 @@
  * Two things need pinning: where each field comes from, and that no log is ever
  * opened — proved by a persistence stub that throws if anything opens a handle.
  * Run: node --test tests/upstream/sessions.test.ts
- * See docs/dev/protocol.md §4.1 and docs/dev/plans/M1-consistency-delta.md §3.2.
+ * See dev/protocol.md §4.1 and dev/plans/M1-consistency-delta.md §3.2.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

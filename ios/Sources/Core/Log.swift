@@ -1,7 +1,7 @@
 import Foundation
 
 /// 唯一日志出口：ISO8601 UTC 毫秒时间戳 + [级别][模块]，stderr 直写（Xcode 控制台可见，
-/// 与 tsnet Go 日志同通道对照）。规范见 docs/specs/2026-10-10-engineering-conventions.md §2。
+/// 与 tsnet Go 日志同通道对照）。规范见 dev/CONVENTIONS.md §2。
 enum Log {
 
     /// 模块标签集中在此登记，调用点不允许写散字符串；新场景需要新标签时先来这里加。

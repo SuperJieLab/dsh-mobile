@@ -3,7 +3,7 @@
  * are the reason `handle` exists standalone: no server, no runtime, no filesystem,
  * no network — the data source is injected, so the protocol layer decides alone.
  * Run: node --test tests/contract/rpc.test.ts
- * See docs/dev/protocol.md and docs/dev/plans/M0-reachability-spike.md §4.3 Step 3.
+ * See dev/protocol.md and dev/plans/M0-reachability-spike.md §4.3 Step 3.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -30,7 +30,7 @@ function fakePort(sessions: readonly FakeSession[] = []): SessionPort {
       // The one shape the server *can* refuse: the client claims to have read events
       // and the log holds none. A `since` past the water mark is indistinguishable
       // from "caught up" and stays a normal answer
-      // (docs/dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
+      // (dev/plans/M1-consistency-delta.md §3.3.2 决定 5).
       if (remaining.length === 0 && since > 0 && found.events.length === 0) {
         return { events: [], asOfSeq: 0, hasMore: false, staleCursor: true }
       }
@@ -391,7 +391,7 @@ test('a since past the water mark is answered, not refused — it is indistingui
 })
 
 // ---------------------------------------------------------------------------
-// `page` — the backwards window (docs/dev/protocol.md §4.3)
+// `page` — the backwards window (dev/protocol.md §4.3)
 // ---------------------------------------------------------------------------
 
 test('page with no beforeSeq hands back the newest message window', async () => {
@@ -529,7 +529,7 @@ test('page on an unknown session is the same refusal the read path uses', async 
 })
 
 // ---------------------------------------------------------------------------
-// `list-sessions` — the v2 row shape (docs/dev/protocol.md §4.1)
+// `list-sessions` — the v2 row shape (dev/protocol.md §4.1)
 // ---------------------------------------------------------------------------
 
 test('a list row carries running and blank, and never an event count', async () => {

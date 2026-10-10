@@ -1,4 +1,4 @@
-// 唯一日志出口：ISO8601 UTC 毫秒时间戳 + [级别][模块]，格式规范见 docs/specs/2026-10-10-engineering-conventions.md §2。
+// 唯一日志出口：ISO8601 UTC 毫秒时间戳 + [级别][模块]，格式规范见 dev/CONVENTIONS.md §2。
 // debug 级默认静默，DSH_LOG_DEBUG=1 打开；warn/error 走 stderr，其余走 stdout。
 export type LogLevel = "debug" | "info" | "warn" | "error";
 

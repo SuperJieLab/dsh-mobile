@@ -17,7 +17,7 @@
  * 一直没有结果；「最终答案」= 该轮最后一个 step 的助手消息，且含真正的回复内容、不含工具调用块。
  *
  * 上游那套「事件 → 节点」的注册表不复用、也不照搬（它是给可插拔前端的扩展面），只需要它的
- * 语义。出处见 `docs/dev/plans/M6-presentation-layer.md` §3.2 决定 8–14。
+ * 语义。出处见 `dev/plans/M6-presentation-layer.md` §3.2 决定 8–14。
  */
 
 import Foundation

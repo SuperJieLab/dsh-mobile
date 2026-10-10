@@ -1,7 +1,7 @@
 /**
  * 审批对账的重建测试（Q1–Q7）：状态机不碰网络 / UI，只喂事件序列与对账名单，看建出几张卡。
  *
- * 判据与出处：docs/dev/plans/M5-remote-intervention.md §3.3 表 + 实施期修正 14。
+ * 判据与出处：dev/plans/M5-remote-intervention.md §3.3 表 + 实施期修正 14。
  *
  * 事实来源（`approval/asked` − `approval/decided`）不足以判定「还挂着」：真机上两条
  * `asked` 无 `decided`，其同一 turn 里 `turn/end` 已落、紧随的 `tool/result` 写着
