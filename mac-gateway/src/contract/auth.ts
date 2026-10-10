@@ -1,65 +1,65 @@
 /**
- * The auth contract: three tickets, each answering one question, so leaking one
- * is not losing all three (docs/dev/plans/M4-identity-credentials.md §4.2).
+ * 认证契约：三张票，各回答一个问题，泄漏一张不等于三张全丢
+ * (docs/dev/plans/M4-identity-credentials.md §4.2)。
  *
- *   pairing code   one-shot · 10 min · dead after 5 wrong tries — establishes
- *                  the relationship; only ever answered with a device token
- *   device token   the relationship · long-lived · revocable — stored as a
- *                  SHA-256 hash; only ever used to obtain access tokens
- *   access token   a time slice · 15 min · in memory on both ends — the only
- *                  ticket that may ride a business request
+ *   pairing code   一次性 · 10 分钟 · 错 5 次即作废 —— 建立关系；
+ *                  只会得到 device token 作为回答
+ *   device token   关系本身 · 长期有效 · 可吊销 —— 以 SHA-256 哈希存储；
+ *                  只用于换取 access token
+ *   access token   一段时间片 · 15 分钟 · 两端仅存内存 —— 唯一允许
+ *                  随业务请求出行的票
  *
- * Pure functions with `random` and `now` injected, so every rule is assertable
- * without a network. Hashing uses `node:crypto` — the one dependency this
- * out-of-tree module may take — and only the hash is stored, never the token.
+ * 纯函数，`random` 与 `now` 注入，因此每条规则都能离网断言。哈希用
+ * `node:crypto` —— 本模块（位于 dsh 安装树之外）唯一允许的依赖 ——
+ * 只存哈希，绝不存 token 本身。
  */
 
 import { createHash } from 'node:crypto'
 
-/** How long one access token lives. */
+/** 一枚 access token 的存活时长。 */
 export const ACCESS_TTL_MS = 15 * 60 * 1000
 
-/** How long a pairing code may sit on the screen before it dies. */
+/** 配对码可在屏幕上停留多久，超时即失效。 */
 export const PAIRING_TTL_MS = 10 * 60 * 1000
 
-/** Wrong tries a pairing code tolerates before it dies early. */
+/** 配对码容忍多少次错误尝试，超过即提前作废。 */
 export const PAIRING_MAX_ATTEMPTS = 5
 
-/** What the credentials file holds. Revocation resets to `{ version: 1 }`. */
+/** 凭据文件的内容。吊销即重置为 `{ version: 1 }`。 */
 export interface StoredCredentials {
   version: 1
-  /** SHA-256 hex of the device token. Absent while unpaired. */
+  /** device token 的 SHA-256 十六进制。未配对时缺省。 */
   deviceTokenHash?: string
-  /** The live pairing code, if one has been issued and not yet consumed. */
+  /** 当前有效的配对码，已签发且未被消费时存在。 */
   pairing?: {
     code: string
-    /** Epoch ms after which the code is dead even unused. */
+    /** 纪元毫秒；届时即使未使用，配对码也作废。 */
     expiresAt: number
-    /** Wrong tries so far. */
+    /** 目前的错误尝试次数。 */
     attempts: number
   }
 }
 
-/** The empty file — the state revocation returns to. */
+/** 空文件 —— 吊销后回到的状态。 */
 export function emptyCredentials(): StoredCredentials {
   return { version: 1 }
 }
 
-/** SHA-256 hex of a text. Deterministic, so injectable randomness is not needed here. */
+/** 文本的 SHA-256 十六进制。确定性计算，无需注入随机源。 */
 export function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
 /**
- * A 6-digit pairing code: the threat is a bystander at pairing time, not online
- * brute force — the persistent attempt cap is what bounds it.
+ * 6 位数字配对码：威胁是配对时在场的旁观者，而非在线暴力穷举 ——
+ * 持久化的尝试上限才是真正的约束。
  */
 export function newPairingCode(random: () => number): string {
   const value = Math.floor(random() * 1_000_000)
   return String(value).padStart(6, '0')
 }
 
-/** 32 random bytes as hex — the shape of both the device and the access token. */
+/** 32 随机字节的十六进制 —— device token 与 access token 同用这一形态。 */
 export function newToken(random: () => number): string {
   let hex = ''
   for (let index = 0; index < 32; index += 1) {
@@ -69,9 +69,9 @@ export function newToken(random: () => number): string {
 }
 
 /**
- * `Authorization: Bearer <token>` → the token; anything else → nothing. The
- * header is the only place identity rides (docs/dev/protocol.md §「身份」) — in
- * the envelope it would weld to one transport, which the first constraint forbids.
+ * `Authorization: Bearer <token>` → 取出 token；其余 → 无。头部是身份出行的
+ * 唯一载体 (docs/dev/protocol.md §「身份」)——放进信封就会焊死在某一种
+ * 传输上，违背第一条约束。
  */
 export function bearerTokenOf(header: string | undefined): string | undefined {
   if (header === undefined) return undefined
@@ -79,16 +79,15 @@ export function bearerTokenOf(header: string | undefined): string | undefined {
   return match?.[1]
 }
 
-/** Whether `code` could be a pairing code at all. Anything else counts as a wrong try. */
+/** `code` 是否形似配对码。其余一律记为一次错误尝试。 */
 export function isPlausiblePairingCode(code: unknown): code is string {
   return typeof code === 'string' && /^\d{6}$/.test(code)
 }
 
 /**
- * One pairing attempt, in and out — the file left behind is part of the verdict,
- * since both the attempt counter and the consumption are state. The code dies
- * three ways: consumed, expired (10 minutes), exhausted (5 wrong tries, malformed
- * input included). A dead code is removed — it can no longer be answered.
+ * 一次配对尝试，输入输出都含文件 —— 留下的文件是判定的一部分，因为尝试
+ * 计数与消费都是状态。配对码有三种死法：已消费、已过期（10 分钟）、
+ * 已耗尽（5 次错误尝试，含畸形输入）。死码即移除 —— 它不再能被回答。
  */
 export type PairingOutcome =
   | { status: 'paired'; file: StoredCredentials; deviceToken: string }
@@ -104,7 +103,7 @@ export function attemptPairing(
 
   if (pairing === undefined) return { status: 'invalid-code', file }
   if (!isPlausiblePairingCode(code)) {
-    return countAttempt(file) // a malformed try is still a try
+    return countAttempt(file) // 畸形输入也算一次尝试
   }
   if (now >= pairing.expiresAt) {
     return { status: 'code-expired', file: withoutPairing(file) }
@@ -121,7 +120,7 @@ export function attemptPairing(
     file: {
       version: 1,
       deviceTokenHash: sha256Hex(deviceToken),
-      // Consumed: the one-shot property, enforced by removal.
+      // 已消费：一次性属性靠移除来强制。
     },
   }
 }
@@ -144,9 +143,8 @@ function withoutPairing(file: StoredCredentials): StoredCredentials {
 }
 
 /**
- * Issue one access token against a presented device token. The raw token
- * returns exactly once — the server keeps only the hash, so a leaked
- * credentials file cannot mint access tokens.
+ * 凭已出示的 device token 签发一枚 access token。原始 token 只返回一次 ——
+ * 服务端只留哈希，泄漏的凭据文件因此铸不出 access token。
  */
 export function issueAccess(
   file: StoredCredentials,
@@ -161,7 +159,7 @@ export function issueAccess(
   return { status: 'ok', token, tokenHash: sha256Hex(token), expiresAt: now + ACCESS_TTL_MS }
 }
 
-/** Whether an in-memory access record still counts at `now`. */
+/** 内存中的 access 记录在 `now` 时刻是否仍然有效。 */
 export function isLiveAccess(record: { expiresAt: number } | undefined, now: number): boolean {
   return record !== undefined && now < record.expiresAt
 }

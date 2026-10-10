@@ -1,20 +1,20 @@
 /**
- * The write channel's adapters (M5): the approval relay and the prompt pump.
+ * 写通道适配器（M5）：审批中继与 prompt 泵。
  *
- * **The relay.** `api-remotes` sits earlier in the waterfall and parks every `approval/request` in
- * `pendingRemoteEvents` until a *remote client* answers, so the relay makes this plugin a
- * remote event-stream client — it opens the gateway's `$events` stream, forwards every
- * `approval/request` frame to the phone as an `approval` frame, and answers through
- * `dispatchRpc("$events/result")` on tap. Phone and browser are peers: first answer settles
- * the waterfall, the loser's meets `unknown-approval` (fail-closed, Plan §3.3 决定 3).
+ * **中继。** `api-remotes` 在 waterfall 中更早，把每个 `approval/request` 挂进
+ * `pendingRemoteEvents` 等待*远程客户端*应答，因此中继把本插件变成一个远程
+ * 事件流客户端 —— 打开网关的 `$events` 流，把每个 `approval/request` 帧作为
+ * `approval` 帧转发给手机，并在点击时通过 `dispatchRpc("$events/result")`
+ * 应答。手机与浏览器是对等方：第一个应答终结 waterfall，落败方得到
+ * `unknown-approval`（fail-closed，Plan §3.3 决定 3）。
  *
- * A question the phone never saw is replayed on the next connection by the WS adapter; the relay
- * keeps its pending set until the upstream `cancel` arrives. One-shot by construction: a delivered
- * answer drops the pending entry only when the gateway accepted it, and every delivery maps to the
- * one-shot vocabulary (`allowed-once` / `rejected`) — the relay never infers a durable grant.
+ * 手机从未见过的问题由 WS 适配器在下一次连接时重放；中继保持其待答集合直到
+ * 上游 `cancel` 到达。构造上即一次性：已交付的应答只在网关接受后才移除待答项，
+ * 且每次交付都映射到一次性词汇（`allowed-once` / `rejected`）——
+ * 中继绝不推断持久授权。
  *
- * The pump forwards prompts to the controller's `prompt` (the web UI's own door, Plan §3.3
- * 决定 9); `promptId` is the request id, which the controller de-duplicates.
+ * 泵把 prompt 转发给 controller 的 `prompt`（web UI 自己的门，Plan §3.3
+ * 决定 9）；`promptId` 即请求 id，controller 会去重。
  */
 
 import { describeError, isNotFound } from '../contract/errors.ts'
@@ -28,14 +28,14 @@ import {
   type SessionPromptMessage,
 } from '../contract/write-channel.ts'
 
-/** One frame of the gateway's `$events` wire stream, as far as the relay cares. */
+/** 网关 `$events` 线上流的一帧，仅到中继关心的程度。 */
 export type UpstreamWireFrame =
   | { type: 'ready'; clientId: string; host?: unknown }
   | { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }
   | { type: 'cancel'; eventId: string }
   | { type: 'emit'; event: string; args: unknown }
 
-/** The part of the gateway service the relay drives. */
+/** 中继驱动的网关服务部分。 */
 export interface RemoteEventGatewayLike {
   openWireStream(
     endpoint: string,
@@ -45,12 +45,12 @@ export interface RemoteEventGatewayLike {
   dispatchRpc(endpoint: string, payload: { args: unknown }, signal: AbortSignal): Promise<unknown>
 }
 
-/** What the relay pushes at connected phones — the WS adapter's broadcast face. */
+/** 中继推向已连接手机的内容 —— WS 适配器的广播切面。 */
 export interface BroadcasterLike {
   broadcast(frame: unknown): void
 }
 
-/** One `approval/request` frame the relay is holding for the phone. */
+/** 中继为手机暂存的一个 `approval/request` 帧。 */
 interface HeldRequest {
   eventId: string
   toolName: string
@@ -58,7 +58,7 @@ interface HeldRequest {
   reason?: string
 }
 
-/** Reconnect backoff for the `$events` stream, same shape as the follow client's. */
+/** `$events` 流的重连退避，形状与 follow 客户端相同。 */
 const RELAY_RECONNECT_MIN_MS = 500
 const RELAY_RECONNECT_MAX_MS = 10_000
 
@@ -77,9 +77,9 @@ export class ApprovalRelay {
   }
 
   /**
-   * Open the `$events` stream and run the relay loop until `lifetime` aborts (plugin
-   * teardown). Never throws; one generation ends and the next begins after a capped backoff
-   * — liveness is not optional, a dead relay silently empties the phone's approval view.
+   * 打开 `$events` 流并运行中继循环，直到 `lifetime` 中止（插件拆除）。
+   * 绝不抛错；一代结束、封顶退避后下一代开始 —— 存活不是可选项，死掉的中继
+   * 会让手机的审批视图静默清空。
    */
   start(lifetime: AbortSignal): void {
     this.#lifetime = lifetime
@@ -91,7 +91,7 @@ export class ApprovalRelay {
     this.#abort?.abort()
   }
 
-  /** Whether the relay currently holds a live `$events` client identity. */
+  /** 中继当前是否持有存活的 `$events` 客户端身份。 */
   get ready(): boolean {
     return this.#clientId !== undefined
   }
@@ -102,8 +102,8 @@ export class ApprovalRelay {
     let backoff = RELAY_RECONNECT_MIN_MS
     while (!signal.aborted) {
       try {
-        // openWireStream is async (runtime lib/index.js:581): iterating the Promise it
-        // returns throws "not async iterable", so unwrap the resolved generator first.
+        // openWireStream 是异步的（runtime lib/index.js:581）：直接迭代它返回的
+        // Promise 会抛 "not async iterable"，所以先解包已 resolve 的生成器。
         const stream = await this.#gateway.openWireStream('$events', { args: {} }, signal)
         for await (const frame of stream) {
           if (signal.aborted) return
@@ -129,8 +129,8 @@ export class ApprovalRelay {
         if (signal.aborted) return
         log.error(`approval relay stream failed: ${describeError(error)}; reconnecting`)
       }
-      // The client identity died with the stream: the gateway re-delivers every
-      // still-pending question, so carrying the old set over would replay consumed answers.
+      // 客户端身份随流一起死掉：网关会重投每个仍在等待的问题，沿用旧集合
+      // 会重放已消费的应答。
       this.#clientId = undefined
       this.#pending.clear()
       await new Promise<void>((resolve) => {
@@ -141,11 +141,11 @@ export class ApprovalRelay {
     }
   }
 
-  /** Park one question for the phone and push it at every connected client. */
+  /** 为手机暂存一个问题，并推给每个已连接的客户端。 */
   #hold(frame: Extract<UpstreamWireFrame, { type: 'waterfall' }>): void {
     const request = frame.request as { toolName?: unknown; callId?: unknown; reason?: unknown } | undefined
     const toolName = typeof request?.toolName === 'string' ? request.toolName : undefined
-    if (toolName === undefined) return // not an approval-shaped request; not ours to interpret
+    if (toolName === undefined) return // 不是审批形状的请求；不归我们解释
     const held: HeldRequest = {
       eventId: frame.eventId,
       toolName,
@@ -160,21 +160,20 @@ export class ApprovalRelay {
     })
   }
 
-  /** Questions still standing — what a freshly connected phone is replayed. */
+  /** 仍在等待的问题 —— 新连接手机会被重放的内容。 */
   held(): HeldRequest[] {
     return [...this.#pending.values()]
   }
 
   /**
-   * The wire side: deliver one answer through the gateway's result door, replaying the first
-   * outcome for a retried `answerId` (W1) and refusing anything that does not name a held
-   * question (W2).
+   * 线路侧：通过网关的结果门交付一个应答；重试的 `answerId` 重放首个结果（W1），
+   * 未指向已暂存问题的一律拒绝（W2）。
    */
   async answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval'> {
     return this.#replay.remember(answer.answerId, () => this.deliver(answer)).value
   }
 
-  /** The actual one-time delivery. Runs inside `ReplayTable.remember`. */
+  /** 实际的一次性交付。运行在 `ReplayTable.remember` 内部。 */
   private async deliver(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval'> {
     if (this.#clientId === undefined || !this.#pending.has(answer.eventId)) {
       log.info(`answer for ${answer.eventId}: no held question — unknown-approval`)
@@ -193,13 +192,13 @@ export class ApprovalRelay {
   }
 }
 
-/** A signal that never aborts, for the no-lifetime call paths. */
+/** 永不中止的信号，供无 lifetime 的调用路径使用。 */
 function neverAborted(): AbortSignal {
   const controller = new AbortController()
   return controller.signal
 }
 
-/** The part of the controller's prompt door this pump calls. */
+/** 本泵调用的 controller prompt 门部分。 */
 export interface PromptControllerLike {
   prompt(request: {
     requestId: string
@@ -210,17 +209,16 @@ export interface PromptControllerLike {
 }
 
 /**
- * What the pump reports to the protocol layer: `unknown-session` for the controller's
- * not-found failure; anything else is not the client's to fix by resending, so it becomes
- * `internal-error` at the caller.
+ * 泵向协议层报告的内容：controller 的 not-found 失败映射为 `unknown-session`；
+ * 其余任何失败都不是客户端重发能修的，在调用方变成 `internal-error`。
  */
 export type PromptOutcome = 'accepted' | 'unknown-session'
 
-/** Admit one prompt through the controller. Throws for non-not-found failures. */
+/** 让一个 prompt 通过 controller 受理。非 not-found 失败会抛出。 */
 export async function pumpPrompt(controller: PromptControllerLike, prompt: SessionPromptMessage): Promise<PromptOutcome> {
-  // The controller's prompt door reads its caller signal at the entrance
-  // (`signal.throwIfAborted()`); the web UI passes its request signal, we have none, so a
-  // generous timeout stands in: admission is fast and the turn proceeds once queued.
+  // controller 的 prompt 门在入口读取调用方信号（`signal.throwIfAborted()`）；
+  // web UI 传它的请求信号，而我们没有，所以用一个宽裕的超时代替：受理很快，
+  // 排队后回合即继续。
   const signal = AbortSignal.timeout(30_000)
   try {
     await controller.prompt({

@@ -1,16 +1,14 @@
 /**
- * The model contract (M7): the one-元 ops for session-level model selection —
- * docs/dev/plans/M7-model-selection.md §四. `model-catalog` is a read op, so a
- * missing port refuses like an unwired write channel does (unreachable in
- * production, where the assembly always wires it).
+ * 模型契约 (M7)：会话级模型选择的单条 op ——
+ * docs/dev/plans/M7-model-selection.md §四。`model-catalog` 是读 op，端口
+ * 缺失时像写通道未接线一样拒绝（生产装配必接线，此拒绝在生产不可达）。
  *
- * The port is the contract's only dependency; a fake keeps the tests free of
- * runtime and network. Upstream's normalized shapes are forwarded verbatim —
- * validation and normalization live behind the controller's door (决定 3), the
- * contract only relays what that door answered.
+ * 端口是契约的唯一依赖；用 fake 让测试摆脱运行时与网络。上游的规范化形状
+ * 原样转发 —— 校验与规范化都在控制器的门后（决定 3），契约只转达门后
+ * 给出的答复。
  */
 
-/** One normalized model selection, upstream's own vocabulary (决定 3). */
+/** 一条规范化后的模型选择，用上游自己的词汇（决定 3）。 */
 export interface ModelSelection {
   provider: string
   model: string
@@ -18,16 +16,16 @@ export interface ModelSelection {
 }
 
 /**
- * The Host's model catalog (决定 6): provider-grouped models, the deployment
- * default, and per-provider failures isolated upstream. `routableProviders` is
- * stripped by the adapter — the client has no use for it (§四 契约段).
+ * 宿主的模型目录（决定 6）：按 provider 分组的模型、部署默认值，以及逐个
+ * provider 隔离的失败。`routableProviders` 被适配器剥掉 —— 客户端用不上
+ * （§四 契约段）。
  */
 export interface ModelCatalog {
-  /** The deployment default, when the deployment has one. */
+  /** 部署默认值，部署有默认时存在。 */
   default?: ModelSelection
-  /** Provider groups with at least one model. */
+  /** 至少含一个模型的 provider 分组。 */
   groups: readonly ModelGroup[]
-  /** Providers that failed to enumerate, one entry each, never the whole catalog. */
+  /** 枚举失败的 provider，各记一条，绝不拖垮整个目录。 */
   failures: readonly ModelFailure[]
 }
 
@@ -43,20 +41,20 @@ export interface ModelFailure {
   message: string
 }
 
-/** The outcome of one select: the normalized choice, or upstream's refusal. */
+/** 一次 select 的结果：规范化后的选择，或上游的拒绝。 */
 export type ModelSelectOutcome =
   | { ok: true; selected: ModelSelection }
   | { ok: false; code: 'unknown-session' | 'session/model-unavailable'; message: string }
 
-/** The data source the model ops are written against — the contract's only dependency. */
+/** 模型 op 所依赖的数据源 —— 契约的唯一依赖。 */
 export interface ModelPort {
-  /** The current Host-generation catalog. Failures throw (`internal-error`). */
+  /** 当前宿主代的目录。失败时抛错（`internal-error`）。 */
   catalog(): Promise<ModelCatalog>
-  /** Install one session-local selection. Upstream's refusal comes back as a result. */
+  /** 安装一条会话级选择。上游的拒绝作为结果返回。 */
   select(request: ModelSelectMessage): Promise<ModelSelectOutcome>
 }
 
-/** A validated `model-select` message (决定 3's request shape). */
+/** 校验通过的 `model-select` 消息（决定 3 的请求形状）。 */
 export interface ModelSelectMessage {
   sessionId: string
   provider: string
@@ -65,20 +63,18 @@ export interface ModelSelectMessage {
 }
 
 /**
- * Parse and validate one `model-select` payload, or `undefined` when it cannot
- * be a selection at all. Strict on purpose — the write-path rule (protocol.md
- * §六 `invalid-request`): a malformed selection silently executed would point
- * the next turn at a model nobody chose. `sessionId` is *not* validated here —
- * the read paths already map a malformed id to `unknown-session`, and the write
- * path keeps that convention (contract/write-channel.ts 同款).
+ * 解析并校验一条 `model-select` 载荷，完全不像选择时返回 `undefined`。
+ * 刻意从严 —— 写路径规则（protocol.md §六 `invalid-request`）：畸形选择被
+ * 静默执行，会让下一轮指向一个没人选过的模型。`sessionId` 不在此校验 ——
+ * 读路径已把畸形 id 映射到 `unknown-session`，写路径沿用该约定
+ * （contract/write-channel.ts 同款）。
  */
 export function modelSelectRequestOf(message: Record<string, unknown>): ModelSelectMessage | undefined {
   const sessionId = nonEmptyString(message.sessionId)
   const provider = nonEmptyString(message.provider)
   const model = nonEmptyString(message.model)
-  // Present-but-empty mirrors upstream's own schema (`z.string().min(1)`):
-  // refused here, never silently read as absent — a write payload is not
-  // normalized into a different request than the client sent.
+  // 存在但为空对齐上游自身 schema（`z.string().min(1)`）：在此拒绝，
+  // 绝不静默当作缺省 —— 写载荷不会变成与客户端所发不同的另一个请求。
   const reasoningEffort = message.reasoningEffort === undefined ? undefined : nonEmptyString(message.reasoningEffort)
   if (sessionId === undefined || provider === undefined || model === undefined) return undefined
   if (message.reasoningEffort !== undefined && reasoningEffort === undefined) return undefined
@@ -90,7 +86,7 @@ export function modelSelectRequestOf(message: Record<string, unknown>): ModelSel
   }
 }
 
-/** A non-empty string, or nothing. */
+/** 非空字符串，否则无。 */
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }

@@ -1,11 +1,9 @@
 /**
- * The HTTP transport for the phone: route one request, enforce the transport
- * guards, and gate identity — everything a socket-level caller owes the protocol
- * but that is not itself protocol.
+ * 面向手机的 HTTP 传输：路由一条请求、执行传输层守卫、把守身份 ——
+ * socket 层调用方欠协议的一切，只要不是协议本身。
  *
- * Status codes are not protocol — the envelope carries the outcome, so a
- * protocol-level refusal is still HTTP 200. `/rpc` carries protocol messages;
- * the rest only tells a human "the listener is up" from "nothing is listening".
+ * 状态码不是协议 —— 结果由信封携带，协议层拒绝也是 HTTP 200。`/rpc`
+ * 承载协议消息；其余只帮人区分「监听器活着」与「什么都没在听」。
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
@@ -17,12 +15,11 @@ import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.http)
 
-/** Request-body ceiling — a transport guard, not a protocol rule: the port is
- * LAN-reachable and an unbounded read is a memory-exhaustion lever. 1 MiB is far
- * above any v2 request. */
+/** 请求体上限 —— 传输层守卫，不是协议规则：端口 LAN 可达，无界读是内存
+ * 耗尽的把手。1 MiB 远高于任何 v2 请求。 */
 const MAX_BODY_BYTES = 1_048_576
 
-/** What the listener needs to answer one request. */
+/** 监听器应答一条请求所需的依赖。 */
 export interface RpcListenerDeps {
   sessionPort: SessionPort
   limits: Limits
@@ -32,18 +29,18 @@ export interface RpcListenerDeps {
 }
 
 /**
- * Build the plugin's own HTTP listener: one server, `POST /rpc` for one-way
- * calls, the stream upgrade sharing the port (gated like any request — no live
- * access token, no 101; see remote/ws.ts).
+ * 构建插件自己的 HTTP 监听器：一个 server，`POST /rpc` 走单向调用，
+ * 流升级共享端口（与其他请求同一闸门 —— 无有效 access token，就没有 101；
+ * 见 remote/ws.ts）。
  */
 export function createRpcListener(deps: RpcListenerDeps): Server {
-  // `respond` never rejects; a throw here would be an unhandled rejection.
+  // `respond` 从不 reject；此处抛出会成为未处理的 rejection。
   return createServer((request, response) => {
     void respond(request, response, deps)
   })
 }
 
-/** Route one request. */
+/** 路由一条请求。 */
 async function respond(
   request: IncomingMessage,
   response: ServerResponse,
@@ -52,8 +49,8 @@ async function respond(
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
 
   if (path !== '/rpc') {
-    // Liveness, and the answer to any unknown path. Transport-level only: no
-    // protocol message is involved, so no envelope is involved either.
+    // 存活探测，以及任何未知路径的回答。纯传输层：不涉协议消息，
+    // 也不涉信封。
     response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
     response.end(path === '/' ? 'mac-gateway alive — M4, protocol v2, POST /rpc for the protocol\n' : 'not found\n')
     return
@@ -69,8 +66,7 @@ async function respond(
   try {
     body = await readBody(request)
   } catch (error) {
-    // Not a message at all, so it is refused as a transport failure rather than
-    // answered with a protocol envelope carrying a meaningless code.
+    // 根本不是消息，按传输失败拒绝，而不是用带着无意义码的协议信封作答。
     response.writeHead(error instanceof TooLargeError ? 413 : 400, { 'content-type': 'text/plain; charset=utf-8' })
     response.end(`malformed request: ${String(error)}\n`)
     return
@@ -85,8 +81,8 @@ async function respond(
     return
   }
 
-  // Identity (M4): the auth ops carry their credential in the body, every other
-  // op needs a live access token; a denial is HTTP 401 with a protocol envelope.
+  // 身份 (M4)：auth op 的凭据放在体内，其余 op 都需要有效的 access token；
+  // 被拒时以 HTTP 401 附协议信封。
   const op = (message as { op?: unknown } | null)?.op
   if (op === 'pair' || op === 'refresh') {
     const answer = await handleAuthOp(op, message, deps.vault)
@@ -105,9 +101,8 @@ async function respond(
   }
 
   const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort, deps.modelPort)
-  // Refusals keep evidence server-side: write ops because the phone only shows a
-  // status line, model ops because the T8 device run showed a silently-empty catalog
-  // — a read op that dies must not be quieter than a write op that fails.
+  // 拒绝在服务端留证据：写 op 因为手机只显示一行状态；模型 op 因为 T8
+  // 真机跑出过一次静默为空的目录 —— 死掉的读 op 不得比失败的写 op 更安静。
   if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer' || op === 'model-select' || op === 'model-catalog')) {
     log.error(`op "${op}" refused: ${JSON.stringify(answer.error)}`)
   }
@@ -115,15 +110,14 @@ async function respond(
   response.end(`${JSON.stringify(answer)}\n`)
 }
 
-/** Refusal envelope shared by the auth path (the read path builds its own inside `handle`). */
+/** auth 路径共用的拒绝信封（读路径在 `handle` 内自建）。 */
 function refusal(code: string, message: string): { v: number; ok: false; error: { code: string; message: string } } {
   return { v: PROTOCOL_VERSION, ok: false, error: { code, message } }
 }
 
 /**
- * Answer `pair` / `refresh`. Kept beside the gate, not inside `handle`, so the
- * protocol contract stays a pure read protocol: these two are the only messages
- * whose authority comes from the body rather than the header.
+ * 应答 `pair` / `refresh`。放在闸门旁而非 `handle` 内，让协议契约保持为
+ * 纯读协议：凭据来自体内而非头部的消息只有这两条。
  */
 async function handleAuthOp(
   op: 'pair' | 'refresh',
@@ -162,7 +156,7 @@ async function handleAuthOp(
   }
 }
 
-/** Thrown when a request body exceeds {@link MAX_BODY_BYTES}. */
+/** 请求体超过 {@link MAX_BODY_BYTES} 时抛出。 */
 class TooLargeError extends Error {
   constructor() {
     super(`body exceeds ${MAX_BODY_BYTES} bytes`)
@@ -171,8 +165,8 @@ class TooLargeError extends Error {
 }
 
 /**
- * Read a request body, refusing to grow past the ceiling. The limit is enforced
- * while collecting, not after, so an oversized body is never fully buffered.
+ * 读请求体，拒绝超出上限的增长。限制在收集过程中执行，而非之后，
+ * 超限的请求体因此绝不会被完整缓冲。
  */
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = []

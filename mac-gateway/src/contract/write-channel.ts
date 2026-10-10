@@ -1,33 +1,31 @@
 /**
- * The write contract (M5): parsing and replay bookkeeping for the two write ops
- * — docs/dev/plans/M5-remote-intervention.md §四.
- * Write payloads are validated strictly, unlike the read paths: a malformed
- * decision silently executed is a remote command run on a guess, so every
- * malformed write is refused with `invalid-request` (Plan §3.3 决定 8).
+ * 写契约 (M5)：两条写 op 的解析与重放簿记 ——
+ * docs/dev/plans/M5-remote-intervention.md §四。写载荷从严校验，与读路径
+ * 不同：畸形决定被静默执行，等于凭猜测运行一条远程命令，因此每条畸形写
+ * 都以 `invalid-request` 拒绝（Plan §3.3 决定 8）。
  *
- * The replay table makes retries safe (W1): a re-send after a lost reply gets
- * the first outcome again. Cleared by a restart, harmless — the log's
- * `approval/decided` audit is the truth a client reconciles against
- * (Plan §3.3 决定 3).
+ * 重放表让重试安全 (W1)：回复丢失后的重发会再次得到第一次的结果。
+ * 重启即清空，无害 —— 日志中的 `approval/decided` 审计才是客户端对账的
+ * 真相（Plan §3.3 决定 3）。
  */
 
-/** A validated `approval-answer` message. */
+/** 校验通过的 `approval-answer` 消息。 */
 export interface ApprovalAnswerMessage {
   /**
-   * The `$events` waterfall frame's `eventId` this answer is about — the id the
-   * `approval-request` frame the phone saw carried (the projected
-   * request has no audit id, so this is the only end-to-end address).
+   * 本回答针对的 `$events` waterfall 帧 `eventId` —— 手机看到的
+   * `approval-request` 帧所带的 id（投影出的请求没有审计 id，这是唯一的
+   * 端到端地址）。
    */
   eventId: string
-  /** The client's choice; mapped to the upstream outcome vocabulary on delivery. */
+  /** 客户端的选择；投递时映射到上游的结论词汇。 */
   decision: 'allow' | 'deny'
-  /** Client-minted idempotency key. Retries with the same key replay the first outcome. */
+  /** 客户端铸造的幂等键。同键重试重放第一次的结果。 */
   answerId: string
 }
 
 /**
- * Parse and validate one `approval-answer` payload, or `undefined` when it
- * cannot be an answer at all. Strict on purpose — see the module note.
+ * 解析并校验一条 `approval-answer` 载荷，完全不像回答时返回 `undefined`。
+ * 刻意从严 —— 见模块注释。
  */
 export function approvalAnswerOf(message: Record<string, unknown>): ApprovalAnswerMessage | undefined {
   const eventId = nonEmptyString(message.eventId)
@@ -37,20 +35,20 @@ export function approvalAnswerOf(message: Record<string, unknown>): ApprovalAnsw
   return { eventId, decision, answerId }
 }
 
-/** A validated `session-prompt` message. */
+/** 校验通过的 `session-prompt` 消息。 */
 export interface SessionPromptMessage {
-  /** Target session. */
+  /** 目标会话。 */
   sessionId: string
-  /** Prompt text; empty or whitespace-only cannot become a prompt upstream. */
+  /** prompt 文本；空或纯空白无法成为上游的 prompt。 */
   text: string
-  /** Client-minted idempotency key, passed upstream as the prompt `requestId`. */
+  /** 客户端铸造的幂等键，作为 prompt 的 `requestId` 传给上游。 */
   promptId: string
 }
 
 /**
- * Parse and validate one `session-prompt` payload, or `undefined`. `sessionId`
- * is *not* validated here: the read paths already map a malformed id to
- * `unknown-session`, and the write path keeps that convention.
+ * 解析并校验一条 `session-prompt` 载荷，不像时返回 `undefined`。`sessionId`
+ * 不在此校验：读路径已把畸形 id 映射到 `unknown-session`，写路径沿用
+ * 该约定。
  */
 export function sessionPromptOf(message: Record<string, unknown>): SessionPromptMessage | undefined {
   const sessionId = nonEmptyString(message.sessionId)
@@ -62,23 +60,23 @@ export function sessionPromptOf(message: Record<string, unknown>): SessionPrompt
   return { sessionId, text, promptId }
 }
 
-/** The data source the two write ops are written against — the write contract's only dependency. */
+/** 两条写 op 所依赖的数据源 —— 写契约的唯一依赖。 */
 export interface WritePort {
   /**
-   * Deliver one answer to the pending approval, or report that no pending
-   * approval answers to that id (already consumed, cancelled, or never asked).
+   * 把一条回答投递给挂起的 approval；没有挂起 approval 对应该 id
+   * （已消费、已取消、或从未问过）时报告之。
    */
   answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval'>
   /**
-   * Admit one prompt into the session's agent inbox, or report that the session
-   * does not exist. Any other upstream failure is the caller's `internal-error`.
+   * 把一条 prompt 收进会话的 agent 收件箱；会话不存在时报告之。
+   * 其余上游失败归调用方的 `internal-error`。
    */
   promptSession(prompt: SessionPromptMessage): Promise<'accepted' | 'unknown-session'>
 }
 
 /**
- * Remember the first outcome per idempotency key and replay it forever after:
- * `produce` runs at most once per key, so its side effect happens only once.
+ * 记住每个幂等键的第一次结果，此后永远重放它：`produce` 每键至多运行一次，
+ * 其副作用因此只发生一次。
  */
 export class ReplayTable<V> {
   readonly #entries = new Map<string, V>()
@@ -92,12 +90,12 @@ export class ReplayTable<V> {
   }
 }
 
-/** Map the client's two-button vocabulary onto the upstream outcome vocabulary. */
+/** 把客户端的两键词汇映射到上游的结论词汇。 */
 export function outcomeOfDecision(decision: 'allow' | 'deny'): 'allowed-once' | 'rejected' {
   return decision === 'allow' ? 'allowed-once' : 'rejected'
 }
 
-/** A non-empty string, or nothing. */
+/** 非空字符串，否则无。 */
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }

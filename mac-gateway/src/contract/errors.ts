@@ -1,21 +1,21 @@
 /**
- * Upstream failures, read one way: two pure predicates, once copied into the
- * HTTP contract, the stream adapter, and the write adapter.
+ * 上游失败，读法只有一种：两个纯谓词，被复制进 HTTP 契约、流适配器与
+ * 写适配器。
  *
- * They match the runtime's own error classes structurally — `isDSHRemoteError`
- * and `code` — because this module lives outside the installation.
+ * 它们与运行时自身的错误类做结构匹配 —— `isDSHRemoteError` 与 `code` ——
+ * 因为本模块位于安装树之外。
  *
- * Only the predicates are shared; which protocol code a failure becomes stays
- * with each caller (the stream and write paths fold a not-found differently).
+ * 只共享谓词；一个失败变成哪个协议码由各调用方决定（流与写路径对
+ * not-found 的折叠方式不同）。
  */
 
-/** Whether an error means "stored, but this runtime will not interpret it". */
+/** 该错误是否表示「已存储，但本运行时不解读它」。 */
 export function isUnreadable(error: unknown): boolean {
   const name = (error as { name?: unknown } | null)?.name
   return name === 'SessionFormatUnsupportedError' || name === 'SessionPersistenceCorruptionError'
 }
 
-/** Whether an error is one of the host's remote failures (structural check). */
+/** 该错误是否属于宿主的远程失败（结构化检查）。 */
 export function isRemoteError(error: unknown): error is { code: string } {
   return typeof error === 'object' && error !== null
     && (error as { isDSHRemoteError?: unknown }).isDSHRemoteError === true
@@ -23,15 +23,14 @@ export function isRemoteError(error: unknown): error is { code: string } {
 }
 
 /**
- * Whether a remote failure means "what you named is not there": the
- * `/not-found` suffix in **any** namespace, even one we do not know yet —
- * a missing thing, not a server fault.
+ * 该远程失败是否表示「所指之物不存在」：任意命名空间下的 `/not-found`
+ * 后缀，包括尚未认识的命名空间 —— 缺东西，不是服务端故障。
  */
 export function isNotFound(error: unknown): boolean {
   return isRemoteError(error) && error.code.endsWith('/not-found')
 }
 
-/** A human-readable reason, for the refusal message only. */
+/** 人类可读的原因，只用于拒绝消息。 */
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

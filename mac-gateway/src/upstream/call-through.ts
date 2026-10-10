@@ -1,12 +1,10 @@
 /**
- * Calls into the DSH host **by parameter name**, not position. Positions are internal
- * detail, not contract: the gateway's private members may grow a parameter ahead of the
- * one we care about. Names survive that, and Cordis's multi-line
- * rewrite of service members.
+ * 按形参名调用 DSH 宿主，而不是按位置。位置是内部细节，不是契约：网关的私有
+ * 成员可能在我们关心的那个参数之前新增一个参数。名字能挺过这种变化，也能挺过
+ * Cordis 对服务成员的多行改写。
  *
- * An unreadable parameter list (bound, native) falls back to positions, and an unknown name takes
- * its positional slot — garbage for that argument, never for `signal`, the one argument a stream
- * cannot be opened without.
+ * 形参表读不出（bind、native）时回退到按位置，未知名字取它的位置槽 ——
+ * 对该实参是垃圾值，但对 `signal` 永远不是，它是开流唯一不可缺的实参。
  */
 
 /**
@@ -24,13 +22,13 @@ export function openStreamThrough(
     endpoint: opening.endpoint,
     payload: opening.payload,
     uplink: emptyUplink(),
-    // `undefined` is the operator's own in-process carrier (types.d.ts:83).
+    // `undefined` 是操作者自己的进程内载具（types.d.ts:83）。
     peer: undefined,
     signal: opening.signal,
   })
 }
 
-/** One logical stream's opening, as the relay asks for it. */
+/** 一个逻辑流的开流请求，即中继要的形状。 */
 export interface StreamOpening {
   readonly endpoint: string
   readonly payload: unknown
@@ -45,19 +43,18 @@ export function callThrough<T>(callee: (...args: unknown[]) => T, values: Record
 }
 
 /**
- * The uplink a Gateway-owned endpoint gets: it hands its iterator back as soon as it opens,
- * so carrier items are dropped rather than read (types.d.ts:81). It must be a real
- * AsyncIterable — the gateway calls `return()` on it while opening.
+ * Gateway 自有端点拿到的 uplink：它一打开就交回迭代器，载具项被丢弃而非读取
+ * （types.d.ts:81）。必须是真实的 AsyncIterable —— 网关在开流时会对它调用
+ * `return()`。
  */
 function emptyUplink(): AsyncIterable<unknown> {
   return (async function* () {})()
 }
 
 /**
- * The opener's declared parameter names, or `undefined` when none can be read. The source is
- * read as-is, not as written: Cordis rewrites service members to multi-line parameter lists
- * with a trailing comma, so an empty tail is normal and must not pass for a name
- * (`async open(\n  endpoint,\n  payload,\n)`).
+ * opener 声明的形参名，读不出时为 `undefined`。源码按原样读取，而不是按书写
+ * 意图：Cordis 把服务成员改写成带尾逗号的多行形参表，所以空的尾巴是正常的，
+ * 不能当作名字（`async open(\n  endpoint,\n  payload,\n)`）。
  */
 export function parameterNamesOf(opener: (...args: unknown[]) => unknown): string[] | undefined {
   const source = Function.prototype.toString.call(opener)
@@ -74,10 +71,9 @@ export function parameterNamesOf(opener: (...args: unknown[]) => unknown): strin
 }
 
 /**
- * Arguments by position, for the parameter lists seen so far: cancellation is last in both,
- * which is where every build has put it; anything past the known names (`control`) stays
- * `undefined`, the gateway supplying its own. Guessing by arity is acceptable only because
- * the alternative is failing to open the stream at all.
+ * 按位置实参，对应迄今见过的形参表：两者中取消信号都在最后，历来各版本也都
+ * 放在最后；已知名字之后的实参（`control`）保持 `undefined`，由网关自备。
+ * 按 arity 猜测是可以接受的，因为另一条路是流完全打不开。
  */
 function positionalArguments(arity: number, values: Record<string, unknown>): unknown[] {
   if (arity >= 5) return [values.endpoint, values.payload, values.uplink, values.peer, values.signal]

@@ -1,88 +1,87 @@
 /**
- * The stream contract: the mux framing and the follow opening, as pure functions.
+ * 流契约：mux 成帧与 follow 打开，全部是纯函数。
  *
- * Owns what is not a protocol message: the frame envelope (`streamId` and nothing else), the follow
- * request's shape, the window assembly. Protocol messages come from `rpc.ts` **verbatim** (§3.3).
+ * 管辖一切非协议消息之物：帧信封（只有 `streamId`，别无其他）、follow 请求
+ * 的形状、窗口装配。协议消息自 `rpc.ts` **原样** 通行（§3.3）。
  *
- * Frame shapes mirror the reference mux (upstream `stream-protocol.ts`, `0d1f5000`); one stream is
- * one AsyncIterable — nothing to correlate.
- * The HTTP envelope's `{v, op, ok}` shell stays out, since
- * a stream has no reply to mark ok; the version gate lives in the `mux v1` framing contract
- * (§3.3, "word for word").
+ * 帧形状对照参考 mux（上游 `stream-protocol.ts`，`0d1f5000`）；一条流就是
+ * 一个 AsyncIterable —— 无需关联。HTTP 信封的 `{v, op, ok}` 外壳不进流，
+ * 因为流没有可标 ok 的应答；版本闸门在 `mux v1` 成帧契约里（§3.3，
+ * "word for word"）。
  *
- * The opening shares `pageWindow` with `page` (rpc.ts), so "the opening is the same window a `page`
- * returns" is structural (docs/dev/plans/M2-realtime-transient.md §3.2/§4.4).
+ * 打开与 `page`（rpc.ts）共用 `pageWindow`，因此「打开就是 `page` 返回的
+ * 同一个窗口」是结构保证（docs/dev/plans/M2-realtime-transient.md §3.2/§4.4）。
  */
 
 import { pageWindow } from './window.ts'
 import type { WireEvent } from './rpc.ts'
 import type { UsageSnapshot } from './usage.ts'
 
-/** Client → server: begin one logical stream. */
+/** 客户端 → 服务端：开始一条逻辑流。 */
 export interface MuxOpenFrame {
   type: 'open'
   streamId: number
   payload: unknown
 }
 
-/** Client → server: stop one logical stream. */
+/** 客户端 → 服务端：停止一条逻辑流。 */
 export interface MuxCancelFrame {
   type: 'cancel'
   streamId: number
 }
 
-/** Everything a client can send on the mux connection. */
+/** 客户端能在 mux 连接上发送的一切。 */
 export type MuxClientFrame = MuxOpenFrame | MuxCancelFrame
 
-/** Server → client: one item of the stream (an opening, an event, a transient frame). */
+/** 服务端 → 客户端：流的一项（打开、事件或 transient 帧）。 */
 export interface MuxItemFrame {
   type: 'item'
   streamId: number
   payload: unknown
 }
 
-/** Server → client: the stream ended normally. */
+/** 服务端 → 客户端：流正常结束。 */
 export interface MuxEndFrame {
   type: 'end'
   streamId: number
 }
 
-/** Server → client: the stream failed; `payload` is the protocol's error object. */
+/** 服务端 → 客户端：流出错；`payload` 是协议的错误对象。 */
 export interface MuxErrorFrame {
   type: 'error'
   streamId: number
   payload: { code: string; message: string }
 }
 
-/** Server → client: a connection-level approval push (M5). */
+/** 服务端 → 客户端：连接级 approval 推送 (M5)。 */
 export interface MuxApprovalFrame {
   type: 'approval'
-  /** `{kind:'request', eventId, toolName, callId?, reason?}` or `{kind:'cancel', eventId}`. */
+  /** `{kind:'request', eventId, toolName, callId?, reason?}` 或 `{kind:'cancel', eventId}`。 */
   payload: unknown
 }
 
 /**
- * Server → client: the occupancy reading for one stream (M6) — stream-scoped, unlike
- * `approval`: occupancy belongs to the session this stream follows. ⚠️ The water mark is the
- * projection's cut, not the window's `cursor`, and a client must not subtract the two
- * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+ * 服务端 → 客户端：一条流的占用读数 (M6) —— 流作用域，与 `approval` 不同：
+ * 占用属于这条流所 follow 的会话。⚠️ 水位是投影的切点，不是窗口的
+ * `cursor`，客户端不得拿两者相减
+ * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2)。
  */
 export interface MuxUsageFrame {
   type: 'usage'
   streamId: number
-  /** `sessionId` so a client can check the frame against the stream it opened. */
+  /** 带 `sessionId`，供客户端核对帧是否属于自己打开的那条流。 */
   payload: { sessionId: string } & UsageSnapshot
 }
 
-/** Everything the server sends on the mux connection. */
+/** 服务端能在 mux 连接上发送的一切。 */
 export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApprovalFrame | MuxUsageFrame
 
 /**
- * Parse one client frame from its wire text.
+ * 从线上文本解析一条客户端帧。
  *
- * @returns `undefined` for unparsable JSON, an unknown `type`, a non-integral `streamId`, an `open`
- *   whose payload is not a follow request — answered with a transport-level close: something
- *   unparsable is not a message and has no stream to refuse it on.
+ * @returns 无法解析的 JSON、未知 `type`、非整数 `streamId`、`open` 载荷不是
+ *   follow 请求 —— 一律返回 `undefined`，并以传输层 close 应对：解析不了的
+ *   东西不是消息，也没有可拒收它的流。
  */
 export function parseClientFrame(text: string): MuxClientFrame | undefined {
   let parsed: unknown
@@ -106,32 +105,33 @@ export function parseClientFrame(text: string): MuxClientFrame | undefined {
   return undefined
 }
 
-/** Encode one server frame to its wire text. */
+/** 把一条服务端帧编码为线上文本。 */
 export function encodeServerFrame(frame: MuxServerFrame): string {
   return JSON.stringify(frame)
 }
 
 /**
- * The follow request carried by an `open` payload — deliberately small. The reference request
- * is `{address, maxMessages?, assistantStream?}` (upstream `types.ts:449`); the notable absence
- * is a water mark: a reconnect re-opens and rebuilds its window from the new opening rather than
- * resuming from a cursor (docs/dev/plans/M2-realtime-transient.md §3.4).
+ * `open` 载荷携带的 follow 请求 —— 刻意精简。参考请求是
+ * `{address, maxMessages?, assistantStream?}`（上游 `types.ts:449`）；显著的
+ * 缺席者是水位：重连会重新打开并从新 opening 重建窗口，而不是从 cursor
+ * 续读（docs/dev/plans/M2-realtime-transient.md §3.4）。
  */
 export interface FollowRequest {
   sessionId: string
-  /** Window size for the opening; absent = the default, same as `page`. */
+  /** 打开的窗口大小；缺省即默认值，与 `page` 相同。 */
   maxMessages?: number
 }
 
 /**
- * Validate an `open` payload as a follow request.
+ * 把 `open` 载荷校验为 follow 请求。
  *
- * The op set is shared with the HTTP envelope by name and meaning; M2 adds one op, `follow`
- * (docs/dev/plans/M2-realtime-transient.md §3.3) — any other, or none, is not a follow request.
+ * op 集合与 HTTP 信封按名字与语义共享；M2 新增一个 op，`follow`
+ * （docs/dev/plans/M2-realtime-transient.md §3.3）—— 其他 op 或无 op，
+ * 都不是 follow 请求。
  *
- * @returns the request, or `undefined` when it cannot name a session — the same leniency boundary
- *   as `page`: a malformed `maxMessages` degrades to the default; no usable `sessionId` is not a
- *   follow request.
+ * @returns 请求本身；命名不出会话时返回 `undefined` —— 与 `page` 相同的
+ *   宽容边界：畸形 `maxMessages` 退化为默认值；没有可用 `sessionId` 就不是
+ *   follow 请求。
  */
 export function followRequestOf(payload: unknown): FollowRequest | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
@@ -144,49 +144,48 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
     : { sessionId }
 }
 
-/** The opening frame's payload: a `page`-shaped window plus the stream's anchors. */
+/** 打开帧的载荷：`page` 形状的窗口加上这条流的锚点。 */
 export interface FollowOpening {
   sessionId: string
   /**
-   * The exclusive upper bound the log reached when the opening was cut — the position the event
-   * frames that follow start *after*, so a client can say "everything from here on arrived live"
-   * without comparing window contents.
+   * 打开被切下时日志已到达的排他上界 —— 其后的事件帧都从这一位置*之后*
+   * 开始，客户端因此无需比对窗口内容即可断言「从这里起都是实时到达的」。
    */
   cursor: number
-  /** First seq of the window — the client's next `beforeSeq` when paging back. */
+  /** 窗口首个 seq —— 客户端回翻页时的下一个 `beforeSeq`。 */
   pageStart: number
-  /** Same field, same meaning as in a `page` reply. */
+  /** 与 `page` 应答中的同名字段同义。 */
   hasOlder: boolean
-  /** The window — serialized identically to a `page` reply's `events`. */
+  /** 窗口 —— 序列化方式与 `page` 应答的 `events` 完全一致。 */
   events: readonly WireEvent[]
   /**
-   * The transient baseline, carried through verbatim when one is live: an in-progress assistant
-   * attempt with its accumulated text and next chunk index. Opaque here — the client's
-   * `TransientChannel` owns the semantics (docs/dev/plans/M2-realtime-transient.md §3.4); the
-   * contract only promises what the source gave arrives unchanged.
+   * transient 基线，活跃时原样随行：一个进行中的 assistant 尝试及其累计
+   * 文本与下一个 chunk 序号。此处不透明 —— 语义归客户端的
+   * `TransientChannel` 所有（docs/dev/plans/M2-realtime-transient.md §3.4）；
+   * 契约只承诺源给什么、到达时不变。
    */
   assistantStream?: unknown
   /**
-   * Occupancy as read when this opening was assembled (M6); absent when the projections held
-   * nothing displayable — a statement, not a fault (§3.1 决定 2).
+   * 组装这条打开时读到的占用 (M6)；投影无可显示之物时缺省 —— 是陈述，
+   * 不是故障（§3.1 决定 2）。
    *
-   * ⚠️ `occupancy.asOfSeq` is the projection's cut, **not** this opening's `cursor`: the window is
-   * cut by message count, so it may trail or lead the projections' log — independent water marks
-   * (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+   * ⚠️ `occupancy.asOfSeq` 是投影的切点，**不是**这条打开的 `cursor`：
+   * 窗口按消息数切，可能落后或超前投影的日志 —— 两个独立水位
+   * （docs/dev/plans/M6-presentation-layer.md §3.1 决定 2）。
    */
   occupancy?: UsageSnapshot
 }
 
 /**
- * Assemble a follow opening from one session's whole log.
+ * 从一个会话的整条日志装配 follow 打开。
  *
- * The whole-log input is the same price `page` pays (the stored-read API is forward-only), and it
- * makes the window assembly identical to a `page`'s: same function, same density precondition,
- * same boundary rule. `occupancy` is carried through as read by the caller, so window and state
- * come from one moment (docs/dev/plans/M6-presentation-layer.md §3.1 决定 2).
+ * 整日志输入与 `page` 同价（存储读 API 只能前向），这使窗口装配与 `page`
+ * 完全一致：同一函数、同一稠密前置条件、同一边界规则。`occupancy` 按调用方
+ * 读到的原样随行，窗口与状态出自同一时刻
+ * （docs/dev/plans/M6-presentation-layer.md §3.1 决定 2）。
  *
- * @throws the errors {@link pageWindow} throws — the adapter turns them into an `error` frame
- *   with the same code a `page` would have refused with.
+ * @throws {@link pageWindow} 抛出的错误 —— 适配器把它们折成 `error` 帧，
+ *   错误码与 `page` 拒绝时相同。
  */
 export function followOpening(
   request: FollowRequest,
@@ -205,8 +204,8 @@ export function followOpening(
 }
 
 /**
- * Window size for a follow opening when the caller does not say — the same default a `page` uses,
- * because the opening IS the first page.
+ * 调用方不指定时 follow 打开的窗口大小 —— 与 `page` 用同一个默认值，
+ * 因为打开就是第一页。
  */
 export const DEFAULT_FOLLOW_MESSAGES = 50
 

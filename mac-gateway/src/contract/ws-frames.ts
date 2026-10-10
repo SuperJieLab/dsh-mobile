@@ -1,25 +1,25 @@
 /**
- * The WebSocket framing contract: the RFC 6455 subset this gateway speaks, as pure functions —
- * byte-level and side-effect-free, hence testable without a socket.
+ * WebSocket 成帧契约：本网关使用的 RFC 6455 子集，全是纯函数 —— 字节级、
+ * 无副作用，因此无需 socket 即可测试。
  *
- * Hand-rolled: the plugin imports Node builtins only (docs/dev/plans/M0 §5.1 — no bare specifiers
- * outside the dsh installation), so no `ws`; the subset is exactly what the mux needs — text both
- * ways, ping/pong heartbeat, close — no extensions, no binary, no deflate.
+ * 手写实现：插件只引 Node 内建（docs/dev/plans/M0 §5.1 —— dsh 安装树之外
+ * 不允许裸 specifier），所以没有 `ws`；子集恰好是 mux 所需 —— 双向文本、
+ * ping/pong 心跳、close —— 无扩展、无二进制、无 deflate。
  *
- * Two RFC 6455 asymmetries are handled, not absorbed: client frames are MASKED and must be
- * unmasked, server frames never are; and a message may arrive fragmented, so the parser is
- * incremental (docs/dev/plans/M2-realtime-transient.md §3.2/§4.4 step 1).
+ * 处理了 RFC 6455 的两处不对称，而非吸收掉：客户端帧是 MASKED 的、必须
+ * 去掩码，服务端帧从不掩码；消息可能分片到达，解析器因此是增量的
+ * （docs/dev/plans/M2-realtime-transient.md §3.2/§4.4 step 1）。
  */
 
 import { createHash } from 'node:crypto'
 
-/** The GUID every WebSocket accept key is derived from (RFC 6455 §1.3). */
+/** 每个 WebSocket accept key 的推导源头（RFC 6455 §1.3）。 */
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
 /**
- * The `Sec-WebSocket-Accept` value for a handshake request.
+ * 握手请求的 `Sec-WebSocket-Accept` 值。
  *
- * @returns the base64 digest, or `undefined` when the key is missing.
+ * @returns base64 摘要；key 缺失时 `undefined`。
  */
 export function acceptKeyOf(headers: Readonly<Record<string, string | string[] | undefined>>): string | undefined {
   const key = headerOf(headers, 'sec-websocket-key')
@@ -27,7 +27,7 @@ export function acceptKeyOf(headers: Readonly<Record<string, string | string[] |
   return createHash('sha1').update(key + WS_GUID).digest('base64')
 }
 
-/** Case-insensitive single header lookup. */
+/** 大小写不敏感的单头查找。 */
 function headerOf(headers: Readonly<Record<string, string | string[] | undefined>>, name: string): string | undefined {
   for (const [key, value] of Object.entries(headers)) {
     if (key.toLowerCase() !== name) continue
@@ -36,7 +36,7 @@ function headerOf(headers: Readonly<Record<string, string | string[] | undefined
   return undefined
 }
 
-/** The `101` response headers for a validated handshake. */
+/** 校验通过的握手对应的 `101` 应答头。 */
 export function handshakeResponse(accept: string): string {
   return [
     'HTTP/1.1 101 Switching Protocols',
@@ -47,7 +47,7 @@ export function handshakeResponse(accept: string): string {
   ].join('\r\n')
 }
 
-/** RFC 6455 opcodes this gateway uses. Everything else closes the connection. */
+/** 本网关使用的 RFC 6455 opcode。其余一律关闭连接。 */
 const OP_CONTINUATION = 0x0
 const OP_TEXT = 0x1
 const OP_CLOSE = 0x8
@@ -55,49 +55,48 @@ const OP_PING = 0x9
 const OP_PONG = 0xa
 
 /**
- * One frame parsed out of the client's byte stream. Control frames may interleave between fragments
- * of a text message; only text (and its continuations) carries payload that reaches the mux.
+ * 从客户端字节流中解析出的一帧。控制帧可穿插于文本消息的分片之间；
+ * 只有文本（及其 continuation）携带能到达 mux 的载荷。
  */
 export interface WsTextFrame {
   kind: 'text'
-  /** The unmasked UTF-8 payload of one complete text message. */
+  /** 一条完整文本消息去掩码后的 UTF-8 载荷。 */
   text: string
 }
 
-/** A ping — answered with a pong carrying the same payload. */
+/** ping —— 以携带同一载荷的 pong 应答。 */
 export interface WsPingFrame {
   kind: 'ping'
   payload: Buffer
 }
 
-/** A pong — the client's answer to our heartbeat ping. */
+/** pong —— 客户端对我们心跳 ping 的回答。 */
 export interface WsPongFrame {
   kind: 'pong'
 }
 
-/** A close — echoed back, then the socket dies. */
+/** close —— 原样回送，然后 socket 关闭。 */
 export interface WsCloseFrame {
   kind: 'close'
 }
 
-/** One fully reassembled client message. */
+/** 一条完整重组的客户端消息。 */
 export type WsFrame = WsTextFrame | WsPingFrame | WsPongFrame | WsCloseFrame
 
 /**
- * An incremental parser for the client side of one WebSocket connection: the socket delivers
- * chunks, not frames, and unfinished text fragments live here across them.
+ * 一条 WebSocket 连接客户端侧的增量解析器：socket 送来的是块，不是帧，
+ * 未完成的文本分片跨块存放在此。
  */
 export class WsFrameParser {
-  /** Assembled so far of an unfinished text message. */
+  /** 未完成文本消息目前重组到的部分。 */
   private fragments: Buffer[] = []
 
   /**
-   * Consume bytes, completing as many messages as they hold.
+   * 消费字节，完成其中能完成的所有消息。
    *
-   * @returns the completed frames and the bytes consumed — everything past that belongs to an
-   *   unfinished frame and must be re-presented with the next chunk. A protocol violation (reserved
-   *   opcode, unmasked client frame, oversized length) returns `error`: the caller closes, because
-   *   a peer that breaks framing is not speaking this protocol.
+   * @returns 已完成的帧与已消费的字节数 —— 其余属于未完成的帧，须随下一个
+   *   块重新提交。协议违规（保留 opcode、未掩码的客户端帧、超长长度）返回
+   *   `error`：调用方据此关闭，因为破坏成帧的对端说的不是这个协议。
    */
   push(chunk: Buffer): { frames: WsFrame[]; consumed: number; error?: string } {
     const frames: WsFrame[] = []
@@ -105,7 +104,7 @@ export class WsFrameParser {
     while (offset < chunk.length) {
       const parsed = WsFrameParser.parseOne(chunk, offset)
       if ('error' in parsed) return { frames, consumed: offset, error: parsed.error }
-      if (parsed.frame === undefined) break // need more bytes for this frame
+      if (parsed.frame === undefined) break // 此帧还需更多字节
       offset += parsed.consumed
       const frame = parsed.frame
       if (frame.kind === 'text-fragment') {
@@ -121,12 +120,12 @@ export class WsFrameParser {
     return { frames, consumed: offset }
   }
 
-  /** Parse one frame at `offset`; no frame and no error means "need more bytes". */
+  /** 在 `offset` 处解析一帧；无帧且无错即「还需更多字节」。 */
   private static parseOne(
     chunk: Buffer,
     offset: number,
   ): { frame?: (WsFrame | { kind: 'text-fragment'; payload: Buffer; fin: boolean }); consumed: number; error?: string } {
-    // Fixed header: 2 bytes.
+    // 定长头部：2 字节。
     if (chunk.length - offset < 2) return { consumed: offset }
     const b0 = chunk[offset]
     const b1 = chunk[offset + 1]
@@ -136,11 +135,11 @@ export class WsFrameParser {
     let length = b1 & 0x7f
     let headerLength = 2
 
-    // Client frames MUST be masked (RFC 6455 §5.1) — a peer that does not mask
-    // is not a browser-conformant client.
+    // 客户端帧必须掩码（RFC 6455 §5.1）—— 不掩码的对端不是符合
+    // 浏览器规范的客户端。
     if (!masked) return { consumed: offset, error: 'client frame is not masked' }
 
-    // Extended lengths: 126 → 2 more bytes, 127 → 8 more.
+    // 扩展长度：126 → 再加 2 字节，127 → 再加 8 字节。
     if (length === 126) {
       if (chunk.length - offset < 4) return { consumed: offset }
       length = chunk.readUInt16BE(offset + 2)
@@ -148,14 +147,14 @@ export class WsFrameParser {
     } else if (length === 127) {
       if (chunk.length - offset < 10) return { consumed: offset }
       const big = chunk.readBigUInt64BE(offset + 2)
-      // A message larger than the body ceiling is not a demo concern; framing
-      // abuse is. The guard keeps BigInt arithmetic out of the common path.
+      // 超过体量上限的消息不是演示要防的对象，成帧滥用才是。此守卫让
+      // BigInt 运算不进常路。
       if (big > BigInt(Number.MAX_SAFE_INTEGER)) return { consumed: offset, error: 'frame too large' }
       length = Number(big)
       headerLength = 10
     }
 
-    const total = headerLength + 4 + length // + mask key
+    const total = headerLength + 4 + length // + 掩码键
     if (chunk.length - offset < total) return { consumed: offset }
 
     const maskKey = chunk.subarray(offset + headerLength, offset + headerLength + 4)
@@ -172,36 +171,36 @@ export class WsFrameParser {
   }
 }
 
-/** XOR the payload with its 4-byte mask, in place (RFC 6455 §5.3). */
+/** 载荷与 4 字节掩码异或，原地进行（RFC 6455 §5.3）。 */
 function unmask(payload: Buffer, maskKey: Buffer): void {
   for (let index = 0; index < payload.length; index += 1) {
     payload[index] ^= maskKey[index % 4]
   }
 }
 
-/** Encode one unmasked server text frame (FIN, no fragmentation). */
+/** 编码一帧未掩码的服务端文本帧（FIN，不分片）。 */
 export function encodeTextFrame(text: string): Buffer {
   return encodeFrame(0x1, Buffer.from(text, 'utf8'))
 }
 
-/** Encode a pong answering a ping (same payload, per RFC 6455 §5.5.3). */
+/** 编码回应 ping 的 pong（载荷相同，依 RFC 6455 §5.5.3）。 */
 export function encodePong(payload: Buffer): Buffer {
   return encodeFrame(0xa, payload)
 }
 
-/** Encode a server-initiated ping for the heartbeat. */
+/** 编码心跳用的服务端发起 ping。 */
 export function encodePing(): Buffer {
   return encodeFrame(0x9, Buffer.alloc(0))
 }
 
-/** Encode a clean close frame. */
+/** 编码干净的 close 帧。 */
 export function encodeClose(): Buffer {
   return encodeFrame(0x8, Buffer.alloc(0))
 }
 
 function encodeFrame(opcode: number, payload: Buffer): Buffer {
-  // Server frames are never masked. Lengths: inline <126, 16-bit <65536,
-  // 64-bit beyond (not expected in practice).
+  // 服务端帧从不掩码。长度：<126 内联，<65536 用 16 位，
+  // 更大用 64 位（实际不应出现）。
   if (payload.length < 126) {
     const head = Buffer.from([0x80 | opcode, payload.length])
     return Buffer.concat([head, payload])

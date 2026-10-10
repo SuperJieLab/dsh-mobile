@@ -1,16 +1,15 @@
 /**
- * The credentials adapter: the vault that owns the three tickets' state. Every *rule* lives
- * in `contract/auth.ts`; this module owns only state and I/O — the credentials file and the
- * in-memory table of live access tokens.
+ * 凭据适配器：持有三张票状态的保险库。所有*规则*都在 `contract/auth.ts`；
+ * 本模块只管状态与 I/O —— 凭据文件与内存中的 access token 活跃表。
  *
- * Read side, fail-closed: a file that cannot be read or parsed counts as unpaired (worst case
- * one re-pairing, never an unintended grant). Write side, best-effort but never silent: a
- * persist failure is logged and the relationship stays usable for this run, only failing to
- * survive a restart — refusing outright would deny a valid pairing over an unwritable disk.
+ * 读侧 fail-closed：读不了或解析不了的文件按未配对待（最坏重配一次，
+ * 绝不出现意外的授权）。写侧尽力而为但绝不静默：持久化失败会记日志，
+ * 关系在本运行内仍然可用，只是活不过重启 —— 直接拒绝等于因磁盘不可写
+ * 而否定一次有效配对。
  *
- * The access table is in memory by design: a 15-minute ticket need not survive a restart, and
- * the client's refresh flow makes re-issuing one an invisible non-event
- * (docs/dev/plans/M4-identity-credentials.md §3.3).
+ * access 表刻意放内存：15 分钟的票不必活过重启，客户端的刷新流程让
+ * 重签一枚票成为不可见的无事
+ * （docs/dev/plans/M4-identity-credentials.md §3.3）。
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -31,16 +30,16 @@ import {
   type StoredCredentials,
 } from '../contract/auth.ts'
 
-/** Where the file lives when no one says otherwise. */
+/** 无特别指定时凭据文件的所在。 */
 export const DEFAULT_CREDENTIALS_PATH = join(homedir(), '.dsh', 'dsh-mobile', 'credentials.json')
 
 export class CredentialVault {
   private file: StoredCredentials = emptyCredentials()
-  /** Live access tokens by hash; the raw token is never stored server-side. */
+  /** 按哈希索引的活跃 access token；原始 token 绝不存于服务端。 */
   private readonly access = new Map<string, { expiresAt: number }>()
 
-  // Explicit fields rather than TypeScript parameter properties: Node's
-  // type-stripping mode cannot execute them, and this package is zero-build.
+  // 显式字段而非 TypeScript 参数属性：Node 的类型剥离模式执行不了它们，
+  // 本包零构建。
   private readonly path: string
   private readonly random: () => number
   private readonly now: () => number
@@ -56,7 +55,7 @@ export class CredentialVault {
     this.load()
   }
 
-  /** Read the file; anything unreadable counts as unpaired — fail closed. */
+  /** 读文件；任何读不了的都按未配对待 —— fail closed。 */
   private load(): void {
     try {
       const raw = readFileSync(this.path, 'utf8')
@@ -67,8 +66,8 @@ export class CredentialVault {
         this.file = emptyCredentials()
       }
     } catch {
-      // Absent or corrupt: an unpaired vault either way — the next `pairingCode()`
-      // issues a fresh code.
+      // 缺失或损坏：无论哪种都是未配对的保险库 —— 下一次 `pairingCode()`
+      // 会签发新码。
       this.file = emptyCredentials()
     }
   }
@@ -83,8 +82,8 @@ export class CredentialVault {
   }
 
   /**
-   * The pairing code to show on the screen: issue one if there is none or the old one died —
-   * a code that can no longer be answered must not be displayed.
+   * 要显示在屏幕上的配对码：没有、或旧的已死时签发一枚新的 ——
+   * 已经无法被回答的码不得继续展示。
    */
   pairingCode(): string {
     const now = this.now()
@@ -102,7 +101,7 @@ export class CredentialVault {
     return this.file.pairing!.code
   }
 
-  /** Consume a pairing attempt. `reason` is a human-readable refusal when not ok. */
+  /** 消费一次配对尝试。失败时 `reason` 是人类可读的拒绝理由。 */
   pair(code: unknown): { ok: true; deviceToken: string } | { ok: false; reason: string } {
     const outcome = attemptPairing(this.file, code, this.now(), this.random)
     this.file = outcome.file
@@ -117,7 +116,7 @@ export class CredentialVault {
     return { ok: false, reason: reasons[outcome.status] }
   }
 
-  /** Exchange the device token for one access token. Denial means the relationship is not there. */
+  /** 用 device token 换一枚 access token。被拒即关系不存在。 */
   refresh(deviceToken: unknown): { ok: true; accessToken: string; expiresAt: number } | { ok: false } {
     const outcome = issueAccess(this.file, deviceToken, this.now(), this.random)
     if (outcome.status === 'denied') return { ok: false }
@@ -125,7 +124,7 @@ export class CredentialVault {
     return { ok: true, accessToken: outcome.token, expiresAt: outcome.expiresAt }
   }
 
-  /** The HTTP/WS gate: does this `Authorization` header name a live access token? */
+  /** HTTP/WS 闸门：该 `Authorization` 头是否指向一枚活跃的 access token？ */
   authenticate(authorizationHeader: string | undefined): boolean {
     const token = bearerTokenOf(authorizationHeader)
     if (token === undefined) return false
@@ -133,9 +132,8 @@ export class CredentialVault {
   }
 
   /**
-   * Pre-pair without a pairing code — assembly tests only. Production pairing goes through
-   * `pairingCode()` + `pair()`, and this writes the relationship directly so a test can hold
-   * the raw token without parsing console output.
+   * 不经配对码预配对 —— 仅装配测试。生产配对走 `pairingCode()` + `pair()`；
+   * 本方法直接写入关系，测试因此能持有原始 token 而不必解析控制台输出。
    */
   seedDeviceToken(deviceToken: string): void {
     this.file = { version: 1, deviceTokenHash: sha256Hex(deviceToken) }

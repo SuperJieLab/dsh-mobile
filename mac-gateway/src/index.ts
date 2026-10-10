@@ -1,17 +1,15 @@
 /**
- * mac-gateway — the Mac-side DSH plugin for dsh-mobile: assembly only. The
- * protocol lives in `contract/`, the phone-facing transports in `remote/`, and
- * every host-facing port factory in `upstream/faces.ts` — this file wires them
- * together and owns the listener's lifetime (docs/dev/protocol.md,
- * docs/dev/plans/R1-gateway-layout.md).
+ * mac-gateway —— dsh-mobile 的 Mac 侧 DSH 插件：只做装配。协议在
+ * `contract/`，面向手机的传输在 `remote/`，所有面向宿主的端口工厂在
+ * `upstream/faces.ts` —— 本文件把它们接起来，并管监听器的生命周期
+ * （docs/dev/protocol.md、docs/dev/plans/R1-gateway-layout.md）。
  *
- * The list path (v2) is zero-I/O — headers plus a host-kept projection, never a
- * log — and its four services are declared in `inject`: without them the fiber
- * stays pending, the right failure for a gateway that cannot read sessions
- * (docs/dev/protocol.md §4.1).
+ * 列表路径 (v2) 是零 I/O —— 头加宿主保留的投影，绝不读日志 —— 其四项
+ * 服务在 `inject` 中声明：缺了它们 fiber 保持 pending，这对一个读不了
+ * 会话的网关是正确的失败（docs/dev/protocol.md §4.1）。
  *
- * Imports are Node builtins plus our own modules only; cordis is type-only, as
- * bare specifiers do not resolve outside the dsh installation.
+ * 导入仅限 Node 内建与自有模块；cordis 只作类型引入，因为裸 specifier
+ * 在 dsh 安装树之外无法解析。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_LIMITS, type Limits, type SessionPort } from './contract/rpc.ts'
@@ -25,60 +23,57 @@ import { createLogger, LogModule } from './log.ts'
 
 const log = createLogger(LogModule.main)
 
-/** Display metadata used by dsh diagnostics. */
+/** dsh 诊断用的展示元数据。 */
 export const name = 'mac-gateway'
 
 /**
- * Services this plugin requires before it starts;
- * cordis holds the fiber until they are available (see the module comment).
+ * 插件启动前所需的服务；就绪之前 cordis 扣住 fiber（见模块注释）。
  */
 export const inject = [
-  // The read paths (snapshot / page) go straight to the stored log.
+  // 读路径（snapshot / page）直取已存储的日志。
   'sessionPersistence',
-  // The list path: records (headers + liveness), projections, and what is running.
+  // 列表路径：记录（头 + 存活）、投影，以及在运行的东西。
   'sessionQuery',
   'sessionProjections',
   'sessionProjectionCache',
   'sessions',
   'agents',
-  // The follow stream (M2): pump the controller's follow to the WS channel.
-  // Only present in the web-app bundle — spec §8.5 B5 records what that costs.
+  // follow 流 (M2)：把控制器的 follow 泵到 WS 通道。
+  // 仅 web-app bundle 提供 —— 代价见 spec §8.5 B5。
   'sessionController',
-  // The approval relay (M5): the gateway's `$events` stream is
-  // how a remote client receives and answers approval waterfall requests.
+  // approval 中继 (M5)：网关的 `$events` 流是远程客户端接收并应答
+  // approval waterfall 请求的通路。
   'typertGateway',
 ]
 
-/** Plugin config, supplied by the owning patch row. */
+/** 插件配置，由所属 patch 行提供。 */
 export interface Config {
-  /** Bind address. `0.0.0.0` reaches the LAN; `127.0.0.1` is loopback only. @default '0.0.0.0' */
+  /** 绑定地址。`0.0.0.0` 可达 LAN；`127.0.0.1` 仅回环。 @default '0.0.0.0' */
   host?: string
-  /** Bind port. @default 3081 */
+  /** 绑定端口。 @default 3081 */
   port?: number
-  /** Most events one `snapshot` reply may carry. Config so the caps are observable end
-   * to end (docs/dev/protocol.md §五). @default 500 */
+  /** 一条 `snapshot` 应答至多携带的事件数。做成配置是为了让上限可被端到端
+   * 观测（docs/dev/protocol.md §五）。 @default 500 */
   maxDeltaEvents?: number
-  /** Soft ceiling on one reply's serialized `events`, in bytes. @default 1048576 */
+  /** 一条应答 `events` 序列化尺寸的软上限，字节。 @default 1048576 */
   maxDeltaBytes?: number
-  /** Where the credentials file lives; overridable so assembly smoke tests never touch
-   * the real home. @default '~/.dsh/dsh-mobile/credentials.json' */
+  /** 凭据文件位置；可覆盖，让装配冒烟测试绝不碰真实 home。
+   * @default '~/.dsh/dsh-mobile/credentials.json' */
   credentialsPath?: string
-  /** Pre-pair the vault with this device token (tests only) — production pairing goes
-   * through the pairing code. */
+  /** 用该 device token 预配对保险库（仅测试）—— 生产配对走配对码。 */
   deviceTokenSeed?: string
 }
 
 /** M0 全接口绑定的兜底值；M8 起生产经 config.host 改绑 tailnet 地址（100.64.0.1）。 */
 const DEFAULT_HOST = '0.0.0.0'
 
-/** Deliberately not 3080 — that is the dsh web profile's own port. */
+/** 刻意不用 3080 —— 那是 dsh web profile 自己的端口。 */
 const DEFAULT_PORT = 3081
 
 /**
- * Cordis calls this with the plugin's context and the config from its tree row. Host
- * and port are config, not constants, so switching the reachability scheme stays a
- * one-line patch edit — the §3.2 reversibility claim needs the bind address to stay
- * uncompiled.
+ * Cordis 以插件上下文和其树行中的配置调用本函数。host 与 port 是配置而非
+ * 常量，切换可达性方案因此只是补一行 patch —— §3.2 的可逆性主张要求绑定
+ * 地址不被编译进去。
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const host = config.host ?? DEFAULT_HOST
@@ -88,34 +83,33 @@ export function apply(ctx: Context, config: Config = {}): void {
     listSourceOver(ctx),
     modelSelectionSourceOver(ctx),
   )
-  // Caps are configuration, not constants: they exist to be lowered until a
-  // chunked read is observable, which is exactly how they are verified.
+  // 上限是配置而非常量：它们存在的意义就是被调低直到分块读可观测，
+  // 这正是它们的验证方式。
   const limits: Limits = {
     maxDeltaEvents: config.maxDeltaEvents ?? DEFAULT_LIMITS.maxDeltaEvents,
     maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
   }
 
-  // The vault owns the three tickets (docs/dev/plans/M4-identity-credentials.md §4.2).
-  // `pair` / `refresh` bypass the gate — they carry their own credential.
+  // 保险库持有三张票（docs/dev/plans/M4-identity-credentials.md §4.2）。
+  // `pair` / `refresh` 绕过闸门 —— 它们自带凭据。
   const vault = new CredentialVault(config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH)
   if (config.deviceTokenSeed !== undefined) {
-    // Tests only: pre-pair without walking through the pairing code.
+    // 仅测试：不走配对码流程直接预配对。
     vault.seedDeviceToken(config.deviceTokenSeed)
   }
   log.info(`pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
 
-  // The write channel (M5): the relay bridges `approval-answer` to the gateway's
-  // `$events` stream (a host-side waterfall listener cannot receive remote answers —
-  // api-remotes parks them until a remote client speaks); the pump forwards
-  // `session-prompt` through the controller's
-  // own door (docs/dev/plans/M5-remote-intervention.md §四).
+  // 写通道 (M5)：中继把 `approval-answer` 桥接到网关的 `$events` 流
+  // （宿主侧 waterfall 监听器收不到远程应答 —— api-remotes 会把它们挂起，
+  // 直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`
+  // （docs/dev/plans/M5-remote-intervention.md §四）。
   const relayLifetime = new AbortController()
   const approvalFace = broadcasterOver()
   const relay = new ApprovalRelay(gatewayOver(ctx), approvalFace)
   relay.start(relayLifetime.signal)
   const writePort = writePortOver(ctx, relay)
-  // The model channel (M7): declared-face calls into the same controller the relay
-  // and the pump use; absent service must say so at assembly, not on first tap.
+  // 模型通道 (M7)：声明式 face 调用中继与泵所用的同一控制器；服务缺席
+  // 必须在装配时说清，而不是第一次点击时。
   const modelPort = modelChannelOver(ctx)
 
   log.info('plugin loaded — M7 build, auth on both channels, write + model channels on')
@@ -123,17 +117,17 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.effect(() => {
     const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort })
 
-    // The stream channel shares the listener: same port, `POST /rpc` for one-way
-    // calls, `/rpc/stream` upgrade gated like any request (M4): no live access token, no 101.
+    // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
+    // 升级与其他请求同一闸门 (M4)：无有效 access token，就没有 101。
     const broadcaster = attachStreamHandler(server, streamSourceOver(ctx), vault, {
-      // A freshly connected phone gets the reconciliation frame (the ids of every
-      // standing question), then a replay of each — so it can drop forwarded cards
-      // whose `cancel` fired while it was offline: an absent id is authoritative.
+      // 新接入的手机先拿到对账帧（所有挂起问题的 id），再逐条重放 ——
+      // 它因此可以丢掉那些在其离线期间 `cancel` 已触发的转发卡片：
+      // 缺席的 id 是权威的。
       onClientConnected: (send) => {
         const held = relay.held()
         if (!relay.ready) {
-          // No live `$events` identity, so the held set proves nothing: a `stale`
-          // sync tells the client to keep its cards rather than prune against a lying list.
+          // 无存活的 `$events` 身份，持有集合证明不了什么：`stale` 同步
+          // 告诉客户端保留卡片，而不是对着一个说谎的列表去剪。
           send({ type: 'approval', payload: { kind: 'sync', eventIds: [], callIds: [], stale: true } })
           return
         }
@@ -142,9 +136,9 @@ export function apply(ctx: Context, config: Config = {}): void {
           payload: {
             kind: 'sync',
             eventIds: held.map(h => h.eventId),
-            // callIds ride along so audit-rebuilt cards (asked − decided in the log)
-            // reconcile against what the gateway still holds: a dangling asked
-            // (host died mid-ask) must not resurrect.
+            // callIds 随行，让由审计重建的卡片（日志中的 asked − decided）
+            // 能与网关仍持有的对上账：悬空的 asked（宿主在询问中途死亡）
+            // 不得复活。
             callIds: held.flatMap(h => h.callId === undefined ? [] : [h.callId]),
           },
         })
@@ -155,10 +149,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
     approvalFace.connect((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
 
-    // Our logger (console underneath) rather than ctx.logger: in non-TTY runs
-    // `ctx.logger.info` emitted nothing (dsh's own startup line too), and an
-    // invisible bind failure beats a non-idiomatic log; TTY-gating is unverified
-    // (docs/dev/plans/M0-reachability-spike.md §5.1).
+    // 用我们的 logger（底层是 console）而非 ctx.logger：非 TTY 运行中
+    // `ctx.logger.info` 什么也不输出（dsh 自己的启动行同样如此），绑定
+    // 失败不可见比日志不合惯例更糟；TTY 门控未验证
+    // （docs/dev/plans/M0-reachability-spike.md §5.1）。
     server.on('error', (error) => {
       log.error(`listener error: ${String(error)}`)
     })
@@ -169,8 +163,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     return () => {
       relayLifetime.abort()
-      // close() alone leaves idle keep-alive sockets open since Node 19, keeping
-      // the port occupied across a live patch reload.
+      // 自 Node 19 起，仅 close() 会让空闲 keep-alive socket 保持打开，
+      // 端口因此在热重载期间仍被占用。
       server.closeAllConnections()
       server.close()
     }
