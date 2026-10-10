@@ -3,11 +3,11 @@
  *
  * `handle` 是注入数据源的普通 async 函数：无 HTTP、无 socket、无 DSH 运行时、
  * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL（dev/protocol.md；
- * dev/plans/M0-reachability-spike.md §4.3 Step 3）。水位（§五）：两个边界
+ * dev/plans/M0-reachability-spike.md §4.3 Step 3）。水位：两个边界
  * 均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没有」）；
  * `asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或
  * 重取。两种不重叠的读取：`snapshot` 自 cursor 前向，`page` 反向取一个
- * 用于打开的窗口（§4.2 / §4.3）。
+ * 用于打开的窗口。
  *
  * 应答上限：单条应答 ≤ `maxDeltaEvents` 条事件，软性再受 `maxDeltaBytes`
  * 约束；提前截停用 `hasMore` 说明。上限约束单条应答，从不是序列的累计
@@ -95,9 +95,9 @@ export interface SessionSlice {
    */
   staleCursor: boolean
   /**
-   * 会话的模型基线 (M7)：*下一个*请求将用的模型，读自宿主的
+   * 会话的模型基线：*下一个*请求将用的模型，读自宿主的
    * `modelSelection` 投影。未知时缺省 —— 客户端回退到目录默认值，
-   * 绝不猜测（决定 1/7）。
+   * 绝不猜测。
    */
   model?: ModelSelection
 }
@@ -200,17 +200,17 @@ export async function handle(
       case 'page':
         return await page(envelope, port)
       case 'model-catalog':
-        // 读 op (M7)。仅只读测试装配会缺端口；生产必接线，
+        // 读 op。仅只读测试装配会缺端口；生产必接线，
         // 此拒绝在生产不可达。
         if (model === undefined) return failure('internal-error', 'model channel not wired for "model-catalog"')
         return await modelCatalog(model)
       case 'model-select':
-        // 写 op (M7)，与 M5 的写 op 同一通道纪律。
+        // 写 op，与写通道的 op 同一纪律。
         if (model === undefined) return failure('internal-error', 'model channel not wired for "model-select"')
         return await modelSelect(envelope, model)
       case 'approval-answer':
       case 'session-prompt':
-        // 写 op (M5)。仅只读测试装配会缺 `write`；生产必接线，
+        // 写 op。仅只读测试装配会缺 `write`；生产必接线，
         // 此拒绝在生产不可达。
         if (write === undefined) return failure('internal-error', `write channel not wired for "${op}"`)
         return op === 'approval-answer'
@@ -229,8 +229,8 @@ export async function handle(
 }
 
 /**
- * 投递一条 approval 应答 (M5)。`ok` 意为*已投递给挂起的问题* —— 权威结论
- * 是客户端从流中对账的 `approval/decided` 审计事件（Plan §3.3 决定 3）。
+ * 投递一条 approval 应答。`ok` 意为*已投递给挂起的问题* —— 权威结论
+ * 是客户端从流中对账的 `approval/decided` 审计事件。
  */
 async function approvalAnswer(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
   const answer = approvalAnswerOf(envelope)
@@ -245,7 +245,7 @@ async function approvalAnswer(envelope: Record<string, unknown>, write: WritePor
 }
 
 /**
- * 收纳一条 prompt (M5)。`ok` 意为*已接受进收件箱* —— 回复本体经流到达。
+ * 收纳一条 prompt。`ok` 意为*已接受进收件箱* —— 回复本体经流到达。
  */
 async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
   const prompt = sessionPromptOf(envelope)
@@ -260,8 +260,8 @@ async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort
 }
 
 /**
- * 安装一条会话级模型选择 (M7)。`ok` 意为*已为下一个请求装好* —— 持久的
- * `model/selection` 事件经流到达客户端，展示对账的正是它（决定 2）。
+ * 安装一条会话级模型选择。`ok` 意为*已为下一个请求装好* —— 持久的
+ * `model/selection` 事件经流到达客户端，展示对账的正是它。
  * 上游的拒绝保留自己的码：`session/model-unavailable` 说模型不可路由，
  * 与畸形请求是不同的补救。
  */
@@ -275,7 +275,7 @@ async function modelSelect(envelope: Record<string, unknown>, model: ModelPort):
   return { v: PROTOCOL_VERSION, ok: true, selected: { ...outcome.selected } }
 }
 
-/** 模型目录路径 (M7)：宿主目录原样，去掉客户端用不上的字段。 */
+/** 模型目录路径：宿主目录原样，去掉客户端用不上的字段。 */
 async function modelCatalog(model: ModelPort): Promise<Response> {
   const catalog = await model.catalog()
   return {
@@ -344,7 +344,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
     asOfSeq: last === undefined ? since : last.seq + 1,
     hasMore: slice.hasMore || events.length < slice.events.length,
     events: [...events],
-    // 基线随每条 snapshot 应答随行；缺省仍是缺省（§4.2）。
+    // 基线随每条 snapshot 应答随行；缺省仍是缺省。
     ...slice.model === undefined ? {} : { model: slice.model },
   }
 }

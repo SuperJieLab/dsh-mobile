@@ -3,9 +3,9 @@ import Foundation
 /// 协议版本，请求与响应都必须带它 —— 版本协商的位置（`dev/protocol.md` §三）。
 let gatewayProtocolVersion = 2
 
-/// 失败信封里的错误码（协议 v2 六个 + M4 `unauthenticated` + M5 `unknown-approval` /
-/// `invalid-request` + M7 `session/model-unavailable`）。收的时候刻意用 `String` 而非本枚举：上游加码时照原样显示，
-/// 不能解不出来就崩。
+/// 失败信封里的错误码（协议 v2 六个 + `unauthenticated` + `unknown-approval` /
+/// `invalid-request` + `session/model-unavailable`）。收的时候刻意用 `String` 而非本枚举：
+/// 上游加码时照原样显示，不能解不出来就崩。
 enum GatewayErrorCode: String {
     case unsupportedVersion = "unsupported-version"
     case unknownOp = "unknown-op"
@@ -122,7 +122,7 @@ enum JSONValue: Decodable, Encodable, Equatable {
     }
 
     /// 对称的编码：跟解码一样按实际类型走 —— `JSONValue` 要能在两个方向上
-    /// 原样表示任意 JSON（M2 的跟随流要往回发帧）。
+    /// 原样表示任意 JSON（跟随流要往回发帧）。
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
@@ -158,8 +158,8 @@ enum JSONValue: Decodable, Encodable, Equatable {
     /// 取对象里的一个键；拿不到就是 nil。
     subscript(key: String) -> JSONValue? { object?[key] }
 
-    /// 拿一个整数字段；拿不到就是 `nil`。凡要读协议对象的地方都用它（原先寄居在
-    /// `TransientChannel`，会让只编协议层的测试脚本连带编译一个用不到的状态机）。
+    /// 拿一个整数字段；拿不到就是 `nil`。凡要读协议对象的地方都用它（`TransientChannel`
+    /// 不用它，只编协议层的测试脚本就不必连带编译一个用不到的状态机）。
     var int: Int? {
         if case .number(let value) = self, value == value.rounded(), value >= 0 { return Int(value) }
         return nil
@@ -220,7 +220,7 @@ extension SessionEvent {
     }
 }
 
-// MARK: - 上下文占用（M6）
+// MARK: - 上下文占用
 
 /// 占用组成的三项。**不是** `usedTokens` 的分解 —— 估算器对中文与 JSON schema
 /// 定价偏低，三项加起来不等于那个数（`dev/plans/M6-presentation-layer.md` §3.1 决定 6）。
@@ -252,9 +252,9 @@ struct UsageSnapshot: Decodable, Equatable {
     var usage: UsagePayload? = nil
 }
 
-// MARK: - 模型选择（M7）
+// MARK: - 模型选择
 
-/// 一次模型选择（协议 §4.7）。`reasoningEffort` 缺省 = 不指定推理力度 ——
+/// 一次模型选择。`reasoningEffort` 缺省 = 不指定推理力度 ——
 /// 字段缺省是协议的一部分（`encodeIfPresent`），不是故障。
 struct ModelSelection: Codable, Equatable {
     let provider: String
@@ -262,7 +262,7 @@ struct ModelSelection: Codable, Equatable {
     var reasoningEffort: String? = nil
 }
 
-/// 打开选择器时现拉一次的目录（协议 §4.7）。服务端只转发与剥除宿主私有字段，
+/// 打开选择器时现拉一次的目录。服务端只转发与剥除宿主私有字段，
 /// 不重排不补齐；`default` 整个缺省 = 无部署默认，客户端显示时不猜。
 struct ModelCatalog: Decodable, Equatable {
     var `default`: ModelSelection? = nil
@@ -311,7 +311,7 @@ struct ModelCatalogRequest: Encodable {
 }
 
 /// `model-select` 请求：`reasoningEffort` 为 `nil` 时整个字段不出现在 JSON 里
-/// （合成编码用 `encodeIfPresent`）—— 「没指定」与「空串」是两回事（§4.6 严格校验）。
+/// （合成编码用 `encodeIfPresent`）—— 「没指定」与「空串」是两回事（严格校验）。
 struct ModelSelectRequest: Encodable {
     let v = gatewayProtocolVersion
     let op = "model-select"
@@ -336,14 +336,14 @@ func relativeTime(_ value: Double) -> String {
     return formatter.localizedString(for: epochMilliseconds(value), relativeTo: Date())
 }
 
-// MARK: - 请求（R2 归拢：协议形状的唯一出处，原散在 GatewayClient）
+// MARK: - 请求（协议形状的唯一出处）
 
 struct ListSessionsRequest: Encodable {
     let v = gatewayProtocolVersion
     let op = "list-sessions"
 }
 
-/// 配对（M4）：一次性配对码换设备凭证。身份不进消息体之外的位置 ——
+/// 配对：一次性配对码换设备凭证。身份不进消息体之外的位置 ——
 /// 配对码就是这条消息的载荷，走与业务同一端点。
 struct PairRequest: Encodable {
     let v = gatewayProtocolVersion
@@ -351,7 +351,7 @@ struct PairRequest: Encodable {
     let code: String
 }
 
-/// 续期（M4）：设备凭证换访问凭证。
+/// 续期：设备凭证换访问凭证。
 struct RefreshRequest: Encodable {
     let v = gatewayProtocolVersion
     let op = "refresh"
@@ -375,7 +375,7 @@ struct PageRequest: Encodable {
     let maxMessages: Int?
 }
 
-/// 审批应答（M5）：应答词汇表只有两键，映射在服务端完成 ——
+/// 审批应答：应答词汇表只有两键，映射在服务端完成 ——
 /// `allow` → `allowed-once`（一次性，绝不推断持久授权）。
 struct ApprovalAnswerRequest: Encodable {
     let v = gatewayProtocolVersion
@@ -385,7 +385,7 @@ struct ApprovalAnswerRequest: Encodable {
     let answerId: String
 }
 
-/// 下发指令（M5）：`promptId` 是幂等键，服务端按它去重重复投递。
+/// 下发指令：`promptId` 是幂等键，服务端按它去重重复投递。
 struct SessionPromptRequest: Encodable {
     let v = gatewayProtocolVersion
     let op = "session-prompt"
@@ -394,9 +394,9 @@ struct SessionPromptRequest: Encodable {
     let promptId: String
 }
 
-// MARK: - 响应信封（R2 归拢）
+// MARK: - 响应信封
 
-/// 响应信封的公共部分（协议 §三）。载荷字段一律声明成可选：服务端拒绝时（`ok: false`）根本
+/// 响应信封的公共部分。载荷字段一律声明成可选：服务端拒绝时（`ok: false`）根本
 /// 不会带载荷，声明成必选会让解码先一步失败，我们就拿不到那条有用的 `error` 了。
 protocol GatewayResponse: Decodable {
     var v: Int { get }
@@ -424,7 +424,7 @@ struct ListSessionsResponse: GatewayResponse {
     let sessions: [SessionSummary]?
 }
 
-/// 配对回包（M4）：设备凭证只在这里出现一次。
+/// 配对回包：设备凭证只在这里出现一次。
 struct PairResponse: GatewayResponse {
     let v: Int
     let ok: Bool
@@ -432,7 +432,7 @@ struct PairResponse: GatewayResponse {
     let deviceToken: String?
 }
 
-/// 续期回包（M4）：访问凭证与过期时刻（epoch 毫秒）。
+/// 续期回包：访问凭证与过期时刻（epoch 毫秒）。
 struct RefreshResponse: GatewayResponse {
     let v: Int
     let ok: Bool
@@ -441,7 +441,7 @@ struct RefreshResponse: GatewayResponse {
     let expiresAt: Double?
 }
 
-/// 快照回包：opening 的 `model` 字段是协议面（§4.2），
+/// 快照回包：opening 的 `model` 字段是协议面，
 /// 解码行为要能被 `run-model.sh` 直接断言 —— 单模块编译下 internal 即可测。
 struct SnapshotResponse: GatewayResponse {
     let v: Int
@@ -464,21 +464,21 @@ struct PageResponse: GatewayResponse {
     let events: [SessionEvent]?
 }
 
-/// 审批应答回包（M5）：成功不带载荷。
+/// 审批应答回包：成功不带载荷。
 struct ApprovalAnswerResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
 }
 
-/// 下发指令回包（M5）：成功即已受理。
+/// 下发指令回包：成功即已受理。
 struct SessionPromptResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
 }
 
-/// 目录回包（M7）：转发原样，只剥了宿主私有字段。
+/// 目录回包：转发原样，只剥了宿主私有字段。
 struct ModelCatalogResponse: GatewayResponse {
     let v: Int
     let ok: Bool
@@ -488,7 +488,7 @@ struct ModelCatalogResponse: GatewayResponse {
     var failures: [ModelCatalogFailure]? = nil
 }
 
-/// 选择回包（M7）：`selected` 是上游归一化后的选择（不含 sessionId），透传不重推。
+/// 选择回包：`selected` 是上游归一化后的选择（不含 sessionId），透传不重推。
 struct ModelSelectResponse: GatewayResponse {
     let v: Int
     let ok: Bool
@@ -496,23 +496,23 @@ struct ModelSelectResponse: GatewayResponse {
     var selected: ModelSelection? = nil
 }
 
-// MARK: - 快照结果（R2 归拢）
+// MARK: - 快照结果
 
 /// 一次快照的结果。
 struct SessionSnapshot {
     /// 本次覆盖到的位置（不含）—— 回传它就能拿到「空增量」，是水位不变式的用法。
     let asOfSeq: Int
-    /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限（协议 §五）。
+    /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限。
     let hasMore: Bool
     let events: [SessionEvent]
-    /// 会话的模型基线（M7）：**下一轮**将使用的模型。缺省 = 服务端不知道，
-    /// 客户端退到目录默认；进会话后的增量走跟随流（决定 1/2）。
+    /// 会话的模型基线：**下一轮**将使用的模型。缺省 = 服务端不知道，
+    /// 客户端退到目录默认；进会话后的增量走跟随流。
     var model: ModelSelection? = nil
 }
 
-// MARK: - 回溯窗口结果（R2 归拢）
+// MARK: - 回溯窗口结果
 
-/// 一段往回读的窗口（协议 §4.3）。与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口
+/// 一段往回读的窗口。与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口
 /// 从某个位置往回走。打开会话用后者取最近一段，之后用前者追新增 —— 客户端**不需要跨会话记住
 /// 任何位置**，冷启动永远从「现在的最新一段」开始。
 struct SessionPage {

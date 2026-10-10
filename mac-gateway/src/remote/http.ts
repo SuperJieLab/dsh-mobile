@@ -52,7 +52,7 @@ async function respond(
     // 存活探测，以及任何未知路径的回答。纯传输层：不涉协议消息，
     // 也不涉信封。
     response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
-    response.end(path === '/' ? 'mac-gateway alive — M4, protocol v2, POST /rpc for the protocol\n' : 'not found\n')
+    response.end(path === '/' ? 'mac-gateway alive — protocol v2, POST /rpc for the protocol\n' : 'not found\n')
     return
   }
 
@@ -81,7 +81,7 @@ async function respond(
     return
   }
 
-  // 身份 (M4)：auth op 的凭据放在体内，其余 op 都需要有效的 access token；
+  // 身份：auth op 的凭据放在体内，其余 op 都需要有效的 access token；
   // 被拒时以 HTTP 401 附协议信封。
   const op = (message as { op?: unknown } | null)?.op
   if (op === 'pair' || op === 'refresh') {

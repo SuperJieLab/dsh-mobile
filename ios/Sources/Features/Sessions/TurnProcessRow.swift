@@ -3,7 +3,7 @@ import SwiftUI
 /// 一轮的过程：折叠头（一行摘要）+ 展开后的过程行。
 ///
 /// 默认收起 —— 一轮里二十次工具调用、几千字思考，铺开会把对话本身淹掉。最终答案**不在**折叠里
-/// （组装器已划成独立节点），故收起后读起来是「你说什么 → 它做了什么 → 它答什么」（§3.2 决定 10）。
+/// （组装器已划成独立节点），故收起后读起来是「你说什么 → 它做了什么 → 它答什么」。
 struct TurnProcessRow: View {
 
     let process: NodeProcess
@@ -17,7 +17,7 @@ struct TurnProcessRow: View {
                 if expanded { entries }
             } else {
                 // 没有折叠头就收起不了 ——
-                // 窗口切半的那一组（`turn/start` 不在窗口里）仍如实平铺（判据 A7）。
+                // 窗口切半的那一组（`turn/start` 不在窗口里）仍如实平铺。
                 entries
             }
         }

@@ -65,7 +65,7 @@ export function listSourceOver(ctx: Context): ListSource {
  * 窄切面（`FollowSource`）；controller 只存在于 web-app bundle 中，
  * cordis 会持有本插件直到它出现。
  */
-/** 占用量读取所基于的投影键 —— 具名常量使读取不会物化无人消费的视图（M6）。 */
+/** 占用量读取所基于的投影键 —— 具名常量使读取不会物化无人消费的视图。 */
 const OCCUPANCY_KEYS = ['contextPressure', 'contextBreakdown'] as const
 
 export function streamSourceOver(ctx: Context): FollowSource {
@@ -81,7 +81,7 @@ export function streamSourceOver(ctx: Context): FollowSource {
       const snapshot = read.snapshot(session, OCCUPANCY_KEYS)
       return snapshot === undefined ? undefined : usageSnapshotOf(snapshot.values, snapshot.asOfSeq)
     },
-    // 模型基线随开流走（M7）：与 snapshot 路径相同的投影读取，只是时刻更早 ——
+    // 模型基线随开流走：与 snapshot 路径相同的投影读取，只是时刻更早 ——
     // 开流是存活会话走的路径。
     modelOf: (sessionId) => modelSelectionViewOf(ctx, sessionId),
   }
@@ -134,9 +134,9 @@ interface AgentsLike {
 }
 
 /**
- * 单个会话的 `modelSelection` 投影线上视图 —— snapshot 基线（M7 T4）与跟流
+ * 单个会话的 `modelSelection` 投影线上视图 —— snapshot 基线与跟流
  * 开场的 `model` 字段共用的那次读取。缺席（会话不存活）是诚实的 —— 字段保持
- * 缺席而非猜默认值（决定 1/7）。
+ * 缺席而非猜默认值。
  */
 function modelSelectionViewOf(ctx: Context, sessionId: string): ModelSelectionView | undefined {
   const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
@@ -155,7 +155,7 @@ export function modelSelectionSourceOver(ctx: Context): ModelSelectionSource {
 }
 
 /**
- * 协议层眼中的写通道（M5），与其他来源一样取自宿主。
+ * 协议层眼中的写通道，与其他来源一样取自宿主。
  *
  * `approval-answer` 交给中继；`session-prompt` 走 controller 的 prompt 门，
  * `session/not-found` 折叠为 `unknown-session`，其他上游失败原样重抛，
@@ -169,8 +169,8 @@ export function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
 }
 
 /**
- * 协议层眼中的模型通道（M7），建立在中继与泵共用的同一 controller 上。
- * 缺席是组装层事实，因此在组装时宣布（G2 的禁止静默降级规则），之后这些操作
+ * 协议层眼中的模型通道，建立在中继与泵共用的同一 controller 上。
+ * 缺席是组装层事实，因此在组装时宣布，之后这些操作
  * 以 `internal-error` 信封应答 —— 手机绝不能把「本应拒答」看成死连接。
  */
 export function modelChannelOver(ctx: Context): ModelPort | undefined {

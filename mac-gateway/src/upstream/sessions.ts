@@ -94,7 +94,7 @@ interface SessionListMetadataLike {
 
 /**
  * `modelSelection` 投影的线上视图，宿主给出的形状（`{lastUsed, next}`）；
- * 只有 `next` 是基线（决定 1）—— 即下一个请求将用的模型。
+ * 只有 `next` 是基线 —— 即下一个请求将用的模型。
  */
 export interface ModelSelectionView {
   next?: ModelSelection | null
@@ -186,7 +186,7 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
           asOfSeq: last === undefined ? since : last.seq + 1,
           hasMore,
           staleCursor: false,
-          // 模型基线（M7 决定 1）：投影的 `next` 原样，投影缺席则字段缺席 ——
+          // 模型基线：投影的 `next` 原样，投影缺席则字段缺席 ——
           // 绝不给 null，绝不猜默认值。
           ...baselineOf(id, modelSelection),
         }

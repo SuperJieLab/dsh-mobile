@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// 配对屏（M4）：用 Mac 屏幕上的一次性配对码建立关系。
+/// 配对屏：用 Mac 屏幕上的一次性配对码建立关系。
 ///
 /// 全 App 唯一需要用户「在场」的动作，也是唯一一段不需要身份的通信 —— 配对码本身就是凭证
 /// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。成功后设备凭证进沙盒存储，
 /// 之后一切请求静默带票。
 ///
-/// 组网段（M8）：headscale 地址与接入 key（沙盒存储）在此录入，
-/// 节点状态如实展示；配对仍走原三票身份（决定 9，不因在虚拟网内简化）。
+/// 组网段：headscale 地址与接入 key（沙盒存储）在此录入，
+/// 节点状态如实展示；配对仍走原三票身份（不因在虚拟网内简化）。
 struct PairingView: View {
     let client: GatewayClient
     /// 组网段的数据源 —— App 根部创建并经 environmentObject 注入。
@@ -58,7 +58,7 @@ struct PairingView: View {
         .scrollDismissesKeyboard(.immediately)
     }
 
-    // MARK: - 组网段（M8）
+    // MARK: - 组网段
 
     @ViewBuilder
     private var meshSection: some View {
@@ -128,7 +128,7 @@ struct PairingView: View {
             code = ""
         } catch {
             // 服务端的话原样显示（配对码不对 / 过期 / 作废）——
-            // 与 M0 起「看得见为什么不行」的纪律一致。
+            // 与「看得见为什么不行」的纪律一致。
             failure = error.localizedDescription
         }
     }

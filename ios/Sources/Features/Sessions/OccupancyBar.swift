@@ -1,15 +1,15 @@
 import SwiftUI
 
-/// 上下文占用：一行读数，点开看组成三项（M6）。
+/// 上下文占用：一行读数，点开看组成三项。
 ///
 /// 复现对象是上游 composer 旁的占用面板（`ContextMeter.tsx`），只把那个环换成一行 —— 窄屏上
 /// 没有环的位置。呈现规则全部照上游：
-/// - 百分比与紧凑数字（换算在 `UsagePayload.percent` / `.figures` 里，判据 O2）
-/// - 「约」无条件加，不区分数字来自哪个投影字段（§3.1 决定 5）
-/// - **组成缺省时不出展开区，比例照常显示**（判据 U8）；三行文案用上游的中文
+/// - 百分比与紧凑数字（换算在 `UsagePayload.percent` / `.figures` 里）
+/// - 「约」无条件加，不区分数字来自哪个投影字段
+/// - **组成缺省时不出展开区，比例照常显示**；三行文案用上游的中文
 ///   （`ui-conversation/src/client/locales.ts:63-65`）
 ///
-/// ⚠️ 本视图只在有读数时被挂上，判空归调用方（`SessionDetailView`）—— 这里永远不做空态（判据 U2）。
+/// ⚠️ 本视图只在有读数时被挂上，判空归调用方（`SessionDetailView`）—— 这里永远不做空态。
 struct OccupancyBar: View {
     let usage: UsagePayload
 

@@ -38,10 +38,10 @@ export const inject = [
   'sessionProjectionCache',
   'sessions',
   'agents',
-  // follow 流 (M2)：把控制器的 follow 泵到 WS 通道。
-  // 仅 web-app bundle 提供 —— 代价见 spec §8.5 B5。
+  // follow 流：把控制器的 follow 泵到 WS 通道。
+  // 仅 web-app bundle 提供。
   'sessionController',
-  // approval 中继 (M5)：网关的 `$events` 流是远程客户端接收并应答
+  // approval 中继：网关的 `$events` 流是远程客户端接收并应答
   // approval waterfall 请求的通路。
   'typertGateway',
 ]
@@ -64,7 +64,7 @@ export interface Config {
   deviceTokenSeed?: string
 }
 
-/** M0 全接口绑定的兜底值；M8 起生产经 config.host 改绑 tailnet 地址（100.64.0.1）。 */
+/** 全接口绑定的兜底值；生产经 config.host 改绑 tailnet 地址（100.64.0.1）。 */
 const DEFAULT_HOST = '0.0.0.0'
 
 /** 刻意不用 3080 —— 那是 dsh web profile 自己的端口。 */
@@ -72,7 +72,7 @@ const DEFAULT_PORT = 3081
 
 /**
  * Cordis 以插件上下文和其树行中的配置调用本函数。host 与 port 是配置而非
- * 常量，切换可达性方案因此只是补一行 patch —— §3.2 的可逆性主张要求绑定
+ * 常量，切换可达性方案因此只是补一行 patch —— 可逆性主张要求绑定
  * 地址不被编译进去。
  */
 export function apply(ctx: Context, config: Config = {}): void {
@@ -99,7 +99,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
   log.info(`pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
 
-  // 写通道 (M5)：中继把 `approval-answer` 桥接到网关的 `$events` 流
+  // 写通道：中继把 `approval-answer` 桥接到网关的 `$events` 流
   // （宿主侧 waterfall 监听器收不到远程应答 —— api-remotes 会把它们挂起，
   // 直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`
   // （dev/plans/M5-remote-intervention.md §四）。
@@ -108,17 +108,17 @@ export function apply(ctx: Context, config: Config = {}): void {
   const relay = new ApprovalRelay(gatewayOver(ctx), approvalFace)
   relay.start(relayLifetime.signal)
   const writePort = writePortOver(ctx, relay)
-  // 模型通道 (M7)：声明式 face 调用中继与泵所用的同一控制器；服务缺席
+  // 模型通道：声明式 face 调用中继与泵所用的同一控制器；服务缺席
   // 必须在装配时说清，而不是第一次点击时。
   const modelPort = modelChannelOver(ctx)
 
-  log.info('plugin loaded — M7 build, auth on both channels, write + model channels on')
+  log.info('plugin loaded — auth on both channels, write + model channels on')
 
   ctx.effect(() => {
     const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort })
 
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
-    // 升级与其他请求同一闸门 (M4)：无有效 access token，就没有 101。
+    // 升级与其他请求同一闸门：无有效 access token，就没有 101。
     const broadcaster = attachStreamHandler(server, streamSourceOver(ctx), vault, {
       // 新接入的手机先拿到对账帧（所有挂起问题的 id），再逐条重放 ——
       // 它因此可以丢掉那些在其离线期间 `cancel` 已触发的转发卡片：

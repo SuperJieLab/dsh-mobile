@@ -34,7 +34,7 @@ struct Snapshot: Equatable {
   let events: [SessionEvent]
 }
 
-/// 一段往回读的窗口（协议 §4.3）。
+/// 一段往回读的窗口。
 struct Window: Equatable {
   /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
   let pageStart: Int

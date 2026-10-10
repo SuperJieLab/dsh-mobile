@@ -22,8 +22,7 @@ struct UsageState: Equatable {
     /// 已经采用的那一份读数；`nil` = 还没有收到过任何帧。
     private(set) var snapshot: UsageSnapshot?
 
-    /// 当前该显示的占用值。为 `nil` 时界面**隐藏整行** —— 「没有读数」不是「占用 0%」
-    /// （判据 U2）。
+    /// 当前该显示的占用值。为 `nil` 时界面**隐藏整行** —— 「没有读数」不是「占用 0%」。
     var usage: UsagePayload? { snapshot?.usage }
 
     init() {}
@@ -41,8 +40,8 @@ struct UsageState: Equatable {
 
 // MARK: - 显示换算
 
-/// 取整、封顶与紧凑数字都在这一侧（服务端只定值），算法照上游 —— R1 判据
-/// 「与 Web UI 一致」量的是这三件事，不是别的。
+/// 取整、封顶与紧凑数字都在这一侧（服务端只定值），算法照上游 —— 「与 Web UI 一致」
+/// 这条验收量的是这三件事，不是别的。
 extension UsagePayload {
 
     /// 百分比：`min(100, round(used / window * 100))`（`context-occupancy.ts:21`）。
@@ -54,7 +53,7 @@ extension UsagePayload {
     }
 
     /// 面板上那一串读数：`~52.3K / 128K`。**「约」无条件加** —— 上游把它硬写在
-    /// 模板里，不区分这个数来自哪个投影字段（§3.1 决定 5）。
+    /// 模板里，不区分这个数来自哪个投影字段。
     var figures: String { "~\(formatTokens(usedTokens)) / \(formatTokens(contextWindow))" }
 }
 

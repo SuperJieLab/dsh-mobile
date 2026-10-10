@@ -2,12 +2,12 @@
  * 流契约：mux 成帧与 follow 打开，全部是纯函数。
  *
  * 管辖一切非协议消息之物：帧信封（只有 `streamId`，别无其他）、follow 请求
- * 的形状、窗口装配。协议消息自 `rpc.ts` **原样** 通行（§3.3）。
+ * 的形状、窗口装配。协议消息自 `rpc.ts` **原样** 通行。
  *
  * 帧形状对照参考 mux（上游 `stream-protocol.ts`，`0d1f5000`）；一条流就是
  * 一个 AsyncIterable —— 无需关联。HTTP 信封的 `{v, op, ok}` 外壳不进流，
- * 因为流没有可标 ok 的应答；版本闸门在 `mux v1` 成帧契约里（§3.3，
- * "word for word"）。
+ * 因为流没有可标 ok 的应答；版本闸门在 `mux v1` 成帧契约里
+ * （"word for word"）。
  *
  * 打开与 `page`（rpc.ts）共用 `pageWindow`，因此「打开就是 `page` 返回的
  * 同一个窗口」是结构保证（dev/plans/M2-realtime-transient.md §3.2/§4.4）。
@@ -53,7 +53,7 @@ export interface MuxErrorFrame {
   payload: { code: string; message: string }
 }
 
-/** 服务端 → 客户端：连接级 approval 推送 (M5)。 */
+/** 服务端 → 客户端：连接级 approval 推送。 */
 export interface MuxApprovalFrame {
   type: 'approval'
   /** `{kind:'request', eventId, toolName, callId?, reason?}` 或 `{kind:'cancel', eventId}`。 */
@@ -61,7 +61,7 @@ export interface MuxApprovalFrame {
 }
 
 /**
- * 服务端 → 客户端：一条流的占用读数 (M6) —— 流作用域，与 `approval` 不同：
+ * 服务端 → 客户端：一条流的占用读数 —— 流作用域，与 `approval` 不同：
  * 占用属于这条流所 follow 的会话。⚠️ 水位是投影的切点，不是窗口的
  * `cursor`，客户端不得拿两者相减
  * (dev/plans/M6-presentation-layer.md §3.1 决定 2)。
@@ -125,7 +125,7 @@ export interface FollowRequest {
 /**
  * 把 `open` 载荷校验为 follow 请求。
  *
- * op 集合与 HTTP 信封按名字与语义共享；M2 新增一个 op，`follow`
+ * op 集合与 HTTP 信封按名字与语义共享；follow 也走 mux 帧
  * （dev/plans/M2-realtime-transient.md §3.3）—— 其他 op 或无 op，
  * 都不是 follow 请求。
  *
@@ -166,8 +166,8 @@ export interface FollowOpening {
    */
   assistantStream?: unknown
   /**
-   * 组装这条打开时读到的占用 (M6)；投影无可显示之物时缺省 —— 是陈述，
-   * 不是故障（§3.1 决定 2）。
+   * 组装这条打开时读到的占用；投影无可显示之物时缺省 —— 是陈述，
+   * 不是故障。
    *
    * ⚠️ `occupancy.asOfSeq` 是投影的切点，**不是**这条打开的 `cursor`：
    * 窗口按消息数切，可能落后或超前投影的日志 —— 两个独立水位

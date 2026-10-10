@@ -1,18 +1,18 @@
 /**
- * 组网配置（M8 决定 8 注）：headscale 控制面地址 + 网关 tailnet 地址。
+ * 组网配置：headscale 控制面地址 + 网关 tailnet 地址。
  *
  * 为什么不在源码里硬编码：controlURL 内嵌 VPS 公网 IP（隐私纪律 —— 仓库是公开的，
  * 真实值只存在于设备本地 UserDefaults 与用户输入时刻）；gateway 地址是 tailnet 内的
- * CGNAT 段 IP，出了网没有意义，给默认值（沿 M0「硬编码一行」的先例）。
+ * CGNAT 段 IP，出了网没有意义，给默认值（沿用「硬编码一行」的先例）。
  *
  * 改动入口在设置页（PairingView 的组网段）；换 VPS/换 IP = 改这里 + 重装信任证书。
  */
 import Foundation
 
 struct MeshConfig: Equatable, Codable {
-    /// headscale 控制面，如 `https://<VPS-IP>:8443`（决定 1）。
+    /// headscale 控制面，如 `https://<VPS-IP>:8443`。
     var controlURLString: String
-    /// Mac 网关的 tailnet 地址（决定 8：直用 100.x IP，不用 MagicDNS）。
+    /// Mac 网关的 tailnet 地址（直用 100.x IP，不用 MagicDNS）。
     var gatewayURLString: String
 
     static let gatewayDefault = "http://100.64.0.1:3081"

@@ -1,26 +1,26 @@
 import Foundation
 
-/// 与 Mac 侧网关的 **op 门面 + 身份状态机**（R2 拆分后）：每个 op 一个方法，内部经
+/// 与 Mac 侧网关的 **op 门面 + 身份状态机**：每个 op 一个方法，内部经
 /// `GatewayTransport` 发送；身份是这里的状态 —— 401 时用设备凭证**静默续期一次再重试**，
 /// 续期单飞保证并发撞 401 的请求共享同一张新票。
 ///
 /// 协议的类型与语义都在 `GatewayProtocol.swift`，传输机制在 `GatewayTransport.swift`，
-/// SwiftUI 在这里没有位置。`struct` 改 `class`（M4）是因为续期单飞与已配对状态是**可变共享
+/// SwiftUI 在这里没有位置。`struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享
 /// 状态**，值语义会在视图间复制出各自为政的凭证；仍 `@MainActor`，因为所有调用方本就在主线程。
 @MainActor
 final class GatewayClient: ObservableObject {
     private(set) var baseURL: URL
 
-    /// 组网后的承载（M8 决定 4）：未激活 = `.shared`（局域网直连，M0 行为）。
+    /// 组网后的承载：未激活 = `.shared`（局域网直连）。
     /// 与 transport 分开存：`FollowClient` 的建连源每次现取，激活后下一轮连接即走隧道。
     private(set) var meshSession: URLSession = .shared
 
     private var transport: GatewayTransport
 
-    /// 三张票在手机侧的家（M4）。与 transport 共持同一份；默认共享单例：全 App 一个身份。
+    /// 三张票在手机侧的家。与 transport 共持同一份；默认共享单例：全 App 一个身份。
     private let credentials: CredentialStore
 
-    /// 续期单飞：同一时刻只允许一个 `refresh` 在途（Plan §3.6 的 401 竞态）。
+    /// 续期单飞：同一时刻只允许一个 `refresh` 在途（401 竞态）。
     /// 并发撞上 401 的请求都等这一张新票，然后各自重试一次。
     private var refreshTask: Task<Bool, Never>?
 
@@ -35,18 +35,18 @@ final class GatewayClient: ObservableObject {
         self.isPaired = self.credentials.hasDeviceToken
     }
 
-    /// 组网激活（M8 链路 1 终点）：节点 Running 后由根部调用 —— HTTP 换 transport、
-    /// WebSocket 换建连源，整体切到 tailnet。消息层零感知（决定 4）：协议、凭证、
+    /// 组网激活：节点 Running 后由根部调用 —— HTTP 换 transport、
+    /// WebSocket 换建连源，整体切到 tailnet。消息层零感知：协议、凭证、
     /// 身份状态机都不动，只换承载与地址。
     func activate(session: URLSession, baseURL: URL) {
         meshSession = session
         self.baseURL = baseURL
         transport = GatewayTransport(baseURL: baseURL, credentials: credentials, session: session)
-        // 承载切换是 M8 链路 1 的终点状态迁移：局域网 → tailnet 的分界点在此留痕。
+        // 承载切换是局域网 → tailnet 的分界点状态迁移，在此留痕。
         Log.info(Log.Module.gateway, "activated: HTTP+WS switched to \(baseURL.absoluteString)")
     }
 
-    /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证（M4 §3.2）。成功即建立关系；失败文案来自服务端。
+    /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证。成功即建立关系；失败文案来自服务端。
     func pair(code: String) async throws {
         let response: PairResponse = try await send(PairRequest(code: code), authenticated: false)
         try response.validate()
@@ -58,7 +58,7 @@ final class GatewayClient: ObservableObject {
         Log.info(Log.Module.gateway, "paired — device token stored")
     }
 
-    /// 用设备凭证换一张新 access（M4 §3.3）。返回 false 表示关系已被服务端掐断（401）—— 此时
+    /// 用设备凭证换一张新 access。返回 false 表示关系已被服务端掐断（401）—— 此时
     /// 清掉本机凭证，App 回到未配对状态。单飞：撞车的调用共享同一个在途任务，不叠加请求。
     func refreshAccess() async -> Bool {
         if let refreshTask { return await refreshTask.value }
@@ -112,10 +112,10 @@ final class GatewayClient: ObservableObject {
         }
         return SessionSnapshot(
             asOfSeq: asOfSeq,
-            // 缺省 `false`：不带这个字段的是旧服务端，它只会一次给完（协议 §五）。
+            // 缺省 `false`：不带这个字段的是旧服务端，它只会一次给完。
             hasMore: response.hasMore ?? false,
             events: events,
-            // 基线（M7）：服务端「不知道」时整个缺省 —— 客户端退到目录默认，不猜（§4.2）。
+            // 基线：服务端「不知道」时整个缺省 —— 客户端退到目录默认，不猜。
             model: response.model
         )
     }
@@ -145,10 +145,10 @@ final class GatewayClient: ObservableObject {
         )
     }
 
-    // MARK: - 两个写 op（M5）
+    // MARK: - 两个写 op
 
-    /// 应答一条审批。`ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准（Plan §3.3
-    /// 决定 3）。失败如实上抛：`unknown-approval` 表示这条审批已经不在了。
+    /// 应答一条审批。`ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。
+    /// 失败如实上抛：`unknown-approval` 表示这条审批已经不在了。
     func answerApproval(eventId: String, allow: Bool, answerId: String) async throws {
         let response: ApprovalAnswerResponse = try await send(
             ApprovalAnswerRequest(eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId)
@@ -164,9 +164,9 @@ final class GatewayClient: ObservableObject {
         try response.validate()
     }
 
-    // MARK: - 模型选择（M7）
+    // MARK: - 模型选择
 
-    /// 拉模型目录（§4.7）：打开选择器时现拉一次，不订阅刷新 —— 重开即新。
+    /// 拉模型目录：打开选择器时现拉一次，不订阅刷新 —— 重开即新。
     func modelCatalog() async throws -> ModelCatalog {
         let response: ModelCatalogResponse = try await send(ModelCatalogRequest())
         try response.validate()
@@ -174,7 +174,7 @@ final class GatewayClient: ObservableObject {
     }
 
     /// 安装一次会话级选择。`ok` = **已安装给下一轮**，不是「已生效」——
-    /// 生效的证据是流里的 `model/selection` 与随后的 `request/header`（决定 3）。
+    /// 生效的证据是流里的 `model/selection` 与随后的 `request/header`。
     @discardableResult
     func modelSelect(sessionId: String, selection: ModelSelection) async throws -> ModelSelection {
         let response: ModelSelectResponse = try await send(
@@ -216,7 +216,7 @@ final class GatewayClient: ObservableObject {
 // MARK: - 地址
 
 extension GatewayClient {
-    /// Mac 网关的地址 —— **全 App 唯一需要改的一行**。M0 的取舍就是硬编码（Plan §4.3 Step 4）：
+    /// Mac 网关的地址 —— **全 App 唯一需要改的一行**。取舍就是硬编码：
     /// 不做设备发现、不做配置界面；换成 `http://<Mac的主机名>.local:3081` 走 mDNS 也行。
     static let defaultBaseURL = URL(string: "http://192.168.125.23:3081")!
 }

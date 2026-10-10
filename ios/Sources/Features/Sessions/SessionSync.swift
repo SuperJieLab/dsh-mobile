@@ -24,7 +24,7 @@ final class SessionSync: ObservableObject {
 
     /// 屏幕上要画的消息。
     @Published private(set) var messages: [DisplayMessage] = []
-    /// 屏幕上要画的东西 —— 消息**与过程**（M6）；由组装器从同一批事件算出（判据 A1–A9）。
+    /// 屏幕上要画的东西 —— 消息**与过程**；由组装器从同一批事件算出。
     @Published private(set) var nodes: [TranscriptNode] = []
     /// 视图里的事件条数（消息只是其中一部分）。
     @Published private(set) var eventCount = 0
@@ -33,16 +33,16 @@ final class SessionSync: ObservableObject {
     @Published private(set) var status: Status = .idle
     /// 正在生成的回复（打字机）；没有进行中的 attempt 就是空串。
     @Published private(set) var transientText = ""
-    /// 跟随流的连接阶段 —— 连接态指示器的数据源（M3），从 `FollowClient` 转发。
+    /// 跟随流的连接阶段 —— 连接态指示器的数据源，从 `FollowClient` 转发。
     @Published private(set) var connectionPhase: FollowClient.Phase = .idle
-    /// 上下文占用（M6）。为 `nil` 时界面**隐藏整行**（判据 U2）。
+    /// 上下文占用。为 `nil` 时界面**隐藏整行**。
     @Published private(set) var usage: UsagePayload? = nil
-    /// 当前显示的模型（M7）：状态机的镜像，经既有的刷新路径冒泡。
+    /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
     @Published private(set) var displayedModel: ModelSelection? = nil
 
     private let client: GatewayClient
     private let sessionId: String
-    /// 待批审批的状态机（M5）。事实来源与镜像同一条：窗口事件里的 asked − decided 差集，
+    /// 待批审批的状态机。事实来源与镜像同一条：窗口事件里的 asked − decided 差集，
     /// 每次刷新重建。
     let approvals: ApprovalStore
     /// 内存里的镜像。视图重建会新建一个 `SessionSync`、窗口重取一次 ——
@@ -50,7 +50,7 @@ final class SessionSync: ObservableObject {
     private var mirror = SessionMirror()
     private var isSyncing = false
 
-    /// 跟随流（M2）：打开详情页即开启，实时收 opening / 事件 / 瞬态帧。
+    /// 跟随流：打开详情页即开启，实时收 opening / 事件 / 瞬态帧。
     private lazy var follow: FollowClient = {
         let followClient = FollowClient()
         followClient.onOpening = { [weak self] payload in self?.applyOpening(payload) }
@@ -59,24 +59,24 @@ final class SessionSync: ObservableObject {
         followClient.onApproval = { [weak self] payload in self?.approvals.receive(payload) }
         followClient.onUsage = { [weak self] snapshot in self?.applyUsage(snapshot) }
         followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
-        // 连接态指示器的唯一来源（M3）：不接的话指示器永远停在 idle、`ConnectionBadge` 恒隐藏。
+        // 连接态指示器的唯一来源：不接的话指示器永远停在 idle、`ConnectionBadge` 恒隐藏。
         followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
-        // M4：upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
+        // upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
         followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
-        // M8 T7：承载与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
+        // 承载与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
         followClient.sessionProvider = { [weak self] in self?.client.meshSession ?? .shared }
         followClient.baseURLProvider = { [weak self] in self?.client.baseURL ?? GatewayClient.defaultBaseURL }
         return followClient
     }()
     private var transient = TransientChannel()
-    /// 事件 → 显示节点（M6）。它跨刷新保留 —— 状态与去重理由见 `TranscriptAssembler`。
+    /// 事件 → 显示节点。它跨刷新保留 —— 状态与去重理由见 `TranscriptAssembler`。
     private var assembler = TranscriptAssembler { type in
         // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
         Log.warn(Log.Module.session, "TranscriptAssembler 不认识的事件类型：\(type)")
     }
-    /// 占用值的吸收（M6）。判定（严格高水位胜）全在值类型里（判据 O1），这里只持有并转发结果。
+    /// 占用值的吸收。判定（严格高水位胜）全在值类型里，这里只持有并转发结果。
     private var usageState = UsageState()
-    /// 当前模型的跟随更新（M7）。判定全在值类型里（V1–V4），这里只持有并转发结果。
+    /// 当前模型的跟随更新。判定全在值类型里，这里只持有并转发结果。
     private var modelState = ModelSelectionState()
     /// 把嵌套状态机的变化冒泡成自己的 objectWillChange ——
     /// 不转发的话审批卡的增删不触发视图重算（真机踩实）。
@@ -90,7 +90,7 @@ final class SessionSync: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
-    /// 下发一条指令（M5）：回包 ok = 已受理，回答本身从跟随流里来；失败如实进状态行，
+    /// 下发一条指令：回包 ok = 已受理，回答本身从跟随流里来；失败如实进状态行，
     /// 输入的字还在框里。
     func sendPrompt(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -103,7 +103,7 @@ final class SessionSync: ObservableObject {
         }
     }
 
-    // MARK: - 模型选择（M7）
+    // MARK: - 模型选择
 
     /// 拉一次目录（打开选择器时现拉，不订阅刷新——重开即新）。失败返回 `nil` 并如实进状态行。
     func loadModelCatalog() async -> ModelCatalog? {
@@ -122,7 +122,7 @@ final class SessionSync: ObservableObject {
         }
     }
 
-    /// 安装一次会话级选择（决定 3/4）：本地先记代号，回包对号落地；事件流的
+    /// 安装一次会话级选择：本地先记代号，回包对号落地；事件流的
     /// `model/selection` 随后照常进来 —— 与本地即时显示一致，界面不动。失败如实进状态行。
     func selectModel(_ selection: ModelSelection) async {
         let generation = modelState.beginSelect()
@@ -257,7 +257,7 @@ final class SessionSync: ObservableObject {
         refreshView()
     }
 
-    // MARK: - 跟随（M2 的主路径）
+    // MARK: - 跟随
 
     /// 打开详情页即跟随：服务端推 opening（首屏窗口）与后续事件，不再轮询。判定全在状态机
     /// 里 —— 与 HTTP 路径共用同一台 `SessionMirror`：
@@ -275,7 +275,7 @@ final class SessionSync: ObservableObject {
         transientText = ""
     }
 
-    /// 回前台立即触发重连（M3）：上游「恢复立即试」的复现。已就绪或正在握手时无事发生。
+    /// 回前台立即触发重连：上游「恢复立即试」的复现。已就绪或正在握手时无事发生。
     /// 只动连接编排，不碰镜像 —— 新 opening 会经 `applyOpening` 原路进来。
     func reconnectNow() {
         follow.reconnectNow()
@@ -298,7 +298,7 @@ final class SessionSync: ObservableObject {
         }
         transientText = transient.text
 
-        // 模型基线（M7）：opening 的可选 `model` 字段是进会话那一刻权威的「下一轮用什么」
+        // 模型基线：opening 的可选 `model` 字段是进会话那一刻权威的「下一轮用什么」
         // —— 状态机无条件落地（全会话投影比窗口推断权威）。缺省 = 不知道，不猜。
         if let raw = payload["model"],
            let data = try? JSONEncoder().encode(raw),
@@ -314,7 +314,7 @@ final class SessionSync: ObservableObject {
     private func applyLiveEvent(_ event: SessionEvent) {
         // 一条事件 = 一次覆盖到 seq+1 的快照；上游 gap-free 是契约（网关另有目击），幂等照旧生效。
         _ = mirror.apply(.received(Snapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])))
-        // 模型选择的两类事件照同一条流进来（M7）——状态机自己判水位与顺序。
+        // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
         modelState.absorb(event: event)
         displayedModel = modelState.displayed
         refreshView()
@@ -337,7 +337,7 @@ final class SessionSync: ObservableObject {
         refreshView()
     }
 
-    /// 一份占用读数（M6）：opening 里的基线或后续 `usage` 帧 —— 同一处理。被丢弃的帧**不动视图**
+    /// 一份占用读数：opening 里的基线或后续 `usage` 帧 —— 同一处理。被丢弃的帧**不动视图**
     /// （`UsageState` 判定），故乱序与重放不会让百分比跳一下再回来。
     private func applyUsage(_ snapshot: UsageSnapshot) {
         guard usageState.apply(snapshot) == .accepted else { return }
@@ -376,7 +376,7 @@ final class SessionSync: ObservableObject {
     private func fetchSnapshot() async -> Outcome {
         do {
             let snapshot = try await client.snapshot(sessionId: sessionId, since: mirror.cursor)
-            // opening 基线（M7 决定 1）：snapshot 回应带着「下一轮用什么」——
+            // opening 基线：snapshot 回应带着「下一轮用什么」——
             // 进会话前的选择客户端窗口里没有，只有这一路能补上。
             modelState.absorb(baseline: snapshot.model)
             displayedModel = modelState.displayed
@@ -411,8 +411,7 @@ final class SessionSync: ObservableObject {
     }
 
     /// 刷新界面可见的部分。状态机是唯一的事实来源。组装每次都从**整段事件**重算，不做
-    /// 增量 —— 重算代价远低于「增量组装写错一处就静默少一行」的风险；真机上手感有变化时
-    /// 再谈（登记在 §8.5）。
+    /// 增量 —— 重算代价远低于「增量组装写错一处就静默少一行」的风险；真机上手感有变化时再谈。
     private func refreshView() {
         messages = mirror.events.compactMap(\.displayMessage)
         nodes = assembler.assemble(mirror.events)

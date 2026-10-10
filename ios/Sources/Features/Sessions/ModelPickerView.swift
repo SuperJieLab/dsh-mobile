@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// 模型选择按钮（M7）：composer 左侧的当前模型入口，形态照上游 —— 模型选择器住在
+/// 模型选择按钮：composer 左侧的当前模型入口，形态照上游 —— 模型选择器住在
 /// 发送区旁（conversation.composer 槽位），不占消息流的位置。
 ///
 /// 显示规则照上游（`ui-model-selection` 的显示式）：当前值 = 状态机的显示 ?? 目录默认
-/// —— 服务端没说「下一轮用什么」时退到部署默认，**不猜别的**（决定 7）。目录打开时现拉
-/// 一次（`loadModelCatalog`），不订阅刷新——它只在凭证 / 适配器变更时才会变，重开即新
-/// （§4.7）。拉取失败的 provider 灰显并给整表重试；失败的明细不逐条重试（demo 粒度）。
+/// —— 服务端没说「下一轮用什么」时退到部署默认，**不猜别的**。目录打开时现拉
+/// 一次（`loadModelCatalog`），不订阅刷新——它只在凭证 / 适配器变更时才会变，重开即新。
+/// 拉取失败的 provider 灰显并给整表重试；失败的明细不逐条重试（demo 粒度）。
 struct ModelPickerView: View {
     /// 同步编排：显示值与选择动作的来源。
     @ObservedObject var sync: SessionSync

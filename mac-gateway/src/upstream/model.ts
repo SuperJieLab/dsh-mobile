@@ -1,11 +1,11 @@
 /**
- * 模型适配器（M7）：唯一知道 session controller 提供模型选择的模块。它基于
+ * 模型适配器：唯一知道 session controller 提供模型选择的模块。它基于
  * controller 的**声明**切面实现契约的 `ModelPort` —— `selectModel` / `modelCatalog`
  * 是公开 Remote 方法（`dsh-api-session-controller/lib/types/index.js:137-138`），
- * 因此与 M5 中继不同，这里不需要私有切面逃生口；漂移风险在形参*列表*上，
- * 下面的 G2 检查盯着它（形参名变了要出声，绝不静默按位置喂垃圾）。
+ * 因此与审批中继不同，这里不需要私有切面逃生口；漂移风险在形参*列表*上，
+ * 下面的签名检查盯着它（形参名变了要出声，绝不静默按位置喂垃圾）。
  *
- * 校验与归一化归上游所有（决定 3）：它的门回答什么 —— 归一化的 `selected`，
+ * 校验与归一化归上游所有：它的门回答什么 —— 归一化的 `selected`，
  * 或类型化拒答 —— 就转达什么，绝不在此重新推导。第二份「哪个模型合法」
  * 的拷贝正是两个真理的来源。
  */
@@ -32,7 +32,7 @@ export interface ModelControllerLike {
 
 /** 基于 controller 的声明切面构建契约的模型端口。 */
 export function modelPortOver(controller: ModelControllerLike): ModelPort {
-  // 组装期签名检查（G2）：下面的调用按位置传 request 对象，只要形参表与运行时
+  // 组装期签名检查：下面的调用按位置传 request 对象，只要形参表与运行时
   // 一致就是精确的。变化在这里触发 —— 启动时，而不是第一次点击时。
   if (!parameterListIs(controller.selectModel, ['request'])) {
     warnSignature('selectModel', controller.selectModel)

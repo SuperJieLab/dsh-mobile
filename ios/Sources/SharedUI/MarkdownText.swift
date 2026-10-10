@@ -6,10 +6,10 @@ import SwiftUI
 ///
 /// ## 流式：解析结果随源文增量演进
 ///
-/// 正文在瞬态通道上逐 chunk 增长（M2 的打字机）。解析结果放在 `@State` 里，**只在视图第一次
+/// 正文在瞬态通道上逐 chunk 增长（打字机）。解析结果放在 `@State` 里，**只在视图第一次
 /// 出现时全量解析**（`State(initialValue:)` 在身份不变的重建里被忽略，故父视图重算 body 不会
 /// 重解析）；源文变化走 `MarkdownParser.parse(_:extending:)` —— **冻结块原样搬运、只重解析尾部**。
-/// 块的 `id` 是源偏移，冻结块 id 不变 ⇒ SwiftUI 不重挂载、界面不闪（判据 M3/R4）。
+/// 块的 `id` 是源偏移，冻结块 id 不变 ⇒ SwiftUI 不重挂载、界面不闪。
 ///
 /// ## 行内交给系统，块级自己画
 ///
@@ -93,7 +93,7 @@ private struct BlockView: View {
 }
 
 /// 围栏代码块：等宽、带底、可横向滚动（长行不折行）。语言标记只用来留痕（右上角小字）——
-/// 本期不做高亮（§1.3）。
+/// 本期不做高亮。
 private struct CodeBlockView: View {
     let language: String?
     let code: String

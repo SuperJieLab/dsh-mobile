@@ -6,7 +6,7 @@ import SwiftUI
 /// 画出来，以及把同步状态如实显示在底部。**往回翻是显式的**（列表第一行那个入口）：只在
 /// 用户要的时候才拉，不偷偷多拉一批；`hasOlder` 由服务端给，客户端不自己猜。
 ///
-/// 对话流 = 消息气泡 + **折起的过程行**（M6 起工具调用与轮次边界进流，默认收起成一行摘要，
+/// 对话流 = 消息气泡 + **折起的过程行**（工具调用与轮次边界进流，默认收起成一行摘要，
 /// 点开才是工具行与思考行）；打字机、占位行与审批卡另占各自的位置。
 struct SessionDetailView: View {
     let client: GatewayClient
@@ -17,11 +17,11 @@ struct SessionDetailView: View {
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
-    /// 输入框里的草稿（M5 下发指令）。
+    /// 输入框里的草稿（下发指令）。
     @State private var draft = ""
-    /// 回前台立即重连（M3）：App 生命周期与详情域的连接点。
+    /// 回前台立即重连：App 生命周期与详情域的连接点。
     @Environment(\.scenePhase) private var scenePhase
-    /// 组网节点（M8）：连接方式一行的数据源（根部 environmentObject 注入）。
+    /// 组网节点：连接方式一行的数据源（根部 environmentObject 注入）。
     @EnvironmentObject private var node: TailnetNode
 
     init(client: GatewayClient, session: SessionSummary) {
@@ -69,8 +69,8 @@ struct SessionDetailView: View {
                 }
 
                 // 打字机：正在生成的回复。它不在镜像里 —— 瞬态内容没有 seq，不属于「已读到的
-                // 位置」（M2 的第一条纪律）。它逐 chunk 增长，源文变化时 `MarkdownText` 只重
-                // 解析尾部、已渲染的块原样留着（判据 M3）。
+                // 位置」（镜像的第一条纪律）。它逐 chunk 增长，源文变化时 `MarkdownText` 只重
+                // 解析尾部、已渲染的块原样留着。
                 if !sync.transientText.isEmpty {
                     Text("DSH 正在输入…")
                         .font(.caption2)
@@ -113,18 +113,18 @@ struct SessionDetailView: View {
                 }
             }
             .refreshable { await sync.sync() }
-            // 进屏即跟随（M2 主路径）：opening 给首屏，事件与瞬态实时推。
+            // 进屏即跟随：opening 给首屏，事件与瞬态实时推。
             // 离屏即停。`sync()`（HTTP 全量对齐）保留给下拉刷新作兜底。
             .task { sync.startFollowing() }
             .onDisappear { sync.stopFollowing() }
-            // 回前台立即重连 —— 上游「恢复立即试」在详情域的对应（M3）。
+            // 回前台立即重连 —— 上游「恢复立即试」在详情域的对应。
             // 已就绪 / 正在握手时 reconnectNow() 自己无事发生，不会叠加连接。
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
                 sync.reconnectNow()
             }
             .safeAreaInset(edge: .bottom) {
-                // 底栏：审批卡（M5）→ 说明行 → 输入框 → 连接态。审批面板挂在 composer 上方是
+                // 底栏：审批卡 → 说明行 → 输入框 → 连接态。审批面板挂在 composer 上方是
                 // 上游的原生位置（conversation.composer 槽位）——「正在问我的事」永远在输入框旁。
                 VStack(spacing: 0) {
                     ForEach(sync.approvals.pending) { approval in
@@ -142,8 +142,8 @@ struct SessionDetailView: View {
                             .padding(.vertical, 2)
                     }
 
-                    // 上下文占用（M6）：上游把它放在 composer 旁，这里同位置；
-                    // 没有读数就整行不出现（判据 U2）。
+                    // 上下文占用：上游把它放在 composer 旁，这里同位置；
+                    // 没有读数就整行不出现。
                     if let usage = sync.usage {
                         OccupancyBar(usage: usage)
                             .padding(.horizontal, 12)
@@ -151,7 +151,7 @@ struct SessionDetailView: View {
                     }
 
                     HStack(spacing: 8) {
-                        // 当前模型（M7）：选择器住在发送区旁（上游 composer 槽位），不占消息流。
+                        // 当前模型：选择器住在发送区旁（上游 composer 槽位），不占消息流。
                         ModelPickerView(sync: sync)
                         TextField("发一条指令给 DSH…", text: $draft, axis: .vertical)
                             .lineLimit(1...4)
@@ -196,7 +196,7 @@ private struct MessageBubble: View {
                 .foregroundStyle(.secondary)
 
             // 助手的话按 Markdown 排版（块级自己画、行内交给系统）；用户输入是纯文本，
-            // 不值得解一遍。M6 步骤 5。
+            // 不值得解一遍。
             Group {
                 if isUser {
                     Text(message.text)

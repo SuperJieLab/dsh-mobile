@@ -1,5 +1,5 @@
 /**
- * 会话内「当前模型」的跟随更新状态机 —— 一台纯状态机（M7 决定 2 / 决定 4）。
+ * 会话内「当前模型」的跟随更新状态机 —— 一台纯状态机。
  *
  * 不 import SwiftUI / UIKit、不碰网络：输入是 opening 基线、流事件与 select 回包，
  * 输出是当前显示的选择。更新规则是上游投影（`model-selection-projection.js` 的
@@ -7,16 +7,16 @@
  *
  * - `model/selection` 事件 → 显示该选择（有人换了选择）
  * - `request/header` 事件 → 显示 `data.header.config` 里的模型（本轮实际用的）
- * - 两类事件**后到覆盖先到**：选择没被兑现时如实显示落地值，不装作总成立（V2）
- * - 水位纪律与 M6 吸收器同款：**严格高 seq 胜，相等也丢** —— 重放不倒退（V3）
+ * - 两类事件**后到覆盖先到**：选择没被兑现时如实显示落地值，不装作总成立
+ * - 水位纪律与 `UsageState` 同款：**严格高 seq 胜，相等也丢** —— 重放不倒退
  *
  * 简化掉的是上游的 `{lastUsed, pending}` 对账：窗口起点由 opening 基线封口
- * （服务端从全会话投影算好，决定 1），窗口内的增量客户端有全部输入，无需补全量状态。
- * 上游若给投影加第三种事件，这里不会自动跟上 —— 代价已登记（Plan §3.1 决定 2）。
+ * （服务端从全会话投影算好），窗口内的增量客户端有全部输入，无需补全量状态。
+ * 上游若给投影加第三种事件，这里不会自动跟上 —— 这个代价已登记在案。
  *
  * generation 守卫照上游客户端同款纪律（`ui-model-selection/lib/client.js:210-243`
  * 「Latest selection operation wins」）：每次发起 `model-select` 递增代号，
- * 回包时代号不匹配即丢弃 —— 迟到的旧响应绝不覆盖更新的选择（V4）。
+ * 回包时代号不匹配即丢弃 —— 迟到的旧响应绝不覆盖更新的选择。
  *
  * 与 `SessionMirror` 同一形态：能被 iOS target 编译，也能被 `swiftc`
  * 编成 macOS 命令行程序跑断言（`ios/tests/run-model.sh`）。
@@ -24,7 +24,7 @@
 import Foundation
 
 struct ModelSelectionState: Equatable {
-    /// 当前显示的选择。`nil` = 还不知道 —— 界面退到目录默认，不猜（决定 7）。
+    /// 当前显示的选择。`nil` = 还不知道 —— 界面退到目录默认，不猜。
     private(set) var displayed: ModelSelection?
 
     /// 已吸收的最大事件 `seq`；严格高 seq 才推进。
@@ -33,7 +33,7 @@ struct ModelSelectionState: Equatable {
     /// 本机发起过的最新选择代号。
     private var generation = 0
 
-    /// 吸收 opening 基线（决定 1）：服务端从**全会话**投影算出的「下一轮用什么」，
+    /// 吸收 opening 基线：服务端从**全会话**投影算出的「下一轮用什么」，
     /// 比窗口内的推断更权威 —— 无条件落地。`nil` = 服务端不知道，不清旧值、不猜默认。
     mutating func absorb(baseline: ModelSelection?) {
         if let baseline { displayed = baseline }
@@ -43,7 +43,7 @@ struct ModelSelectionState: Equatable {
     /// 事件体原样透传，上游加事件不该让客户端崩。
     @discardableResult
     mutating func absorb(event: SessionEvent) -> Bool {
-        // 水位纪律（V3）：旧 seq 是重放，同 seq 是重复，都不得倒退显示。
+        // 水位纪律：旧 seq 是重放，同 seq 是重复，都不得倒退显示。
         if let lastSeq, event.seq <= lastSeq { return false }
 
         guard let selection = selection(in: event) else { return false }
@@ -58,7 +58,7 @@ struct ModelSelectionState: Equatable {
         return generation
     }
 
-    /// 一笔回包对号入座：代号仍是最新的才落地。返回是否被接受（V4）。
+    /// 一笔回包对号入座：代号仍是最新的才落地。返回是否被接受。
     @discardableResult
     mutating func settle(generation: Int, selected: ModelSelection) -> Bool {
         guard generation == self.generation else { return false }

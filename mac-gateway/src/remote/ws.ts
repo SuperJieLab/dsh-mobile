@@ -3,14 +3,14 @@
  * 泵成 mux 帧的泵。
  *
  * 升级挂在插件自己启动的监听器上（`'upgrade'`，与 `POST /rpc` 同端口）——
- * `ctx.webServer` 是宿主全局的，其 CLI 拒绝 `0.0.0.0`，这正是 M0 存在的
- * 原因（dev/plans/M0-reachability-spike.md §3.2）。
+ * `ctx.webServer` 是宿主全局的，其 CLI 拒绝 `0.0.0.0`，网关因此自带监听
+ * （dev/plans/M0-reachability-spike.md §3.2）。
  *
  * 泵对线上的承诺（dev/plans/M2-realtime-transient.md §3.3，
  * §3.2/§4.4 step 3）：参考的 `{type:'event', event}` 包裹解包；打开的窗口
  * 已由源分页切好（其含端 cursor 变成我们的排他 cursor）；事件与无 cursor
  * 的 transient 帧**原样**通行。适配器只补传输欠下的：成帧、心跳、
- * seq 连续性见证（源承诺无缺口；它说谎时我们高声拒绝 —— §3.5）与
+ * seq 连续性见证（源承诺无缺口；它说谎时我们高声拒绝）与
  * 错误映射。
  */
 
@@ -41,7 +41,7 @@ const log = createLogger(LogModule.ws)
 /**
  * 泵所用的宿主窄面，在此声明是因为各服务的真实类型在 dsh 安装树之外
  * 无法解析。follow 流与占用读数作为一次注入到达，因为两者出自同一宿主
- * （M6，dev/plans/M6-presentation-layer.md §四）。
+ * （dev/plans/M6-presentation-layer.md §四）。
  */
 export interface FollowSource {
   follow(
@@ -68,7 +68,7 @@ export interface FollowSource {
   occupancyOf(sessionId: string): UsageSnapshot | undefined
 
   /**
-   * 会话的模型基线 (M7)：`modelSelection` 投影的线上视图，未知时 undefined。
+   * 会话的模型基线：`modelSelection` 投影的线上视图，未知时 undefined。
    * 与窗口同一口气读出，手机打开时即知下一个请求用什么 —— HTTP snapshot
    * 带同一字段，但活会话实际走的是 follow 打开这条路。
    */
@@ -115,7 +115,7 @@ export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
  * 把流协议挂上插件自己的监听器：处理器接管协商（对照握手 key 验证）与
  * 其后的 socket；socket 错误被吞掉 —— 客户端死亡是常态。
  *
- * `gate` 是 M4 认证闸门，在应答握手之前于升级时检查一次 —— 无有效
+ * `gate` 是认证闸门，在应答握手之前于升级时检查一次 —— 无有效
  * access token，就没有 101。token 过期后连接继续存活；重新认证发生在
  * 下一次连接，不在流中途（dev/plans/M4-identity-credentials.md §3.3）。
  */
@@ -289,7 +289,7 @@ async function pump(
 
   /**
    * 读占用投影，把读失败视作「无话可说」：占用是事件之外的附加物，
-   * 抛错的读记日志后跳过，绝不变成会让手机失去会话的 `error` 帧 (M6)。
+   * 抛错的读记日志后跳过，绝不变成会让手机失去会话的 `error` 帧。
    */
   const readUsage = (): UsageSnapshot | undefined => {
     try {
@@ -301,7 +301,7 @@ async function pump(
   }
 
   /**
-   * 读模型基线 (M7)，规则同占用：事件之外的附加物，抛错的读记日志后
+   * 读模型基线，规则同占用：事件之外的附加物，抛错的读记日志后
    * 跳过，绝不是 `error` 帧。
    */
   const readModel = (): unknown => {
@@ -326,7 +326,7 @@ async function pump(
     const iterable = source.follow({
       address: { kind: 'session', sessionId: request.sessionId },
       // 窗口按参考的拼法请求，切自我们 `page` 窗口所用的同一目标 ——
-      // 打开因此始于 turn 边界（spec §8.5 B6 二次裁决）。
+      // 打开因此始于 turn 边界。
       ...upstreamWindow(request.maxMessages ?? DEFAULT_FOLLOW_MESSAGES),
       assistantStream: true,
     }, signal)
@@ -346,7 +346,7 @@ async function pump(
         expectedSeq = cursor
         log.info(`follow opening for "${request.sessionId}": cursor=${cursor}, ${events.length} events`)
         // 占用基线与窗口同一口气读出：手机打开时拿到的是同一时刻的
-        // 窗口与状态（M6 §3.1 决定 2）。
+        // 窗口与状态。
         const occupancy = readUsage()
         lastUsage = occupancy
         const model = readModel()
@@ -375,7 +375,7 @@ async function pump(
         }
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
         sendItem(event) // 原样 —— 协议消息就是事件对象本身
-        // 触发事件可能挪动了投影；确实挪动了才说 (M6)。
+        // 触发事件可能挪动了投影；确实挪动了才说。
         if (typeof event?.type === 'string' && usageIsTrigger({ type: event.type })) pushUsage()
         continue
       }

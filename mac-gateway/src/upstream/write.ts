@@ -1,20 +1,20 @@
 /**
- * 写通道适配器（M5）：审批中继与 prompt 泵。
+ * 写通道适配器：审批中继与 prompt 泵。
  *
  * **中继。** `api-remotes` 在 waterfall 中更早，把每个 `approval/request` 挂进
  * `pendingRemoteEvents` 等待*远程客户端*应答，因此中继把本插件变成一个远程
  * 事件流客户端 —— 打开网关的 `$events` 流，把每个 `approval/request` 帧作为
  * `approval` 帧转发给手机，并在点击时通过 `dispatchRpc("$events/result")`
  * 应答。手机与浏览器是对等方：第一个应答终结 waterfall，落败方得到
- * `unknown-approval`（fail-closed，Plan §3.3 决定 3）。
+ * `unknown-approval`（fail-closed）。
  *
  * 手机从未见过的问题由 WS 适配器在下一次连接时重放；中继保持其待答集合直到
  * 上游 `cancel` 到达。构造上即一次性：已交付的应答只在网关接受后才移除待答项，
  * 且每次交付都映射到一次性词汇（`allowed-once` / `rejected`）——
  * 中继绝不推断持久授权。
  *
- * 泵把 prompt 转发给 controller 的 `prompt`（web UI 自己的门，Plan §3.3
- * 决定 9）；`promptId` 即请求 id，controller 会去重。
+ * 泵把 prompt 转发给 controller 的 `prompt`（web UI 自己的门）；
+ * `promptId` 即请求 id，controller 会去重。
  */
 
 import { describeError, isNotFound } from '../contract/errors.ts'

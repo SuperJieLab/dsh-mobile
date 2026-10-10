@@ -1,16 +1,16 @@
 import Foundation
 
-/// 对 Mac 网关的**纯传输层**（R2 从 `GatewayClient` 拆出，函数体逐字搬移）：
-/// 拼请求、发一次 `POST /rpc`、按 HTTP 状态与信封判成败、把 URLError 翻成人话。
+/// 对 Mac 网关的**纯传输层**：拼请求、发一次 `POST /rpc`、按 HTTP 状态与信封判成败、
+/// 把 URLError 翻成人话。
 ///
-/// 切分判据 = 「改了要不要升协议版本」（R2 Plan §三）：这里的代码不碰协议语义 ——
+/// 切分判据 = 「改了要不要升协议版本」：这里的代码不碰协议语义 ——
 /// 消息结构在 `GatewayProtocol.swift`，身份状态机（pair / 续期单飞 / `isPaired`）留在
 /// `GatewayClient`，它调本类发送。
 @MainActor
 final class GatewayTransport {
     let baseURL: URL
 
-    /// 承载请求的 session（M8 决定 4）：默认 `shared`（局域网直连，行为不变）；
+    /// 承载请求的 session：默认 `shared`（局域网直连，行为不变）；
     /// 组网后注入 `TailnetNode.gatewaySession`（SOCKS5 回环 → tailnet），消息层零感知。
     private let session: URLSession
 
@@ -20,7 +20,7 @@ final class GatewayTransport {
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
     nonisolated static let timeout: TimeInterval = 10
 
-    /// 三张票在手机侧的家（M4）。默认共享单例：全 App 一个身份。
+    /// 三张票在手机侧的家。默认共享单例：全 App 一个身份。
     let credentials: CredentialStore
 
     init(baseURL: URL, credentials: CredentialStore, session: URLSession = .shared) {
@@ -105,7 +105,7 @@ private func envelopeFailure(in payload: Data) -> GatewayFailure? {
     (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
 }
 
-/// 传输与信封读面的错误（R2 从 `GatewayClient` 搬入）：不是协议语义，是「这次请求
+/// 传输与信封读面的错误：不是协议语义，是「这次请求
 /// 卡在哪一层」的翻译。协议内的拒绝走 `.refused(GatewayFailure)`。
 enum GatewayClientError: LocalizedError {
     /// 请求压根没发出去或没回来 —— 网络层的事，不是协议层的事。
@@ -118,7 +118,7 @@ enum GatewayClientError: LocalizedError {
     case versionMismatch(Int)
     /// 服务端按信封拒绝了。这是**协议内的**结果，不是故障。
     case refused(GatewayFailure)
-    /// 没有可用身份（M4）：未配对，或设备凭证已被服务端撤销。
+    /// 没有可用身份：未配对，或设备凭证已被服务端撤销。
     /// 不可重试 —— 重试要靠重新配对，不是再发一次。
     case unauthenticated
 

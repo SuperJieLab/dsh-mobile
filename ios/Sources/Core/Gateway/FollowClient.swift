@@ -34,18 +34,18 @@ final class FollowClient: NSObject {
     var onTransient: ((JSONValue) -> Void)?
     /// 一条连接级审批帧（`{kind:'request'|'cancel', ...}` 原样）。
     var onApproval: ((JSONValue) -> Void)?
-    /// 一份上下文占用读数（M6）。两个来源、同一个形状：opening 里的基线，以及随后的 `usage` 帧。
+    /// 一份上下文占用读数。两个来源、同一个形状：opening 里的基线，以及随后的 `usage` 帧。
     /// 缺席的含义与「空」不同 —— 字段**不在** = 服务端读不出（保留手里那份），字段在而 `usage` 为空
     /// = 这个水位上确实没有可显示的东西（清空）。
     var onUsage: ((UsageSnapshot) -> Void)?
     /// 一条 error 帧 —— 流通道里的协议内拒绝。
     var onRefused: ((GatewayFailure) -> Void)?
-    /// 连接阶段变化（连接态指示器的数据源，M3）。
+    /// 连接阶段变化（连接态指示器的数据源）。
     var onPhaseChange: ((Phase) -> Void)?
-    /// 取一张有效的访问凭证（M4）—— upgrade 请求带上它，没有就裸连（必被 401 拒）。
+    /// 取一张有效的访问凭证 —— upgrade 请求带上它，没有就裸连（必被 401 拒）。
     var authorizationProvider: (() -> String?)?
-    /// 建连的承载与地址每次现取（M8 决定 4 / T7）：组网激活后根部换值，下一轮连接
-    /// 即走隧道，本类零改动。默认局域网直连（M0 行为）。
+    /// 建连的承载与地址每次现取：组网激活后根部换值，下一轮连接
+    /// 即走隧道，本类零改动。默认局域网直连。
     var sessionProvider: () -> URLSession = { .shared }
     var baseURLProvider: () -> URL = { GatewayClient.defaultBaseURL }
 
@@ -113,7 +113,7 @@ final class FollowClient: NSObject {
         openFollowStream(sessionId: sessionId)
     }
 
-    /// 回前台立即触发一次重连 —— 上游「恢复立即试」（online 事件 → 重连控制器）的复现（M3）。
+    /// 回前台立即触发一次重连 —— 上游「恢复立即试」（online 事件 → 重连控制器）的复现。
     /// 退避窗口里的等待被跳过；已在握手或就绪的连接不受影响，不叠加并发连接。
     func reconnectNow() {
         guard following, sessionId != nil else { return }
@@ -148,7 +148,7 @@ final class FollowClient: NSObject {
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = Self.streamPath
 
-        // upgrade 请求带身份（M4）：与 HTTP 同一个头、同一张票。
+        // upgrade 请求带身份：与 HTTP 同一个头、同一张票。
         var upgradeRequest = URLRequest(url: components.url!)
         if let access = authorizationProvider?() {
             upgradeRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
@@ -277,7 +277,7 @@ final class FollowClient: NSObject {
             if let payload = frame.payload { onApproval?(payload) }
 
         case "usage":
-            // 占用读数（M6）。与 `approval` 不同，它**带 `streamId`** —— 属于本流
+            // 占用读数。与 `approval` 不同，它**带 `streamId`** —— 属于本流
             // 打开的那个会话，所以核一次 `sessionId`（帧串流时不能画别人的占用）。
             guard let payload = frame.payload, let sessionId,
                   payload["sessionId"]?.string == sessionId,
@@ -333,7 +333,7 @@ final class FollowClient: NSObject {
 
     /**
      * 重连延迟的纯函数（`random` 注入）—— 曲线与抖动范围是这段编排里唯一**可断言**的行为：不碰
-     * socket 就能验证。完整的「断线 → 退避 → 重连 → 代次递增」需要真网络，由真机判据 R3/R4 覆盖。
+     * socket 就能验证。完整的「断线 → 退避 → 重连 → 代次递增」需要真网络，由真机测试覆盖。
      *
      * - Parameters:
      *   - attempt: 第几次重连（从 1 起）。

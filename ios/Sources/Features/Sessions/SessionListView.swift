@@ -3,18 +3,18 @@ import SwiftUI
 /// 会话列表。它做两件事：调 `list-sessions`、按本屏的规则决定显示哪些行。按协议
 /// **排序是服务端的承诺**（这里一行排序代码都没有），而「显示哪些」是客户端的事，故过滤在此。
 struct SessionListView: View {
-    /// `@ObservedObject`（M4）：`isPaired` 是可变共享状态 —— 被撤销时这一屏要立刻让位给配对屏。
+    /// `@ObservedObject`：`isPaired` 是可变共享状态 —— 被撤销时这一屏要立刻让位给配对屏。
     @ObservedObject var client: GatewayClient
 
     @State private var sessions: [SessionSummary] = []
     @State private var failure: String?
     @State private var isLoading = false
-    /// 组网/配对入口（M8）：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
+    /// 组网/配对入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
     /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
     @State private var showMeshSettings = false
-    /// 回前台立即刷新（M3）：App 生命周期与列表域的连接点。
+    /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
-    /// 组网节点（M8）：连接方式一行的数据源（根部 environmentObject 注入）。
+    /// 组网节点：连接方式一行的数据源（根部 environmentObject 注入）。
     @EnvironmentObject private var node: TailnetNode
 
     var body: some View {
@@ -48,7 +48,7 @@ struct SessionListView: View {
         .navigationTitle("会话")
         .navigationDestination(for: SessionSummary.self) { session in
             // 显式再注一次（双保险）：navigationDestination 闭包在容器懒建时求值，
-            // 根部注入被吞的场景下这里兜底（真机 T8：配对成功后进详情页崩溃）。
+            // 根部注入被吞的场景下这里兜底（真机踩过：配对成功后进详情页崩溃）。
             SessionDetailView(client: client, session: session)
                 .environmentObject(node)
         }
@@ -65,7 +65,7 @@ struct SessionListView: View {
         }
         .refreshable { await reload() }
         .task { await reload() }
-        // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应（M3）。失败时旧列表照常保留。
+        // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应。失败时旧列表照常保留。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await reload() }
@@ -145,7 +145,7 @@ private struct SessionRow: View {
 }
 
 /// 把失败原因摊在屏幕上。服务端的拒绝与网络层的失败都显示成**原文** ——
-/// M0 的价值有一半在「看得见为什么不行」。
+/// 它的价值有一半在「看得见为什么不行」。
 struct FailureBanner: View {
     let text: String
 

@@ -1,18 +1,18 @@
 /**
- * 用量契约 (M6)：上下文占用，从两个投影值到一个帧载荷 —— 纯函数，
+ * 用量契约：上下文占用，从两个投影值到一个帧载荷 —— 纯函数，
  * 与本目录其他文件一致。
  *
  * 占用是客户端第一件**算不出**的事：分子折入所有表面节点，分母只在路由
  * 宣告时才公布，因此它能落在手机所持窗口之外。参考 UI 做同样的算术
  * （`ui-conversation/src/client/context-occupancy.ts:15-25`）：
  * `projectedTokens ?? pressureTokens` 比 `contextWindow`，封顶并取整 ——
- * 这里不重推宿主已知的事（§2.1）。
+ * 这里不重推宿主已知的事。
  *
  * 两半来自**两个独立注册的键**（`@deepseek-ai/dsh-token-meter`：
  * `contextPressure`、`contextBreakdown`，各自独立条款），同时对两者取一切
- * 带两条规则：分子或分母缺失即「未知」，绝不是 0%，客户端据此隐藏该行
- * （§3.1 决定 4，判据 U2）；两键共用一个水位，即切点的 `asOfSeq`，客户端
- * 因此不可能拿新鲜比值配陈旧分解（§3.1 决定 6，判据 U7）。
+ * 带两条规则：分子或分母缺失即「未知」，绝不是 0%，客户端据此隐藏该行；
+ * 两键共用一个水位，即切点的 `asOfSeq`，客户端因此不可能拿新鲜比值配陈旧
+ * 分解。
  *
  * 线上形状见 dev/protocol.md §4.4；`asOfSeq` 盖哪个读、以及为何保守的
  * 缓存读是错的，见 dev/plans/M6-presentation-layer.md §3.1 决定 3。
@@ -21,7 +21,7 @@
 /**
  * 构成的一半：对下一个请求的启发式 system / tools / message 拆分。
  * 刻意**不是** `usedTokens` 的分解 —— 估计器低估 CJK 文本与 JSON schema，
- * 三者相加永远对不齐锚定的分子（§3.1 决定 6）。
+ * 三者相加永远对不齐锚定的分子。
  */
 export interface BreakdownValues {
   systemTokens: number
@@ -36,8 +36,7 @@ export interface UsagePayload {
   /** 分母。 */
   contextWindow: number
   /**
-   * 仅当三部分全部已知且不全为零时存在；缺省省略展开行，绝不省略比值
-   * （§3.1 决定 6）。
+   * 仅当三部分全部已知且不全为零时存在；缺省省略展开行，绝不省略比值。
    */
   breakdown?: BreakdownValues
 }
@@ -57,7 +56,7 @@ export interface UsageSnapshot {
  *
  * 分子必需（先 `projectedTokens`，再 `pressureTokens`），`contextWindow`
  * 必需且为正，两者都必须是整数：投影自身的 schema 如此规定，坏值不得
- * 变成百分比（§3.1 决定 4，判据 U4）。
+ * 变成百分比。
  *
  * @param values - 按投影键原样读到的投影值，不透明。
  * @param asOfSeq - 读这些值时的水位。
@@ -91,7 +90,7 @@ export function usageSnapshotOf(values: Readonly<Record<string, unknown>>, asOfS
  *
  * ⚠️ 上游区分两种用量形状（`data.usage`，或 `data.stream` 的最后一个
  * chunk）；此处刻意不分：重读是内存内的同步读，无变化时什么也不发，
- * 区分形状只会多一条漏掉采样的路（§3.1 决定 3，判据 U5）。
+ * 区分形状只会多一条漏掉采样的路。
  *
  * @param event - 事件，仅按类型判定。
  */
@@ -105,7 +104,7 @@ export function usageIsTrigger(event: { type: string }): boolean {
  * 新快照是否值得发一帧。
  *
  * 变了的值要上路，没变的不要（一个繁忙的 turn 会多次稳定下来）；从有变无
- * 也是变更之一 —— 它告诉客户端别再显示旧数字（§3.1 决定 3，判据 U3）。
+ * 也是变更之一 —— 它告诉客户端别再显示旧数字。
  *
  * @param previous - 本流上一条已发送的快照，若有。
  * @param next - 刚读到的快照。
@@ -131,7 +130,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 /**
  * 三部分齐备，否则无：三者必须同时在场（残缺的拆分误导多于告知），三个零
- * 等同于缺省 —— 未动过的会话没有可展开之物（§3.1 决定 6，判据 U8）。
+ * 等同于缺省 —— 未动过的会话没有可展开之物。
  */
 function breakdownOf(values: Record<string, unknown> | undefined): BreakdownValues | undefined {
   if (values === undefined) return undefined

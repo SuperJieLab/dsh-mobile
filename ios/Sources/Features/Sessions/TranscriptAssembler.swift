@@ -60,8 +60,7 @@ struct NodeProcess: Equatable {
     /// 这一轮的编号。`nil` = 连编号都取不到。
     let turn: Int?
     /// 这一组的开头（`turn/start`）在不在窗口里 —— 不在就不画折叠头。窗口边界会把一轮切掉
-    /// 半截：过程仍如实显示（不丢行），但缺了开头，画「本轮摘要」等于假装这一轮完整
-    /// （§3.2 决定 11、判据 A7）。
+    /// 半截：过程仍如实显示（不丢行），但缺了开头，画「本轮摘要」等于假装这一轮完整。
     let hasHeader: Bool
     let entries: [ProcessEntry]
 
@@ -92,7 +91,7 @@ struct NodeProcess: Equatable {
 
 /// 过程里的一行。
 enum ProcessEntry: Equatable {
-    /// 一段思考（`reasoning` 块）。它进过程、不进正文（§3.2 决定 13）。
+    /// 一段思考（`reasoning` 块）。它进过程、不进正文。
     case thinking(seq: Int, text: String, time: Double)
     /// 一次工具调用。
     case tool(ToolRow)
@@ -115,7 +114,7 @@ extension ProcessEntry: Identifiable {
     }
 }
 
-    /// 一次工具调用的显示行。四种状态齐全，半截配对如实退化、不猜（§3.2 决定 11）：有结果且
+    /// 一次工具调用的显示行。四种状态齐全，半截配对如实退化、不猜：有结果且
     /// `isError` 假 → 成功；真 → 失败；只有调用 → 运行中；轮次关闭而始终没有结果 → 中断。
 struct ToolRow: Equatable {
 
@@ -154,7 +153,7 @@ struct ToolRow: Equatable {
     /// 「已上报过哪些不认识的类型」—— 按类型去重，每次重放整段窗口只留一条痕。
 struct TranscriptAssembler {
 
-    /// 出现不认识的 `type` 时调一次（按类型去重）—— 会话照常显示，日志里留线索（§3.2 决定 14）。
+    /// 出现不认识的 `type` 时调一次（按类型去重）—— 会话照常显示，日志里留线索。
     private let onUnknownEventType: ((String) -> Void)?
     private var reportedUnknownTypes: Set<String> = []
 
@@ -408,7 +407,7 @@ private extension TranscriptAssembler {
             let message = result.data["message"]
             let failed = message?["isError"]?.bool == true
             status = failed ? .failed : .succeeded
-            // 结果的正文是块数组；一期只呈现文本块（图片等其它块登记在 §1.3）。
+            // 结果的正文是块数组；一期只呈现文本块（图片等其它块后续再谈）。
             let text = (message?["content"]?.array ?? []).compactMap { block -> String? in
                 guard block["type"]?.string == "text" else { return nil }
                 return block["text"]?.string

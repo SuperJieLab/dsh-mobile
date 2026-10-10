@@ -1,11 +1,11 @@
 /**
- * 节点状态机（M8 决定 6）：iOS 侧唯一的新逻辑，纯函数、不持网络对象、不 import UI。
- * 迁移表唯一源 = Plan M8 §3.3 状态图；断言 = tests/run-mesh.sh（O1）。
+ * 节点状态机：iOS 侧唯一的新逻辑，纯函数、不持网络对象、不 import UI。
+ * 迁移表唯一源 = 状态机状态图；断言 = tests/run-mesh.sh。
  *
  * 纪律映射：
  * - Failed 的 badKey ≠ unreachable 必须可区分（界面文案据此分叉）；
- * - App 挂起不迁移（停摆由 tsnet 前台复活 + M3 重连接力吸收）；
- * - 状态目录损坏一律回 noKey（fail-closed，与 M4 凭证损坏同口径，决定 5 补）。
+ * - App 挂起不迁移（停摆由 tsnet 前台复活 + 重连接力吸收）；
+ * - 状态目录损坏一律回 noKey（fail-closed，与凭证损坏同口径）。
  */
 import Foundation
 
@@ -34,7 +34,7 @@ enum TailnetNodeState: Equatable {
         case nodeUnreachable
         /// 进后台：状态机不迁移，仍是 running。**当前无发射源**（后台路径走
         /// revive() + scenePhase，不进状态机）——保留是把「进后台不迁移」这个
-        /// 决定固化在表里，作为决策档案（MS13 断言同）。
+        /// 决定固化在表里，作为决策档案。
         case appBackgrounded
     }
 

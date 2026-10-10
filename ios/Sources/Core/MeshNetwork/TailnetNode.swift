@@ -1,14 +1,14 @@
 /**
- * TailscaleKit 的包装层（M8 决定 3）：节点生命周期 → `TailnetNodeState` 事件。
+ * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
  * 职责边界：这里只做「上游调用 + 结果归类成状态机事件」，不含任何判断逻辑之外的行为；
  * 迁移决策全部在纯状态机 `TailnetNodeState`（run-mesh.sh 断言对象）。注册成功的副产物
- * 是一只走 SOCKS5 回环的 `gatewaySession`（决定 4），`GatewayClient` 注入它之后流量
+ * 是一只走 SOCKS5 回环的 `gatewaySession`，`GatewayClient` 注入它之后流量
  * 全部进 tailnet。
  *
  * 上游形状（libtailscale@59d4bb8，TailscaleNode.swift 实读）：
  * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
- * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册（决定 5）；
+ * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册；
  * - `TailscaleError` 没有结构化的 key 错误分支，badKey/unreachable 只能按错误消息归类
  *   —— 这里是薄翻译层。
  */
@@ -33,7 +33,7 @@ final class TailnetNode: ObservableObject {
     /// Running 后可用：全部流量进 tailnet 的 session，给 `GatewayClient` 注入。
     private(set) var gatewaySession: URLSession?
 
-    /// 当前到网关对端的路径（决定 10）：Running 期间轮询刷新，其余状态为 nil。
+    /// 当前到网关对端的路径：Running 期间轮询刷新，其余状态为 nil。
     /// 展示层的唯一数据源 —— `ConnectionBadge` 只吃这个值，不感知本类型。
     @Published private(set) var meshPath: MeshPath?
 
@@ -44,7 +44,7 @@ final class TailnetNode: ObservableObject {
     private var node: TailscaleNode?
     private var pathPollTask: Task<Void, Never>?
 
-    /// 到对端的连接方式（R4 的展示侧判据）。
+    /// 到对端的连接方式。
     enum MeshPath: Equatable {
         /// 打洞成功，点对点直达。
         case direct
@@ -115,7 +115,7 @@ final class TailnetNode: ObservableObject {
         }
     }
 
-    /// 回前台的探活（链路 3「节点复活」节点层侧）：tsnet 的复活是上游行为（状态在
+    /// 回前台的探活（节点复活场景的节点层侧）：tsnet 的复活是上游行为（状态在
     /// 进程内，前台即恢复），这里只探测状态是否仍可读。读不了 = 节点已死 → 如实落
     /// Failed(unreachable)，不自动重试（异常点表：不做重试风暴，重试入口在设置页）。
     func revive() async {
@@ -148,7 +148,7 @@ final class TailnetNode: ObservableObject {
         return false
     }
 
-    // MARK: - 路径展示（决定 10）
+    // MARK: - 路径展示
 
     /// 读 tsnet status 的对端路径：对端带 `CurAddr` 即直连，只落在 `Relay` 上即中继。
     /// 读不出（挂起中、status 暂不可用）返回 nil —— 展示层对 nil 就不显示。
@@ -173,7 +173,7 @@ final class TailnetNode: ObservableObject {
     }
 
     /// Running 期间按固定节奏轮询路径；掉出 Running 即停并清值。
-    /// 轮询而非事件订阅：上游 statusJSON 是拉取式，R4 是同刻人工对照，15s 粒度够用。
+    /// 轮询而非事件订阅：上游 statusJSON 是拉取式，验收靠同刻人工对照，15s 粒度够用。
     private func startPathPolling() {
         guard pathPollTask == nil else { return }
             pathPollTask = Task { [weak self] in
@@ -270,9 +270,9 @@ final class TailnetNode: ObservableObject {
         Log.info(Log.Module.mesh, "state: \(old) --\(event)--> \(state)")
     }
 
-    // MARK: - tsnet 状态目录（决定 5 补：损坏 → noKey，fail-closed）
+    // MARK: - tsnet 状态目录（损坏 → noKey，fail-closed）
 
-    /// App 沙盒内的节点状态目录。卸载 App 随之蒸发 → 重开落 noKey（判据 R7）。
+    /// App 沙盒内的节点状态目录。卸载 App 随之蒸发 → 重开落 noKey。
     private static var stateDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("tsnet", isDirectory: true)

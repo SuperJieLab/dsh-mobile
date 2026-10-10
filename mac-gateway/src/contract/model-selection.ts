@@ -1,14 +1,14 @@
 /**
- * 模型契约 (M7)：会话级模型选择的单条 op ——
+ * 模型契约：会话级模型选择的单条 op ——
  * dev/plans/M7-model-selection.md §四。`model-catalog` 是读 op，端口
  * 缺失时像写通道未接线一样拒绝（生产装配必接线，此拒绝在生产不可达）。
  *
  * 端口是契约的唯一依赖；用 fake 让测试摆脱运行时与网络。上游的规范化形状
- * 原样转发 —— 校验与规范化都在控制器的门后（决定 3），契约只转达门后
+ * 原样转发 —— 校验与规范化都在控制器的门后，契约只转达门后
  * 给出的答复。
  */
 
-/** 一条规范化后的模型选择，用上游自己的词汇（决定 3）。 */
+/** 一条规范化后的模型选择，用上游自己的词汇。 */
 export interface ModelSelection {
   provider: string
   model: string
@@ -16,9 +16,8 @@ export interface ModelSelection {
 }
 
 /**
- * 宿主的模型目录（决定 6）：按 provider 分组的模型、部署默认值，以及逐个
- * provider 隔离的失败。`routableProviders` 被适配器剥掉 —— 客户端用不上
- * （§四 契约段）。
+ * 宿主的模型目录：按 provider 分组的模型、部署默认值，以及逐个
+ * provider 隔离的失败。`routableProviders` 被适配器剥掉 —— 客户端用不上。
  */
 export interface ModelCatalog {
   /** 部署默认值，部署有默认时存在。 */
@@ -54,7 +53,7 @@ export interface ModelPort {
   select(request: ModelSelectMessage): Promise<ModelSelectOutcome>
 }
 
-/** 校验通过的 `model-select` 消息（决定 3 的请求形状）。 */
+/** 校验通过的 `model-select` 消息。 */
 export interface ModelSelectMessage {
   sessionId: string
   provider: string

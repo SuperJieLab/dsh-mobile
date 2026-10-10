@@ -1,12 +1,11 @@
 import SwiftUI
 
 /// dsh-mobile 的 iPhone 客户端：会话列表 / 会话详情 / 配对 / 审批四个场景的根部，
-/// 也是协议纯度的一面镜子 —— 客户端若需要改协议才跑得起来，说明协议没设计对
-/// （Plan §4.3 Step 4）。
+/// 也是协议纯度的一面镜子 —— 客户端若需要改协议才跑得起来，说明协议没设计对。
 ///
-/// 根部接线（链路 1 / 链路 3）：启动即拉起组网节点（读沙盒存储决定注册还是
+/// 根部接线：启动即拉起组网节点（读沙盒存储决定注册还是
 /// 复用）；节点 Running 后把 tailnet session 与网关 tailnet 地址注入 `GatewayClient` ——
-/// HTTP 与 WebSocket 整体切进虚拟网，消息层零感知（决定 4）。回前台探活交给节点层。
+/// HTTP 与 WebSocket 整体切进虚拟网，消息层零感知。回前台探活交给节点层。
 @main
 struct DshMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
@@ -27,7 +26,7 @@ struct DshMobileApp: App {
                         }
                         await node.launch(config: MeshConfig.load())
                     }
-                    // 链路 1 终点：节点验证 Running → 全部流量切 tailnet。激活挂在
+                    // 节点验证 Running → 全部流量切 tailnet。激活挂在
                     // 节点层回调上——onChange(of: state) 在同值迁移（running→running）
                     // 时不触发，靠状态 diff 会漏掉激活。
                     .onAppear {
@@ -36,8 +35,8 @@ struct DshMobileApp: App {
                             client.activate(session: session, baseURL: baseURL)
                         }
                     }
-                    // 链路 3：回前台先探活节点（死了如实落 Failed）；WS 重连由
-                    // 既有 M3 的 onChange(scenePhase) 接管（列表/详情页各自触发）。
+                    // 回前台先探活节点（死了如实落 Failed）；WS 重连由
+                    // 既有的 onChange(scenePhase) 接管（列表/详情页各自触发）。
                     .onChange(of: scenePhase) { _, phase in
                         guard phase == .active else { return }
                         Task { await node.revive() }

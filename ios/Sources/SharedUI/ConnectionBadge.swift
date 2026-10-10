@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 连接态指示器（M3）—— 上游 `connecting` / `disconnected` 指示器的复现
+/// 连接态指示器 —— 上游 `connecting` / `disconnected` 指示器的复现
 /// （`ui-settings-general/src/client/SettingsRoot.tsx:203-228`）。
 ///
 /// 两半语义照抄上游：断连要诚实（如实标注、旧内容照常展示、不清屏不弹错误页）；短尝试要
@@ -18,7 +18,7 @@ struct ConnectionBadge: View {
         case offline
     }
 
-    /// 到网关对端的连接方式（M8 决定 10）：running 时显示一行「直连 / 经中继」。
+    /// 到网关对端的连接方式：running 时显示一行「直连 / 经中继」。
     /// 值由调用方从节点层取好传入 —— 本组件不感知 `TailnetNode` 类型（保持零耦合，
     /// 与状态机同理由：CLI 测试编不到 TailscaleKit）。
     enum MeshPath {
@@ -45,7 +45,7 @@ struct ConnectionBadge: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // 组网路径一行（决定 10）：独立于断连指示器 —— 已入网时它常在，
+            // 组网路径一行：独立于断连指示器 —— 已入网时它常在，
             // 断连语义仍由上面的防闪烁窗口管。
             if let meshPath {
                 Label(meshPath == .direct ? "直连" : "经中继",
