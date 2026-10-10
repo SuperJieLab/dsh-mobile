@@ -44,10 +44,10 @@ final class FollowClient: NSObject {
     var onPhaseChange: ((Phase) -> Void)?
     /// 取一张有效的访问凭证 —— upgrade 请求带上它，没有就裸连（必被 401 拒）。
     var authorizationProvider: (() -> String?)?
-    /// 建连的承载与地址每次现取：组网激活后根部换值，下一轮连接
-    /// 即走隧道，本类零改动。默认局域网直连。
+    /// 建连的承载与地址每次现取：store 激活后下一轮连接即走隧道，本类零改动。
+    /// 返回 nil = 端点不存在（未激活）——不猜地址，connect 据此进退避等待。
     var sessionProvider: () -> URLSession = { .shared }
-    var baseURLProvider: () -> URL = { GatewayClient.defaultBaseURL }
+    var baseURLProvider: () -> URL? = { nil }
 
     // MARK: - 状态
 
@@ -128,6 +128,12 @@ final class FollowClient: NSObject {
 
     private func connect() {
         guard following, sessionId != nil else { return }
+        // 无端点（未激活，R5 决定 3）：不猜地址，也不动代次与 phase 的连接语义，
+        // 直接进既有退避循环 —— 激活后下一轮自动连上。
+        guard let endpoint = baseURLProvider() else {
+            scheduleReconnect()
+            return
+        }
         // 注意：不在这里清零 reconnectAttempt —— 退避档位必须随失败次数爬升，
         // 否则握手持续失败时会退化成每秒一次的疯狂循环（真机抓到过）。
         generation += 1
@@ -141,7 +147,7 @@ final class FollowClient: NSObject {
             closeTask()
         }
 
-        guard var components = URLComponents(url: baseURLProvider(), resolvingAgainstBaseURL: false) else {
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             phase = .idle
             return
         }

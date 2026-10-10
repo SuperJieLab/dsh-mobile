@@ -15,7 +15,7 @@ struct DshMobileApp: App {
 
     init() {
         let node = TailnetNode()
-        let client = GatewayClient(baseURL: GatewayClient.defaultBaseURL)
+        let client = GatewayClient()
         _node = StateObject(wrappedValue: node)
         _store = StateObject(wrappedValue: ConnectionStore(client: client, node: node))
         self.client = client

@@ -13,13 +13,16 @@
 import Foundation
 
 @main
+@MainActor
 struct FollowReplayTests {
+
+    static func main() async { await run() }
 
     private static func event(_ seq: Int, text: String = "m") -> SessionEvent {
         SessionEvent(type: seq % 2 == 0 ? "user/message" : "assistant/message", seq: seq, time: 1_700_000_000_000 + Double(seq), data: .object([:]))
     }
 
-    static func main() {
+    private static func run() async {
 
         // MARK: C3 —— 跟随流按投喂顺序重放进同一台镜像
 
@@ -121,6 +124,35 @@ struct FollowReplayTests {
         expect(gate.flushDue(), "G3c 到点收批：本批开着 → flush 落地一次")
         expect(!gate.flushDue(), "G3d 收批之后再 flush 是无事发生（无消费者的重算被挡掉）")
         expect(gate.eventArrived() == .openWindow, "G3e 关批后新事件重新开批")
+
+        // MARK: R5 K1–K3 —— 端点生命周期（Plan R5 契约：不存在 → activate 一次 → 存在）
+
+        // K1：未激活的 client 不持有端点，op 立抛 .notActivated（transport 尚不存在，零网络）。
+        let bare = GatewayClient()
+        var k1Hit = false
+        do { _ = try await bare.listSessions() } catch GatewayClientError.notActivated { k1Hit = true } catch {}
+        expect(k1Hit, "K1 未激活 op 立抛 notActivated（不猜地址、不发网络）")
+        expect(bare.baseURL == nil, "K1b 未激活端点为 nil")
+
+        // K2：activate 是端点唯一来源——激活后同 op 的失败是传输层（ refusal），不再是 notActivated。
+        let activated = GatewayClient()
+        let endpoint = URL(string: "http://127.0.0.1:1")!
+        activated.activate(session: .shared, baseURL: endpoint)
+        expect(activated.baseURL == endpoint, "K2a 激活后端点 = activate 入参")
+        var k2Hit = false
+        do { _ = try await activated.listSessions() } catch GatewayClientError.notActivated { k2Hit = false } catch GatewayClientError.transport { k2Hit = true } catch {}
+        expect(k2Hit, "K2b 激活后失败降为传输层错误（端点确实来自 activate）")
+
+        // K3：无端点时跟随流不建连——直接进退避等待，激活后下一轮自愈。
+        let follow = FollowClient()
+        follow.baseURLProvider = { nil }
+        var lastPhase: FollowClient.Phase?
+        follow.onPhaseChange = { lastPhase = $0 }
+        follow.start(sessionId: "s1")
+        expect({
+            if case .waiting = lastPhase { return true }
+            return false
+        }(), "K3 无端点建连请求 → 不产连接任务，进入退避等待（激活后自愈）")
 
         print("—— \(passed) passed, \(failed) failed ——")
         if failed > 0 { exit(1) }

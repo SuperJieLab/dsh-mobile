@@ -65,7 +65,7 @@ final class SessionSync: ObservableObject {
         followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
         // 承载与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
         followClient.sessionProvider = { [weak self] in self?.client.meshSession ?? .shared }
-        followClient.baseURLProvider = { [weak self] in self?.client.baseURL ?? GatewayClient.defaultBaseURL }
+        followClient.baseURLProvider = { [weak self] in self?.client.baseURL }
         return followClient
     }()
     private var transient = TransientChannel()

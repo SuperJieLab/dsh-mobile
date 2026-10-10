@@ -9,13 +9,15 @@ import Foundation
 /// 状态**，值语义会在视图间复制出各自为政的凭证；仍 `@MainActor`，因为所有调用方本就在主线程。
 @MainActor
 final class GatewayClient: ObservableObject {
-    private(set) var baseURL: URL
+    /// 网关端点 —— **激活前不存在**（R5 契约）：App 在节点验证 Running 之前不持有
+    /// 任何网关地址，`activate` 是它从无到有的唯一时刻。
+    private(set) var baseURL: URL?
 
-    /// 组网后的承载：未激活 = `.shared`（局域网直连）。
+    /// 组网激活后的承载：激活前 = `.shared`（但端点不存在，请求不会发出）。
     /// 与 transport 分开存：`FollowClient` 的建连源每次现取，激活后下一轮连接即走隧道。
     private(set) var meshSession: URLSession = .shared
 
-    private var transport: GatewayTransport
+    private var transport: GatewayTransport?
 
     /// 三张票在手机侧的家。与 transport 共持同一份；默认共享单例：全 App 一个身份。
     private let credentials: CredentialStore
@@ -27,17 +29,15 @@ final class GatewayClient: ObservableObject {
     /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
     @Published private(set) var isPaired: Bool
 
-    init(baseURL: URL, credentials: CredentialStore? = nil, session: URLSession = .shared) {
-        self.baseURL = baseURL
+    init(credentials: CredentialStore? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
         self.credentials = credentials ?? .shared
-        self.transport = GatewayTransport(baseURL: baseURL, credentials: self.credentials, session: session)
         self.isPaired = self.credentials.hasDeviceToken
     }
 
-    /// 组网激活：节点 Running 后由根部调用 —— HTTP 换 transport、
-    /// WebSocket 换建连源，整体切到 tailnet。消息层零感知：协议、凭证、
-    /// 身份状态机都不动，只换承载与地址。
+    /// 组网激活：节点验证 Running 后由 store 调用（R5：唯一激活点）——
+    /// HTTP 换 transport、WebSocket 换建连源，整体切到 tailnet。消息层零感知：
+    /// 协议、凭证、身份状态机都不动，只换承载与地址。
     func activate(session: URLSession, baseURL: URL) {
         meshSession = session
         self.baseURL = baseURL
@@ -198,6 +198,8 @@ final class GatewayClient: ObservableObject {
         _ request: Request,
         authenticated: Bool = true
     ) async throws -> Response {
+        // 未激活 = 没有地址可打：fail-fast，不猜地址（R5 决定 1）。
+        guard let transport else { throw GatewayClientError.notActivated }
         if let answer = try await transport.sendOnce(request, authenticated: authenticated, type: Response.self) {
             return answer
         }
@@ -211,13 +213,4 @@ final class GatewayClient: ObservableObject {
         }
         throw GatewayClientError.unauthenticated
     }
-}
-
-// MARK: - 地址
-
-extension GatewayClient {
-    /// 局域网兜底地址 —— 组网配置（`MeshConfig`）缺失时的启动兜底，也是
-    /// 「全 App 唯一需要改的一行」。生产地址走 tailnet（`MeshConfig.gatewayDefault`）；
-    /// 换成 `http://<Mac的主机名>.local:3081` 走 mDNS 也行。
-    static let defaultBaseURL = URL(string: "http://192.168.125.23:3081")!
 }

@@ -121,6 +121,8 @@ enum GatewayClientError: LocalizedError {
     /// 没有可用身份：未配对，或设备凭证已被服务端撤销。
     /// 不可重试 —— 重试要靠重新配对，不是再发一次。
     case unauthenticated
+    /// 端点不存在：组网尚未激活（R5 契约）。零网络——激活后重试即可。
+    case notActivated
 
     var errorDescription: String? {
         switch self {
@@ -145,6 +147,8 @@ enum GatewayClientError: LocalizedError {
 
         case .unauthenticated:
             return "还没有配对，或配对已被 Mac 侧撤销 —— 请重新配对。"
+        case .notActivated:
+            return "组网尚未就绪 —— 等连接建立后再试。"
         }
     }
 
