@@ -14,8 +14,8 @@ struct SessionListView: View {
     @State private var showMeshSettings = false
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
-    /// 组网节点：连接方式一行的数据源（根部 environmentObject 注入）。
-    @EnvironmentObject private var node: TailnetNode
+    /// 连接域：连接方式一行的数据源（根部 environmentObject 注入，R3 起唯一出处）。
+    @EnvironmentObject private var store: ConnectionStore
 
     var body: some View {
         if !client.isPaired {
@@ -50,7 +50,7 @@ struct SessionListView: View {
             // 显式再注一次（双保险）：navigationDestination 闭包在容器懒建时求值，
             // 根部注入被吞的场景下这里兜底（真机踩过：配对成功后进详情页崩溃）。
             SessionDetailView(client: client, session: session)
-                .environmentObject(node)
+                .environmentObject(store)
         }
         .overlay {
             if isLoading && sessions.isEmpty {
@@ -73,7 +73,7 @@ struct SessionListView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 ConnectionBadge(state: ConnectionBadge.Status(isLoading: isLoading, lastFailure: failure),
-                                meshPath: node.meshPath.map(ConnectionBadge.MeshPath.init))
+                                meshPath: store.meshPath.map(ConnectionBadge.MeshPath.init))
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -91,7 +91,7 @@ struct SessionListView: View {
         }
         .sheet(isPresented: $showMeshSettings) {
             NavigationStack { PairingView(client: client) }
-                .environmentObject(node)
+                .environmentObject(store)
         }
     }
 

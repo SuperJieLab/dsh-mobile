@@ -10,8 +10,8 @@ import SwiftUI
 /// 节点状态如实展示；配对仍走原三票身份（不因在虚拟网内简化）。
 struct PairingView: View {
     let client: GatewayClient
-    /// 组网段的数据源 —— App 根部创建并经 environmentObject 注入。
-    @EnvironmentObject private var node: TailnetNode
+    /// 组网段的数据源 —— 连接域唯一出处（R3 起读 store 的节点状态透传与动作）。
+    @EnvironmentObject private var store: ConnectionStore
 
     @State private var code = ""
     @State private var failure: String?
@@ -63,7 +63,7 @@ struct PairingView: View {
     @ViewBuilder
     private var meshSection: some View {
         Section("组网") {
-                switch node.state {
+                switch store.nodeState {
                 case .noKey:
                     Text("输入组网服务地址与接入密钥（Mac 上 `headscale preauthkeys create` 生成）。")
                         .font(.footnote)
@@ -106,13 +106,13 @@ struct PairingView: View {
                         // 顺序反了提交永远是空串。
                         let key = tailnetKey
                         tailnetKey = ""
-                        Task { await node.submitKey(key, config: MeshConfig.load()) }
+                        Task { await store.submitMeshKey(key, config: MeshConfig.load()) }
                     }
                     .disabled(tailnetKey.isEmpty || !MeshConfig(controlURLString: controlURL, gatewayURLString: gatewayURL).isComplete)
 
-                    if case .failed = node.state {
+                    if case .failed = store.nodeState {
                         Button("重试") {
-                            Task { await node.retry(config: MeshConfig.load()) }
+                            Task { await store.retryMesh(config: MeshConfig.load()) }
                         }
                     }
                 }

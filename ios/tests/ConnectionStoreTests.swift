@@ -107,4 +107,6 @@ private final class FakeClient: GatewayActivating, @unchecked Sendable {
     func reviveNode() async {
         if reviveShouldFail { nodeState = .failed(.unreachable) }
     }
+    func submitKey(_ key: String, config: MeshConfig) async {}
+    func retry(config: MeshConfig) async {}
 }

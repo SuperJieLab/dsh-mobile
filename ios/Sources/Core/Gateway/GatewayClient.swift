@@ -216,7 +216,8 @@ final class GatewayClient: ObservableObject {
 // MARK: - 地址
 
 extension GatewayClient {
-    /// Mac 网关的地址 —— **全 App 唯一需要改的一行**。取舍就是硬编码：
-    /// 不做设备发现、不做配置界面；换成 `http://<Mac的主机名>.local:3081` 走 mDNS 也行。
+    /// 局域网兜底地址 —— 组网配置（`MeshConfig`）缺失时的启动兜底，也是
+    /// 「全 App 唯一需要改的一行」。生产地址走 tailnet（`MeshConfig.gatewayDefault`）；
+    /// 换成 `http://<Mac的主机名>.local:3081` 走 mDNS 也行。
     static let defaultBaseURL = URL(string: "http://192.168.125.23:3081")!
 }

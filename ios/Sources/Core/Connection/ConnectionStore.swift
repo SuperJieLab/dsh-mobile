@@ -36,6 +36,9 @@ protocol GatewayActivating: AnyObject {
     var onVerifiedRunning: ((URLSession) -> Void)? { get set }
     func launchNode(config: MeshConfig) async
     func reviveNode() async
+    /// 组网管理动作（设置页）：提交接入 key / failed 后重试。判定仍在节点层状态机。
+    func submitKey(_ key: String, config: MeshConfig) async
+    func retry(config: MeshConfig) async
 }
 
 /// 到网关对端的连接方式（域内类型；`TailnetNode.MeshPath` 与
@@ -50,6 +53,9 @@ final class ConnectionStore: ObservableObject {
 
     /// 对外连接阶段 —— 视图读连接态的唯一出处（决定 4）。
     @Published private(set) var phase: ConnectionPhase
+    /// 节点层状态的细粒度透传：`phase` 把 registering 与 running-未承载都折进
+    /// connecting，组网管理屏要区分这两态，故单独暴露（读取面仍唯一出处）。
+    @Published private(set) var nodeState: TailnetNodeState
     /// 直连 / 中继；非 ready 期为 nil。徽章的独立数据源，口径与重构前一致。
     @Published private(set) var meshPath: CarrierPath?
 
@@ -61,6 +67,7 @@ final class ConnectionStore: ObservableObject {
     init(client: GatewayActivating, node: MeshNodeControlling) {
         self.client = client
         self.node = node
+        self.nodeState = node.nodeState
         self.phase = ConnectionPhase.resolve(nodeState: node.nodeState,
                                              isPaired: client.isPaired,
                                              hasGatewaySession: false)
@@ -93,9 +100,24 @@ final class ConnectionStore: ObservableObject {
         meshPath = node.carrierPath
     }
 
+    // MARK: - 组网管理（设置页动作透传；判定在节点层，这里只接顺序）
+
+    func submitMeshKey(_ key: String, config: MeshConfig) async {
+        await node.submitKey(key, config: config)
+        reproject()
+        meshPath = node.carrierPath
+    }
+
+    func retryMesh(config: MeshConfig) async {
+        await node.retry(config: config)
+        reproject()
+        meshPath = node.carrierPath
+    }
+
     private func reproject() {
         // 身份轴从 client 读（节点不认识身份，决定 5）；isPaired 当前不被枚举消费，
         // 是「组合门面」的预留输入。
+        nodeState = node.nodeState
         phase = ConnectionPhase.resolve(nodeState: node.nodeState,
                                         isPaired: client.isPaired,
                                         hasGatewaySession: tailnetActivated)

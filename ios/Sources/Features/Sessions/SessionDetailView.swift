@@ -21,8 +21,8 @@ struct SessionDetailView: View {
     @State private var draft = ""
     /// 回前台立即重连：App 生命周期与详情域的连接点。
     @Environment(\.scenePhase) private var scenePhase
-    /// 组网节点：连接方式一行的数据源（根部 environmentObject 注入）。
-    @EnvironmentObject private var node: TailnetNode
+    /// 连接域：连接方式一行的数据源（根部 environmentObject 注入，R3 起唯一出处）。
+    @EnvironmentObject private var store: ConnectionStore
 
     init(client: GatewayClient, session: SessionSummary) {
         self.client = client
@@ -171,7 +171,7 @@ struct SessionDetailView: View {
 
                     // 连接态指示器：跟随流断开时如实说「已断开」，旧内容照常可读。
                     ConnectionBadge(state: ConnectionBadge.Status(followPhase: sync.connectionPhase),
-                                    meshPath: node.meshPath.map(ConnectionBadge.MeshPath.init))
+                                    meshPath: store.meshPath.map(ConnectionBadge.MeshPath.init))
                         .padding(.vertical, 4)
                 }
                 .background(.bar)
