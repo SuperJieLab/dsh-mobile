@@ -1,6 +1,6 @@
 /**
  * 认证契约：三张票，各回答一个问题，泄漏一张不等于三张全丢
- * (dev/plans/M4-identity-credentials.md §4.2)。
+ * (M4 §4.2)。
  *
  *   pairing code   一次性 · 10 分钟 · 错 5 次即作废 —— 建立关系；
  *                  只会得到 device token 作为回答
@@ -70,7 +70,7 @@ export function newToken(random: () => number): string {
 
 /**
  * `Authorization: Bearer <token>` → 取出 token；其余 → 无。头部是身份出行的
- * 唯一载体 (dev/protocol.md §「身份」)——放进信封就会焊死在某一种
+ * 唯一载体 (dev/reference/protocol.md §「身份」)——放进信封就会焊死在某一种
  * 传输上，违背第一条约束。
  */
 export function bearerTokenOf(header: string | undefined): string | undefined {

@@ -1,7 +1,7 @@
 /**
  * Stream contract tests.
  *
- * The headline test is S1 (dev/plans/M2-realtime-transient.md §5.1): the same window via
+ * The headline test is S1 (M2 §5.1): the same window via
  * the HTTP `page` path and via the follow opening must serialize **character-for-character
  * identically** — "the protocol is messages, not URLs", now executable with a second carrier.
  */

@@ -21,8 +21,8 @@
  * 钉 cut）是 TypeScript，代码用
  * 不了 —— 照语义重写最小的一段；文件能被 iOS target 编译，
  * 也能被 `swiftc` 编成 macOS 命令行程序跑断言。
- * 出处：dev/plans/M1-consistency-delta.md §3.3.2 决定 2 / 决定 9；
- * 契约见 dev/protocol.md。
+ * 出处：M1 §3.3.2 决定 2 / 决定 9；
+ * 契约见 dev/reference/protocol.md。
  */
 
 /// 一次 `snapshot` 成功响应的内容。

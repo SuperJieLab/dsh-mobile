@@ -9,7 +9,7 @@ import Foundation
  * 存储位置：`SecretFile`，Application Support/secrets/ 下自管文件，complete 文件保护。
  * 不用 Keychain：跨卸载存活且无法随卸载清除，与「卸载即失效」冲突；不用 UserDefaults：
  * 语义是偏好设置、存凭证名不正言顺。个人设备场景下文件内明文可接受，
- * 论证见 `dev/plans/M8-cross-network.md` §后注。
+ * 论证见 `M8` §后注。
  *
  * 单例：全 App 只有一个身份。`GatewayClient` 签发与续期，`FollowClient` 升级时读。
  */

@@ -1,5 +1,5 @@
 /**
- * The write contract's tests (M5, dev/plans/M5-remote-intervention.md §五 W1–W3
+ * The write contract's tests (M5, M5 §五 W1–W3
  * plus the `handle` dispatch; W4's server-side rebuild was retired by 实施期修正 11 —
  * rebuilding is the phone's display concern now). The port is a fake; no network.
  */

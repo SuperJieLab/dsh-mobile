@@ -4,7 +4,7 @@
  * 两段：**A 类**喂定死的事件；
  * **切片**（`sliceChecks`）编进镜像让窗口动起来（打开 / 往回翻 / 冷启动重取）。
  *
- * 判据与出处：dev/plans/M6-presentation-layer.md §五。配对与状态判定照**运行时产物**
+ * 判据与出处：M6 §五。配对与状态判定照**运行时产物**
  * （`@deepseek-ai/dsh-client-ui-chat`）：
  * - 配对 id = `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`
  * - 失败标记 = `tool/result.data.message.isError`（**不是** `content[0].isError` —— clone 仓库版本

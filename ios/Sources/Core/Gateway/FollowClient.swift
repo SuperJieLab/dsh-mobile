@@ -8,7 +8,7 @@ import Foundation
  * 2. **退避重连**：base 500ms × 2^n、抖动 50–100%、封顶 10s、
  * 就绪硬超时 15s（照抄上游 `recovery-config.ts:26-30`）；
  *    **重连即重新 open**，新 opening 重建窗口、
- *    不做水位续传（dev/plans/M2-realtime-transient.md §3.4）。
+ *    不做水位续传（M2 §3.4）。
  * 3. **心跳**：2s ping 一次，连续 2 次没等到 pong 就当它死了走重连（照抄上游 `stream-server.ts`）；
  *    URLSession 自动回服务端的 ping，这里只管「对面还活着吗」。
  * 不解释任何帧：解析成 JSON 原样递回调，形状与语义都在 `SessionSync`；协议名与端口全从

@@ -1,5 +1,5 @@
 /**
- * The model contract's tests (M7, dev/plans/M7-model-selection.md §4.1 T1,
+ * The model contract's tests (M7, M7 §4.1 T1,
  * 判据 G1). The model port is a fake; no network, no DSH runtime. Routing lives
  * on `handle` — one wire message in, one wire message out, same as every op.
  */

@@ -1,6 +1,6 @@
 import Foundation
 
-/// 协议版本，请求与响应都必须带它 —— 版本协商的位置（`dev/protocol.md` §三）。
+/// 协议版本，请求与响应都必须带它 —— 版本协商的位置（`dev/reference/protocol.md` §三）。
 let gatewayProtocolVersion = 2
 
 /// 失败信封里的错误码（协议 v2 六个 + `unauthenticated` + `unknown-approval` /
@@ -59,7 +59,7 @@ struct GatewayFailure: Decodable {
 // MARK: - 会话
 
 /// 列表里的一行（协议 v2）。字段全来自会话 header 或 host 已维护的投影，没有一个读日志算出来
-/// —— 列表因而零 I/O（`dev/protocol.md` §4.1）。
+/// —— 列表因而零 I/O（`dev/reference/protocol.md` §4.1）。
 struct SessionSummary: Decodable, Identifiable, Hashable {
     let id: String
     /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——
@@ -223,7 +223,7 @@ extension SessionEvent {
 // MARK: - 上下文占用
 
 /// 占用组成的三项。**不是** `usedTokens` 的分解 —— 估算器对中文与 JSON schema
-/// 定价偏低，三项加起来不等于那个数（`dev/plans/M6-presentation-layer.md` §3.1 决定 6）。
+/// 定价偏低，三项加起来不等于那个数（`M6` §3.1 决定 6）。
 struct UsageBreakdown: Decodable, Equatable {
     let systemTokens: Int
     let toolsTokens: Int
@@ -243,7 +243,7 @@ struct UsagePayload: Decodable, Equatable {
 }
 
 /// 一个水位上的一份占用读数。`usage` 缺失是一个**陈述**而不是故障：这个 cut 上没有可显示的
-/// 东西，正在显示的旧值应当被清掉（`dev/plans/M6-presentation-layer.md` §3.1 决定 4）。
+/// 东西，正在显示的旧值应当被清掉（`M6` §3.1 决定 4）。
 struct UsageSnapshot: Decodable, Equatable {
     /// 这份读数取自日志的哪个水位。⚠️ 与窗口的 `cursor` 是两条轴，**不要相减** —— 窗口按消息数切，
     /// 可能落后或领先投影折叠到的位置。

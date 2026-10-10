@@ -4,9 +4,9 @@
  *
  * 升级挂在插件自己启动的监听器上（`'upgrade'`，与 `POST /rpc` 同端口）——
  * `ctx.webServer` 是宿主全局的，其 CLI 拒绝 `0.0.0.0`，网关因此自带监听
- * （dev/plans/M0-reachability-spike.md §3.2）。
+ * （M0 §3.2）。
  *
- * 泵对线上的承诺（dev/plans/M2-realtime-transient.md §3.3，
+ * 泵对线上的承诺（M2 §3.3，
  * §3.2/§4.4 step 3）：参考的 `{type:'event', event}` 包裹解包；打开的窗口
  * 已由源分页切好（其含端 cursor 变成我们的排他 cursor）；事件与无 cursor
  * 的 transient 帧**原样**通行。适配器只补传输欠下的：成帧、心跳、
@@ -41,7 +41,7 @@ const log = createLogger(LogModule.ws)
 /**
  * 泵所用的宿主窄面，在此声明是因为各服务的真实类型在 dsh 安装树之外
  * 无法解析。follow 流与占用读数作为一次注入到达，因为两者出自同一宿主
- * （dev/plans/M6-presentation-layer.md §四）。
+ * （M6 §四）。
  */
 export interface FollowSource {
   follow(
@@ -61,7 +61,7 @@ export interface FollowSource {
   /**
    * 立即读取一个会话的占用投影 —— 同步、内存内：宿主在事件落地时折叠
    * 投影，所以这是状态读，不是日志走查
-   * （dev/plans/M6-presentation-layer.md §3.1 决定 3）。
+   * （M6 §3.1 决定 3）。
    *
    * @returns 读数；宿主不知道该会话时 `undefined`。
    */
@@ -117,7 +117,7 @@ export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
  *
  * `gate` 是认证闸门，在应答握手之前于升级时检查一次 —— 无有效
  * access token，就没有 101。token 过期后连接继续存活；重新认证发生在
- * 下一次连接，不在流中途（dev/plans/M4-identity-credentials.md §3.3）。
+ * 下一次连接，不在流中途（M4 §3.3）。
  */
 export function attachStreamHandler(
   server: Server,
@@ -367,7 +367,7 @@ async function pump(
         const event = frame.event as { type?: unknown; seq?: unknown } | undefined
         // 源承诺无缺口；我们做见证。跳过的 seq 意味着流自己的承诺破了 ——
         // 高声拒绝，绝不渲染一个谁也看不见的洞
-        // （dev/plans/M2-realtime-transient.md §3.5）。
+        // （M2 §3.5）。
         if (expectedSeq !== undefined && event?.seq !== expectedSeq) {
           log.error(`follow stream broke continuity: expected seq ${String(expectedSeq)}, got ${String(event?.seq)}`)
           send(socket, { type: 'error', streamId, payload: { code: 'internal-error', message: `follow stream skipped seq ${String(expectedSeq)}` } })

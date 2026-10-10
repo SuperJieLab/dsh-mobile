@@ -7,7 +7,7 @@
 # TailscaleKit.framework per platform -> xcodebuild -create-xcframework.
 #
 # Versions are pinned because the Go/tailscale-core pairing has broken before
-# (pub.dev ecosystem precedent; dev/plans/M8-cross-network.md §八). To
+# (pub.dev ecosystem precedent; M8 §八). To
 # upgrade: bump GO_VERSION / LIBTAILSCALE_REF, delete the clone, rerun.
 #
 # Usage: ios/scripts/build-tailscale-kit.sh   (outputs to ios/Frameworks/)

@@ -1,6 +1,6 @@
 /**
  * SessionMirror 的契约测试（SM1–SM14）：状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
- * 跑法见同目录 `run.sh`；出处：dev/plans/M1-consistency-delta.md §5.1。
+ * 跑法见同目录 `run.sh`；出处：M1 §5.1。
  */
 import Foundation
 

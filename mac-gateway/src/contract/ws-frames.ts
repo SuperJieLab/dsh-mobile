@@ -8,7 +8,7 @@
  *
  * 处理了 RFC 6455 的两处不对称，而非吸收掉：客户端帧是 MASKED 的、必须
  * 去掩码，服务端帧从不掩码；消息可能分片到达，解析器因此是增量的
- * （dev/plans/M2-realtime-transient.md §3.2/§4.4 step 1）。
+ * （M2 §3.2/§4.4 step 1）。
  */
 
 import { createHash } from 'node:crypto'

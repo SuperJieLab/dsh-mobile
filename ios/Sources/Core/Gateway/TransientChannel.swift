@@ -3,7 +3,7 @@
  *
  * 瞬态帧（`assistant-stream`）没有 `seq`，只有 attemptId / revision / index，不进水位体系：
  * 推进游标等于把「没落盘的东西」当成「已读到的位置」。所以它有自己的通道与校验，与
- * `SessionMirror` 平行互不触碰（dev/plans/M2-realtime-transient.md §3.4）。
+ * `SessionMirror` 平行互不触碰（M2 §3.4）。
  *
  * `revision` 来自 agent 级全局单调计数器（`() => ++assistantStreamRevision`）：start / chunk /
  * end 每帧 +1、跨 attempt 连续，是断号校验的对象；`index` 是 attempt 内 chunk 的位置。校验即

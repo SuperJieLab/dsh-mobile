@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 助手文本的渲染：`[Block]` → 视图。它**只认 `[Block]`，不认 markdown 源文** —— 将来若把
-/// 自写解析器换成成熟库（触发条件见 `dev/plans/M6-presentation-layer.md` §3.3 决定 15），
+/// 自写解析器换成成熟库（触发条件见 `M6` §3.3 决定 15），
 /// 换的是 `MarkdownParser` 那一层，这里一行都不用动。
 ///
 /// ## 流式：解析结果随源文增量演进

@@ -10,7 +10,7 @@
  * （"word for word"）。
  *
  * 打开与 `page`（rpc.ts）共用 `pageWindow`，因此「打开就是 `page` 返回的
- * 同一个窗口」是结构保证（dev/plans/M2-realtime-transient.md §3.2/§4.4）。
+ * 同一个窗口」是结构保证（M2 §3.2/§4.4）。
  */
 
 import { pageWindow } from './window.ts'
@@ -64,7 +64,7 @@ export interface MuxApprovalFrame {
  * 服务端 → 客户端：一条流的占用读数 —— 流作用域，与 `approval` 不同：
  * 占用属于这条流所 follow 的会话。⚠️ 水位是投影的切点，不是窗口的
  * `cursor`，客户端不得拿两者相减
- * (dev/plans/M6-presentation-layer.md §3.1 决定 2)。
+ * (M6 §3.1 决定 2)。
  */
 export interface MuxUsageFrame {
   type: 'usage'
@@ -114,7 +114,7 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
  * `open` 载荷携带的 follow 请求 —— 刻意精简。参考请求是
  * `{address, maxMessages?, assistantStream?}`（上游 `types.ts:449`）；显著的
  * 缺席者是水位：重连会重新打开并从新 opening 重建窗口，而不是从 cursor
- * 续读（dev/plans/M2-realtime-transient.md §3.4）。
+ * 续读（M2 §3.4）。
  */
 export interface FollowRequest {
   sessionId: string
@@ -126,7 +126,7 @@ export interface FollowRequest {
  * 把 `open` 载荷校验为 follow 请求。
  *
  * op 集合与 HTTP 信封按名字与语义共享；follow 也走 mux 帧
- * （dev/plans/M2-realtime-transient.md §3.3）—— 其他 op 或无 op，
+ * （M2 §3.3）—— 其他 op 或无 op，
  * 都不是 follow 请求。
  *
  * @returns 请求本身；命名不出会话时返回 `undefined` —— 与 `page` 相同的
@@ -161,7 +161,7 @@ export interface FollowOpening {
   /**
    * transient 基线，活跃时原样随行：一个进行中的 assistant 尝试及其累计
    * 文本与下一个 chunk 序号。此处不透明 —— 语义归客户端的
-   * `TransientChannel` 所有（dev/plans/M2-realtime-transient.md §3.4）；
+   * `TransientChannel` 所有（M2 §3.4）；
    * 契约只承诺源给什么、到达时不变。
    */
   assistantStream?: unknown
@@ -171,7 +171,7 @@ export interface FollowOpening {
    *
    * ⚠️ `occupancy.asOfSeq` 是投影的切点，**不是**这条打开的 `cursor`：
    * 窗口按消息数切，可能落后或超前投影的日志 —— 两个独立水位
-   * （dev/plans/M6-presentation-layer.md §3.1 决定 2）。
+   * （M6 §3.1 决定 2）。
    */
   occupancy?: UsageSnapshot
 }
@@ -182,7 +182,7 @@ export interface FollowOpening {
  * 整日志输入与 `page` 同价（存储读 API 只能前向），这使窗口装配与 `page`
  * 完全一致：同一函数、同一稠密前置条件、同一边界规则。`occupancy` 按调用方
  * 读到的原样随行，窗口与状态出自同一时刻
- * （dev/plans/M6-presentation-layer.md §3.1 决定 2）。
+ * （M6 §3.1 决定 2）。
  *
  * @throws {@link pageWindow} 抛出的错误 —— 适配器把它们折成 `error` 帧，
  *   错误码与 `page` 拒绝时相同。

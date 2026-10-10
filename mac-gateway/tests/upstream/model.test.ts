@@ -1,5 +1,5 @@
 /**
- * The model adapter's tests (M7, dev/plans/M7-model-selection.md §4.1 T2,
+ * The model adapter's tests (M7 §4.1 T2,
  * 判据 G2). The controller fake replicates the **runtime** signatures verbatim
  * (`dsh-api-session-controller/lib/types/index.js` — `selectModel(request)`,
  * `modelCatalog()`); a fake that differs from the real face would let a drift

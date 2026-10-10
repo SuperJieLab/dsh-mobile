@@ -1,7 +1,7 @@
 /**
  * 跟随承载下的镜像重放（C3）与退避曲线（C1 可测部分）。
  *
- * ## C3（dev/plans/M2-realtime-transient.md §5.2）
+ * ## C3（M2 §5.2）
  * 跟随流的形状：opening 即 `page` 的窗口（`Window`），一条事件帧即一次覆盖到
  * `seq + 1` 的快照（`Snapshot`）。不碰 `SessionSync`、不碰网络，按投喂顺序重放 ——
  * M1 那台状态机若为 WebSocket 改任何一行，这里先红。

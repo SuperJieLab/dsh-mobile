@@ -2,8 +2,8 @@
  * 协议契约：一条线上消息进，一条线上消息出。
  *
  * `handle` 是注入数据源的普通 async 函数：无 HTTP、无 socket、无 DSH 运行时、
- * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL（dev/protocol.md；
- * dev/plans/M0-reachability-spike.md §4.3 Step 3）。水位：两个边界
+ * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL（dev/reference/protocol.md；
+ * M0 §4.3 Step 3）。水位：两个边界
  * 均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没有」）；
  * `asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或
  * 重取。两种不重叠的读取：`snapshot` 自 cursor 前向，`page` 反向取一个
@@ -11,7 +11,7 @@
  *
  * 应答上限：单条应答 ≤ `maxDeltaEvents` 条事件，软性再受 `maxDeltaBytes`
  * 约束；提前截停用 `hasMore` 说明。上限约束单条应答，从不是序列的累计
- * （dev/plans/M1-consistency-delta.md §3.3.2 决定 4）。
+ * （M1 §3.3.2 决定 4）。
  */
 
 import { describeError, isUnreadable } from './errors.ts'
@@ -51,7 +51,7 @@ export interface WireEvent {
 /**
  * 会话列表的一行 —— 列表路径承诺的字段 (v2)。每个字段都来自会话头或
  * 已保留的投影，因此列表是零 I/O：这里没有任何东西需要读日志
- * （dev/protocol.md §4.1）。
+ * （dev/reference/protocol.md §4.1）。
  */
 export interface SessionRow {
   /** 已存储的会话 id。 */
@@ -91,7 +91,7 @@ export interface SessionSlice {
   /**
    * 客户端的 cursor 指向一个不可能存在的位置：`since` 为正而日志为空。
    * 这是数据源唯一能证明的错误 cursor —— 越过水位的 `since` 会读成
-   * 「已追平」（dev/plans/M1-consistency-delta.md §3.3.2 决定 5）。
+   * 「已追平」（M1 §3.3.2 决定 5）。
    */
   staleCursor: boolean
   /**
@@ -141,7 +141,7 @@ export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_04
  */
 export const DEFAULT_PAGE_MESSAGES = 50
 
-/** 拒绝。`code` 取 dev/protocol.md §六 中的码之一。 */
+/** 拒绝。`code` 取 dev/reference/protocol.md §六 中的码之一。 */
 export interface WireError {
   code: string
   message: string
@@ -302,7 +302,7 @@ async function listSessions(port: SessionPort, now: () => number): Promise<Respo
 
 /**
  * 一行的线上形状，省略 `title` 而非发送 null。`eventCount` 刻意缺席：
- * 日志推导的事实会把日志拖回列表路径（dev/protocol.md §4.1）。
+ * 日志推导的事实会把日志拖回列表路径（dev/reference/protocol.md §4.1）。
  */
 function toWireSummary(row: SessionRow): Record<string, unknown> {
   return {
@@ -331,7 +331,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
 
   if (slice.staleCursor) {
     // 用错误码，不用静默空应答：整个视图已不可信，布尔会被吞掉
-    // （dev/protocol.md §六）。
+    // （dev/reference/protocol.md §六）。
     return failure('resync-required', `since ${since} cannot exist: this session's log is empty`)
   }
 
@@ -378,7 +378,7 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
     window = pageWindow(sessionId, events, beforeSeq, maxMessages)
   } catch (error) {
     // 两种拒绝：不可解读的日志是 `unreadable-session`，cursor 越过末端是
-    // `resync-required`（dev/plans/M1-consistency-delta.md 判据 P4）。
+    // `resync-required`（M1 判据 P4）。
     if (error instanceof LogNotDenseError) return failure('unreadable-session', error.message)
     if (error instanceof CursorPastEndError) return failure('resync-required', error.message)
     throw error

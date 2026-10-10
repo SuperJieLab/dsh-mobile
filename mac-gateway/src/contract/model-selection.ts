@@ -1,6 +1,6 @@
 /**
  * 模型契约：会话级模型选择的单条 op ——
- * dev/plans/M7-model-selection.md §四。`model-catalog` 是读 op，端口
+ * M7 §四。`model-catalog` 是读 op，端口
  * 缺失时像写通道未接线一样拒绝（生产装配必接线，此拒绝在生产不可达）。
  *
  * 端口是契约的唯一依赖；用 fake 让测试摆脱运行时与网络。上游的规范化形状

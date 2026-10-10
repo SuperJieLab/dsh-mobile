@@ -2,7 +2,7 @@
  * Markdown 解析器的测试（M1–M4）：纯状态机，不 import SwiftUI / UIKit、不碰网络与磁盘，
  * 喂源文、断言块数组，覆盖块级识别 / 行内接入 / 尾部冻结 / 未闭合围栏。
  *
- * 判据与出处：dev/plans/M6-presentation-layer.md §五。
+ * 判据与出处：M6 §五。
  * 流式语义照上游运行时产物 `@deepseek-ai/dsh-client-ui-primitives` 的 `markdown/incremental.ts`：
  * 除尾部外全部冻结，冻结块的键是源偏移。
  */
