@@ -102,18 +102,6 @@ export function pageWindow(
   return { pageStart: start, asOfSeq: end, hasOlder: start > 0, events: events.slice(start, end) }
 }
 
-/** One backwards window's geometry — see {@link pageWindow}. */
-export interface PageWindow {
-  /** First seq of the window (the client's next `beforeSeq` when paging back). */
-  pageStart: number
-  /** Exclusive upper bound the window reached. */
-  asOfSeq: number
-  /** Whether older events exist before the window. */
-  hasOlder: boolean
-  /** The window's events, in seq order. */
-  events: readonly WireEvent[]
-}
-
 /**
  * The reference host's spelling of the same window rule, from the one target
  * {@link pageWindow} takes.

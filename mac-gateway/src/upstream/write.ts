@@ -84,6 +84,7 @@ export class ApprovalRelay {
     void this.#run()
   }
 
+  /** 测试专用出口（生产 teardown 走 relayLifetime.abort()）。 */
   stop(): void {
     this.#abort?.abort()
   }

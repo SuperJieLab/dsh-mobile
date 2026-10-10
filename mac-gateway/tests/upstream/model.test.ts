@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { test, mock } from 'node:test'
 
 import { modelPortOver, type ModelControllerLike } from '../../src/upstream/model.ts'
-import type { ModelSelectMessage } from '../../src/contract/model.ts'
+import type { ModelSelectMessage } from '../../src/contract/model-selection.ts'
 
 // -- helpers -----------------------------------------------------------------
 

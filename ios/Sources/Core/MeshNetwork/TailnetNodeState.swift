@@ -32,10 +32,10 @@ enum TailnetNodeState: Equatable {
         case retry(keyPresent: Bool)
         /// running 中节点失联（复活失败等）。
         case nodeUnreachable
-        /// 进后台：状态机不迁移，仍是 running。
+        /// 进后台：状态机不迁移，仍是 running。**当前无发射源**（后台路径走
+        /// revive() + scenePhase，不进状态机）——保留是把「进后台不迁移」这个
+        /// 决定固化在表里，作为决策档案（MS13 断言同）。
         case appBackgrounded
-        /// tsnet 状态目录损坏：任何状态都回 noKey，引导重输 key。
-        case stateStoreCorrupted
     }
 
     /// 迁移表。返回新状态；未列出的 (state, event) 组合原样返回（稳态不变迁移）。
@@ -68,9 +68,6 @@ enum TailnetNodeState: Equatable {
             return .running
         case (.running, .registrationSucceeded):
             return .running   // 前台复活幂等
-        // fail-closed：状态目录损坏压过一切
-        case (_, .stateStoreCorrupted):
-            return .noKey
         // 其余组合：状态不变
         default:
             return state

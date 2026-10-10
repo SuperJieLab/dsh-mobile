@@ -70,7 +70,7 @@ export interface ModelSelectMessage {
  * §六 `invalid-request`): a malformed selection silently executed would point
  * the next turn at a model nobody chose. `sessionId` is *not* validated here —
  * the read paths already map a malformed id to `unknown-session`, and the write
- * path keeps that convention (contract/write.ts 同款).
+ * path keeps that convention (contract/write-channel.ts 同款).
  */
 export function modelSelectRequestOf(message: Record<string, unknown>): ModelSelectMessage | undefined {
   const sessionId = nonEmptyString(message.sessionId)

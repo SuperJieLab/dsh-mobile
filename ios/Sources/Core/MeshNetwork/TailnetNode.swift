@@ -74,11 +74,6 @@ final class TailnetNode: ObservableObject {
             guard !key.isEmpty else { return }
             SecretFile.write(fileName, key)
         }
-
-        /// key 完成使命后可从设置页删除。
-        static func delete() {
-            SecretFile.delete(fileName)
-        }
     }
 
     // MARK: - 入口（App 启动 / 设置页动作）

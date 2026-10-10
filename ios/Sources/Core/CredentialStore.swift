@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /**
  * 三张票在手机侧的家（M4）。
@@ -19,27 +18,11 @@ final class CredentialStore {
 
     static let shared = CredentialStore()
 
-    // MARK: - Keychain 残留清理（M8 存储迁移的一次性迁移尾款）
-
-    /// 存储迁到沙盒前写入 Keychain 的旧条目：iOS 无用户可见的删除入口，卸载也不清，
-    /// 只能由 App 自删。每次启动都跑（幂等，不存在的条目 SecItemDelete 静默返回），
-    /// 旧 key 彻底失效即可停用——但留着也无害（两次无文件的 Delete 是微秒级）。
-    private static func purgeLegacyKeychain() {
-        for service in ["dsh-mobile.device-token", "dsh-mobile.tailnet-key"] {
-            SecItemDelete([
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-            ] as CFDictionary)
-        }
-    }
-
     // MARK: - 设备凭证（关系本体，沙盒文件）
 
     /// 沙盒里存着的设备凭证；没有就是未配对。被撤销时由续期失败清掉。
-    private(set) var deviceToken: String? = {
-        purgeLegacyKeychain()
-        return SecretFile.read("device-token")
-    }()
+    /// （Keychain 时代的旧条目已由 M8 迁移期的 purgeLegacyKeychain 清空，该尾款已撤。）
+    private(set) var deviceToken: String? = SecretFile.read("device-token")
 
     var hasDeviceToken: Bool { deviceToken != nil }
 

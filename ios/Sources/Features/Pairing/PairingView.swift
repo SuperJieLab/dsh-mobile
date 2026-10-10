@@ -119,7 +119,8 @@ struct PairingView: View {
         }
     }
 
-    private func pair() async {        isPairing = true
+    private func pair() async {
+        isPairing = true
         defer { isPairing = false }
         failure = nil
         do {

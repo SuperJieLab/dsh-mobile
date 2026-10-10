@@ -9,7 +9,7 @@ import Foundation
 struct MeshNodeStateTests {
 
     private static func run() {
-    // —— 启动（读 Keychain + 上次节点持久状态）——
+    // —— 启动（读沙盒 key + 上次节点持久状态）——
     expect(TailnetNodeState.handle(.launch(keyPresent: false, nodeStateHealthy: false)) == .noKey,
            "MS1 无 key 启动 → noKey")
     expect(TailnetNodeState.handle(.launch(keyPresent: false, nodeStateHealthy: true)) == .noKey,
@@ -48,12 +48,6 @@ struct MeshNodeStateTests {
            "MS14 running 中节点失联 → failed(unreachable)（如实显示，不自动重试风暴）")
     expect(TailnetNodeState.handle(.registrationSucceeded, from: .running) == .running,
            "MS15 前台复活再次报注册成功 → 仍 running（幂等）")
-
-    // —— 状态目录损坏：任何状态都回 noKey ——
-    for from in [TailnetNodeState.noKey, .registering, .running, .failed(.badKey), .failed(.unreachable)] {
-        expect(TailnetNodeState.handle(.stateStoreCorrupted, from: from) == .noKey,
-               "MS16 \(from) 遇状态目录损坏 → noKey（fail-closed，与 M4 凭证损坏同口径）")
-    }
 
         print("—— \(passed) passed, \(failed) failed ——")
         if failed > 0 { exit(1) }

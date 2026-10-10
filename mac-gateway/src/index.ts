@@ -65,7 +65,7 @@ export interface Config {
   deviceTokenSeed?: string
 }
 
-/** All-interfaces bind: the whole point of M0 (see docs/dev/spec.md §四 M0). */
+/** M0 全接口绑定的兜底值；M8 起生产经 config.host 改绑 tailnet 地址（100.64.0.1）。 */
 const DEFAULT_HOST = '0.0.0.0'
 
 /** Deliberately not 3080 — that is the dsh web profile's own port. */
