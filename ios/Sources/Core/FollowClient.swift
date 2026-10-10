@@ -44,6 +44,10 @@ final class FollowClient: NSObject {
     var onPhaseChange: ((Phase) -> Void)?
     /// 取一张有效的访问凭证（M4）—— upgrade 请求带上它，没有就裸连（必被 401 拒）。
     var authorizationProvider: (() -> String?)?
+    /// 建连的承载与地址每次现取（M8 决定 4 / T7）：组网激活后根部换值，下一轮连接
+    /// 即走隧道，本类零改动。默认局域网直连（M0 行为）。
+    var sessionProvider: () -> URLSession = { .shared }
+    var baseURLProvider: () -> URL = { GatewayClient.defaultBaseURL }
 
     // MARK: - 状态
 
@@ -137,7 +141,7 @@ final class FollowClient: NSObject {
             closeTask()
         }
 
-        guard var components = URLComponents(url: GatewayClient.defaultBaseURL, resolvingAgainstBaseURL: false) else {
+        guard var components = URLComponents(url: baseURLProvider(), resolvingAgainstBaseURL: false) else {
             phase = .idle
             return
         }
@@ -149,7 +153,7 @@ final class FollowClient: NSObject {
         if let access = authorizationProvider?() {
             upgradeRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
         }
-        let webSocketTask = URLSession.shared.webSocketTask(with: upgradeRequest)
+        let webSocketTask = sessionProvider().webSocketTask(with: upgradeRequest)
         task = webSocketTask
         print("[FollowClient] connect g\(current) → \(components.url!)")
         webSocketTask.resume()

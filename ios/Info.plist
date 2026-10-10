@@ -20,26 +20,23 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 网关地址是 tailnet 内的 http://100.64.0.1:3081（隧道内已加密，无需再 TLS）。
+		     只能开全局明文例外：100.64/10 不在 ATS「本地网络」范围，NSExceptionDomains
+		     只认域名不认 IP。⚠️ 只留 NSAllowsArbitraryLoads 一个键——iOS 10+ 下只要
+		     存在 NSAllowsLocalNetworking 等其他全局例外键，本键即被忽略（文档 §Versioning；
+		     真机 T8 实测同设两个键时 -1022 依旧）。 -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>连接你在 Mac 上运行的 DSH 网关，读取会话列表与消息。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-
-	<!-- LNP（本地网络隐私，iOS 14+）：明文 HTTP 出向连局域网 IP 同样受管控，
-	     用户必须在这条文案对应的弹窗里授权。用户拒绝后请求会拿到
-	     NSURLErrorNotConnectedToInternet，而不是连接被拒。 -->
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>连接你在 Mac 上运行的 DSH 网关，读取会话列表与消息。</string>
-
-	<!-- ATS（传输安全）：放到局域网地址的明文 HTTP 需要显式放行。
-	     NSAllowsLocalNetworking 只对本地/局域网地址开口子，比
-	     NSAllowsArbitraryLoads 收敛得多。 -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 </dict>
 </plist>

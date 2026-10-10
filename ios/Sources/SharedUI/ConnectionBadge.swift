@@ -18,11 +18,21 @@ struct ConnectionBadge: View {
         case offline
     }
 
+    /// 到网关对端的连接方式（M8 决定 10）：running 时显示一行「直连 / 经中继」。
+    /// 值由调用方从节点层取好传入 —— 本组件不感知 `TailnetNode` 类型（保持零耦合，
+    /// 与状态机同理由：CLI 测试编不到 TailscaleKit）。
+    enum MeshPath {
+        case direct
+        case relay
+    }
+
     let state: Status
+    var meshPath: MeshPath? = nil
 
     /// 合成的逐成员初始化器会带上私有的 `@State` 而不可见，显式给一个。
-    init(state: Status) {
+    init(state: Status, meshPath: MeshPath? = nil) {
         self.state = state
+        self.meshPath = meshPath
     }
 
     /// 指示器一旦显示，至少停留此时长 —— 照抄上游的最短显示时长。
@@ -34,8 +44,17 @@ struct ConnectionBadge: View {
     @State private var shownAt = Date.distantPast
 
     var body: some View {
-        Group {
-            if let shown {
+        VStack(alignment: .leading, spacing: 2) {
+            // 组网路径一行（决定 10）：独立于断连指示器 —— 已入网时它常在，
+            // 断连语义仍由上面的防闪烁窗口管。
+            if let meshPath {
+                Label(meshPath == .direct ? "直连" : "经中继",
+                      systemImage: meshPath == .direct ? "arrow.left.arrow.right" : "personalhotspot")
+                    .font(.caption2)
+                    .foregroundStyle(meshPath == .relay ? Color.orange : Color.secondary)
+            }
+            Group {
+                if let shown {
                 Label {
                     Text(caption(shown))
                 } icon: {
@@ -43,6 +62,7 @@ struct ConnectionBadge: View {
                 }
                 .font(.caption)
                 .foregroundStyle(shown == .offline ? Color.orange : Color.secondary)
+            }
             }
         }
         .task(id: state) {

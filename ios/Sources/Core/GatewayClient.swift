@@ -9,9 +9,13 @@ import Foundation
 /// 状态**，值语义会在视图间复制出各自为政的凭证；仍 `@MainActor`，因为所有调用方本就在主线程。
 @MainActor
 final class GatewayClient: ObservableObject {
-    let baseURL: URL
+    private(set) var baseURL: URL
 
-    private let transport: GatewayTransport
+    /// 组网后的承载（M8 决定 4）：未激活 = `.shared`（局域网直连，M0 行为）。
+    /// 与 transport 分开存：`FollowClient` 的建连源每次现取，激活后下一轮连接即走隧道。
+    private(set) var meshSession: URLSession = .shared
+
+    private var transport: GatewayTransport
 
     /// 三张票在手机侧的家（M4）。与 transport 共持同一份；默认共享单例：全 App 一个身份。
     private let credentials: CredentialStore
@@ -20,15 +24,24 @@ final class GatewayClient: ObservableObject {
     /// 并发撞上 401 的请求都等这一张新票，然后各自重试一次。
     private var refreshTask: Task<Bool, Never>?
 
-    /// 关系是否存在（设备凭证在 Keychain 里）。配对成功置真，被撤销置假。
+    /// 关系是否存在（设备凭证在沙盒里，M8 后注）。配对成功置真，被撤销置假。
     @Published private(set) var isPaired: Bool
 
-    init(baseURL: URL, credentials: CredentialStore? = nil) {
+    init(baseURL: URL, credentials: CredentialStore? = nil, session: URLSession = .shared) {
         self.baseURL = baseURL
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
         self.credentials = credentials ?? .shared
-        self.transport = GatewayTransport(baseURL: baseURL, credentials: self.credentials)
+        self.transport = GatewayTransport(baseURL: baseURL, credentials: self.credentials, session: session)
         self.isPaired = self.credentials.hasDeviceToken
+    }
+
+    /// 组网激活（M8 链路 1 终点）：节点 Running 后由根部调用 —— HTTP 换 transport、
+    /// WebSocket 换建连源，整体切到 tailnet。消息层零感知（决定 4）：协议、凭证、
+    /// 身份状态机都不动，只换承载与地址。
+    func activate(session: URLSession, baseURL: URL) {
+        meshSession = session
+        self.baseURL = baseURL
+        transport = GatewayTransport(baseURL: baseURL, credentials: credentials, session: session)
     }
 
     /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证（M4 §3.2）。成功即建立关系；失败文案来自服务端。

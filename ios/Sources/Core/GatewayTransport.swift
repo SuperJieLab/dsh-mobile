@@ -10,6 +10,10 @@ import Foundation
 final class GatewayTransport {
     let baseURL: URL
 
+    /// 承载请求的 session（M8 决定 4）：默认 `shared`（局域网直连，行为不变）；
+    /// 组网后注入 `TailnetNode.gatewaySession`（SOCKS5 回环 → tailnet），消息层零感知。
+    private let session: URLSession
+
     /// 协议里的唯一端点。多端点会把资源语义烧进 URL（见 `docs/dev/protocol.md` §二）。
     nonisolated static let rpcPath = "/rpc"
 
@@ -19,9 +23,10 @@ final class GatewayTransport {
     /// 三张票在手机侧的家（M4）。默认共享单例：全 App 一个身份。
     let credentials: CredentialStore
 
-    init(baseURL: URL, credentials: CredentialStore) {
+    init(baseURL: URL, credentials: CredentialStore, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.credentials = credentials
+        self.session = session
     }
 
     /// 发一次（不带续期编排）。返回 `nil` 表示被 401 拒了 —— 续期单飞与重试
@@ -44,7 +49,7 @@ final class GatewayTransport {
         let payload: Data
         let urlResponse: URLResponse
         do {
-            (payload, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+            (payload, urlResponse) = try await session.data(for: urlRequest)
         } catch {
             throw GatewayClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }

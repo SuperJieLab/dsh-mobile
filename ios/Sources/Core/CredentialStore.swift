@@ -1,21 +1,16 @@
 import Foundation
 import Security
 
-/// Keychain 条目的公共字段 —— 文件级函数：读设备凭证发生在实例属性初始化器里，
-/// 那时 `self` 与 `Self` 都不可用。
-private func keychainQuery() -> [String: Any] {
-    [
-        kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "dsh-mobile.device-token",
-        kSecAttrAccount as String: "device",
-    ]
-}
-
 /**
  * 三张票在手机侧的家（M4）。
  *
- * 设备凭证是关系的本体，要经得起杀 App / 重启（进 Keychain）；访问凭证只是 15 分钟的
+ * 设备凭证是关系的本体，要经得起杀 App / 重启（进 App 沙盒）；访问凭证只是 15 分钟的
  * 时间片，丢了就换（只进内存）—— 与「客户端不落盘位置」同一条纪律：时间片不是资产。
+ *
+ * 存储位置（M8 后注，原为 Keychain → UserDefaults → 沙盒文件）：`SecretFile`，
+ * Application Support/secrets/ 下自管文件，complete 文件保护。Keychain 跨卸载存活
+ * 且无法随卸载清除，与「卸载即失效」冲突；UserDefaults 语义是偏好设置、存凭证名不
+ * 正言顺。个人设备场景下文件内明文可接受，论证见 `docs/dev/plans/M8-cross-network.md` §后注。
  *
  * 单例：全 App 只有一个身份。`GatewayClient` 签发与续期，`FollowClient` 升级时读。
  */
@@ -24,43 +19,40 @@ final class CredentialStore {
 
     static let shared = CredentialStore()
 
-    // MARK: - 设备凭证（关系本体，Keychain）
+    // MARK: - Keychain 残留清理（M8 存储迁移的一次性迁移尾款）
 
-    /// Keychain 里存着的设备凭证；没有就是未配对。重装 App 后 Keychain 仍在，
-    /// 所以「未配对」的判定以能读到为准；被撤销时由续期失败清掉。
+    /// 存储迁到沙盒前写入 Keychain 的旧条目：iOS 无用户可见的删除入口，卸载也不清，
+    /// 只能由 App 自删。每次启动都跑（幂等，不存在的条目 SecItemDelete 静默返回），
+    /// 旧 key 彻底失效即可停用——但留着也无害（两次无文件的 Delete 是微秒级）。
+    private static func purgeLegacyKeychain() {
+        for service in ["dsh-mobile.device-token", "dsh-mobile.tailnet-key"] {
+            SecItemDelete([
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+            ] as CFDictionary)
+        }
+    }
+
+    // MARK: - 设备凭证（关系本体，沙盒文件）
+
+    /// 沙盒里存着的设备凭证；没有就是未配对。被撤销时由续期失败清掉。
     private(set) var deviceToken: String? = {
-        var query = keychainQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        purgeLegacyKeychain()
+        return SecretFile.read("device-token")
     }()
 
     var hasDeviceToken: Bool { deviceToken != nil }
 
     func saveDeviceToken(_ token: String) {
-        guard let data = token.data(using: .utf8) else { return }
         deviceToken = token
-
-        // 已有则更新，没有则新增 —— Keychain 的两步写，没有 upsert。
-        let update: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(keychainQuery() as CFDictionary, update as CFDictionary)
-        guard status == errSecItemNotFound else { return }
-
-        var add = keychainQuery()
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(add as CFDictionary, nil)
+        SecretFile.write("device-token", token)
     }
 
     /// 关系在这台手机上的终点：被撤销（续期 401）时由 `GatewayClient` 调用。
     func deleteDeviceToken() {
         deviceToken = nil
         clearAccess()
-        SecItemDelete(keychainQuery() as CFDictionary)
+        SecretFile.delete("device-token")
     }
 
     // MARK: - 访问凭证（时间片，只进内存）
