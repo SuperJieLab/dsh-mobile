@@ -303,6 +303,30 @@ test('model ops are answered with an envelope even when no controller is behind 
   }
 })
 
+// MARK: - the bind address (M8 T2: the exposed surface is withdrawn)
+
+test('the listener binds only to the configured address: another local address is unreachable', { timeout: 10_000 }, async () => {
+  const port = freshPort(45_300)
+  const credentialsPath = tempCredentialsPath()
+  // 127.0.0.1 vs 127.0.0.2: two distinct loopback addresses, so the "reachability
+  // surface" claim is observable without a real tailnet (R5's reproducible stand-in —
+  // on the Mac the deployment binds 100.64.0.1 and the LAN probe plays 127.0.0.2's part).
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    const up = await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    assert.equal(up.status, 200)
+
+    await assert.rejects(
+      fetch(`http://127.0.0.2:${port}/`, { signal: AbortSignal.timeout(3_000) }),
+      undefined,
+      'a device outside the bound address must not even complete a TCP handshake',
+    )
+  } finally {
+    teardown()
+  }
+})
+
 // MARK: - the auth gate (M4 A4)
 
 test('a business request without credentials is refused as 401 unauthenticated', async () => {
