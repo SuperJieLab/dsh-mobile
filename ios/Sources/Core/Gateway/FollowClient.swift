@@ -26,8 +26,8 @@ final class FollowClient: NSObject {
     }
     // MARK: - 回调（由编排层注入；全部在主线程）
 
-    /// opening 帧：`{sessionId, cursor, pageStart, hasOlder, events, assistantStream?}`。
-    var onOpening: ((JSONValue) -> Void)?
+    /// opening 帧：typed 直解（R4 决定 1），外壳与事件数组一次解码齐备。
+    var onOpening: ((OpeningFrame) -> Void)?
     /// 一条持久事件（DSH 事件对象原样）。
     var onEvent: ((SessionEvent) -> Void)?
     /// 一条瞬态帧（start/chunk/end，原样）。
@@ -229,7 +229,8 @@ final class FollowClient: NSObject {
             Log.debug(Log.Module.session, "g\(current) non-text frame ignored")
             return
         }
-        guard let frame = try? JSONDecoder().decode(MuxFrame.self, from: Data(text.utf8)) else {
+        let rawData = Data(text.utf8)
+        guard let frame = try? JSONDecoder().decode(MuxFrame.self, from: rawData) else {
             Log.warn(Log.Module.session, "g\(current) unparsable frame (first 120 chars): \(text.prefix(120))")
             return // 解不了的帧不是消息，忽略
         }
@@ -239,17 +240,26 @@ final class FollowClient: NSObject {
         case "item":
             guard let payload = frame.payload else { return }
             if payload["sessionId"] != nil && payload["cursor"] != nil && payload["events"] != nil {
-                // opening：就绪的标志。
+                // opening：就绪的标志。typed 直解一次（R4 决定 1）——坏事件由
+                // FailableDecodable 单条跳过，其余照常显示。
                 reconnectAttempt = 0
                 missedPongs = 0
+                guard let opening = OpeningFrame.decode(rawData) else {
+                    Log.warn(Log.Module.session, "g\(current) opening unparsable (first 120 chars): \(text.prefix(120))")
+                    return
+                }
                 phase = .ready
-                onOpening?(payload)
+                onOpening?(opening)
                 // 占用基线随 opening 一同到达（服务端读不出投影时不带这个字段，
                 // 那与「这个水位上没有值」是两件事，所以只在字段在时才上报）。
-                if let baseline = payload["occupancy"]?.usageSnapshot { onUsage?(baseline) }
+                if let baseline = opening.occupancy { onUsage?(baseline) }
             } else if payload["type"]?.string == "assistant-stream" {
                 onTransient?(payload["frame"] ?? .null)
-            } else if let event = payload.sessionEvent {
+            } else if payload["type"]?.string != nil, payload["seq"] != nil {
+                // 事件帧：payload 本体就是 SessionEvent —— 直解一次；解不出如实丢弃
+                //（与旧往返路径的静默丢弃同语义）。
+                guard let envelope = try? JSONDecoder().decode(FrameWithEvent.self, from: rawData),
+                      let event = envelope.payload?.value else { return }
                 onEvent?(event)
             }
 
@@ -280,8 +290,9 @@ final class FollowClient: NSObject {
             // 占用读数。与 `approval` 不同，它**带 `streamId`** —— 属于本流
             // 打开的那个会话，所以核一次 `sessionId`（帧串流时不能画别人的占用）。
             guard let payload = frame.payload, let sessionId,
-                  payload["sessionId"]?.string == sessionId,
-                  let snapshot = payload.usageSnapshot else { return }
+                  payload["sessionId"]?.string == sessionId else { return }
+            guard let envelope = try? JSONDecoder().decode(FrameWithUsage.self, from: rawData),
+                  let snapshot = envelope.payload?.value else { return }
             onUsage?(snapshot)
 
         default:
@@ -379,18 +390,12 @@ private struct MuxFrame: Decodable {
     private enum CodingKeys: String, CodingKey { case type, streamId, payload }
 }
 
-private extension JSONValue {
-    /// 若这个 payload 是一条事件（有 `type` 与 `seq`），解成 `SessionEvent`。
-    /// 不是事件（opening、瞬态包装）就是 `nil`。
-    var sessionEvent: SessionEvent? {
-        guard self["type"]?.string != nil, self["seq"] != nil else { return nil }
-        return try? JSONDecoder().decode(SessionEvent.self, from: JSONEncoder().encode(self))
-    }
+/// 事件帧的 typed 信封：payload 本体就是 SessionEvent（R4 决定 1）。
+private struct FrameWithEvent: Decodable {
+    let payload: FailableDecodable<SessionEvent>?
+}
 
-    /// 若这个对象是一份占用读数（有 `asOfSeq`），解成 `UsageSnapshot`。
-    /// 不是（opening 本体、别的载荷）就是 `nil` —— 据此区分「没这个字段」。
-    var usageSnapshot: UsageSnapshot? {
-        guard self["asOfSeq"] != nil else { return nil }
-        return try? JSONDecoder().decode(UsageSnapshot.self, from: JSONEncoder().encode(self))
-    }
+/// usage 帧的 typed 信封：payload 本体就是 UsageSnapshot（R4 决定 1）。
+private struct FrameWithUsage: Decodable {
+    let payload: FailableDecodable<UsageSnapshot>?
 }

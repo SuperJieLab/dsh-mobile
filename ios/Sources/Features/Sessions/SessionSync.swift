@@ -53,7 +53,7 @@ final class SessionSync: ObservableObject {
     /// 跟随流：打开详情页即开启，实时收 opening / 事件 / 瞬态帧。
     private lazy var follow: FollowClient = {
         let followClient = FollowClient()
-        followClient.onOpening = { [weak self] payload in self?.applyOpening(payload) }
+        followClient.onOpening = { [weak self] opening in self?.applyOpening(opening) }
         followClient.onEvent = { [weak self] event in self?.applyLiveEvent(event) }
         followClient.onTransient = { [weak self] frame in self?.applyTransient(frame) }
         followClient.onApproval = { [weak self] payload in self?.approvals.receive(payload) }
@@ -281,17 +281,16 @@ final class SessionSync: ObservableObject {
         follow.reconnectNow()
     }
 
-    private func applyOpening(_ payload: JSONValue) {
-        let window = Window(
-            pageStart: payload["pageStart"]?.int ?? 0,
-            asOfSeq: payload["cursor"]?.int ?? 0,
-            hasOlder: payload["hasOlder"]?.bool ?? false,
-            events: (payload["events"]?.array ?? []).compactMap { try? JSONDecoder().decode(SessionEvent.self, from: JSONEncoder().encode($0)) }
-        )
-        _ = mirror.open(with: window)
+    private func applyOpening(_ opening: OpeningFrame) {
+        _ = mirror.open(with: Window(
+            pageStart: opening.pageStart,
+            asOfSeq: opening.cursor,
+            hasOlder: opening.hasOlder,
+            events: opening.events
+        ))
 
         // 瞬态基线：opening 里带了进行中的 attempt 就恢复打字机，没有就清场。
-        if let baseline = payload["assistantStream"] {
+        if let baseline = opening.assistantStream {
             transient.apply(baseline: parseBaseline(baseline))
         } else {
             transient = TransientChannel()
@@ -299,15 +298,13 @@ final class SessionSync: ObservableObject {
         transientText = transient.text
 
         // 模型基线：opening 的可选 `model` 字段是进会话那一刻权威的「下一轮用什么」
-        // —— 状态机无条件落地（全会话投影比窗口推断权威）。缺省 = 不知道，不猜。
-        if let raw = payload["model"],
-           let data = try? JSONEncoder().encode(raw),
-           let baseline = try? JSONDecoder().decode(ModelSelection.self, from: data) {
+        // —— 状态机无条件落地（全会话投影比窗口推断权威）。字段不在 = 不知道，不猜。
+        if let baseline = opening.model {
             modelState.absorb(baseline: baseline)
             displayedModel = modelState.displayed
         }
 
-        status = .done(added: window.events.count, recovered: false)
+        status = .done(added: opening.events.count, recovered: false)
         refreshView()
     }
 

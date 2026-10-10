@@ -79,6 +79,38 @@ struct FollowReplayTests {
         expect(FollowClient.backoffDelayMs(attempt: 0, random: 1) == 500, "C1-7 attempt 0 按 1 处理")
         expect(FollowClient.backoffDelayMs(attempt: 3, random: 99) == 2_000, "C1-8 random 越界被钳到 1")
 
+        // MARK: R4 G1/G2 —— 帧层 typed 解码（对账 + 容错，Plan R4 §3.4 决定 1）
+
+        let openingText = """
+        {"type":"item","streamId":1,"payload":{"sessionId":"s1","cursor":3,"pageStart":0,"hasOlder":true,
+          "events":[
+            {"type":"user/message","seq":1,"time":1700000000000,"data":{}},
+            {"type":"user/message","seq":"oops","time":1700000000001,"data":{}},
+            {"type":"assistant/message","seq":2,"time":1700000000002,"data":{}}
+          ]}}
+        """
+        let openingData = Data(openingText.utf8)
+
+        // 对账基准：旧的 JSONValue 往返路径（R4 之后代码里不再存在，判定在这里留档）。
+        let routed = try! JSONDecoder().decode(JSONValue.self, from: openingData)
+        let legacyEvents: [SessionEvent] = ((routed["payload"]?["events"]?.array) ?? []).compactMap {
+            try? JSONDecoder().decode(SessionEvent.self, from: JSONEncoder().encode($0))
+        }
+
+        let decodedOpening = OpeningFrame.decode(openingData)
+        expect(opening != nil, "G1a opening 帧原文直解成功")
+        expect(decodedOpening?.events == legacyEvents, "G1b 直解与 JSONValue 往返产出逐字一致")
+        expect(decodedOpening?.cursor == 3 && decodedOpening?.pageStart == 0 && decodedOpening?.hasOlder == true,
+               "G1c 外壳字段（cursor/pageStart/hasOlder）一次解码齐备")
+
+        expect(decodedOpening?.events.count == 2, "G2a 坏事件（seq 非数字）单条跳过")
+        expect(decodedOpening?.events.first?.seq == 1 && decodedOpening?.events.last?.seq == 2,
+               "G2b 好事件保序保留")
+
+        // 非 opening 形状（缺 cursor/events）如实返回 nil —— 路由判据不变。
+        let notOpening = Data(#"{"type":"item","streamId":1,"payload":{"type":"user/message","seq":9,"time":1,"data":{}}}"#.utf8)
+        expect(OpeningFrame.decode(notOpening) == nil, "G2c 非 opening 载荷不误判")
+
         print("—— \(passed) passed, \(failed) failed ——")
         if failed > 0 { exit(1) }
     }

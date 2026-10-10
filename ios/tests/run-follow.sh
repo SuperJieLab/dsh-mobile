@@ -17,6 +17,8 @@ swiftc -O -o "$out" \
   "$here/../Sources/Core/Secrets/CredentialStore.swift" \
   "$here/../Sources/Core/Secrets/SecretFile.swift" \
   "$here/../Sources/Core/Gateway/SessionMirror.swift" \
+  "$here/../Sources/Core/Gateway/FailableDecodable.swift" \
+  "$here/../Sources/Core/Gateway/OpeningFrame.swift" \
   "$here/../Sources/Core/Log.swift" \
   "$here/../Sources/Core/Gateway/FollowClient.swift" \
   "$here/TestHarness.swift" \
