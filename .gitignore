@@ -15,7 +15,15 @@ dist/
 # macOS
 .DS_Store
 
+# 证书与私钥（gen-certs.sh 产物；私钥永不进仓库，见 deploy/HEADSCALE.md §2）
+mac-gateway/deploy/tls/
+*.crt
+*.key
+*.pem
+
 # Xcode
+ios/Frameworks/
 ios/build/
+ios/.build/
 ios/DerivedData/
 xcuserdata/
