@@ -16,6 +16,9 @@ import type { FollowSource } from '../remote/ws.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { callThrough, openStreamThrough, parameterNamesOf } from './call-through.ts'
 import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './write.ts'
+import { createLogger, LogModule } from '../log.ts'
+
+const log = createLogger(LogModule.faces)
 
 /**
  * The list path's sources, assembled from the host services — each mirrors one thing
@@ -52,8 +55,8 @@ export function listSourceOver(ctx: Context): ListSource {
     // the cache-parameter drift below invisible until the phone showed a blank screen,
     // so the count goes to a log (实施期修正 16).
     onProjectionFailure: (failures, first) => {
-      console.warn(
-        `[mac-gateway] ${failures} session row(s) served without projections — first failure: ${String(first)}`,
+      log.warn(
+        `${failures} session row(s) served without projections — first failure: ${String(first)}`,
       )
     },
   }
@@ -185,7 +188,7 @@ export function modelChannelOver(ctx: Context): ModelPort | undefined {
     typeof controller.selectModel !== 'function' ||
     typeof controller.modelCatalog !== 'function'
   ) {
-    console.warn('[mac-gateway] sessionController has no model face — model-catalog/model-select will refuse as internal-error')
+    log.warn('sessionController has no model face — model-catalog/model-select will refuse as internal-error')
     return undefined
   }
   return modelPortOver(controller as ModelControllerLike)
@@ -219,7 +222,7 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
   if (typeof dispatchRpc !== 'function') {
     // The answer door is the relay's whole reason to exist: missing it has to
     // surface at alignment time, not on the first tapped answer.
-    console.error(`[mac-gateway] approval relay gateway members: ${members}`)
+    log.error(`approval relay gateway members: ${members}`)
     throw new Error('ctx.typertGateway exposes no dispatchRpc — the approval relay cannot answer without it')
   }
 
@@ -228,19 +231,19 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
     | undefined
   const opening = typeof declared?.open === 'function' ? declared.open : raw.openWireStream
   if (typeof opening !== 'function') {
-    console.error(`[mac-gateway] approval relay gateway members: ${members}`)
+    log.error(`approval relay gateway members: ${members}`)
     throw new Error('ctx.typertGateway exposes neither wireStream.open nor openWireStream — approval relay cannot run')
   }
   const opener = opening as (...args: unknown[]) => Promise<AsyncIterable<unknown>>
-  console.log(
-    `[mac-gateway] approval relay gateway: ${opener === declared?.open ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
+  log.info(
+    `approval relay gateway: ${opener === declared?.open ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
   )
   // The one argument the relay cannot work without is cancellation: if this
   // build spells it differently, say so here rather than in a reconnect loop.
   const names = parameterNamesOf(opener)
   if (names === undefined || !names.includes('signal')) {
-    console.warn(
-      `[mac-gateway] approval relay: the stream opener declares ${names === undefined ? 'no readable parameters' : `no \`signal\` (${names.join(', ')})`}; feeding it positionally, cancellation last. reads: ${Function.prototype.toString.call(opener).slice(0, 160)}`,
+    log.warn(
+      `approval relay: the stream opener declares ${names === undefined ? 'no readable parameters' : `no \`signal\` (${names.join(', ')})`}; feeding it positionally, cancellation last. reads: ${Function.prototype.toString.call(opener).slice(0, 160)}`,
     )
   }
 

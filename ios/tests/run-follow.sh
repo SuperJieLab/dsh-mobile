@@ -11,13 +11,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="${TMPDIR:-/tmp}/dsh-mobile-follow-tests"
 
 swiftc -O -o "$out" \
-  "$here/../Sources/Core/GatewayProtocol.swift" \
-  "$here/../Sources/Core/GatewayTransport.swift" \
-  "$here/../Sources/Core/GatewayClient.swift" \
-  "$here/../Sources/Core/CredentialStore.swift" \
-  "$here/../Sources/Core/SecretFile.swift" \
-  "$here/../Sources/Core/SessionMirror.swift" \
-  "$here/../Sources/Core/FollowClient.swift" \
+  "$here/../Sources/Core/Gateway/GatewayProtocol.swift" \
+  "$here/../Sources/Core/Gateway/GatewayTransport.swift" \
+  "$here/../Sources/Core/Gateway/GatewayClient.swift" \
+  "$here/../Sources/Core/Secrets/CredentialStore.swift" \
+  "$here/../Sources/Core/Secrets/SecretFile.swift" \
+  "$here/../Sources/Core/Gateway/SessionMirror.swift" \
+  "$here/../Sources/Core/Log.swift" \
+  "$here/../Sources/Core/Gateway/FollowClient.swift" \
   "$here/TestHarness.swift" \
   "$here/FollowReplayTests.swift"
 

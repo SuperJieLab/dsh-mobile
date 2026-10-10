@@ -13,11 +13,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="${TMPDIR:-/tmp}/dsh-mobile-model-tests"
 
 swiftc -O -o "$out" \
-  "$here/../Sources/Core/GatewayProtocol.swift" \
-  "$here/../Sources/Core/GatewayTransport.swift" \
-  "$here/../Sources/Core/CredentialStore.swift" \
-  "$here/../Sources/Core/SecretFile.swift" \
-  "$here/../Sources/Core/GatewayClient.swift" \
+  "$here/../Sources/Core/Gateway/GatewayProtocol.swift" \
+  "$here/../Sources/Core/Gateway/GatewayTransport.swift" \
+  "$here/../Sources/Core/Secrets/CredentialStore.swift" \
+  "$here/../Sources/Core/Secrets/SecretFile.swift" \
+  "$here/../Sources/Core/Gateway/GatewayClient.swift" \
   "$here/../Sources/Features/Sessions/ModelSelectionState.swift" \
   "$here/TestHarness.swift" \
   "$here/ModelProtocolTests.swift"

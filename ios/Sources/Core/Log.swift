@@ -1,0 +1,39 @@
+import Foundation
+
+/// 唯一日志出口：ISO8601 UTC 毫秒时间戳 + [级别][模块]，stderr 直写（Xcode 控制台可见，
+/// 与 tsnet Go 日志同通道对照）。规范见 docs/specs/2026-10-10-engineering-conventions.md §2。
+enum Log {
+
+    /// 模块标签集中在此登记，调用点不允许写散字符串；新场景需要新标签时先来这里加。
+    enum Module {
+        static let app = "app"
+        static let mesh = "mesh"
+        static let gateway = "gateway"
+        static let pairing = "pairing"
+        static let session = "session"
+    }
+
+    /// debug 级默认静默，DSH_LOG_DEBUG=1 打开。
+    private static let debugEnabled = ProcessInfo.processInfo.environment["DSH_LOG_DEBUG"] == "1"
+
+    private static let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let lock = NSLock()
+
+    static func debug(_ module: String, _ message: String) { write("debug", module, message) }
+    static func info(_ module: String, _ message: String) { write("info", module, message) }
+    static func warn(_ module: String, _ message: String) { write("warn", module, message) }
+    static func error(_ module: String, _ message: String) { write("error", module, message) }
+
+    private static func write(_ level: String, _ module: String, _ message: String) {
+        if level == "debug" && !debugEnabled { return }
+        let line = "\(formatter.string(from: Date())) [\(level)][\(module)] \(message)\n"
+        lock.lock()
+        defer { lock.unlock() }
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+}

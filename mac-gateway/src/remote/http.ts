@@ -13,6 +13,9 @@ import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort
 import type { WritePort } from '../contract/write-channel.ts'
 import type { ModelPort } from '../contract/model-selection.ts'
 import { CredentialVault } from './credentials.ts'
+import { createLogger, LogModule } from '../log.ts'
+
+const log = createLogger(LogModule.http)
 
 /** Request-body ceiling — a transport guard, not a protocol rule: the port is
  * LAN-reachable and an unbounded read is a memory-exhaustion lever. 1 MiB is far
@@ -103,7 +106,7 @@ async function respond(
   // status line, model ops because the T8 device run showed a silently-empty catalog
   // — a read op that dies must not be quieter than a write op that fails.
   if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer' || op === 'model-select' || op === 'model-catalog')) {
-    console.error(`[mac-gateway] op "${op}" refused: ${JSON.stringify(answer.error)}`)
+    log.error(`op "${op}" refused: ${JSON.stringify(answer.error)}`)
   }
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   response.end(`${JSON.stringify(answer)}\n`)

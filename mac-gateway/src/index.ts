@@ -21,6 +21,9 @@ import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
 import { broadcasterOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
+import { createLogger, LogModule } from './log.ts'
+
+const log = createLogger(LogModule.main)
 
 /** Display metadata used by dsh diagnostics. */
 export const name = 'mac-gateway'
@@ -99,7 +102,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     // Tests only: pre-pair without walking through the pairing code.
     vault.seedDeviceToken(config.deviceTokenSeed)
   }
-  console.log(`[mac-gateway] pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
+  log.info(`pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
 
   // The write channel (M5): the relay bridges `approval-answer` to the gateway's
   // `$events` stream (实施期修正 11 — the host-side waterfall listener approach was
@@ -114,7 +117,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // and the pump use; absent service must say so at assembly, not on first tap.
   const modelPort = modelChannelOver(ctx)
 
-  console.log('[mac-gateway] plugin loaded — M7 build, auth on both channels, write + model channels on')
+  log.info('plugin loaded — M7 build, auth on both channels, write + model channels on')
 
   ctx.effect(() => {
     const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort })
@@ -151,15 +154,16 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
     approvalFace.connect((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
 
-    // console.* rather than ctx.logger: in non-TTY runs `ctx.logger.info` emitted
-    // nothing (dsh's own startup line too), and an invisible bind failure beats a
-    // non-idiomatic log; TTY-gating is unverified (docs/dev/plans/M0-reachability-spike.md §5.1).
+    // Our logger (console underneath) rather than ctx.logger: in non-TTY runs
+    // `ctx.logger.info` emitted nothing (dsh's own startup line too), and an
+    // invisible bind failure beats a non-idiomatic log; TTY-gating is unverified
+    // (docs/dev/plans/M0-reachability-spike.md §5.1).
     server.on('error', (error) => {
-      console.error(`[mac-gateway] listener error: ${String(error)}`)
+      log.error(`listener error: ${String(error)}`)
     })
 
     server.listen(port, host, () => {
-      console.log(`[mac-gateway] listening on http://${host}:${port}`)
+      log.info(`listening on http://${host}:${port}`)
     })
 
     return () => {

@@ -18,13 +18,6 @@ import TailscaleKit
 @MainActor
 final class TailnetNode: ObservableObject {
 
-    // MARK: - 日志（T8 真机排障回填：链路关键信息走 stderr，与 tsnet 日志同通道）
-
-    /// stderr 直写：Xcode 控制台可见（黄色段），与上游 Go 日志时间线可对照。
-    private static func meshLog(_ message: String) {
-        FileHandle.standardError.write(Data(">> [mesh] \(message)\n".utf8))
-    }
-
     /// key 的可核对形式：头 11 位（`hskey-auth-`）+ 尾 6 位 —— 足以和 headscale
     /// 日志里的 auth id / VPS preauthkeys list 对号，又不整串刷屏。
     private static func keyHint(_ key: String?) -> String {
@@ -82,7 +75,7 @@ final class TailnetNode: ObservableObject {
     func launch(config: MeshConfig) async {
         let key = TailnetKeyStore.load()
         let healthy = Self.stateStoreHealthy()
-        Self.meshLog("launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy) controlURL=\(config.controlURLString ?? "nil") gateway=\(config.gatewayURLString ?? "nil")")
+        Log.info(Log.Module.mesh, "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy) controlURL=\(config.controlURLString ?? "nil") gateway=\(config.gatewayURLString ?? "nil")")
         transition(.launch(keyPresent: key != nil, nodeStateHealthy: healthy))
 
         switch state {
@@ -101,7 +94,7 @@ final class TailnetNode: ObservableObject {
 
     /// 设置页提交接入 key：进沙盒存储 → registering → 注册。
     func submitKey(_ key: String, config: MeshConfig) async {
-        Self.meshLog("submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
+        Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
         guard !key.isEmpty else {
             // 空提交不进状态机注册流程（真机 T8：空串曾全流程放行）。
             transition(.registrationFailed(.badKey))
@@ -115,7 +108,7 @@ final class TailnetNode: ObservableObject {
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
     func retry(config: MeshConfig) async {
         let key = TailnetKeyStore.load()
-        Self.meshLog("retry: key=\(Self.keyHint(key))")
+        Log.info(Log.Module.mesh, "retry: key=\(Self.keyHint(key))")
         transition(.retry(keyPresent: key != nil))
         if case .registering = state {
             await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
@@ -190,7 +183,7 @@ final class TailnetNode: ObservableObject {
                         // 顺带探测后端事实：显示 running 但后端掉回 NeedsLogin
                         //（key 被拒/被撤销）= UI 在说谎 → 如实落 failed。
                         if await Self.backendState(of: self.node) == "NeedsLogin" {
-                            Self.meshLog("poll: backend fell to NeedsLogin while UI running → failed")
+                            Log.info(Log.Module.mesh, "poll: backend fell to NeedsLogin while UI running → failed")
                             self.stopPathPolling()
                             self.transition(.nodeUnreachable)
                             continue
@@ -216,12 +209,12 @@ final class TailnetNode: ObservableObject {
     private func up(key: String?, config: MeshConfig, onAuthkeyError: ((TailnetNodeFailure) -> TailnetNodeState.Event)? = nil) async {
         guard config.isComplete, let controlURL = config.controlURL else {
             // 配置没填全：视同不可达（界面提示去设置页补地址）。
-            Self.meshLog("up: config incomplete → registrationFailed(unreachable)")
+            Log.info(Log.Module.mesh, "up: config incomplete → registrationFailed(unreachable)")
             transition(.registrationFailed(.unreachable))
             return
         }
         do {
-            Self.meshLog("up: start hostname=dsh-iphone controlURL=\(controlURL.absoluteString) key=\(Self.keyHint(key))")
+            Log.info(Log.Module.mesh, "up: start hostname=dsh-iphone controlURL=\(controlURL.absoluteString) key=\(Self.keyHint(key))")
             let node = try TailscaleNode(
                 config: Configuration(
                     hostName: "dsh-iphone",
@@ -238,9 +231,9 @@ final class TailnetNode: ObservableObject {
             // BackendState == Running 才认成功；否则按 key 有无归因（有 key 还
             // 停在 NeedsLogin = key 被拒）。
             let backendNow = await Self.backendState(of: node) ?? "<unreadable>"
-            Self.meshLog("up: returned, BackendState=\(backendNow) (waiting up to 3s for Running)")
+            Log.info(Log.Module.mesh, "up: returned, BackendState=\(backendNow) (waiting up to 3s for Running)")
             if await Self.backendRunning(node) {
-                Self.meshLog("up: verified Running → registrationSucceeded")
+                Log.info(Log.Module.mesh, "up: verified Running → registrationSucceeded")
                 gatewaySession = try await TailnetURLSession.makeSession(for: node)
                 transition(.registrationSucceeded)
                 startPathPolling()
@@ -249,14 +242,14 @@ final class TailnetNode: ObservableObject {
                 // 这个确定性时点上，不能靠状态 diff。
                 onVerifiedRunning?(gatewaySession!)
             } else {
-                Self.meshLog("up: NOT Running after 3s → registrationFailed(key=\(key == nil ? "absent→unreachable" : "present→badKey"))")
+                Log.info(Log.Module.mesh, "up: NOT Running after 3s → registrationFailed(key=\(key == nil ? "absent→unreachable" : "present→badKey"))")
                 transition(.registrationFailed(key == nil ? .unreachable : .badKey))
             }
         } catch {
             self.node = nil
             gatewaySession = nil
             stopPathPolling()
-            Self.meshLog("up: threw \(String(describing: error))")
+            Log.info(Log.Module.mesh, "up: threw \(String(describing: error))")
             transition(Self.classify(error, onto: onAuthkeyError))
         }
     }
@@ -274,7 +267,7 @@ final class TailnetNode: ObservableObject {
     private func transition(_ event: TailnetNodeState.Event) {
         let old = state
         state = TailnetNodeState.handle(event, from: state)
-        Self.meshLog("state: \(old) --\(event)--> \(state)")
+        Log.info(Log.Module.mesh, "state: \(old) --\(event)--> \(state)")
     }
 
     // MARK: - tsnet 状态目录（决定 5 补：损坏 → noKey，fail-closed）

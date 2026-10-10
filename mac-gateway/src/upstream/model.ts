@@ -15,6 +15,9 @@
 
 import { isRemoteError, isNotFound } from '../contract/errors.ts'
 import type { ModelCatalog, ModelPort, ModelSelection, ModelSelectMessage, ModelSelectOutcome } from '../contract/model-selection.ts'
+import { createLogger, LogModule } from '../log.ts'
+
+const log = createLogger(LogModule.model)
 
 /**
  * The part of the session controller this adapter calls. The signatures are the
@@ -90,7 +93,7 @@ function parameterListIs(fn: (...args: never[]) => unknown, expected: readonly s
 
 /** The drift alarm: name what drifted and show the face, so the fix is one read away. */
 function warnSignature(member: string, fn: (...args: never[]) => unknown): void {
-  console.warn(
-    `[mac-gateway] model adapter: ${member}'s parameter list differs from the runtime signature this build was written against; reads: ${Function.prototype.toString.call(fn).slice(0, 160)}`,
+  log.warn(
+    `model adapter: ${member}'s parameter list differs from the runtime signature this build was written against; reads: ${Function.prototype.toString.call(fn).slice(0, 160)}`,
   )
 }

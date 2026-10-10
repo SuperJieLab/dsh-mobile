@@ -72,7 +72,7 @@ final class SessionSync: ObservableObject {
     /// 事件 → 显示节点（M6）。它跨刷新保留 —— 状态与去重理由见 `TranscriptAssembler`。
     private var assembler = TranscriptAssembler { type in
         // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
-        print("[TranscriptAssembler] 不认识的事件类型：\(type)")
+        Log.warn(Log.Module.session, "TranscriptAssembler 不认识的事件类型：\(type)")
     }
     /// 占用值的吸收（M6）。判定（严格高水位胜）全在值类型里（判据 O1），这里只持有并转发结果。
     private var usageState = UsageState()
@@ -325,7 +325,7 @@ final class SessionSync: ObservableObject {
         let verdict = transient.apply(frame: frame)
         if verdict == .broken {
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
-            print("[TransientChannel] broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
+            Log.warn(Log.Module.session, "TransientChannel broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
             follow.reopenStream()
             return
         }

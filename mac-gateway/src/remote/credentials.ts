@@ -16,6 +16,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import { createLogger, LogModule } from '../log.ts'
+
+const log = createLogger(LogModule.http)
 import {
   attemptPairing,
   bearerTokenOf,
@@ -75,7 +78,7 @@ export class CredentialVault {
       mkdirSync(dirname(this.path), { recursive: true })
       writeFileSync(this.path, `${JSON.stringify(this.file, null, 2)}\n`, 'utf8')
     } catch (error) {
-      console.error(`[mac-gateway] could not persist credentials: ${String(error)}`)
+      log.error(`could not persist credentials: ${String(error)}`)
     }
   }
 

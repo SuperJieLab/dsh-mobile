@@ -34,6 +34,9 @@ import {
   encodeTextFrame,
   handshakeResponse,
 } from '../contract/ws-frames.ts'
+import { createLogger, LogModule } from '../log.ts'
+
+const log = createLogger(LogModule.ws)
 
 /**
  * The narrow face of the host the pump uses, declared here because the services' real types do
@@ -147,7 +150,7 @@ async function handleUpgrade(
   onClientConnected?: ClientHook,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
-  console.log(`[mac-gateway] upgrade request for "${path}"`)
+  log.info(`upgrade request for "${path}"`)
   if (path !== STREAM_PATH) {
     // Not ours — decline without pretending to speak WebSocket.
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
@@ -156,7 +159,7 @@ async function handleUpgrade(
   }
 
   if (!gate.authenticate(request.headers.authorization)) {
-    console.log('[mac-gateway] upgrade refused: no valid access token')
+    log.info('upgrade refused: no valid access token')
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
     socket.destroy()
     return
@@ -164,13 +167,13 @@ async function handleUpgrade(
 
   const accept = acceptKeyOf(request.headers)
   if (accept === undefined) {
-    console.log('[mac-gateway] upgrade refused: no Sec-WebSocket-Key')
+    log.info('upgrade refused: no Sec-WebSocket-Key')
     socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
     socket.destroy()
     return
   }
 
-  console.log('[mac-gateway] upgrade accepted → 101')
+  log.info('upgrade accepted → 101')
   socket.write(handshakeResponse(accept))
   clients.add(socket)
   socket.on('close', () => clients.delete(socket))
@@ -296,7 +299,7 @@ async function pump(
     try {
       return source.occupancyOf(request.sessionId)
     } catch (error) {
-      console.error(`[mac-gateway] occupancy read failed for "${request.sessionId}": ${describeError(error)}`)
+      log.error(`occupancy read failed for "${request.sessionId}": ${describeError(error)}`)
       return undefined
     }
   }
@@ -310,7 +313,7 @@ async function pump(
     try {
       return source.modelOf(request.sessionId)
     } catch (error) {
-      console.error(`[mac-gateway] model read failed for "${request.sessionId}": ${describeError(error)}`)
+      log.error(`model read failed for "${request.sessionId}": ${describeError(error)}`)
       return undefined
     }
   }
@@ -345,7 +348,7 @@ async function pump(
         const first = events[0] as { seq?: unknown } | undefined
         const cursor = frame.cursor + 1 // reference cursor is inclusive; ours is exclusive
         expectedSeq = cursor
-        console.log(`[mac-gateway] follow opening for "${request.sessionId}": cursor=${cursor}, ${events.length} events`)
+        log.info(`follow opening for "${request.sessionId}": cursor=${cursor}, ${events.length} events`)
         // The occupancy baseline is read in the same breath as the window: the
         // phone opens on a window and a state from one moment (M6 §3.1 决定 2).
         const occupancy = readUsage()
@@ -370,7 +373,7 @@ async function pump(
         // stream's own promise broke — refuse loudly rather than render a view
         // with a hole nobody can see (docs/dev/plans/M2-realtime-transient.md §3.5).
         if (expectedSeq !== undefined && event?.seq !== expectedSeq) {
-          console.error(`[mac-gateway] follow stream broke continuity: expected seq ${String(expectedSeq)}, got ${String(event?.seq)}`)
+          log.error(`follow stream broke continuity: expected seq ${String(expectedSeq)}, got ${String(event?.seq)}`)
           send(socket, { type: 'error', streamId, payload: { code: 'internal-error', message: `follow stream skipped seq ${String(expectedSeq)}` } })
           return
         }
@@ -384,7 +387,7 @@ async function pump(
       if (frame.type === 'assistant-stream') {
         transientCount += 1
         if (transientCount === 1 || transientCount % 50 === 0) {
-          console.log(`[mac-gateway] transient frames forwarded: ${transientCount}`)
+          log.info(`transient frames forwarded: ${transientCount}`)
         }
         sendItem({ type: 'assistant-stream', frame: frame.frame }) // verbatim, cursor-less
         continue

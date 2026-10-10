@@ -19,6 +19,9 @@
  */
 
 import { describeError, isNotFound } from '../contract/errors.ts'
+import { createLogger, LogModule } from '../log.ts'
+
+const log = createLogger(LogModule.relay)
 import {
   ReplayTable,
   outcomeOfDecision,
@@ -108,7 +111,7 @@ export class ApprovalRelay {
           if (frame.type === 'ready') {
             this.#clientId = frame.clientId
             backoff = RELAY_RECONNECT_MIN_MS
-            console.log(`[mac-gateway] approval relay ready (clientId ${frame.clientId})`)
+            log.info(`approval relay ready (clientId ${frame.clientId})`)
             continue
           }
           if (frame.type === 'waterfall' && frame.event === 'approval/request') {
@@ -122,10 +125,10 @@ export class ApprovalRelay {
           }
         }
         if (signal.aborted) return
-        console.warn('[mac-gateway] approval relay stream ended; reconnecting')
+        log.warn('approval relay stream ended; reconnecting')
       } catch (error) {
         if (signal.aborted) return
-        console.error(`[mac-gateway] approval relay stream failed: ${describeError(error)}; reconnecting`)
+        log.error(`approval relay stream failed: ${describeError(error)}; reconnecting`)
       }
       // The client identity died with the stream: the gateway re-delivers every
       // still-pending question, so carrying the old set over would replay consumed answers.
@@ -151,7 +154,7 @@ export class ApprovalRelay {
       ...(typeof request?.reason === 'string' ? { reason: request.reason } : {}),
     }
     this.#pending.set(frame.eventId, held)
-    console.log(`[mac-gateway] approval relay holding "${held.toolName}" (${frame.eventId})`)
+    log.info(`approval relay holding "${held.toolName}" (${frame.eventId})`)
     this.#broadcaster.broadcast({
       type: 'approval',
       payload: { kind: 'request', eventId: held.eventId, toolName: held.toolName, ...(held.callId === undefined ? {} : { callId: held.callId }), ...(held.reason === undefined ? {} : { reason: held.reason }) },
@@ -175,7 +178,7 @@ export class ApprovalRelay {
   /** The actual one-time delivery. Runs inside `ReplayTable.remember`. */
   private async deliver(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval'> {
     if (this.#clientId === undefined || !this.#pending.has(answer.eventId)) {
-      console.log(`[mac-gateway] answer for ${answer.eventId}: no held question — unknown-approval`)
+      log.info(`answer for ${answer.eventId}: no held question — unknown-approval`)
       return 'unknown-approval'
     }
     await this.#gateway.dispatchRpc('$events/result', {
@@ -186,7 +189,7 @@ export class ApprovalRelay {
       },
     }, this.#lifetime ?? neverAborted())
     this.#pending.delete(answer.eventId)
-    console.log(`[mac-gateway] delivered ${answer.decision} for ${answer.eventId}`)
+    log.info(`delivered ${answer.decision} for ${answer.eventId}`)
     return 'delivered'
   }
 }
