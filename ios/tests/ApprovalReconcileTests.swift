@@ -51,7 +51,7 @@ struct ApprovalReconcileTests {
 
     static func main() {
         MainActor.assumeIsolated {
-            let client = GatewayClient(baseURL: URL(string: "http://127.0.0.1:9")!)
+            let client = GatewayClient()
 
             // Q1：崩溃残骸不建卡 —— 会话日志里 asked 没有 decided，但 turn 已闭合。
             let wrecked = ApprovalStore(client: client)

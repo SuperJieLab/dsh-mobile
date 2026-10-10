@@ -6,8 +6,8 @@
  * （决定 1）；启动兜底激活、VerifiedRunning 激活内化、回前台探活的编排住这里（决定 2、6）。
  *
  * 与 `GatewayClient` 的关系（决定 3）：client 是 op 门面 + 身份状态机，由根部创建
- * 传给本 store，store 只调它的 `activate` —— 连接域不吞身份域，业务调用面照旧
- * 直接消费 client。
+ * 传给本 store，store 只在节点验证 Running 时调一次 `activate` —— 连接域不吞身份域，
+ * 业务调用面照旧直接消费 client。端点在激活前不存在（R5 契约）。
  */
 import Foundation
 import Combine
@@ -84,22 +84,18 @@ final class ConnectionStore: ObservableObject {
                                              hasGatewaySession: false)
     }
 
-    /// 启动编排（决定 6，原 DshMobileApp.task 根部三段中的两段）：
-    /// ① 兜底激活 —— 配对请求不能等组网 Running，先用普通 session 打配置地址；
-    /// ② 激活内化 —— 回调在本方法里挂上，消费方是 store 而非视图层；
-    /// ③ 拉起节点。判定逻辑全部在节点层状态机，这里只管调用顺序。
+    /// 启动编排（决定 6，R5 起无兜底激活）：挂回调 + 拉起节点。激活只发生在
+    /// VerifiedRunning 回调里 —— 激活前 App 不持有任何网关地址（R5 契约）。
+    /// 判定逻辑全部在节点层状态机，这里只管调用顺序。
     func start(config: MeshConfig) async {
         // 幂等：启动编排一次进程只该走一遍。重入（视图重放 .task）只刷新投影，
-        // 不重兜底激活、不重拉节点。回前台的恢复走 sceneActive，与此无关。
+        // 不重拉节点。回前台的恢复走 sceneActive，与此无关。
         guard !started else {
             nodeChanged()
             return
         }
         started = true
         self.config = config
-        if let baseURL = config.gatewayBaseURL {
-            client.activate(session: .shared, baseURL: baseURL)
-        }
         node.onVerifiedRunning = { [weak self] session in
             guard let self, let baseURL = self.config?.gatewayBaseURL else { return }
             self.client.activate(session: session, baseURL: baseURL)

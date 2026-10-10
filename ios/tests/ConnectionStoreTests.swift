@@ -43,29 +43,26 @@ struct ConnectionStoreTests {
             }
         }
 
-        // —— N2：兜底激活 + VerifiedRunning 激活内化（决定 2、6）——
-        // 兜底：start() 即以 .shared session 激活 MeshConfig 里的网关地址（配对不等组网）
+        // —— K4：启动零激活 + VerifiedRunning 唯一激活点（R5 决定 2）——
+        // 激活前 App 不持有端点；端点从无到有只发生在节点验证 Running 那一刻。
         let config = MeshConfig(controlURLString: "https://203.0.113.10:8443",
                                 gatewayURLString: "http://100.64.0.1:3081")
         let node = FakeNode()
         let client = FakeClient()
         let store = ConnectionStore(client: client, node: node)
         await store.start(config: config)
-        expect(client.activations.count == 1
-               && client.activations[0].1 == config.gatewayBaseURL!
-               && client.activations[0].0 === URLSession.shared,
-               "N2a start() 兜底激活：立即用 .shared 激活配置地址（配对不等组网 Running）")
+        expect(client.activations.isEmpty,
+               "K4a start 不激活：未激活 = 端点不存在，不兜底（R5 删 LAN 兜底）")
 
-        // 内化：节点验证 Running → 回调消费方是 store，client 恰再收到一次
-        // 「节点产出的 session + 配置地址」的激活，阶段随即 .ready
+        // 唯一激活点：节点验证 Running → client 恰收到一次「隧道 session + 配置地址」。
         let tunnel = URLSession(configuration: .ephemeral)
         node.nodeState = .running
         node.onVerifiedRunning?(tunnel)
-        expect(client.activations.count == 2
-               && client.activations[1].0 === tunnel
-               && client.activations[1].1 == config.gatewayBaseURL!,
-               "N2b VerifiedRunning 回调内化：client 收到隧道承载激活（不穿视图层）")
-        expect(store.phase == .ready, "N2c 激活后阶段投影为 ready")
+        expect(client.activations.count == 1
+               && client.activations[0].0 === tunnel
+               && client.activations[0].1 == config.gatewayBaseURL!,
+               "K4b VerifiedRunning 唯一激活点：端点一次建成（不穿视图层）")
+        expect(store.phase == .ready, "K4c 激活后阶段投影为 ready")
 
         // —— N2d/N2e：start 进程内幂等（真机 2026-10-10：列表页 .task 重入触发
         // 第二次 start → 节点重启 → 活连接被杀 + 徽章掉直连标签）——
