@@ -9,6 +9,7 @@ out="${TMPDIR:-/tmp}/dsh-mobile-connection-tests"
 
 swiftc -O -o "$out" \
   "$here/../Sources/Core/MeshNetwork/TailnetNodeState.swift" \
+  "$here/../Sources/Core/MeshNetwork/MeshConfig.swift" \
   "$here/../Sources/Core/Connection/ConnectionStore.swift" \
   "$here/TestHarness.swift" \
   "$here/ConnectionStoreTests.swift"

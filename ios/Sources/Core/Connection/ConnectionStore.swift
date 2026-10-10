@@ -10,6 +10,97 @@
  * 直接消费 client。
  */
 import Foundation
+import Combine
+
+// MARK: - 注入接缝（R3 决定 2、3）
+//
+// store 只认这两个协议，不认具体类型 —— 真实类型的适配住在 `ConnectionAdapters.swift`
+// （App target，进 Xcode；CLI 测试只编本文件 + TailnetNodeState + MeshConfig，
+// 因此 TailscaleKit / GatewayClient 全链路都不进测试编译面）。
+
+/// 承载激活能力：`GatewayClient.activate` 的窄面。
+protocol GatewayActivating: AnyObject {
+    /// 当前身份关系是否存在（投影输入；身份轴不并入连接阶段，决定 5）。
+    var isPaired: Bool { get }
+    func activate(session: URLSession, baseURL: URL)
+}
+
+/// 组网节点能力：`TailnetNode` 的窄面。状态仍由 `TailnetNodeState` 状态机判定，
+/// 本协议只暴露读取与既有入口，不做任何新判定。
+@MainActor protocol MeshNodeControlling: AnyObject {
+    var nodeState: TailnetNodeState { get }
+    /// 当前到网关对端的路径；Running 期间由节点层轮询刷新，其余为 nil。
+    var carrierPath: CarrierPath? { get }
+    /// 节点验证 Running、tailnet session 建成的那一刻（同值迁移不触发 onChange，
+    /// 激活只能挂回调 —— 机制沿用 M8 T8 排障结论，消费方从视图根部改为本 store）。
+    var onVerifiedRunning: ((URLSession) -> Void)? { get set }
+    func launchNode(config: MeshConfig) async
+    func reviveNode() async
+}
+
+/// 到网关对端的连接方式（域内类型；`TailnetNode.MeshPath` 与
+/// `ConnectionBadge.MeshPath` 各自适配到它）。
+enum CarrierPath: Equatable {
+    case direct
+    case relay
+}
+
+@MainActor
+final class ConnectionStore: ObservableObject {
+
+    /// 对外连接阶段 —— 视图读连接态的唯一出处（决定 4）。
+    @Published private(set) var phase: ConnectionPhase
+    /// 直连 / 中继；非 ready 期为 nil。徽章的独立数据源，口径与重构前一致。
+    @Published private(set) var meshPath: CarrierPath?
+
+    private let client: GatewayActivating
+    private let node: MeshNodeControlling
+    /// tailnet 承载是否已激活（回调已 firing 且 activate 已调）。
+    private var tailnetActivated = false
+
+    init(client: GatewayActivating, node: MeshNodeControlling) {
+        self.client = client
+        self.node = node
+        self.phase = ConnectionPhase.resolve(nodeState: node.nodeState,
+                                             isPaired: client.isPaired,
+                                             hasGatewaySession: false)
+    }
+
+    /// 启动编排（决定 6，原 DshMobileApp.task 根部三段中的两段）：
+    /// ① 兜底激活 —— 配对请求不能等组网 Running，先用普通 session 打配置地址；
+    /// ② 激活内化 —— 回调在本方法里挂上，消费方是 store 而非视图层；
+    /// ③ 拉起节点。判定逻辑全部在节点层状态机，这里只管调用顺序。
+    func start(config: MeshConfig) async {
+        if let baseURL = config.gatewayBaseURL {
+            client.activate(session: .shared, baseURL: baseURL)
+        }
+        node.onVerifiedRunning = { [weak self] session in
+            guard let self, let baseURL = config.gatewayBaseURL else { return }
+            self.client.activate(session: session, baseURL: baseURL)
+            self.tailnetActivated = true
+            self.reproject()
+        }
+        await node.launchNode(config: config)
+        reproject()
+        meshPath = node.carrierPath
+    }
+
+    /// 回前台探活（原 DshMobileApp.onChange(scenePhase) 段）：探活判定在节点层，
+    /// 失败如实落 failed、不自动重试（重试入口在设置页）。
+    func sceneActive() async {
+        await node.reviveNode()
+        reproject()
+        meshPath = node.carrierPath
+    }
+
+    private func reproject() {
+        // 身份轴从 client 读（节点不认识身份，决定 5）；isPaired 当前不被枚举消费，
+        // 是「组合门面」的预留输入。
+        phase = ConnectionPhase.resolve(nodeState: node.nodeState,
+                                        isPaired: client.isPaired,
+                                        hasGatewaySession: tailnetActivated)
+    }
+}
 
 /// 对外连接阶段（R3 决定 1）：`TailnetNodeState` 的投影，不自建迁移表。
 /// 身份轴（`isPaired`）不进这个枚举 —— 离线也可已配对，两轴正交（决定 5）。
