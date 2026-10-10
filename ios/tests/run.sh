@@ -14,6 +14,7 @@ out="${TMPDIR:-/tmp}/dsh-mobile-session-mirror-tests"
 
 swiftc -O -o "$out" \
   "$here/../Sources/Core/Gateway/GatewayProtocol.swift" \
+  "$here/../Sources/Core/Log.swift" \
   "$here/../Sources/Core/Gateway/GatewayTransport.swift" \
   "$here/../Sources/Core/Secrets/CredentialStore.swift" \
   "$here/../Sources/Core/Secrets/SecretFile.swift" \

@@ -42,6 +42,8 @@ final class GatewayClient: ObservableObject {
         meshSession = session
         self.baseURL = baseURL
         transport = GatewayTransport(baseURL: baseURL, credentials: credentials, session: session)
+        // 承载切换是 M8 链路 1 的终点状态迁移：局域网 → tailnet 的分界点在此留痕。
+        Log.info(Log.Module.gateway, "activated: HTTP+WS switched to \(baseURL.absoluteString)")
     }
 
     /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证（M4 §3.2）。成功即建立关系；失败文案来自服务端。
@@ -53,6 +55,7 @@ final class GatewayClient: ObservableObject {
         }
         credentials.saveDeviceToken(deviceToken)
         isPaired = true
+        Log.info(Log.Module.gateway, "paired — device token stored")
     }
 
     /// 用设备凭证换一张新 access（M4 §3.3）。返回 false 表示关系已被服务端掐断（401）—— 此时
@@ -68,14 +71,17 @@ final class GatewayClient: ObservableObject {
                 try response.validate()
                 guard let token = response.accessToken, let expiresAt = response.expiresAt else { return false }
                 self.credentials.storeAccess(token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
+                Log.debug(Log.Module.session, "access ticket refreshed")
                 return true
             } catch GatewayClientError.unauthenticated {
                 // 服务端不认这段关系了：撤销或凭证被替换。掐断本机状态。
+                Log.warn(Log.Module.gateway, "relationship severed by server — device token cleared")
                 self.credentials.deleteDeviceToken()
                 self.isPaired = false
                 return false
             } catch {
                 // 传输失败不是关系终结：票换不到只是暂时，下次再试。
+                Log.warn(Log.Module.session, "refresh failed (transport) — retrying next 401")
                 return false
             }
         }

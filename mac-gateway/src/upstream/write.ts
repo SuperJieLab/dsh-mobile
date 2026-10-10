@@ -230,6 +230,8 @@ export async function pumpPrompt(controller: PromptControllerLike, prompt: Sessi
       mode: 'queue',
       content: [{ type: 'text', text: prompt.text }],
     }, signal)
+    // 写链路的另一半（与 relay 的 delivered 对称）：受理即返回，回答从流里来。
+    log.info(`prompt accepted for "${prompt.sessionId}" (requestId ${prompt.promptId}, ${prompt.text.length} chars)`)
     return 'accepted'
   } catch (error) {
     if (isNotFound(error)) return 'unknown-session'

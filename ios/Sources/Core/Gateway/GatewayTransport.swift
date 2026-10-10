@@ -51,6 +51,8 @@ final class GatewayTransport {
         do {
             (payload, urlResponse) = try await session.data(for: urlRequest)
         } catch {
+            // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
+            Log.warn(Log.Module.gateway, "transport: \(error.localizedDescription) (base=\(baseURL.host ?? "?"))")
             throw GatewayClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }
 
@@ -61,15 +63,19 @@ final class GatewayTransport {
                 guard authenticated else {
                     if let failure = envelopeFailure(in: payload) {
                         if failure.code == GatewayErrorCode.unauthenticated.rawValue {
+                            Log.info(Log.Module.gateway, "auth op refused: \(failure.code) — \(failure.message)")
                             throw GatewayClientError.unauthenticated
                         }
                         throw GatewayClientError.refused(failure)
                     }
                     throw GatewayClientError.unauthenticated
                 }
+                // 正常续期编排的第一环：debug 留痕，不打满 info。
+                Log.debug(Log.Module.gateway, "401 on business op — refreshing ticket")
                 return nil
             }
             if http.statusCode != 200 {
+                Log.warn(Log.Module.gateway, "HTTP \(http.statusCode) from \(baseURL.host ?? "?")")
                 throw GatewayClientError.badStatus(http.statusCode)
             }
         }
@@ -80,8 +86,10 @@ final class GatewayTransport {
             // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
             // 比解码器的报错信息有用得多。
             if let failure = envelopeFailure(in: payload) {
+                Log.warn(Log.Module.gateway, "op refused: \(failure.code) — \(failure.message)")
                 throw GatewayClientError.refused(failure)
             }
+            Log.warn(Log.Module.gateway, "malformed response: \(String(describing: error))")
             throw GatewayClientError.malformedResponse(detail: String(describing: error))
         }
     }

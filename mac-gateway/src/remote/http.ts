@@ -96,6 +96,9 @@ async function respond(
   }
 
   if (!deps.vault.authenticate(request.headers.authorization)) {
+    // info 而非 warn：票过期后的这次 401 是续期编排的正常一环，客户端拿到 401 会
+    // 静默换票重试；warn 留给 refresh 本身被拒（关系被掐）。
+    log.info(`op "${String(op)}" refused: no live access token`)
     response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
     response.end(`${JSON.stringify(refusal('unauthenticated', 'missing or expired access token — pair first, then refresh'))}\n`)
     return
@@ -132,8 +135,12 @@ async function handleAuthOp(
   if (op === 'pair') {
     const outcome = vault.pair(payload.code)
     if (!outcome.ok) {
+      // 配对失败值得留痕：试错配对码与码过期在这里同形，日志能区分开。
+      log.warn(`pair refused: ${outcome.reason}`)
       return { status: 401, body: refusal('invalid-pairing-code', outcome.reason) }
     }
+    // 关系建立是身份链路的状态迁移，必须留痕（配对成功但列表 401 时先看这里）。
+    log.info('pair accepted — device relationship established')
     return {
       status: 200,
       body: { v: PROTOCOL_VERSION, ok: true, deviceToken: outcome.deviceToken },
@@ -142,6 +149,8 @@ async function handleAuthOp(
 
   const outcome = vault.refresh(payload.deviceToken)
   if (!outcome.ok) {
+    // 服务端掐断关系的唯一时刻 —— 客户端会静默回未配对态，这里不说就没人知道为什么。
+    log.warn('refresh refused: unknown device token — relationship severed')
     return {
       status: 401,
       body: refusal('unauthenticated', 'unknown device token — pair again'),
