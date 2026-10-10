@@ -111,6 +111,17 @@ struct FollowReplayTests {
         let notOpening = Data(#"{"type":"item","streamId":1,"payload":{"type":"user/message","seq":9,"time":1,"data":{}}}"#.utf8)
         expect(OpeningFrame.decode(notOpening) == nil, "G2c 非 opening 载荷不误判")
 
+        // MARK: R4 G3 —— 合并闸（Plan R4 §3.4 决定 2）：批内累计，到点收批
+
+        var gate = RefreshGate()
+        expect(gate.eventArrived() == .openWindow, "G3a 批未开：首个事件开批并调度 flush")
+        var accumulated = 0
+        for _ in 0..<99 where gate.eventArrived() == .accumulate { accumulated += 1 }
+        expect(accumulated == 99, "G3b 批开着：后续 99 个事件只累计，不重复调度")
+        expect(gate.flushDue(), "G3c 到点收批：本批开着 → flush 落地一次")
+        expect(!gate.flushDue(), "G3d 收批之后再 flush 是无事发生（无消费者的重算被挡掉）")
+        expect(gate.eventArrived() == .openWindow, "G3e 关批后新事件重新开批")
+
         print("—— \(passed) passed, \(failed) failed ——")
         if failed > 0 { exit(1) }
     }

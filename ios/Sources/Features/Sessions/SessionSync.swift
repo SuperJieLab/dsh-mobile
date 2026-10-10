@@ -81,6 +81,12 @@ final class SessionSync: ObservableObject {
     /// 把嵌套状态机的变化冒泡成自己的 objectWillChange ——
     /// 不转发的话审批卡的增删不触发视图重算（真机踩实）。
     private var approvalsObservation: AnyCancellable?
+    /// 刷新合并闸（R4 决定 2）：事件帧批处理，判定在值类型 `RefreshGate`。
+    private var refreshGate = RefreshGate()
+    /// flush 是否已有一次调度在途（防重复调度）。
+    private var flushScheduled = false
+    /// 合并窗口 = 一个渲染帧量级。瞬态打字机逐帧到达无感知；事件文本晚一帧出现。
+    private static let flushWindowNanos: UInt64 = 16_000_000
 
     init(client: GatewayClient, sessionId: String) {
         self.client = client
@@ -314,7 +320,22 @@ final class SessionSync: ObservableObject {
         // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
         modelState.absorb(event: event)
         displayedModel = modelState.displayed
-        refreshView()
+        // R4 决定 2：事件帧只标脏，批到点一次全量重算（opening / HTTP 同步路径不经闸）。
+        if refreshGate.eventArrived() == .openWindow { scheduleFlush() }
+    }
+
+    /// 合并刷新的调度端：批窗口 = 一个渲染帧量级（16ms，参数现定）。窗口期内
+    /// 再来的事件只累计；到点关批、全量重算一次。调度与本闸的判定分离——判定
+    /// 是 `RefreshGate`（CLI 可断言），这里只管睡与叫醒。
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.flushWindowNanos)
+            guard let self, self.refreshGate.flushDue() else { return }
+            self.flushScheduled = false
+            self.refreshView()
+        }
     }
 
     private func applyTransient(_ frame: JSONValue) {
