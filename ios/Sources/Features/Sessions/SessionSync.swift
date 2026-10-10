@@ -63,6 +63,9 @@ final class SessionSync: ObservableObject {
         followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
         // M4：upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
         followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
+        // M8 T7：承载与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
+        followClient.sessionProvider = { [weak self] in self?.client.meshSession ?? .shared }
+        followClient.baseURLProvider = { [weak self] in self?.client.baseURL ?? GatewayClient.defaultBaseURL }
         return followClient
     }()
     private var transient = TransientChannel()

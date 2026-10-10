@@ -9,8 +9,13 @@ struct SessionListView: View {
     @State private var sessions: [SessionSummary] = []
     @State private var failure: String?
     @State private var isLoading = false
+    /// 组网/配对入口（M8）：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
+    /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
+    @State private var showMeshSettings = false
     /// 回前台立即刷新（M3）：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
+    /// 组网节点（M8）：连接方式一行的数据源（根部 environmentObject 注入）。
+    @EnvironmentObject private var node: TailnetNode
 
     var body: some View {
         if !client.isPaired {
@@ -42,7 +47,10 @@ struct SessionListView: View {
         }
         .navigationTitle("会话")
         .navigationDestination(for: SessionSummary.self) { session in
+            // 显式再注一次（双保险）：navigationDestination 闭包在容器懒建时求值，
+            // 根部注入被吞的场景下这里兜底（真机 T8：配对成功后进详情页崩溃）。
             SessionDetailView(client: client, session: session)
+                .environmentObject(node)
         }
         .overlay {
             if isLoading && sessions.isEmpty {
@@ -64,9 +72,15 @@ struct SessionListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ConnectionBadge(state: ConnectionBadge.Status(isLoading: isLoading, lastFailure: failure))
+                ConnectionBadge(state: ConnectionBadge.Status(isLoading: isLoading, lastFailure: failure),
+                                meshPath: node.meshPath.map(ConnectionBadge.MeshPath.init))
             }
             ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showMeshSettings = true
+                } label: {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                }
                 Button {
                     Task { await reload() }
                 } label: {
@@ -74,6 +88,10 @@ struct SessionListView: View {
                 }
                 .disabled(isLoading)
             }
+        }
+        .sheet(isPresented: $showMeshSettings) {
+            NavigationStack { PairingView(client: client) }
+                .environmentObject(node)
         }
     }
 
