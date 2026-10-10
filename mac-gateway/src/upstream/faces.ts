@@ -53,7 +53,7 @@ export function listSourceOver(ctx: Context): ListSource {
 
     // A row without projections is still the right row, but degrading *quietly* kept
     // the cache-parameter drift below invisible until the phone showed a blank screen,
-    // so the count goes to a log (实施期修正 16).
+    // so the count goes to a log.
     onProjectionFailure: (failures, first) => {
       log.warn(
         `${failures} session row(s) served without projections — first failure: ${String(first)}`,
@@ -119,15 +119,14 @@ interface ProjectionSnapshotLike {
 }
 
 /**
- * The part of `ctx.sessionProjectionCache` this module uses. ⚠️ **This face lost a
- * parameter** between baseline and runtime (实施期修正 16). Baseline:
- * `cachedSnapshot(meta, inheritedEventCount, keys?)` /
- * `cachedPredecessorTitle(meta, inheritedEventCount)`. 0.1.7-alpha.2:
+ * The part of `ctx.sessionProjectionCache` this module uses. ⚠️ **Positional
+ * drift hazard**: at the runtime this build depends on (0.1.7-alpha.2), the face is
  * `cachedSnapshot(meta, keys?)` / `cachedPredecessorTitle(meta)`
- * (dsh-session-projection-cache/lib/index.js:193,214). The inherited prefix is
- * gone — the header alone carries the lifecycle identity — so positional
- * arguments after the header move one slot; the header is the *only* argument
- * given here, as the runtime's own listing does (dsh-api-session-controller/lib/index.js:1917).
+ * (dsh-session-projection-cache/lib/index.js:193,214) — the header alone carries the
+ * lifecycle identity, and it is the *only* argument given here, as the runtime's own
+ * listing does (dsh-api-session-controller/lib/index.js:1917). An older signature
+ * carried an `inheritedEventCount` prefix; passing positionally against a drifted
+ * face lands the argument in `keys` (docs/dev/plans/M1-consistency-delta.md 实施期修正 16).
  */
 interface ProjectionCacheLike {
   cachedSnapshot(header: never): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
@@ -197,12 +196,12 @@ export function modelChannelOver(ctx: Context): ModelPort | undefined {
 /**
  * 审批中继所驱动的网关服务切面。
  *
- * 实施期修正 13：`ctx.typertGateway` 拿到的是被 traceable/严格视图包过的成员，
+ * `ctx.typertGateway` 拿到的是被 traceable/严格视图包过的成员，
  * 异步生成器方法包装后不再可迭代（真机日志 `openWireStream is not a function or
  * its return value is not async iterable`）—— 用全局注册表 symbol
  * `Symbol.for('cordis.original')`（cordis 的 `originalOf` 逃生口）即可解出原始实例。
  *
- * 实施期修正 15：原始实例的**形参位置**也会变 —— 0.1.7 把 `uplink` / `peer` 插在 `signal`
+ * 原始实例的**形参位置**也会变 —— 0.1.7 把 `uplink` / `peer` 插在 `signal`
  * 前，按位置传的取消信号落进 uplink 槽，`AbortSignal.any([undefined, ...])` 当场抛错
  * （真机日志 `signals[0] is not of type AbortSignal.`）。对策：收流优先走**声明面**
  * `wireStream.open`（types.d.ts:87）；缺席才碰私有 `openWireStream`，实参**按形参名**填
@@ -253,7 +252,7 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
     openWireStream: (endpoint, payload, signal) =>
       openStreamThrough(opener, { endpoint, payload, signal }) as Promise<AsyncIterable<UpstreamWireFrame>>,
     // Same reason as the opener: the answer door is a private member too, and
-    // its parameters may move (实施期修正 15).
+    // its parameters may move.
     dispatchRpc: (endpoint, payload, signal) => callThrough(dispatchRpc, { endpoint, payload, signal }),
   }
 }

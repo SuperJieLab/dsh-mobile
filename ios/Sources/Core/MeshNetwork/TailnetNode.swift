@@ -9,8 +9,8 @@
  * 上游形状（libtailscale@59d4bb8，TailscaleNode.swift 实读）：
  * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
  * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册（决定 5）；
- * - `TailscaleError` 没有结构化的 key 错误分支，badKey/unreachable 只能按错误消息
- *   归类 —— 这是薄翻译层，判据真机跑过 R1 后按实际日志校准（client 纪律：真机日志回填）。
+ * - `TailscaleError` 没有结构化的 key 错误分支，badKey/unreachable 只能按错误消息归类
+ *   —— 这里是薄翻译层。
  */
 import Foundation
 import TailscaleKit
@@ -38,7 +38,7 @@ final class TailnetNode: ObservableObject {
     @Published private(set) var meshPath: MeshPath?
 
     /// 节点验证 Running、tailnet session 建成的那一刻（App 据此把承载切进虚拟网）。
-    /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调（T8 真机实测教训）。
+    /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调。
     var onVerifiedRunning: ((URLSession) -> Void)?
 
     private var node: TailscaleNode?
@@ -52,13 +52,13 @@ final class TailnetNode: ObservableObject {
         case relay
     }
 
-    // MARK: - 接入 key（决定 5 的修订，M8 后注：App 沙盒而非 Keychain——
-    // Keychain 跨卸载存活且无法随卸载清除，与「卸载即失效」冲突；沙盒随卸载蒸发）
+    // MARK: - 接入 key（App 沙盒而非 Keychain：Keychain 跨卸载存活且无法随卸载清除，
+    // 与「卸载即失效」冲突；沙盒随卸载蒸发）
 
     enum TailnetKeyStore {
         private static let fileName = "tailnet-key"
 
-        /// 空串不算 key（真机 T8：空串曾被当「有 key」放行注册，注册请求自然不带票）。
+        /// 空串不算 key：空串会被当「有 key」放行注册，注册请求自然不带票。
         static func load() -> String? {
             SecretFile.read(fileName).flatMap { $0.isEmpty ? nil : $0 }
         }
@@ -83,8 +83,8 @@ final class TailnetNode: ObservableObject {
             await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
         case .running:
             // 重开也照喂 key（在才喂）：状态目录健康 ≠ 注册完成——上次起节点可能只写
-            // 了目录就退出（真机 T8 实测：残缺状态 + 不喂 key ⇒ 注册请求不带 key，
-            // headscale 落交互注册回 AuthURL，永远不上节点表）。后端已 Running 时
+            // 了目录就退出，残缺状态 + 不喂 key ⇒ 注册请求不带 key，headscale 落
+            // 交互注册回 AuthURL，永远不上节点表。后端已 Running 时
             // 上游自行忽略 key（tsnet.go「Ignoring authkey」分支），无副作用。
             await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
         default:
@@ -96,7 +96,7 @@ final class TailnetNode: ObservableObject {
     func submitKey(_ key: String, config: MeshConfig) async {
         Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
         guard !key.isEmpty else {
-            // 空提交不进状态机注册流程（真机 T8：空串曾全流程放行）。
+            // 空提交不进状态机注册流程。
             transition(.registrationFailed(.badKey))
             return
         }
@@ -226,7 +226,7 @@ final class TailnetNode: ObservableObject {
             )
             self.node = node
             try await node.up()
-            // 闭合信号验证（真机 T8 回填）：up() 返回 ≠ 注册完成 —— 后端停在
+            // 闭合信号：up() 返回 ≠ 注册完成 —— 后端停在
             // NeedsLogin、控制面回 AuthURL 时 up() 也返回。只有 statusJSON 报
             // BackendState == Running 才认成功；否则按 key 有无归因（有 key 还
             // 停在 NeedsLogin = key 被拒）。
@@ -237,7 +237,7 @@ final class TailnetNode: ObservableObject {
                 gatewaySession = try await TailnetURLSession.makeSession(for: node)
                 transition(.registrationSucceeded)
                 startPathPolling()
-                // 根部激活回调（T8 排障回填）：App 的 onChange(of: state) 在同值迁移
+                // 根部激活回调：App 的 onChange(of: state) 在同值迁移
                 // （running→running）时不触发，隧道承载的激活只能挂在「session 刚建成」
                 // 这个确定性时点上，不能靠状态 diff。
                 onVerifiedRunning?(gatewaySession!)

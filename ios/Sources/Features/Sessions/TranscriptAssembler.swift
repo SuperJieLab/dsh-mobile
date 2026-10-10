@@ -172,7 +172,7 @@ struct TranscriptAssembler {
         ///
         /// - Parameter endingTurn: 这一轮是不是就此结束。**用户消息夹在 `turn/start` 与助手
         ///   首个输出之间是常态**，那时过程要收口（否则用户那句会排到过程后面），但这一轮
-        ///   并未结束 —— 「有头」这身份得留着（真机实测：一起清掉会让窗口里 13 个
+        ///   并未结束 —— 「有头」这身份得留着（一起清掉会让窗口里 13 个
         ///   `turn/start` 全被判成无头）。
         func flush(endingTurn: Bool = false) {
             if let current = draft, !current.entries.isEmpty {

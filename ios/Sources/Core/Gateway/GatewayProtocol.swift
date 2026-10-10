@@ -184,7 +184,7 @@ struct DisplayMessage: Hashable {
 extension SessionEvent {
     /// 把一条事件变成一条可显示的消息；变不出来就是 `nil`。
     ///
-    /// ⚠️ **两种事件的消息不是一个形状**（实测得出）：
+    /// ⚠️ **两种事件的消息不是一个形状**：
     /// - `user/message` —— 消息对象直接在 `data` 上：`data.content` / `data.role` / `data.source`
     /// - `assistant/message` —— 消息包在 `data.message` 里，与 `data.usage` / `data.stream` 并列
     ///
@@ -284,7 +284,7 @@ struct ModelCatalogEntry: Decodable, Equatable {
     var reasoning: Reasoning? = nil
 
     /// 上游形状（catalog.js:20-27）：`efforts` 是**对象数组**，不是 id 串 ——
-    /// T8 真机教训：按想象造的 `[String]` 让整份目录解码失败、菜单全空。
+    /// 按 `[String]` 解会让整份目录解码失败、菜单全空。
     struct Reasoning: Decodable, Equatable {
         let efforts: [Effort]
         var defaultEffort: String? = nil

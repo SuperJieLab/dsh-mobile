@@ -24,7 +24,7 @@ final class GatewayClient: ObservableObject {
     /// 并发撞上 401 的请求都等这一张新票，然后各自重试一次。
     private var refreshTask: Task<Bool, Never>?
 
-    /// 关系是否存在（设备凭证在沙盒里，M8 后注）。配对成功置真，被撤销置假。
+    /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
     @Published private(set) var isPaired: Bool
 
     init(baseURL: URL, credentials: CredentialStore? = nil, session: URLSession = .shared) {

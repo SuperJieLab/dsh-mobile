@@ -3,14 +3,14 @@ import SwiftUI
 /// 配对屏（M4）：用 Mac 屏幕上的一次性配对码建立关系。
 ///
 /// 全 App 唯一需要用户「在场」的动作，也是唯一一段不需要身份的通信 —— 配对码本身就是凭证
-/// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。成功后设备凭证进沙盒存储（M8 后注），
+/// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。成功后设备凭证进沙盒存储，
 /// 之后一切请求静默带票。
 ///
-/// M8 追加组网段（决定 5 / 决定 8）：headscale 地址与接入 key（沙盒存储）在此录入，
+/// 组网段（M8）：headscale 地址与接入 key（沙盒存储）在此录入，
 /// 节点状态如实展示；配对仍走原三票身份（决定 9，不因在虚拟网内简化）。
 struct PairingView: View {
     let client: GatewayClient
-    /// 组网段的数据源 —— App 根部创建并经 environmentObject 注入（T7 接线）。
+    /// 组网段的数据源 —— App 根部创建并经 environmentObject 注入。
     @EnvironmentObject private var node: TailnetNode
 
     @State private var code = ""
@@ -103,7 +103,7 @@ struct PairingView: View {
                     Button("保存并接入") {
                         MeshConfig(controlURLString: controlURL, gatewayURLString: gatewayURL).save()
                         // 先捕获值再清空输入框：Task 闭包执行时才读 tailnetKey，
-                        // 顺序反了提交永远是空串（真机 T8 日志实锤的竞态）。
+                        // 顺序反了提交永远是空串。
                         let key = tailnetKey
                         tailnetKey = ""
                         Task { await node.submitKey(key, config: MeshConfig.load()) }

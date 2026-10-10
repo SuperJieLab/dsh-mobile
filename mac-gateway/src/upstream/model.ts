@@ -4,8 +4,8 @@
  * controller's **declared** face — `selectModel` / `modelCatalog` are public
  * Remote methods (`dsh-api-session-controller/lib/types/index.js:137-138`), so
  * unlike the M5 relay this needs no private-face escape hatch; the drift risk
- * is the parameter *lists*, which the G2 checks below watch (实施期修正 15 的
- * 同族防线：形参名变了要出声，绝不静默按位置喂垃圾).
+ * is the parameter *lists*, which the G2 checks below watch (形参名变了要出声，
+ * 绝不静默按位置喂垃圾).
  *
  * Upstream owns validation and normalization (决定 3): whatever its door
  * answers — the normalized `selected`, or a typed refusal — is relayed, never
@@ -22,7 +22,7 @@ const log = createLogger(LogModule.model)
 /**
  * The part of the session controller this adapter calls. The signatures are the
  * runtime's, verbatim — a fake that differs from the real face lets a drift
- * pass every test (the lesson of 实施期修正 15/16).
+ * pass every test.
  */
 export interface ModelControllerLike {
   selectModel(request: {

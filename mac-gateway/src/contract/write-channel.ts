@@ -1,6 +1,6 @@
 /**
  * The write contract (M5): parsing and replay bookkeeping for the two write ops
- * — docs/dev/plans/M5-remote-intervention.md §四 (as amended by 实施期修正 11).
+ * — docs/dev/plans/M5-remote-intervention.md §四.
  * Write payloads are validated strictly, unlike the read paths: a malformed
  * decision silently executed is a remote command run on a guess, so every
  * malformed write is refused with `invalid-request` (Plan §3.3 决定 8).
@@ -15,7 +15,7 @@
 export interface ApprovalAnswerMessage {
   /**
    * The `$events` waterfall frame's `eventId` this answer is about — the id the
-   * `approval-request` frame the phone saw carried (实施期修正 11: the projected
+   * `approval-request` frame the phone saw carried (the projected
    * request has no audit id, so this is the only end-to-end address).
    */
   eventId: string

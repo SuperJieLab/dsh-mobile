@@ -44,7 +44,7 @@ export const inject = [
   // The follow stream (M2): pump the controller's follow to the WS channel.
   // Only present in the web-app bundle — spec §8.5 B5 records what that costs.
   'sessionController',
-  // The approval relay (M5, 实施期修正 11): the gateway's `$events` stream is
+  // The approval relay (M5): the gateway's `$events` stream is
   // how a remote client receives and answers approval waterfall requests.
   'typertGateway',
 ]
@@ -105,8 +105,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   log.info(`pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
 
   // The write channel (M5): the relay bridges `approval-answer` to the gateway's
-  // `$events` stream (实施期修正 11 — the host-side waterfall listener approach was
-  // structurally dead); the pump forwards `session-prompt` through the controller's
+  // `$events` stream (a host-side waterfall listener cannot receive remote answers —
+  // api-remotes parks them until a remote client speaks); the pump forwards
+  // `session-prompt` through the controller's
   // own door (docs/dev/plans/M5-remote-intervention.md §四).
   const relayLifetime = new AbortController()
   const approvalFace = broadcasterOver()

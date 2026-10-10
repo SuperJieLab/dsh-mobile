@@ -54,7 +54,7 @@ export interface MuxErrorFrame {
   payload: { code: string; message: string }
 }
 
-/** Server → client: a connection-level approval push (M5, 实施期修正 11). */
+/** Server → client: a connection-level approval push (M5). */
 export interface MuxApprovalFrame {
   type: 'approval'
   /** `{kind:'request', eventId, toolName, callId?, reason?}` or `{kind:'cancel', eventId}`. */

@@ -137,7 +137,7 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
           // A projection is a *hint*: one row's read failing costs that row its cells, never
           // the whole list — the line upstream's listing draws (`session-controller/src/list.ts`
           // `projectionsFor`, returns `undefined` and warns). Without it one unreadable
-          // checkpoint blanks the screen (实施期修正 16).
+          // checkpoint blanks the screen.
           failures += 1
           firstFailure ??= error
         }

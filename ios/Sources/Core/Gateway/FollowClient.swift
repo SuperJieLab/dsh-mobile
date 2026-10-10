@@ -32,7 +32,7 @@ final class FollowClient: NSObject {
     var onEvent: ((SessionEvent) -> Void)?
     /// 一条瞬态帧（start/chunk/end，原样）。
     var onTransient: ((JSONValue) -> Void)?
-    /// 一条连接级审批帧（M5 实施期修正 11：`{kind:'request'|'cancel', ...}` 原样）。
+    /// 一条连接级审批帧（`{kind:'request'|'cancel', ...}` 原样）。
     var onApproval: ((JSONValue) -> Void)?
     /// 一份上下文占用读数（M6）。两个来源、同一个形状：opening 里的基线，以及随后的 `usage` 帧。
     /// 缺席的含义与「空」不同 —— 字段**不在** = 服务端读不出（保留手里那份），字段在而 `usage` 为空

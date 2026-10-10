@@ -1,7 +1,7 @@
 import Foundation
 
 /**
- * 凭证的沙盒文件存储（M8 后注修订二：UserDefaults → 自管文件）。
+ * 凭证的沙盒文件存储（Application Support/secrets/ 下自管文件）。
  *
  * UserDefaults 也在沙盒里、卸载同样蒸发，但它是全局键值命名空间，语义是「偏好
  * 设置」，存凭证名不正言不顺（还容易留着调试残渣）。凭证收进 Application Support

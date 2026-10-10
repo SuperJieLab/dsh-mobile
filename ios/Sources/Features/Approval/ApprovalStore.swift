@@ -23,7 +23,7 @@ final class ApprovalStore: ObservableObject {
         let reason: String?
         /// 提问挂在哪一次工具调用上，可能没有 —— 转发帧与审计事件的对账键。
         let callId: String?
-        /// 网关 `$events` waterfall 帧的 `eventId`（实施期修正 11）—— 应答的线上寻址键；
+        /// 网关 `$events` waterfall 帧的 `eventId` —— 应答的线上寻址键；
         /// 重建出的卡片在转发帧到达前为 `nil`（不可应答）。
         var eventId: String?
     }
@@ -47,7 +47,7 @@ final class ApprovalStore: ObservableObject {
     private var lastEvents: [SessionEvent] = []
     /// 转发而来的活卡（eventId → 卡片）；重建时跨窗口保留。
     private var live: [String: PendingApproval] = [:]
-    /// 最近一次 sync 对账里上游仍挂着的 callId（实施期修正 12）—— 重建时据此过滤悬空审计卡：收口后
+    /// 最近一次 sync 对账里上游仍挂着的 callId —— 重建时据此过滤悬空审计卡：收口后
     /// cancel 只发给在线者，dsh 重启更让 asked 永无 decided。
     private var standingCallIds: Set<String> = []
     /// 名单是否权威。只有收到过非 stale 的 sync 才敢按名单滤卡 —— relay 未就绪时服务端发 stale 帧。
@@ -91,7 +91,7 @@ final class ApprovalStore: ObservableObject {
             case "approval/decided":
                 if let id = event.data["id"]?.string { pendingById.removeValue(forKey: id) }
             case "turn/end":
-                // 实施期修正 14：turn 闭合 ⇒ 这一轮里还没收口的 asked 是崩溃残骸。上游
+                // turn 闭合 ⇒ 这一轮里还没收口的 asked 是崩溃残骸。上游
                 // `approval.request()` 在 turn 内阻塞到 outcome 落盘
                 // （`user-approval/src/index.ts:208-227`），故 turn 能结束就意味着它发起的每个
                 // 审批都有结局；只有进程在等 outcome 时被杀，才会留下「turn 已闭合、decided
@@ -122,7 +122,7 @@ final class ApprovalStore: ObservableObject {
         }
     }
 
-    /// 网关审批推送（实施期修正 11）：转发帧到达 → 绑定或新建；取消 → 撤卡。
+    /// 网关审批推送：转发帧到达 → 绑定或新建；取消 → 撤卡。
     func receive(_ payload: JSONValue) {
         switch payload["kind"]?.string {
         case "request":
@@ -150,7 +150,7 @@ final class ApprovalStore: ObservableObject {
             live.removeValue(forKey: eventId)
             states[eventId] = nil
         case "sync":
-            // 连接即对账（实施期修正 12）。三档：stale（relay 未就绪，名单证明不了任何事 ——
+            // 连接即对账。三档：stale（relay 未就绪，名单证明不了任何事 ——
             // 不撤卡、不启用 callId 过滤，对空名单过滤会把真挂着的审批也滤没）；旧服务端格式
             // （只有 eventIds 无 callIds，eventIds 照样撤转发卡、callId 过滤保持关闭）；权威名单
             // （撤名单之外的转发卡，并记 callIds 供 rebuild 过滤悬空审计卡）。
@@ -190,7 +190,7 @@ final class ApprovalStore: ObservableObject {
         }
         do {
             try await client.answerApproval(eventId: eventId, allow: allow, answerId: UUID().uuidString)
-            // 自清（运行时实锤：receiveRemoteEventResult 先移除应答者自己的 delivery 再广播
+            // 自清（上游行为：receiveRemoteEventResult 先移除应答者自己的 delivery 再广播
             // cancel —— 自己答掉的审批，cancel 只发给别人，我们收不到收口帧）。上游语义
             // 「先答先收口」，回包成功即结局已定，与 Web UI 同样在应答当下收掉卡片。
             pending.removeAll { $0.eventId == eventId }

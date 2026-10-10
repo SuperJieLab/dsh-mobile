@@ -1,9 +1,8 @@
 /**
  * The write channel's adapters (M5): the approval relay and the prompt pump.
  *
- * **The relay (实施期修正 11).** A host-side waterfall listener proved dead on the running
- * product: `api-remotes` sits earlier in the waterfall and parks every `approval/request` in
- * `pendingRemoteEvents` until a *remote client* answers. So the relay makes this plugin a
+ * **The relay.** `api-remotes` sits earlier in the waterfall and parks every `approval/request` in
+ * `pendingRemoteEvents` until a *remote client* answers, so the relay makes this plugin a
  * remote event-stream client — it opens the gateway's `$events` stream, forwards every
  * `approval/request` frame to the phone as an `approval` frame, and answers through
  * `dispatchRpc("$events/result")` on tap. Phone and browser are peers: first answer settles

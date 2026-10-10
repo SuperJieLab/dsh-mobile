@@ -1,7 +1,7 @@
 /**
  * Calls into the DSH host **by parameter name**, not position. Positions are internal
  * detail, not contract: the gateway's private members may grow a parameter ahead of the
- * one we care about, and did (实施期修正 15). Names survive that, and Cordis's multi-line
+ * one we care about. Names survive that, and Cordis's multi-line
  * rewrite of service members.
  *
  * An unreadable parameter list (bound, native) falls back to positions, and an unknown name takes
@@ -10,12 +10,11 @@
  */
 
 /**
- * 实施期修正 15（真机日志 `signals[0] is not of type AbortSignal.`）。
  * 上游 opener 的形参表会随运行时版本变长：`uplink` / `peer` 插在 `signal` 前面，按位置传的取消
  * 信号落进 uplink 槽，
  * 真正的 `signal` 成了 `undefined`，网关内部 `AbortSignal.any([undefined, ...])`
- * 当场抛错 —— 中继每一代都死在建流那一步。形参名是唯一稳的锚点，
- * 实参一律按名填（{@link callThrough}）。
+ * 当场抛错（真机日志 `signals[0] is not of type AbortSignal.`）—— 中继每一代都死在建流那一步。
+ * 形参名是唯一稳的锚点，实参一律按名填（{@link callThrough}）。
  */
 export function openStreamThrough(
   opener: (...args: unknown[]) => Promise<AsyncIterable<unknown>>,
