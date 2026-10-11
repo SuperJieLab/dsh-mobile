@@ -65,6 +65,12 @@ struct SessionListView: View {
         }
         .refreshable { await reload() }
         .task { await reload() }
+        // 组网就绪即首载：启动窗口内的请求会 fail-fast（R5 fail-fast 的体验补全），
+        // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
+        .onChange(of: store.phase) { _, phase in
+            guard case .ready = phase else { return }
+            Task { await reload() }
+        }
         // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应。失败时旧列表照常保留。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
