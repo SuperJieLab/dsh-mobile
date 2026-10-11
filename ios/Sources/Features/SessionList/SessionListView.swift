@@ -8,6 +8,8 @@ struct SessionListView: View {
 
     @State private var sessions: [SessionSummary] = []
     @State private var failure: String?
+    /// 组网就绪前的必然失败（notActivated）：预期状态，显示中性等待而非错误（R5 修正 4②）。
+    @State private var waitingForMesh = false
     @State private var isLoading = false
     /// 组网/配对入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
     /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
@@ -30,6 +32,13 @@ struct SessionListView: View {
             if let failure {
                 Section {
                     FailureBanner(text: failure)
+                }
+            } else if waitingForMesh {
+                Section {
+                    // 组网就绪前的必然等待（R5 修正 4②）：不是错误，中性显示。
+                    Label("等待组网就绪…", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -111,9 +120,18 @@ struct SessionListView: View {
             sessions = try await client.listSessions()
                 .filter { !$0.blank && $0.origin != "subagent" }
             failure = nil
+            waitingForMesh = false
         } catch {
             // 失败时**不清空**已有列表：能显示多少显示多少，错误挂在上面。
-            failure = error.localizedDescription
+            // 例外：notActivated 是组网就绪前的必然阶段（R5 修正 4②），归入等待态；
+            // 其余错误（含节点 failed 期的传输错误）照常走错误横幅。
+            if let gatewayError = error as? GatewayClientError, case .notActivated = gatewayError {
+                waitingForMesh = true
+                failure = nil
+            } else {
+                waitingForMesh = false
+                failure = error.localizedDescription
+            }
         }
     }
 }

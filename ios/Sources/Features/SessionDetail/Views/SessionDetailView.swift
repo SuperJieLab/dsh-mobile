@@ -117,6 +117,12 @@ struct SessionDetailView: View {
             // 离屏即停。`sync()`（HTTP 全量对齐）保留给下拉刷新作兜底。
             .task { sync.startFollowing() }
             .onDisappear { sync.stopFollowing() }
+            // 组网就绪即重连（R5 修正 4①，与列表「就绪即首载」对称）：connecting 期间
+            // 进页时 WS 在退避循环里空转（端点不存在），就绪此刻不等下一轮退避。
+            .onChange(of: store.phase) { _, phase in
+                guard case .ready = phase else { return }
+                sync.reconnectNow()
+            }
             // 回前台立即重连 —— 上游「恢复立即试」在详情域的对应。
             // 已就绪 / 正在握手时 reconnectNow() 自己无事发生，不会叠加连接。
             .onChange(of: scenePhase) { _, phase in
