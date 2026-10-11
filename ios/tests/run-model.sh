@@ -19,7 +19,7 @@ swiftc -O -o "$out" \
   "$here/../Sources/Core/Secrets/CredentialStore.swift" \
   "$here/../Sources/Core/Secrets/SecretFile.swift" \
   "$here/../Sources/Core/Gateway/GatewayClient.swift" \
-  "$here/../Sources/Features/SessionDetail/ModelSelectionState.swift" \
+  "$here/../Sources/Features/SessionDetail/State/ModelSelectionState.swift" \
   "$here/TestHarness.swift" \
   "$here/ModelProtocolTests.swift"
 
