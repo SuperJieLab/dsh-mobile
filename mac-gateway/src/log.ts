@@ -1,4 +1,5 @@
-// 唯一日志出口：ISO8601 UTC 毫秒时间戳 + [级别][模块]，格式规范见 dev/CONVENTIONS.md §2。
+// 唯一日志出口：ISO8601 UTC 毫秒时间戳 + [dsh] + [级别][模块]，格式规范见 dev/CONVENTIONS.md §2。
+// [dsh] 是全局过滤标签（两端一致）：混在别的进程/系统输出里时按它 grep 只留我们的行。
 // debug 级默认静默，DSH_LOG_DEBUG=1 打开；warn/error 走 stderr，其余走 stdout。
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -19,7 +20,7 @@ export function createLogger(module: string): Logger {
   const debugEnabled = process.env.DSH_LOG_DEBUG === "1";
   const emit = (level: LogLevel) => (message: string): void => {
     if (level === "debug" && !debugEnabled) return;
-    const line = `${new Date().toISOString()} [${level}][${module}] ${message}`;
+    const line = `${new Date().toISOString()} [dsh][${level}][${module}] ${message}`;
     if (level === "warn" || level === "error") console.error(line);
     else console.log(line);
   };
