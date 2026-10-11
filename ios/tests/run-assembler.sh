@@ -23,7 +23,7 @@ swiftc -O -o "$out" \
   "$here/../Sources/Core/Secrets/CredentialStore.swift" \
   "$here/../Sources/Core/Secrets/SecretFile.swift" \
   "$here/../Sources/Core/Gateway/SessionMirror.swift" \
-  "$here/../Sources/Features/Sessions/TranscriptAssembler.swift" \
+  "$here/../Sources/Features/SessionDetail/TranscriptAssembler.swift" \
   "$here/TestHarness.swift" \
   "$here/TranscriptAssemblerTests.swift"
 
