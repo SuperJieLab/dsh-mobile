@@ -42,7 +42,7 @@ struct SessionListView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("\(sessions.count) 个会话 · \(client.baseURL.absoluteString)")
+                Text("\(sessions.count) 个会话 · \(client.baseURL?.absoluteString ?? "未激活")")
             }
         }
         .navigationTitle("会话")
