@@ -87,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				AA00000000000000000000A4 /* DshMobile.app */,
+				BB00000000000000000000T3 /* DshMobileTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -110,36 +111,36 @@
 			fileSystemSynchronizedGroups = (
 				AA00000000000000000000A2 /* Sources */,
 			);
-		name = DshMobile;
-		packageProductDependencies = (
-		);
-		productName = DshMobile;
-		productReference = AA00000000000000000000A4 /* DshMobile.app */;
-		productType = "com.apple.product-type.application";
-	};
-	BB00000000000000000000T2 /* DshMobileTests */ = {
-		isa = PBXNativeTarget;
-		buildConfigurationList = BB00000000000000000000T7 /* Build configuration list for PBXNativeTarget "DshMobileTests" */;
-		buildPhases = (
-			BB00000000000000000000T4 /* Sources */,
-			BB00000000000000000000T5 /* Frameworks */,
-			BB00000000000000000000T6 /* Resources */,
-		);
-		buildRules = (
-		);
-		dependencies = (
-			BB00000000000000000000T10 /* PBXTargetDependency */,
-		);
-		fileSystemSynchronizedGroups = (
-			BB00000000000000000000T1 /* tests */,
-		);
-		name = DshMobileTests;
-		packageProductDependencies = (
-		);
-		productName = DshMobileTests;
-		productReference = BB00000000000000000000T3 /* DshMobileTests.xctest */;
-		productType = "com.apple.product-type.bundle.unit-test";
-	};
+			name = DshMobile;
+			packageProductDependencies = (
+			);
+			productName = DshMobile;
+			productReference = AA00000000000000000000A4 /* DshMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+		BB00000000000000000000T2 /* DshMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BB00000000000000000000T7 /* Build configuration list for PBXNativeTarget "DshMobileTests" */;
+			buildPhases = (
+				BB00000000000000000000T4 /* Sources */,
+				BB00000000000000000000T5 /* Frameworks */,
+				BB00000000000000000000T6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BB00000000000000000000T10 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				BB00000000000000000000T1 /* tests */,
+			);
+			name = DshMobileTests;
+			packageProductDependencies = (
+			);
+			productName = DshMobileTests;
+			productReference = BB00000000000000000000T3 /* DshMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -149,15 +150,15 @@
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2660;
 				LastUpgradeCheck = 2660;
-			TargetAttributes = {
-				AA00000000000000000000A5 = {
-					CreatedOnToolsVersion = 26.6;
-					TestTargetID = BB00000000000000000000T2;
+				TargetAttributes = {
+					AA00000000000000000000A5 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = BB00000000000000000000T2;
+					};
+					BB00000000000000000000T2 = {
+						CreatedOnToolsVersion = 26.6;
+					};
 				};
-				BB00000000000000000000T2 = {
-					CreatedOnToolsVersion = 26.6;
-				};
-			};
 			};
 			buildConfigurationList = AA00000000000000000000AA /* Build configuration list for PBXProject "DshMobile" */;
 			developmentRegion = en;
@@ -172,10 +173,10 @@
 			productRefGroup = AA00000000000000000000A3 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-		targets = (
-			AA00000000000000000000A5 /* DshMobile */,
-			BB00000000000000000000T2 /* DshMobileTests */,
-		);
+			targets = (
+				AA00000000000000000000A5 /* DshMobile */,
+				BB00000000000000000000T2 /* DshMobileTests */,
+			);
 		};
 /* End PBXProject section */
 
@@ -243,10 +244,10 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
-			ONLY_ACTIVE_ARCH = YES;
-			SDKROOT = iphoneos;
-			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-			SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 			};
@@ -266,10 +267,10 @@
 				GCC_NO_COMMON_BLOCKS = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
-			MTL_FAST_MATH = YES;
-			SDKROOT = iphoneos;
-			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-			SWIFT_COMPILATION_MODE = wholemodule;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_VERSION = 5.0;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -307,64 +308,64 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-			MARKETING_VERSION = 1.0;
-			PRODUCT_BUNDLE_IDENTIFIER = com.superjie.dshmobile;
-			PRODUCT_NAME = "$(TARGET_NAME)";
-			SWIFT_EMIT_LOC_STRINGS = YES;
-			TARGETED_DEVICE_FAMILY = 1;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.superjie.dshmobile;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
 		};
-		name = Release;
-	};
-	BB00000000000000000000T8 /* Debug */ = {
-		isa = XCBuildConfiguration;
-		buildSettings = {
-			BUNDLE_LOADER = "$(TEST_HOST)";
-			CODE_SIGN_STYLE = Automatic;
-			CURRENT_PROJECT_VERSION = 1;
-			DEVELOPMENT_TEAM = 9TK777LH2K;
-			GENERATE_INFOPLIST_FILE = YES;
-			IPHONEOS_DEPLOYMENT_TARGET = 18.1;
-			LD_RUNPATH_SEARCH_PATHS = (
-				"$(inherited)",
-				"@executable_path/Frameworks",
-				"@loader_path/Frameworks",
-			);
-			MARKETING_VERSION = 1.0;
-			PRODUCT_BUNDLE_IDENTIFIER = com.superjie.dshmobile.tests;
-			PRODUCT_NAME = "$(TARGET_NAME)";
-			SDKROOT = iphoneos;
-			SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
-			SWIFT_VERSION = 5.0;
-			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DshMobile.app/DshMobile";
-			TARGETED_DEVICE_FAMILY = 1;
+		BB00000000000000000000T8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9TK777LH2K;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.superjie.dshmobile.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DshMobile.app/DshMobile";
+			};
+			name = Debug;
 		};
-		name = Debug;
-	};
-	BB00000000000000000000T9 /* Release */ = {
-		isa = XCBuildConfiguration;
-		buildSettings = {
-			BUNDLE_LOADER = "$(TEST_HOST)";
-			CODE_SIGN_STYLE = Automatic;
-			CURRENT_PROJECT_VERSION = 1;
-			DEVELOPMENT_TEAM = 9TK777LH2K;
-			GENERATE_INFOPLIST_FILE = YES;
-			IPHONEOS_DEPLOYMENT_TARGET = 18.1;
-			LD_RUNPATH_SEARCH_PATHS = (
-				"$(inherited)",
-				"@executable_path/Frameworks",
-				"@loader_path/Frameworks",
-			);
-			MARKETING_VERSION = 1.0;
-			PRODUCT_BUNDLE_IDENTIFIER = com.superjie.dshmobile.tests;
-			PRODUCT_NAME = "$(TARGET_NAME)";
-			SDKROOT = iphoneos;
-			SWIFT_COMPILATION_MODE = wholemodule;
-			SWIFT_VERSION = 5.0;
-			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DshMobile.app/DshMobile";
-			TARGETED_DEVICE_FAMILY = 1;
+		BB00000000000000000000T9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9TK777LH2K;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.superjie.dshmobile.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DshMobile.app/DshMobile";
+			};
+			name = Release;
 		};
-		name = Release;
-	};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -377,24 +378,24 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-	AA00000000000000000000AB /* Build configuration list for PBXNativeTarget "DshMobile" */ = {
-		isa = XCConfigurationList;
-		buildConfigurations = (
-			AA00000000000000000000AE /* Debug */,
-			AA00000000000000000000AF /* Release */,
-		);
-		defaultConfigurationIsVisible = 0;
-		defaultConfigurationName = Release;
-	};
-	BB00000000000000000000T7 /* Build configuration list for PBXNativeTarget "DshMobileTests" */ = {
-		isa = XCConfigurationList;
-		buildConfigurations = (
-			BB00000000000000000000T8 /* Debug */,
-			BB00000000000000000000T9 /* Release */,
-		);
-		defaultConfigurationIsVisible = 0;
-		defaultConfigurationName = Release;
-	};
+		AA00000000000000000000AB /* Build configuration list for PBXNativeTarget "DshMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000000AE /* Debug */,
+				AA00000000000000000000AF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BB00000000000000000000T7 /* Build configuration list for PBXNativeTarget "DshMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB00000000000000000000T8 /* Debug */,
+				BB00000000000000000000T9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 	};
 	rootObject = AA00000000000000000000A9 /* Project object */;
