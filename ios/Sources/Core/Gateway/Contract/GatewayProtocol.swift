@@ -1,6 +1,6 @@
 import Foundation
 
-/// 协议版本，请求与响应都必须带它 —— 版本协商的位置（`dev/reference/protocol.md` §三）。
+/// 协议版本，请求与响应都必须带它 —— 版本协商的位置（`dev/contract/protocol.md` §三）。
 let gatewayProtocolVersion = 2
 
 /// 失败信封里的错误码（协议 v2 六个 + `unauthenticated` + `unknown-approval` /
@@ -59,7 +59,7 @@ struct GatewayFailure: Decodable {
 // MARK: - 会话
 
 /// 列表里的一行（协议 v2）。字段全来自会话 header 或 host 已维护的投影，没有一个读日志算出来
-/// —— 列表因而零 I/O（`dev/reference/protocol.md` §4.1）。
+/// —— 列表因而零 I/O（`dev/contract/protocol.md` §4.1）。
 struct SessionSummary: Decodable, Identifiable, Hashable {
     let id: String
     /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——

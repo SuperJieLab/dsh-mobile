@@ -305,7 +305,7 @@ test('the opening asks upstream for a window that starts on a turn boundary', { 
 
   // The reference spells the rule as a floor and a ceiling; both come from the
   // one target our own window function takes, so the opening and `page` ask for
-  // the same window (spec §8.5 B6 二次裁决).
+  // the same window.
   assert.deepEqual(source.requests, [{
     address: { kind: 'session', sessionId: 's1' },
     maxMessages: 100,

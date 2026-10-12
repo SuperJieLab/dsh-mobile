@@ -2,7 +2,7 @@
  * 协议契约：一条线上消息进，一条线上消息出。
  *
  * `handle` 是注入数据源的普通 async 函数：无 HTTP、无 socket、无 DSH 运行时、
- * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL（dev/reference/protocol.md；
+ * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL（dev/contract/protocol.md；
  * M0 §4.3 Step 3）。水位：两个边界
  * 均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没有」）；
  * `asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或
@@ -51,7 +51,7 @@ export interface WireEvent {
 /**
  * 会话列表的一行 —— 列表路径承诺的字段 (v2)。每个字段都来自会话头或
  * 已保留的投影，因此列表是零 I/O：这里没有任何东西需要读日志
- * （dev/reference/protocol.md §4.1）。
+ * （dev/contract/protocol.md §4.1）。
  */
 export interface SessionRow {
   /** 已存储的会话 id。 */
@@ -141,7 +141,7 @@ export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_04
  */
 export const DEFAULT_PAGE_MESSAGES = 50
 
-/** 拒绝。`code` 取 dev/reference/protocol.md §六 中的码之一。 */
+/** 拒绝。`code` 取 dev/contract/protocol.md §六 中的码之一。 */
 export interface WireError {
   code: string
   message: string
@@ -302,7 +302,7 @@ async function listSessions(port: SessionPort, now: () => number): Promise<Respo
 
 /**
  * 一行的线上形状，省略 `title` 而非发送 null。`eventCount` 刻意缺席：
- * 日志推导的事实会把日志拖回列表路径（dev/reference/protocol.md §4.1）。
+ * 日志推导的事实会把日志拖回列表路径（dev/contract/protocol.md §4.1）。
  */
 function toWireSummary(row: SessionRow): Record<string, unknown> {
   return {
@@ -331,7 +331,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
 
   if (slice.staleCursor) {
     // 用错误码，不用静默空应答：整个视图已不可信，布尔会被吞掉
-    // （dev/reference/protocol.md §六）。
+    // （dev/contract/protocol.md §六）。
     return failure('resync-required', `since ${since} cannot exist: this session's log is empty`)
   }
 

@@ -70,7 +70,7 @@ export function newToken(random: () => number): string {
 
 /**
  * `Authorization: Bearer <token>` → 取出 token；其余 → 无。头部是身份出行的
- * 唯一载体 (dev/reference/protocol.md §「身份」)——放进信封就会焊死在某一种
+ * 唯一载体 (dev/contract/protocol.md §「身份」)——放进信封就会焊死在某一种
  * 传输上，违背第一条约束。
  */
 export function bearerTokenOf(header: string | undefined): string | undefined {

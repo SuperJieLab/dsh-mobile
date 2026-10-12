@@ -2,11 +2,11 @@
  * mac-gateway —— dsh-mobile 的 Mac 侧 DSH 插件：只做装配。协议在
  * `contract/`，面向手机的传输在 `remote/`，所有面向宿主的端口工厂在
  * `upstream/faces.ts` —— 本文件把它们接起来，并管监听器的生命周期
- * （dev/reference/protocol.md、R1）。
+ * （dev/contract/protocol.md、R1）。
  *
  * 列表路径 (v2) 是零 I/O —— 头加宿主保留的投影，绝不读日志 —— 其四项
  * 服务在 `inject` 中声明：缺了它们 fiber 保持 pending，这对一个读不了
- * 会话的网关是正确的失败（dev/reference/protocol.md §4.1）。
+ * 会话的网关是正确的失败（dev/contract/protocol.md §4.1）。
  *
  * 导入仅限 Node 内建与自有模块；cordis 只作类型引入，因为裸 specifier
  * 在 dsh 安装树之外无法解析。
@@ -53,7 +53,7 @@ export interface Config {
   /** 绑定端口。 @default 3081 */
   port?: number
   /** 一条 `snapshot` 应答至多携带的事件数。做成配置是为了让上限可被端到端
-   * 观测（dev/reference/protocol.md §五）。 @default 500 */
+   * 观测（dev/contract/protocol.md §五）。 @default 500 */
   maxDeltaEvents?: number
   /** 一条应答 `events` 序列化尺寸的软上限，字节。 @default 1048576 */
   maxDeltaBytes?: number

@@ -12,7 +12,7 @@ import { upstreamWindow } from '../../src/contract/window.ts'
 test('upstreamWindow: the reference spelling of our one-target window rule', () => {
   // The reference splits the rule into a floor it may stop after and a ceiling it
   // must stop at; ours takes one target and derives the ceiling. Here the two
-  // spellings meet (spec §8.5 B6 二次裁决).
+  // spellings meet.
   assert.deepEqual(upstreamWindow(50), {
     maxMessages: 100,
     turnWindow: { minMessages: 50, minTurns: 1 },

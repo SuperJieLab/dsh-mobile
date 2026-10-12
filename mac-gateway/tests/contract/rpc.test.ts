@@ -3,7 +3,7 @@
  * are the reason `handle` exists standalone: no server, no runtime, no filesystem,
  * no network — the data source is injected, so the protocol layer decides alone.
  * Run: node --test tests/contract/rpc.test.ts
- * See dev/reference/protocol.md and M0 §4.3 Step 3.
+ * See dev/contract/protocol.md and M0 §4.3 Step 3.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -71,7 +71,7 @@ function mixedLog(count: number): WireEvent[] {
  * The shape is the point: it makes a message-count boundary land *inside* a turn far
  * more often than on its edge — 60–93% of cuts across four real session logs — which
  * is why a window's start is aligned to a `turn/start` rather than left where the
- * count ran out (spec §8.5 B6 二次裁决).
+ * count ran out.
  */
 function turnedLog(turns: number): WireEvent[] {
   const events: WireEvent[] = []
@@ -391,7 +391,7 @@ test('a since past the water mark is answered, not refused — it is indistingui
 })
 
 // ---------------------------------------------------------------------------
-// `page` — the backwards window (dev/reference/protocol.md §4.3)
+// `page` — the backwards window (dev/contract/protocol.md §4.3)
 // ---------------------------------------------------------------------------
 
 test('page with no beforeSeq hands back the newest message window', async () => {
@@ -455,7 +455,7 @@ test('walking pages backwards covers the log exactly once', async () => {
   assert.deepEqual(collected, log.map(event => event.seq), 'the pages must tile the log with no gap and no overlap')
   // Every page but the one reaching the log's own beginning starts on a turn
   // boundary, so no page opens on a half turn — and alignment is what the caller
-  // walks (spec §8.5 B6 二次裁决).
+  // walks.
   for (const start of starts) {
     if (start === 0) continue
     assert.equal(log[start]?.type, 'turn/start', `a page must start on a turn boundary, got seq ${start}`)
@@ -529,7 +529,7 @@ test('page on an unknown session is the same refusal the read path uses', async 
 })
 
 // ---------------------------------------------------------------------------
-// `list-sessions` — the v2 row shape (dev/reference/protocol.md §4.1)
+// `list-sessions` — the v2 row shape (dev/contract/protocol.md §4.1)
 // ---------------------------------------------------------------------------
 
 test('a list row carries running and blank, and never an event count', async () => {

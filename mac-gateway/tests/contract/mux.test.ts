@@ -33,8 +33,8 @@ function fakeLog(): WireEvent[] {
  * A log with real turn boundaries: every turn is `user/message`, `turn/start`,
  * `assistant/message`, `turn/end`.
  *
- * `followOpening`'s geometry needs turns: a window's start is aligned back to one
- * (spec §8.5 B6 二次裁决), and a log with no `turn/start` only exercises the ceiling.
+ * `followOpening`'s geometry needs turns: a window's start is aligned back to one,
+ * and a log with no `turn/start` only exercises the ceiling.
  */
 function turnedLog(turns: number): WireEvent[] {
   const events: WireEvent[] = []
