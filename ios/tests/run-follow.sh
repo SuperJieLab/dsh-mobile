@@ -11,17 +11,17 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="${TMPDIR:-/tmp}/dsh-mobile-follow-tests"
 
 swiftc -O -o "$out" \
-  "$here/../Sources/Core/Gateway/GatewayProtocol.swift" \
-  "$here/../Sources/Core/Gateway/GatewayTransport.swift" \
-  "$here/../Sources/Core/Gateway/GatewayClient.swift" \
+  "$here/../Sources/Core/Gateway/Contract/GatewayProtocol.swift" \
+  "$here/../Sources/Core/Gateway/Client/GatewayTransport.swift" \
+  "$here/../Sources/Core/Gateway/Client/GatewayClient.swift" \
   "$here/../Sources/Core/Secrets/CredentialStore.swift" \
   "$here/../Sources/Core/Secrets/SecretFile.swift" \
-  "$here/../Sources/Core/Gateway/SessionMirror.swift" \
-  "$here/../Sources/Core/Gateway/FailableDecodable.swift" \
-  "$here/../Sources/Core/Gateway/OpeningFrame.swift" \
+  "$here/../Sources/Core/Gateway/State/SessionMirror.swift" \
+  "$here/../Sources/Core/Gateway/Stream/FailableDecodable.swift" \
+  "$here/../Sources/Core/Gateway/Stream/OpeningFrame.swift" \
   "$here/../Sources/Core/RefreshGate.swift" \
   "$here/../Sources/Core/Log.swift" \
-  "$here/../Sources/Core/Gateway/FollowClient.swift" \
+  "$here/../Sources/Core/Gateway/Stream/FollowClient.swift" \
   "$here/TestHarness.swift" \
   "$here/FollowReplayTests.swift"
 
