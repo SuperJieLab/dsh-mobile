@@ -55,7 +55,7 @@ const REQUEST: ModelSelectMessage = { sessionId: 's', provider: 'deepseek', mode
 /** Run `body` with console.warn captured; returns what was warned. */
 async function captureWarn(body: () => Promise<void>): Promise<string[]> {
   const warnings: string[] = []
-  // warn 级经统一 logger 走 stderr（console.error），见 dev/CONVENTIONS.md §2.1。
+  // warn 级经统一 logger 走 stderr（console.error）。
   const spy = mock.method(console, 'error', (...parts: unknown[]) => { warnings.push(parts.map(String).join(' ')) })
   try {
     await body()

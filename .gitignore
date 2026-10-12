@@ -7,6 +7,9 @@ deepseek-harness/
 # 开发工作区（约束与计划，不随仓库发布）
 dev/
 
+# 现状说明手册（与 dev/ 并列的现状文档，同不发布）
+manual/
+
 # Node
 node_modules/
 dist/
