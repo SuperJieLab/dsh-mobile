@@ -1,6 +1,6 @@
 /**
  * 节点状态机：iOS 侧唯一的新逻辑，纯函数、不持网络对象、不 import UI。
- * 迁移表唯一源 = 状态机状态图；断言 = tests/run-mesh.sh。
+ * 迁移表唯一源 = 状态机状态图；断言 = tests/MeshNodeStateTests.swift。
  *
  * 纪律映射：
  * - Failed 的 badKey ≠ unreachable 必须可区分（界面文案据此分叉）；

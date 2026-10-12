@@ -2,7 +2,7 @@
  * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
  * 职责边界：这里只做「上游调用 + 结果归类成状态机事件」，不含任何判断逻辑之外的行为；
- * 迁移决策全部在纯状态机 `TailnetNodeState`（run-mesh.sh 断言对象）。注册成功的副产物
+ * 迁移决策全部在纯状态机 `TailnetNodeState`（断言在 tests/MeshNodeStateTests.swift）。注册成功的副产物
  * 是一只走 SOCKS5 回环的 `gatewaySession`，`GatewayClient` 注入它之后流量
  * 全部进 tailnet。
  *

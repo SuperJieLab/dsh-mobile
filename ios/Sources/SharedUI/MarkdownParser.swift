@@ -1,10 +1,10 @@
 /**
  * Markdown 解析器 —— 源文 → `[Block]`。
  *
- * **纯状态机：不 import SwiftUI / UIKit**，故能被 `swiftc` 编成命令行程序跑断言
- * （`ios/tests/run-markdown.sh`）。渲染层（`MarkdownText`）只认 `[Block]`，不认源文。
- * 引任何 Swift 包都会断掉编译验证链（`swiftc -typecheck` 直编源码，不经 xcodeproj、
- * 不解析 SPM），所以连解析也自写。**分层是为留门** —— 将来换成熟库只替换这一层，把库的
+ * **纯状态机：不 import SwiftUI / UIKit**，断言在 `tests/MarkdownParserTests.swift`
+ * （unit test target，`xcodebuild test`）。渲染层（`MarkdownText`）只认 `[Block]`，不认源文。
+ * 引任何 Swift 包都会把编译验证链从「一条 `xcodebuild test`」撑成「包 + app 两套构建」，
+ * 所以连解析也自写。**分层是为留门** —— 将来换成熟库只替换这一层，把库的
  * AST 映射成同一个 `[Block]`，渲染与流式策略不动。见
  * `M6` §3.3 决定 15。
  *

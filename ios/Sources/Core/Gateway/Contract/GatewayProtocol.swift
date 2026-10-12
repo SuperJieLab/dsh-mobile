@@ -442,7 +442,7 @@ struct RefreshResponse: GatewayResponse {
 }
 
 /// 快照回包：opening 的 `model` 字段是协议面，
-/// 解码行为要能被 `run-model.sh` 直接断言 —— 单模块编译下 internal 即可测。
+/// 解码行为要能被 `tests/ModelProtocolTests.swift` 直接断言 —— `@testable import` 下 internal 即可测。
 struct SnapshotResponse: GatewayResponse {
     let v: Int
     let ok: Bool

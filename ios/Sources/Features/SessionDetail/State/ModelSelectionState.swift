@@ -18,8 +18,8 @@
  * 「Latest selection operation wins」）：每次发起 `model-select` 递增代号，
  * 回包时代号不匹配即丢弃 —— 迟到的旧响应绝不覆盖更新的选择。
  *
- * 与 `SessionMirror` 同一形态：能被 iOS target 编译，也能被 `swiftc`
- * 编成 macOS 命令行程序跑断言（`ios/tests/run-model.sh`）。
+ * 与 `SessionMirror` 同一形态：纯值类型，断言在 `tests/ModelProtocolTests.swift`
+ * （unit test target，`xcodebuild test`）。
  */
 import Foundation
 

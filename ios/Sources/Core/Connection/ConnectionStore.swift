@@ -1,7 +1,7 @@
 /**
  * 连接域的唯一宿主：把「组网 × 身份 × 传输」三段收敛为一个对外阶段（R3）。
  *
- * 分工：迁移判定仍在纯状态机 `TailnetNodeState`（run-mesh.sh 断言对象），这里不做
+ * 分工：迁移判定仍在纯状态机 `TailnetNodeState`（断言在 tests/MeshNodeStateTests.swift），这里不做
  * 第二台状态机 —— `ConnectionPhase.resolve` 只是它加身份/承载两个输入后的**投影**
  * （决定 1）；启动兜底激活、VerifiedRunning 激活内化、回前台探活的编排住这里（决定 2、6）。
  *

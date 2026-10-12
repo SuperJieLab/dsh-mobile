@@ -1,7 +1,7 @@
 /**
  * 连接域投影断言（R3 N1–N3）。投影与编排见
  * Sources/Core/Connection/ConnectionStore.swift；对外阶段的唯一源 = Plan R3 §3.3
- * 决定 1 与 §3.1 链路图。判定逻辑本身在 TailnetNodeState（run-mesh.sh 断言对象），
+ * 决定 1 与 §3.1 链路图。判定逻辑本身在 TailnetNodeState（断言在 tests/MeshNodeStateTests.swift），
  * 这里只断言「投影无漏组合、编排时点不丢」。
  */
 import Foundation
