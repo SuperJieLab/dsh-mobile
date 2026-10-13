@@ -120,6 +120,16 @@ function snapshotFrame(log: readonly WireEvent[], windowSize: number): UpstreamF
   }
 }
 
+/** A turn boundary — the only place an opening window may be cut on (R9 期1). */
+function turn(seq: number): WireEvent {
+  return { type: 'turn/start', seq, time: 1_700_000_000_000 + seq, data: {} }
+}
+
+/** An event padded to roughly `bytes` of wire text, to make a window overflow a cap. */
+function filler(seq: number, bytes: number): WireEvent {
+  return { type: 'user/message', seq, time: 1_700_000_000_000 + seq, data: { text: 'x'.repeat(bytes) } }
+}
+
 test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 }, async () => {
   const log = [0, 1, 2].map(event)
   const source = fakeSource([
@@ -410,9 +420,11 @@ test('the opening carries the model baseline when the source knows it, absent ot
   }
 })
 
-test('pump: one perf record per forwarded event, four-segment boundary fields', { timeout: 10_000 }, async () => {
-  // R8 期1 链路 A：每条转发的事件在 send 边界留一条 gw 记录 —— seq 关联、
-  // 上游 time 原样（evTime）、同机的 gwRecv/gwSend、帧字节数。
+test('pump: one perf record per forwarded frame — opening and events alike', { timeout: 10_000 }, async () => {
+  // R8 期1 链路 A：每条过 send 边界的帧都留一条 gw 记录 —— 事件帧带 `seq`
+  // 与上游 `time`（`evTime`），窗口重放带 `kind: 'opening'` 与 `events`
+  // 计数；两者都带同机的 `gwRecv` / `gwSend` 与帧字节数。判读按 `kind`，
+  // 不按「`seq` 缺席」。
   const log = [0, 1, 2].map(event)
   const source = fakeSource([
     snapshotFrame(log, 3),
@@ -447,8 +459,8 @@ test('pump: one perf record per forwarded event, four-segment boundary fields', 
     server.close()
   }
 
-  const eventRecords = records.filter(record => record.seq !== undefined)
-  assert.equal(eventRecords.length, 2, 'one record per forwarded event — the opening is not one')
+  const eventRecords = records.filter(record => record.kind === 'event')
+  assert.equal(eventRecords.length, 2, 'one record per forwarded event')
   for (const [index, seq] of [3, 4].entries()) {
     const record = eventRecords[index]
     assert.equal(record.seg, 'gw')
@@ -461,5 +473,74 @@ test('pump: one perf record per forwarded event, four-segment boundary fields', 
     assert.ok((record.bytes as number) > 0, 'the frame really was serialised')
     assert.ok((record.gwRecv as number) <= (record.gwSend as number), 'same-machine boundaries do not invert')
   }
+
+  // The window replay crosses the same send boundary and is the largest single
+  // frame of a stream — the one a client's message-size cap rejects first.
+  const openingRecords = records.filter(record => record.kind === 'opening')
+  assert.equal(openingRecords.length, 1, 'one record per opening')
+  const opening = openingRecords[0]
+  assert.equal(opening.seg, 'gw')
+  assert.equal(opening.sessionId, 's1')
+  assert.equal(opening.events, 3, 'how many events the window carried')
+  assert.equal(typeof opening.bytes, 'number')
+  assert.ok((opening.bytes as number) > 0, 'the opening frame really was serialised')
+  assert.ok((opening.gwRecv as number) <= (opening.gwSend as number), 'same-machine boundaries do not invert')
+  assert.equal('seq' in opening, false, 'a window replay has no single seq — absent, not guessed')
+
   assert.equal(records.filter(record => record.conn !== undefined).length, 1, 'one record per upgrade')
+})
+
+test('opening narrowing: cut on a turn boundary, kept under the byte cap', { timeout: 10_000 }, async () => {
+  // Two turns whose messages are large enough to blow a small cap. Narrowing must
+  // (a) keep the frame under the cap and (b) leave the start on a turn boundary —
+  // never inside a turn, where the same span would render two ways (R9 期1 / B6).
+  const log = [turn(0), filler(1, 300), turn(2), filler(3, 300)]
+  const source = fakeSource([snapshotFrame(log, 4)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+    const socket = await connect(server)
+    send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+
+    const opening = await receive(socket)
+    const payload = opening.payload as { events: WireEvent[]; pageStart: number; hasOlder: boolean; cursor: number }
+    const wire = Buffer.byteLength(JSON.stringify(opening), 'utf8')
+    assert.ok(wire <= 700, `the frame fits the cap (was ${wire})`)
+    assert.equal(payload.events[0].type, 'turn/start', 'the start is a turn boundary')
+    assert.equal(payload.pageStart, 2, 'the earliest turn boundary that still fits')
+    assert.equal(payload.hasOlder, true, 'the older part stays reachable')
+    assert.equal(payload.cursor, 4, 'the water mark does not move when the window narrows')
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
+test('opening narrowing: a single turn over the cap is refused, not truncated', { timeout: 10_000 }, async () => {
+  // The only turn boundary is the current start and that one turn is over the cap.
+  // Truncating inside it would show half a turn; the adapter refuses instead, so
+  // the client learns why rather than watching the socket die.
+  const log = [turn(0), filler(1, 5_000)]
+  const source = fakeSource([snapshotFrame(log, 2)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+    const socket = await connect(server)
+    send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+
+    const refusal = await receive(socket)
+    assert.equal(refusal.type, 'error')
+    assert.equal((refusal.payload as { code: string }).code, 'window-too-large')
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
 })

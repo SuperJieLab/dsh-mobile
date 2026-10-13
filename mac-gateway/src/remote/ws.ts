@@ -22,7 +22,7 @@ import {
   parseClientFrame,
   type MuxServerFrame,
 } from '../contract/mux.ts'
-import { upstreamWindow } from '../contract/window.ts'
+import { fitOpeningToBytes, upstreamWindow } from '../contract/window.ts'
 import { describeError, isNotFound, isUnreadable } from '../contract/errors.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import {
@@ -100,14 +100,20 @@ const PING_INTERVAL_MS = 2_000
 const MISSED_PONG_LIMIT = 2
 
 /**
- * 一条事件帧过 send 边界时携带的计时上下文（R8 期1 链路 A）—— pump 在循环里
- * 取 gwRecv（上游帧到达），send 在写出前补 gwSend 与字节数，合成一条 gw 记录。
- * 缺的字段（seq / evTime）原样缺席，不填默认值。
+ * 一条帧过 send 边界时携带的计时上下文（R8 期1 链路 A）—— pump 在循环里
+ * 取 gwRecv（上游帧到达），send 在写出前补 gwSend 与字节数，合成一条 gw
+ * 记录。窗口重放（opening）与事件帧同占这一段，故两者都走这条路：
+ * opening 是单帧尺寸的最大来源，漏记它等于把要测的那条漏掉。
+ * 缺的字段（seq / evTime / events）原样缺席，不填默认值。
  */
 interface PerfContext {
   readonly sessionId: string
+  /** 帧的子类 —— 判读按它，不按「`seq` 缺席」（缺席当判据是脆的）。 */
+  readonly kind: 'opening' | 'event'
   readonly seq?: number
   readonly evTime?: number
+  /** 仅 opening：本条窗口携带的事件数，与 `bytes` 并读即得窗口形状。 */
+  readonly events?: number
   readonly gwRecv: number
 }
 
@@ -126,6 +132,23 @@ export interface Broadcaster {
 export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
 
 /**
+ * 打开帧的默认字节上界（R9 期1）—— 本机观测到的最大窗口（1.25 MB）的 3 倍余量，
+ * 于是普通会话根本不进收窄路径；同时它留在客户端单帧上限（8 MiB）之下的一端。
+ *
+ * 做成可传参而非常量，理由与 `maxDeltaEvents` 相同：让收窄路径**可被端到端
+ * 观测**（调到极小值就能看见它发生），而不是只活在文档里。
+ */
+export const DEFAULT_OPENING_BYTES = 4 * 1024 * 1024
+
+/** 流适配器的可调项。 */
+export interface StreamOptions {
+  /** 每个接入的客户端调用一次，附带限定于该 socket 的发送器。 */
+  onClientConnected?: ClientHook
+  /** 打开帧的字节上界；缺省即 {@link DEFAULT_OPENING_BYTES}。 */
+  openingCapBytes?: number
+}
+
+/**
  * 把流协议挂上插件自己的监听器：处理器接管协商（对照握手 key 验证）与
  * 其后的 socket；socket 错误被吞掉 —— 客户端死亡是常态。
  *
@@ -137,11 +160,11 @@ export function attachStreamHandler(
   server: Server,
   source: FollowSource,
   gate: { authenticate(authorizationHeader: string | undefined): boolean },
-  hooks: { onClientConnected?: ClientHook } = {},
+  options: StreamOptions = {},
 ): Broadcaster {
   const clients = new Set<Duplex>()
   server.on('upgrade', (request, socket, head) => {
-    void handleUpgrade(request, socket, head, source, gate, clients, hooks.onClientConnected)
+    void handleUpgrade(request, socket, head, source, gate, clients, options)
   })
   return {
     broadcast(frame) {
@@ -159,7 +182,7 @@ async function handleUpgrade(
   source: FollowSource,
   gate: { authenticate(authorizationHeader: string | undefined): boolean },
   clients: Set<Duplex>,
-  onClientConnected?: ClientHook,
+  options: StreamOptions,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
   log.info(`upgrade request for "${path}"`)
@@ -190,14 +213,15 @@ async function handleUpgrade(
   clients.add(socket)
   perfRecord(LogModule.ws, { seg: 'gw', t: Date.now(), conn: 'upgrade-accepted' })
   socket.on('close', () => clients.delete(socket))
-  runSocket(socket, source, head)
+  runSocket(socket, source, head, options)
   // 在客户端开口之前，重放当前挂起之物（持有的 approval）。
-  onClientConnected?.((frame) => send(socket, frame))
+  options.onClientConnected?.((frame) => send(socket, frame))
 }
 
 /** 每连接的状态与循环。 */
-function runSocket(socket: Duplex, source: FollowSource, head: Buffer): void {
+function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: StreamOptions): void {
   const parser = new WsFrameParser()
+  const openingCapBytes = options.openingCapBytes ?? DEFAULT_OPENING_BYTES
   const streams = new Map<number, { abort: AbortController }>()
 
   // 参考服务端用同样的预算断连（`stream-server.ts`）。
@@ -238,7 +262,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer): void {
           socket.end()
           break
         case 'text':
-          onClientText(socket, source, streams, frame.text)
+          onClientText(socket, source, streams, frame.text, openingCapBytes)
           break
       }
     }
@@ -260,6 +284,7 @@ function onClientText(
   source: FollowSource,
   streams: Map<number, { abort: AbortController }>,
   text: string,
+  openingCapBytes: number,
 ): void {
   const frame = parseClientFrame(text)
   if (frame === undefined) return
@@ -284,7 +309,7 @@ function onClientText(
 
   const abort = new AbortController()
   streams.set(frame.streamId, { abort })
-  void pump(socket, source, frame.streamId, request, abort.signal, () => streams.delete(frame.streamId))
+  void pump(socket, source, frame.streamId, request, abort.signal, () => streams.delete(frame.streamId), openingCapBytes)
 }
 
 /**
@@ -298,6 +323,7 @@ async function pump(
   request: { sessionId: string; maxMessages?: number },
   signal: AbortSignal,
   done: () => void,
+  openingCapBytes: number,
 ): Promise<void> {
   const sendItem = (payload: unknown, perf?: PerfContext): void => {
     send(socket, { type: 'item', streamId, payload }, perf)
@@ -359,24 +385,58 @@ async function pump(
         // 窗口已由源自身的分页切好 —— 与 `page` 建模所依据的是同一条
         // 消息数规则。解包即可，不要重切。
         const events = frame.records.map(record => record.event)
-        const first = events[0] as { seq?: unknown } | undefined
         const cursor = frame.cursor + 1 // 参考 cursor 含端；我们排他
         expectedSeq = cursor
-        log.info(`follow opening for "${request.sessionId}": cursor=${cursor}, ${events.length} events`)
         // 占用基线与窗口同一口气读出：手机打开时拿到的是同一时刻的
         // 窗口与状态。
         const occupancy = readUsage()
         lastUsage = occupancy
         const model = readModel()
-        sendItem({
-          sessionId: request.sessionId,
-          cursor,
-          pageStart: typeof first?.seq === 'number' ? first.seq : cursor,
-          hasOlder: frame.hasMore,
+
+        // 窗口的组装只写一处：量尺与实际发送共用它 —— 否则「量了什么」
+        // 与「发了什么」迟早漂移。
+        const openingPayload = (start: number): Record<string, unknown> => {
+          const kept = events.slice(start)
+          const first = kept[0] as { seq?: unknown } | undefined
+          return {
+            sessionId: request.sessionId,
+            cursor,
+            pageStart: typeof first?.seq === 'number' ? first.seq : cursor,
+            hasOlder: start > 0 || frame.hasMore,
+            events: kept,
+            ...(frame.assistantStream === undefined ? {} : { assistantStream: frame.assistantStream }),
+            ...(occupancy === undefined ? {} : { occupancy }),
+            ...(model === undefined ? {} : { model }),
+          }
+        }
+
+        // 界由字节定、切点由轮定（R9 期1）：装不下就按轮边界收窄，连一轮
+        // 都装不下则拒绝 —— 「断连」与「发半截轮」都不是可接受的降级。
+        const shrink = fitOpeningToBytes(
           events,
-          ...(frame.assistantStream === undefined ? {} : { assistantStream: frame.assistantStream }),
-          ...(occupancy === undefined ? {} : { occupancy }),
-          ...(model === undefined ? {} : { model }),
+          openingCapBytes,
+          start => encodeTextFrame(encodeServerFrame({ type: 'item', streamId, payload: openingPayload(start) })).length,
+        )
+        if ('unshrinkable' in shrink) {
+          log.error(`follow opening for "${request.sessionId}" exceeds the ${openingCapBytes}-byte cap even at one turn — refused`)
+          send(socket, {
+            type: 'error',
+            streamId,
+            payload: { code: 'window-too-large', message: 'the most recent turn alone exceeds this connection\'s opening size cap' },
+          })
+          return
+        }
+
+        const sentCount = events.length - shrink.start
+        log.info(`follow opening for "${request.sessionId}": cursor=${cursor}, ${sentCount} events`
+          + (shrink.cutEvents === 0 ? '' : ` (narrowed by ${shrink.cutEvents} events / ${shrink.cutTurns} turns)`))
+        sendItem(openingPayload(shrink.start), {
+          // 窗口重放也占 t2 段，且通常是整条流里最大的一帧 —— 它的尺寸
+          // 是「这一帧为什么超限」唯一的现场证据。
+          sessionId: request.sessionId,
+          kind: 'opening',
+          events: sentCount,
+          gwRecv,
         })
         continue
       }
@@ -394,6 +454,7 @@ async function pump(
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
         sendItem(event, {
           sessionId: request.sessionId,
+          kind: 'event',
           ...(typeof event?.seq === 'number' ? { seq: event.seq } : {}),
           ...(typeof event?.time === 'number' ? { evTime: event.time } : {}),
           gwRecv,
@@ -450,8 +511,10 @@ function send(socket: Duplex, frame: MuxServerFrame, perf?: PerfContext): void {
       seg: 'gw',
       t: gwSend,
       sessionId: perf.sessionId,
+      kind: perf.kind,
       ...(perf.seq === undefined ? {} : { seq: perf.seq }),
       ...(perf.evTime === undefined ? {} : { evTime: perf.evTime }),
+      ...(perf.events === undefined ? {} : { events: perf.events }),
       gwRecv: perf.gwRecv,
       gwSend,
       bytes: frameBytes.length,
