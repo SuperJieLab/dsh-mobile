@@ -422,6 +422,9 @@ struct ListSessionsResponse: GatewayResponse {
     let ok: Bool
     let error: GatewayFailure?
     let sessions: [SessionSummary]?
+    /// 服务端时钟（epoch ms）—— 协议承诺在；clock 采样读它估两端 offset（R8 期1 决定 3）。
+    /// 缺席按「服务端没给」处理，不猜。
+    let serverTime: Double?
 }
 
 /// 配对回包：设备凭证只在这里出现一次。

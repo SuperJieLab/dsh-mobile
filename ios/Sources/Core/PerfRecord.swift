@@ -38,6 +38,9 @@ struct PerfRecord {
         self.fields = fields
     }
 
+    /// 当下时刻的 epoch ms —— 埋点调用点取边界时刻用。
+    static func nowMs() -> Double { Date().timeIntervalSince1970 * 1000 }
+
     /// 记录的 JSON 字典形状。消费方按字段名读，不依赖键序。
     func jsonObject() -> [String: Any] {
         var object: [String: Any] = ["seg": seg.rawValue, "t": t]

@@ -139,6 +139,11 @@ final class FollowClient: NSObject {
         generation += 1
         let current = generation
         phase = .connecting
+        // R8 期1 链路 A：连接发起时刻 —— 期2 用它配对 opening 记录算追平延迟（按 gen 对齐）。
+        Log.perf(Log.Module.session, PerfRecord(
+            seg: .dev, t: PerfRecord.nowMs(), sessionId: sessionId,
+            fields: ["kind": .text("connect-init"), "gen": .number(Double(current))]
+        ))
 
         // 上一代次的连接必须先关掉：不关的话旧 socket 的 receive/heartbeat
         // 还在（回调虽被代次拦住，连接本身泄漏），且系统的连接行为会互相干扰。
@@ -255,7 +260,20 @@ final class FollowClient: NSObject {
                     return
                 }
                 phase = .ready
+                // R8 期1 链路 A：opening 的到达 → 应用跨度（onOpening 包裹 applyOpening，
+                // 同步返回即 fold 完成）。seq 取 cursor（asOfSeq），kind 标明子类。
+                let openingRecv = PerfRecord.nowMs()
                 onOpening?(opening)
+                Log.perf(Log.Module.session, PerfRecord(
+                    seg: .dev, t: PerfRecord.nowMs(), sessionId: opening.sessionId, seq: opening.cursor,
+                    fields: [
+                        "kind": .text("opening"),
+                        "gen": .number(Double(current)),
+                        "devRecv": .number(openingRecv),
+                        "devApply": .number(PerfRecord.nowMs()),
+                        "bytes": .number(Double(rawData.count)),
+                    ]
+                ))
                 // 占用基线随 opening 一同到达（服务端读不出投影时不带这个字段，
                 // 那与「这个水位上没有值」是两件事，所以只在字段在时才上报）。
                 if let baseline = opening.occupancy { onUsage?(baseline) }
@@ -266,7 +284,21 @@ final class FollowClient: NSObject {
                 //（与旧往返路径的静默丢弃同语义）。
                 guard let envelope = try? JSONDecoder().decode(FrameWithEvent.self, from: rawData),
                       let event = envelope.payload?.value else { return }
+                // R8 期1 链路 A：帧到达 → 应用跨度。onEvent 包裹 applyLiveEvent
+                //（mirror.apply + 状态机吸收 + 刷新闸标记），同步返回即 fold 完成；
+                // 批出的全量重算属渲染路径，按设计不进端点。
+                let devRecv = PerfRecord.nowMs()
                 onEvent?(event)
+                Log.perf(Log.Module.session, PerfRecord(
+                    seg: .dev, t: PerfRecord.nowMs(), sessionId: sessionId, seq: event.seq,
+                    fields: [
+                        "kind": .text("event"),
+                        "gen": .number(Double(current)),
+                        "devRecv": .number(devRecv),
+                        "devApply": .number(PerfRecord.nowMs()),
+                        "bytes": .number(Double(rawData.count)),
+                    ]
+                ))
             }
 
         case "error":

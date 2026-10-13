@@ -95,6 +95,14 @@ final class GatewayClient: ObservableObject {
     /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
     func listSessions() async throws -> [SessionSummary] {
         let response: ListSessionsResponse = try await send(ListSessionsRequest())
+        // R8 期1 链路 A：clock 采样 —— 服务端时钟与本地收到时刻的一对，
+        // 期2 用它估两端 offset，修正跨机的 t3 段与端到端（决定 3：不裸减）。
+        if let serverTime = response.serverTime {
+            Log.perf(Log.Module.gateway, PerfRecord(
+                seg: .clock, t: PerfRecord.nowMs(),
+                fields: ["serverTime": .number(serverTime)]
+            ))
+        }
         try response.validate()
         return response.sessions ?? []
     }
