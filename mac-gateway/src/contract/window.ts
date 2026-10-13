@@ -115,3 +115,50 @@ export function upstreamWindow(targetMessages: number): {
     turnWindow: { minMessages: targetMessages, minTurns: 1 },
   }
 }
+
+/** {@link fitOpeningToBytes} 的结果：收窄后的起点，或「连最小窗口都装不下」。 */
+export type OpeningShrink =
+  | { start: number; cutTurns: number; cutEvents: number }
+  | { unshrinkable: true }
+
+/**
+ * 把一个已切好的窗口收窄到字节上界之内 —— {@link pageWindow} 之后的二次约束。
+ * 起点相对 `window` 本身（下标 0 是 `pageWindow` 给出的起点）。
+ *
+ * **两个口径各管一件事**：界由**字节**定（按内容单位切不保证有界 —— 按消息数切、
+ * 按轮切都只是换位置撞墙），切点由**轮**定（起点落在轮次中段会让同一段过程在
+ * 不同时刻形态不同，那是 B6 从源头修掉过的）。所以候选起点取窗口内的
+ * `turn/start`，从最早试到最晚，第一个装得下的就是答案 —— 它同时是「装下最多」
+ * 的那个。全都装不下 = 最后一轮自己就超界，此时**拒绝**而不是把一轮截成半截。
+ *
+ * 窗口内一个 `turn/start` 都没有时（起点本就不在轮边界的退化情形），退回按字节
+ * 切：那种窗口本身极小，收窄通常不会触发，此处只需给出确定结果。
+ *
+ * @param window - 窗口内的事件，下标 0 即当前起点。
+ * @param cap - 最终**帧**的字节上界（不止事件：外壳与随行基线都算在内）。
+ * @param frameBytesOf - 量尺：给定候选起点，算出那一帧的序列化字节数。由调用方
+ *   注入，因为帧里还有事件之外的东西（外壳、占用、模型基线、瞬态基线），
+ *   那些只有调用方知道 —— 纯函数不猜。
+ */
+export function fitOpeningToBytes(
+  window: readonly WireEvent[],
+  cap: number,
+  frameBytesOf: (start: number) => number,
+): OpeningShrink {
+  // 空窗口没有可裁的东西（空会话的打开就是空窗口）—— 「没得裁」不是「装不下」，
+  // 不能被拒绝路径吞掉。
+  if (window.length === 0) return { start: 0, cutTurns: 0, cutEvents: 0 }
+
+  const turnStarts = window.flatMap((event, index) => (event.type === 'turn/start' ? [index] : []))
+  const candidates = turnStarts.length > 0 ? turnStarts : [...window.keys()]
+
+  for (const start of candidates) {
+    if (frameBytesOf(start) > cap) continue
+    return {
+      start,
+      cutTurns: turnStarts.filter(index => index < start).length,
+      cutEvents: start,
+    }
+  }
+  return { unshrinkable: true }
+}
