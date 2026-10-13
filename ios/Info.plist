@@ -22,11 +22,6 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- 网关地址是 tailnet 内的 http://100.64.0.1:3081（隧道内已加密，无需再 TLS）。
-		     只能开全局明文例外：100.64/10 不在 ATS「本地网络」范围，NSExceptionDomains
-		     只认域名不认 IP。⚠️ 只留 NSAllowsArbitraryLoads 一个键——iOS 10+ 下只要
-		     存在 NSAllowsLocalNetworking 等其他全局例外键，本键即被忽略（文档 §Versioning；
-		     真机 T8 实测同设两个键时 -1022 依旧）。 -->
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
