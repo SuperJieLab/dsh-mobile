@@ -26,3 +26,14 @@ export function createLogger(module: string): Logger {
   };
   return { debug: emit("debug"), info: emit("info"), warn: emit("warn"), error: emit("error") };
 }
+
+// 性能记录通道（R8 期1）：调用面统一走本文件导出，物理实现在 perf.ts ——
+// 同标签、同门控、同 stderr 的一支。埋点调用点因此只 import log.ts 一个出口。
+export {
+  perfEnabled,
+  perfLine,
+  perfRecord,
+  setPerfSink,
+  type PerfRecord,
+  type PerfSeg,
+} from './perf.ts';
