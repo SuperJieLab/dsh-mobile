@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { perfEnabled, perfLine, perfRecord, setPerfSink, type PerfRecord } from '../src/perf.ts'
+import { perfEnabled, perfLine, perfRecord, resourceRecord, setPerfSink, type PerfRecord } from '../src/perf.ts'
 
 /** A gw-side record as the pump will emit it (plan §4 contract fields). */
 const sample: PerfRecord = {
@@ -52,4 +52,21 @@ test('perfRecord: gated by the same DSH_LOG_DEBUG switch as the text exit', () =
     if (previous === undefined) delete process.env.DSH_LOG_DEBUG
     else process.env.DSH_LOG_DEBUG = previous
   }
+})
+
+test('resourceRecord: one res record per sample, all five fields present', () => {
+  const now = new Date('2026-10-13T04:00:00.000Z')
+  const record = resourceRecord(
+    { loopLagP50: 0.4, loopLagP99: 3.2, rssMB: 180.5, heapMB: 96.2, wsClients: 2 },
+    now,
+  )
+  assert.deepEqual(record, {
+    seg: 'res',
+    t: now.getTime(),
+    loopLagP50: 0.4,
+    loopLagP99: 3.2,
+    rssMB: 180.5,
+    heapMB: 96.2,
+    wsClients: 2,
+  })
 })

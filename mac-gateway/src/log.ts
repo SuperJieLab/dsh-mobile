@@ -33,7 +33,10 @@ export {
   perfEnabled,
   perfLine,
   perfRecord,
+  resourceRecord,
   setPerfSink,
+  startResourceSampler,
   type PerfRecord,
   type PerfSeg,
+  type ResourceSample,
 } from './perf.ts';

@@ -118,6 +118,8 @@ export const STREAM_PATH = '/rpc/stream'
 export interface Broadcaster {
   /** 向每个存活且已认证的客户端发送一条连接级帧。 */
   broadcast(frame: MuxServerFrame): void
+  /** 当前接入的客户端数 —— 资源采样读它（R8 期1 链路 B）。 */
+  clientCount(): number
 }
 
 /** 每个接入的客户端调用一次，附带限定于该 socket 的发送器。 */
@@ -146,6 +148,7 @@ export function attachStreamHandler(
       const text = encodeTextFrame(encodeServerFrame(frame))
       for (const socket of clients) write(socket, text)
     },
+    clientCount: () => clients.size,
   }
 }
 

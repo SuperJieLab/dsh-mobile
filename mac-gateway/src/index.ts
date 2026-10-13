@@ -19,7 +19,7 @@ import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
 import { broadcasterOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
-import { createLogger, LogModule } from './log.ts'
+import { createLogger, LogModule, startResourceSampler } from './log.ts'
 
 const log = createLogger(LogModule.main)
 
@@ -149,6 +149,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
     approvalFace.connect((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
 
+    // 资源采样（R8 期1 链路 B）：5s 一条 res 记录 —— 事件循环是 dsh 全进程
+    // 共享面，读数只做趋势；debug 级默认静默，采集时 DSH_LOG_DEBUG=1。
+    const stopSampler = startResourceSampler({
+      intervalMs: 5_000,
+      module: LogModule.main,
+      clientCount: () => broadcaster.clientCount(),
+    })
+
     // 用我们的 logger（底层是 console）而非 ctx.logger：非 TTY 运行中
     // `ctx.logger.info` 什么也不输出（dsh 自己的启动行同样如此），绑定
     // 失败不可见比日志不合惯例更糟；TTY 门控未验证
@@ -163,6 +171,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     return () => {
       relayLifetime.abort()
+      stopSampler()
       // 自 Node 19 起，仅 close() 会让空闲 keep-alive socket 保持打开，
       // 端口因此在热重载期间仍被占用。
       server.closeAllConnections()

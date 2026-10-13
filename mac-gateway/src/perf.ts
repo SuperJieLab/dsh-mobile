@@ -12,6 +12,8 @@
  * `setPerfSink` 是测试后门：只有测试会替换行的去向。
  */
 
+import { monitorEventLoopDelay } from 'node:perf_hooks'
+
 /** 记录来自哪一端 —— 契约的四个 seg 值。 */
 export type PerfSeg = 'gw' | 'dev' | 'res' | 'clock'
 
@@ -59,4 +61,59 @@ export function setPerfSink(next: (line: string) => void): void {
 export function perfRecord(module: string, record: PerfRecord): void {
   if (!perfEnabled()) return
   sink(perfLine(module, record))
+}
+
+/** 一条资源采样的输入（R8 期1 链路 B）—— 采样器从系统读快照，本形状是它的纯函数入参。 */
+export interface ResourceSample {
+  /** 事件循环延迟直方图的 p50，毫秒。 */
+  readonly loopLagP50: number
+  /** 事件循环延迟直方图的 p99，毫秒。 */
+  readonly loopLagP99: number
+  /** 进程 RSS，MB。 */
+  readonly rssMB: number
+  /** 堆已用，MB。 */
+  readonly heapMB: number
+  /** 当前接入的流客户端数。 */
+  readonly wsClients: number
+}
+
+/** 快照 → res 记录。纯函数：段名固定 `res`，t 取采样时刻。 */
+export function resourceRecord(sample: ResourceSample, now: Date = new Date()): PerfRecord {
+  return { seg: 'res', t: now.getTime(), ...sample }
+}
+
+/**
+ * 周期性采一条资源记录（R8 期1 链路 B）。事件循环是 dsh 全进程共享面 ——
+ * 读数只做趋势，归因到期2 微观基准。返回停止函数。
+ *
+ * 采样节拍内的清零：直方图读后即 reset，每条记录只覆盖刚过去的这个周期。
+ * `module` 由调用方给（标签集中在 log.ts 登记，本文件不引它 —— 引了会成环）。
+ */
+export function startResourceSampler(options: {
+  intervalMs: number
+  module: string
+  clientCount: () => number
+  emit?: (module: string, record: PerfRecord) => void
+}): () => void {
+  const histogram = monitorEventLoopDelay({ resolution: 20 })
+  histogram.enable()
+  const emit = options.emit ?? perfRecord
+  const timer = setInterval(() => {
+    const memory = process.memoryUsage()
+    emit(
+      options.module,
+      resourceRecord({
+        loopLagP50: histogram.percentile(50) / 1e6,
+        loopLagP99: histogram.percentile(99) / 1e6,
+        rssMB: Math.round((memory.rss / 1024 / 1024) * 10) / 10,
+        heapMB: Math.round((memory.heapUsed / 1024 / 1024) * 10) / 10,
+        wsClients: options.clientCount(),
+      }),
+    )
+    histogram.reset()
+  }, options.intervalMs)
+  return () => {
+    clearInterval(timer)
+    histogram.disable()
+  }
 }
