@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "2600"
+   LastUpgradeVersion = "2700"
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -64,7 +64,9 @@
       ignoresPersistentStateOnLaunch = "NO"
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
-      allowLocationSimulation = "YES">
+      allowLocationSimulation = "YES"
+      launchAutomaticallySubstitute = "NO"
+      languageOnDisk = "NO">
       <BuildableReference
          BuildableIdentifier = "primary"
          BlueprintIdentifier = "AA00000000000000000000A5"
@@ -72,6 +74,7 @@
          BlueprintName = "DshMobile"
          ReferencedContainer = "container:DshMobile.xcodeproj">
       </BuildableReference>
+      <AdditionalOptions/>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
