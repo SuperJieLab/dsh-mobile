@@ -34,7 +34,7 @@ import {
   encodeTextFrame,
   handshakeResponse,
 } from '../contract/ws-frames.ts'
-import { createLogger, LogModule } from '../log.ts'
+import { createLogger, LogModule, perfRecord } from '../log.ts'
 
 const log = createLogger(LogModule.ws)
 
@@ -98,6 +98,18 @@ const PING_INTERVAL_MS = 2_000
 
 /** 连续多少个 pong 未回即视为客户端已消失。 */
 const MISSED_PONG_LIMIT = 2
+
+/**
+ * 一条事件帧过 send 边界时携带的计时上下文（R8 期1 链路 A）—— pump 在循环里
+ * 取 gwRecv（上游帧到达），send 在写出前补 gwSend 与字节数，合成一条 gw 记录。
+ * 缺的字段（seq / evTime）原样缺席，不填默认值。
+ */
+interface PerfContext {
+  readonly sessionId: string
+  readonly seq?: number
+  readonly evTime?: number
+  readonly gwRecv: number
+}
 
 /** 本网关提供流协议的精确路径。 */
 export const STREAM_PATH = '/rpc/stream'
@@ -173,6 +185,7 @@ async function handleUpgrade(
   log.info('upgrade accepted → 101')
   socket.write(handshakeResponse(accept))
   clients.add(socket)
+  perfRecord(LogModule.ws, { seg: 'gw', t: Date.now(), conn: 'upgrade-accepted' })
   socket.on('close', () => clients.delete(socket))
   runSocket(socket, source, head)
   // 在客户端开口之前，重放当前挂起之物（持有的 approval）。
@@ -283,8 +296,8 @@ async function pump(
   signal: AbortSignal,
   done: () => void,
 ): Promise<void> {
-  const sendItem = (payload: unknown): void => {
-    send(socket, { type: 'item', streamId, payload })
+  const sendItem = (payload: unknown, perf?: PerfContext): void => {
+    send(socket, { type: 'item', streamId, payload }, perf)
   }
 
   /**
@@ -336,6 +349,8 @@ async function pump(
 
     for await (const frame of iterable) {
       if (signal.aborted) return
+      // R8 期1：t1 段终点 —— 上游帧到达网关的时刻（与 harness 同机同时钟）。
+      const gwRecv = Date.now()
 
       if (frame.type === 'snapshot') {
         // 窗口已由源自身的分页切好 —— 与 `page` 建模所依据的是同一条
@@ -364,7 +379,7 @@ async function pump(
       }
 
       if (frame.type === 'event') {
-        const event = frame.event as { type?: unknown; seq?: unknown } | undefined
+        const event = frame.event as { type?: unknown; seq?: unknown; time?: unknown } | undefined
         // 源承诺无缺口；我们做见证。跳过的 seq 意味着流自己的承诺破了 ——
         // 高声拒绝，绝不渲染一个谁也看不见的洞
         // （M2 §3.5）。
@@ -374,7 +389,12 @@ async function pump(
           return
         }
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
-        sendItem(event) // 原样 —— 协议消息就是事件对象本身
+        sendItem(event, {
+          sessionId: request.sessionId,
+          ...(typeof event?.seq === 'number' ? { seq: event.seq } : {}),
+          ...(typeof event?.time === 'number' ? { evTime: event.time } : {}),
+          gwRecv,
+        }) // 原样 —— 协议消息就是事件对象本身
         // 触发事件可能挪动了投影；确实挪动了才说。
         if (typeof event?.type === 'string' && usageIsTrigger({ type: event.type })) pushUsage()
         continue
@@ -417,8 +437,24 @@ function mapError(error: unknown): { code: string; message: string } {
   return { code: 'internal-error', message: describeError(error) }
 }
 
-function send(socket: Duplex, frame: MuxServerFrame): void {
-  write(socket, encodeTextFrame(encodeServerFrame(frame)))
+function send(socket: Duplex, frame: MuxServerFrame, perf?: PerfContext): void {
+  const frameBytes = encodeTextFrame(encodeServerFrame(frame))
+  if (perf !== undefined) {
+    // t2 段终点 = 写出时刻。t 与 gwSend 同值有意重复一次：消费方不必记
+    // 「t 对 gw 记录意味着什么」这个约定。
+    const gwSend = Date.now()
+    perfRecord(LogModule.ws, {
+      seg: 'gw',
+      t: gwSend,
+      sessionId: perf.sessionId,
+      ...(perf.seq === undefined ? {} : { seq: perf.seq }),
+      ...(perf.evTime === undefined ? {} : { evTime: perf.evTime }),
+      gwRecv: perf.gwRecv,
+      gwSend,
+      bytes: frameBytes.length,
+    })
+  }
+  write(socket, frameBytes)
 }
 
 function write(socket: Duplex, buffer: Buffer): void {

@@ -13,6 +13,7 @@ import { createServer, request as httpRequest, type Server } from 'node:http'
 import { once } from 'node:events'
 import { attachStreamHandler, STREAM_PATH, type FollowSource, type UpstreamFollowFrame } from '../../src/remote/ws.ts'
 import type { WireEvent } from '../../src/contract/rpc.ts'
+import { setPerfSink } from '../../src/log.ts'
 
 /** A follow source replaying scripted frames, optionally lying. */
 function fakeSource(
@@ -407,4 +408,58 @@ test('the opening carries the model baseline when the source knows it, absent ot
     server.closeAllConnections()
     server.close()
   }
+})
+
+test('pump: one perf record per forwarded event, four-segment boundary fields', { timeout: 10_000 }, async () => {
+  // R8 期1 链路 A：每条转发的事件在 send 边界留一条 gw 记录 —— seq 关联、
+  // 上游 time 原样（evTime）、同机的 gwRecv/gwSend、帧字节数。
+  const log = [0, 1, 2].map(event)
+  const source = fakeSource([
+    snapshotFrame(log, 3),
+    { type: 'event', event: event(3) },
+    { type: 'event', event: event(4) },
+  ])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true })
+  server.listen(0)
+
+  const records: Record<string, unknown>[] = []
+  const previousDebug = process.env.DSH_LOG_DEBUG
+  setPerfSink(line => {
+    records.push(JSON.parse(line.slice(line.indexOf(' {') + 1)) as Record<string, unknown>)
+  })
+  process.env.DSH_LOG_DEBUG = '1'
+  try {
+    await once(server, 'listening')
+    const socket = await connect(server)
+    send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+
+    await receive(socket) // opening
+    await receive(socket) // event 3
+    await receive(socket) // event 4
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    setPerfSink(() => {})
+    if (previousDebug === undefined) delete process.env.DSH_LOG_DEBUG
+    else process.env.DSH_LOG_DEBUG = previousDebug
+    server.closeAllConnections()
+    server.close()
+  }
+
+  const eventRecords = records.filter(record => record.seq !== undefined)
+  assert.equal(eventRecords.length, 2, 'one record per forwarded event — the opening is not one')
+  for (const [index, seq] of [3, 4].entries()) {
+    const record = eventRecords[index]
+    assert.equal(record.seg, 'gw')
+    assert.equal(record.seq, seq)
+    assert.equal(record.sessionId, 's1')
+    assert.equal(record.evTime, 1_700_000_000_000 + seq, 'the upstream event time, verbatim')
+    assert.equal(typeof record.gwRecv, 'number')
+    assert.equal(typeof record.gwSend, 'number')
+    assert.equal(typeof record.bytes, 'number')
+    assert.ok((record.bytes as number) > 0, 'the frame really was serialised')
+    assert.ok((record.gwRecv as number) <= (record.gwSend as number), 'same-machine boundaries do not invert')
+  }
+  assert.equal(records.filter(record => record.conn !== undefined).length, 1, 'one record per upgrade')
 })
