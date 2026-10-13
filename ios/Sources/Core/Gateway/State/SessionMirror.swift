@@ -20,7 +20,7 @@
  * 在两个方向上各写一次转换。上游等价语义（`RemoteJournalStream` 的丢重复、拒缺口、
  * 钉 cut）是 TypeScript，代码用
  * 不了 —— 照语义重写最小的一段；文件能被 iOS target 编译，
- * 也能被 `swiftc` 编成 macOS 命令行程序跑断言。
+ * 断言在 `tests/SessionMirrorTests.swift`（unit test target）。
  * 出处：M1 §3.3.2 决定 2 / 决定 9；
  * 契约见 dev/contract/protocol.md。
  */

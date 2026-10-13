@@ -20,7 +20,7 @@ struct ConnectionBadge: View {
 
     /// 到网关对端的连接方式：running 时显示一行「直连 / 经中继」。
     /// 值由调用方从节点层取好传入 —— 本组件不感知 `TailnetNode` 类型（保持零耦合，
-    /// 与状态机同理由：CLI 测试编不到 TailscaleKit）。
+    /// 与状态机同理由：测试面同样只到协议层）。
     enum MeshPath {
         case direct
         case relay

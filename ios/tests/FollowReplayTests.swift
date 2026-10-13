@@ -45,8 +45,7 @@ final class FollowReplayTests: XCTestCase {
         }(), "C3-3 事件帧按快照语义追加")
         XCTAssertTrue(mirror.cursor == 6, "C3-4 游标推进到 seq+1")
 
-        let duplicate = mirror.apply(.received(Snapshot(asOfSeq: 7, hasMore: false, events: [event(6)])))
-        _ = duplicate
+        _ = mirror.apply(.received(Snapshot(asOfSeq: 7, hasMore: false, events: [event(6)])))
         let replayed = mirror.apply(.received(Snapshot(asOfSeq: 7, hasMore: false, events: [event(6)])))
         XCTAssertTrue({
             if case .caughtUp = replayed { return true }

@@ -117,7 +117,7 @@ final class MarkdownParserTests: XCTestCase {
         let source = "# 标题\n\n第一段\n\n```swift\nlet a = 1"
         let whole = MarkdownParser.parse(source)
 
-        // M3a：逐字符喂入（最狠的切分），最终结果与全量解析逐块相同 —— 增量正确性的地基。
+        // M3a：逐字符喂入（最狠的切法），最终结果与全量解析逐块相同 —— 增量正确性的地基。
         var chunked = MarkdownParser.parse("")
         var prefix = ""
         for character in source {

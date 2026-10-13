@@ -17,7 +17,7 @@
  * `type == "text-delta"` 的 `.text`，其余原样跳过 ——
  * 与 `SessionEvent.displayMessage` 同一条显示规则。
  *
- * 不碰网络与 UI：能被 iOS target 编译，也能被 `swiftc` 编成 macOS 命令行程序跑断言。
+ * 不碰网络与 UI：能被 iOS target 编译，断言在 `tests/TransientChannelTests.swift`（unit test target）。
  */
 
 /// opening 里带的瞬态基线（上游 `SessionAssistantStreamBaseline`，形状见

@@ -15,8 +15,8 @@ import Combine
 // MARK: - 注入接缝（R3 决定 2、3）
 //
 // store 只认这两个协议，不认具体类型 —— 真实类型的适配住在 `ConnectionAdapters.swift`
-// （App target，进 Xcode；CLI 测试只编本文件 + TailnetNodeState + MeshConfig，
-// 因此 TailscaleKit / GatewayClient 全链路都不进测试编译面）。
+// （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
+// TailscaleKit / GatewayClient，见 tests/ConnectionStoreTests.swift）。
 
 /// 承载激活能力：`GatewayClient.activate` 的窄面。
 @MainActor protocol GatewayActivating: AnyObject {
