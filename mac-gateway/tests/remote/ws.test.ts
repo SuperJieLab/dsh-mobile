@@ -486,6 +486,7 @@ test('pump: one perf record per forwarded frame — opening and events alike', {
   assert.ok((opening.bytes as number) > 0, 'the opening frame really was serialised')
   assert.ok((opening.gwRecv as number) <= (opening.gwSend as number), 'same-machine boundaries do not invert')
   assert.equal('seq' in opening, false, 'a window replay has no single seq — absent, not guessed')
+  assert.equal('cutTurns' in opening, false, 'an untouched window records no cut — absent, not zero')
 
   assert.equal(records.filter(record => record.conn !== undefined).length, 1, 'one record per upgrade')
 })
@@ -563,6 +564,82 @@ test('opening narrowing: a nonsensical cap falls back to the default instead of 
     assert.equal((opening.payload as { pageStart: number }).pageStart, 0, 'the default cap applies instead')
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
+/** Collect perf records for the duration of `body`; `DSH_LOG_DEBUG` is flipped on. */
+async function collectPerf(body: () => Promise<void>): Promise<Record<string, unknown>[]> {
+  const records: Record<string, unknown>[] = []
+  const previousDebug = process.env.DSH_LOG_DEBUG
+  setPerfSink(line => {
+    records.push(JSON.parse(line.slice(line.indexOf(' {') + 1)) as Record<string, unknown>)
+  })
+  process.env.DSH_LOG_DEBUG = '1'
+  try {
+    await body()
+  } finally {
+    setPerfSink(() => {})
+    if (previousDebug === undefined) delete process.env.DSH_LOG_DEBUG
+    else process.env.DSH_LOG_DEBUG = previousDebug
+  }
+  return records
+}
+
+test('pump: a narrowed opening records how much it cut', { timeout: 10_000 }, async () => {
+  // U6: the reader must be able to tell "this session was narrowed" from the exit
+  // log alone — that is what turns a field report into a diagnosis.
+  const log = [turn(0), filler(1, 300), turn(2), filler(3, 300)]
+  const source = fakeSource([snapshotFrame(log, 4)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  server.listen(0)
+  try {
+    const records = await collectPerf(async () => {
+      await once(server, 'listening')
+      const socket = await connect(server)
+      send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+      await receive(socket)
+      socket.close()
+      await new Promise(resolve => setTimeout(resolve, 30))
+    })
+
+    const opening = records.find(record => record.kind === 'opening')
+    assert.ok(opening !== undefined, 'the opening is recorded')
+    assert.equal(opening.cutTurns, 1, 'how many turns the narrowing cut')
+    assert.equal(opening.cutEvents, 2, 'how many events the narrowing cut')
+    assert.equal(opening.events, 2, 'how many events the narrowed window carries')
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
+test('pump: a refused opening is recorded with its reason', { timeout: 10_000 }, async () => {
+  // No frame goes out on the refusal path, so this record is the only trace of why
+  // that session would not open.
+  const log = [turn(0), filler(1, 5_000)]
+  const source = fakeSource([snapshotFrame(log, 2)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  server.listen(0)
+  try {
+    const records = await collectPerf(async () => {
+      await once(server, 'listening')
+      const socket = await connect(server)
+      send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+      await receive(socket) // the error frame
+      socket.close()
+      await new Promise(resolve => setTimeout(resolve, 30))
+    })
+
+    const opening = records.find(record => record.kind === 'opening')
+    assert.ok(opening !== undefined, 'the refusal is recorded too')
+    assert.equal(opening.rejected, 'window-too-large')
+    assert.equal(typeof opening.bytes, 'number')
+    assert.ok((opening.bytes as number) > 700, 'the oversize window is the evidence')
   } finally {
     server.closeAllConnections()
     server.close()

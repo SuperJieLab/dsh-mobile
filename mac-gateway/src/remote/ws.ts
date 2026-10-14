@@ -115,7 +115,34 @@ interface PerfContext {
   readonly evTime?: number
   /** 仅 opening：本条窗口携带的事件数，与 `bytes` 并读即得窗口形状。 */
   readonly events?: number
+  /** 仅收窄过的 opening：被裁掉的轮数与事件数。未收窄时**缺席**，不填 0。 */
+  readonly cutTurns?: number
+  readonly cutEvents?: number
+  /** 仅被拒绝的 opening：无帧可发，这里记原因（值为错误码）。 */
+  readonly rejected?: string
   readonly gwRecv: number
+}
+
+/**
+ * 一条 gw 记录的字段组装 —— 发送路径与拒绝路径共用它。拒绝时没有帧，但那条
+ * 记录恰恰是「这个会话为什么打不开」的唯一答案，所以两处的字段集不能各写一遍。
+ */
+function gwRecord(perf: PerfContext, gwSend: number, bytes: number): Record<string, unknown> {
+  return {
+    seg: 'gw',
+    t: gwSend,
+    sessionId: perf.sessionId,
+    kind: perf.kind,
+    ...(perf.seq === undefined ? {} : { seq: perf.seq }),
+    ...(perf.evTime === undefined ? {} : { evTime: perf.evTime }),
+    ...(perf.events === undefined ? {} : { events: perf.events }),
+    ...(perf.cutTurns === undefined ? {} : { cutTurns: perf.cutTurns }),
+    ...(perf.cutEvents === undefined ? {} : { cutEvents: perf.cutEvents }),
+    ...(perf.rejected === undefined ? {} : { rejected: perf.rejected }),
+    gwRecv: perf.gwRecv,
+    gwSend,
+    bytes,
+  }
 }
 
 /** 本网关提供流协议的精确路径。 */
@@ -414,13 +441,19 @@ async function pump(
 
         // 界由字节定、切点由轮定（R9 期1）：装不下就按轮边界收窄，连一轮
         // 都装不下则拒绝 —— 「断连」与「发半截轮」都不是可接受的降级。
-        const shrink = fitOpeningToBytes(
-          events,
-          openingCapBytes,
-          start => encodeTextFrame(encodeServerFrame({ type: 'item', streamId, payload: openingPayload(start) })).length,
-        )
+        const frameBytesAt = (start: number): number =>
+          encodeTextFrame(encodeServerFrame({ type: 'item', streamId, payload: openingPayload(start) })).length
+        const shrink = fitOpeningToBytes(events, openingCapBytes, frameBytesAt)
         if ('unshrinkable' in shrink) {
           log.error(`follow opening for "${request.sessionId}" exceeds the ${openingCapBytes}-byte cap even at one turn — refused`)
+          // 拒绝路径没有帧可发，但这条记录就是「这个会话为什么打不开」的答案。
+          perfRecord(LogModule.ws, gwRecord({
+            sessionId: request.sessionId,
+            kind: 'opening',
+            events: events.length,
+            rejected: 'window-too-large',
+            gwRecv,
+          }, Date.now(), frameBytesAt(0)))
           send(socket, {
             type: 'error',
             streamId,
@@ -438,6 +471,8 @@ async function pump(
           sessionId: request.sessionId,
           kind: 'opening',
           events: sentCount,
+          // 未收窄时这两个字段缺席（不填 0）——「没裁」与「裁了 0 条」是两件事。
+          ...(shrink.cutTurns === 0 ? {} : { cutTurns: shrink.cutTurns, cutEvents: shrink.cutEvents }),
           gwRecv,
         })
         continue
@@ -509,18 +544,7 @@ function send(socket: Duplex, frame: MuxServerFrame, perf?: PerfContext): void {
     // t2 段终点 = 写出时刻。t 与 gwSend 同值有意重复一次：消费方不必记
     // 「t 对 gw 记录意味着什么」这个约定。
     const gwSend = Date.now()
-    perfRecord(LogModule.ws, {
-      seg: 'gw',
-      t: gwSend,
-      sessionId: perf.sessionId,
-      kind: perf.kind,
-      ...(perf.seq === undefined ? {} : { seq: perf.seq }),
-      ...(perf.evTime === undefined ? {} : { evTime: perf.evTime }),
-      ...(perf.events === undefined ? {} : { events: perf.events }),
-      gwRecv: perf.gwRecv,
-      gwSend,
-      bytes: frameBytes.length,
-    })
+    perfRecord(LogModule.ws, gwRecord(perf, gwSend, frameBytes.length))
   }
   write(socket, frameBytes)
 }
