@@ -81,6 +81,14 @@ final class FollowClient: NSObject {
     private static let baseBackoffMs = 500
     private static let maxBackoffMs = 10_000
 
+    /// 单帧接收上限（R9 期1 决定 1）—— 网关承诺打开帧不超过 4 MiB（网关侧
+    /// `DEFAULT_LIMITS.maxOpeningBytes`），这里取它的两倍：覆盖任何非窗口帧，并留出
+    /// 两端读数差异的余量。**这个属性默认只有 1 MiB**，那正是「某个会话打不开」的
+    /// 成因；它必须显著大于网关的上界，否则同一个断连只是换个地方发生。
+    ///
+    /// 不设为 `private`：它是两端配套契约的一半，测试要能断言它（见 O1）。
+    static let maximumMessageSize = 8 * 1024 * 1024
+
     /// 是否仍在跟随（`stop()` 之后一切重连都停）。
     private var following = false
 
@@ -165,6 +173,9 @@ final class FollowClient: NSObject {
             upgradeRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
         }
         let webSocketTask = sessionProvider().webSocketTask(with: upgradeRequest)
+        // 必须在 resume 之前设：超过上限的帧会让 receive 直接以 POSIX 40 失败，
+        // 而系统默认只给 1 MiB —— 一个 1.25 MB 的打开帧就足以把会话永远关在门外。
+        webSocketTask.maximumMessageSize = Self.maximumMessageSize
         task = webSocketTask
         Log.info(Log.Module.session, "connect g\(current) → \(components.url!)")
         webSocketTask.resume()
@@ -307,9 +318,8 @@ final class FollowClient: NSObject {
                 message: frame.payload?["message"]?.string ?? ""
             )
             onRefused?(failure)
-            // 会话级终态（不存在 / 读不出来）重连无意义；其余退避重连。
-            if failure.code == GatewayErrorCode.unknownSession.rawValue
-                || failure.code == GatewayErrorCode.unreadableSession.rawValue {
+            // 会话级终态重连无意义；其余退避重连。
+            if Self.isTerminal(code: failure.code) {
                 stop()
             } else {
                 closeTask()
@@ -378,6 +388,19 @@ final class FollowClient: NSObject {
                 }
             }
         }
+    }
+
+    /**
+     * 重连有没有意义 —— `true` 表示这是会话级终态：重连只会得到同一个结果。
+     *
+     * `window-too-large` 属于这一类（R9 期1 决定 3）：那个窗口不会因为重连而变小，
+     * 反复重连只会把一次确定的拒绝变成一串无用的尝试。**未知码按可重试处理** ——
+     * 白名单之外的码不该让会话卡死。
+     */
+    static func isTerminal(code: String) -> Bool {
+        code == GatewayErrorCode.unknownSession.rawValue
+            || code == GatewayErrorCode.unreadableSession.rawValue
+            || code == GatewayErrorCode.windowTooLarge.rawValue
     }
 
     /**

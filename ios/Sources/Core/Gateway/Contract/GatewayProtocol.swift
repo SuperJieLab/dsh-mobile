@@ -4,8 +4,8 @@ import Foundation
 let gatewayProtocolVersion = 2
 
 /// 失败信封里的错误码（协议 v2 六个 + `unauthenticated` + `unknown-approval` /
-/// `invalid-request` + `session/model-unavailable`）。收的时候刻意用 `String` 而非本枚举：
-/// 上游加码时照原样显示，不能解不出来就崩。
+/// `invalid-request` + `session/model-unavailable` + `window-too-large`）。
+/// 收的时候刻意用 `String` 而非本枚举：上游加码时照原样显示，不能解不出来就崩。
 enum GatewayErrorCode: String {
     case unsupportedVersion = "unsupported-version"
     case unknownOp = "unknown-op"
@@ -17,6 +17,7 @@ enum GatewayErrorCode: String {
     case unknownApproval = "unknown-approval"
     case invalidRequest = "invalid-request"
     case sessionModelUnavailable = "session/model-unavailable"
+    case windowTooLarge = "window-too-large"
 
     /// 人话解释，用于把服务端的拒绝变成用户看得懂的一句话。未知码返回 nil。
     var explanation: String? {
@@ -41,6 +42,8 @@ enum GatewayErrorCode: String {
             return "网关拒绝了这条写请求的载荷 —— 两端版本可能不一致。"
         case .sessionModelUnavailable:
             return "这个模型现在路由不过去 —— 换一个模型，或在 Mac 上检查凭证。"
+        case .windowTooLarge:
+            return "这个会话最近一轮本身就超过了一次能传的上限 —— 暂时打不开，等它有新进展后再来看。"
         }
     }
 }

@@ -9,6 +9,10 @@
  * ## C1 的可测部分
  * `FollowClient` 的重连编排需真网络，完整行为由真机判据 R3/R4 覆盖；这里测它的
  * **退避曲线**（纯函数）：指数爬升、抖动边界、封顶。
+ *
+ * ## R9 T4
+ * 打开帧的两端配套：客户端接收上限与网关承诺的上界的关系，以及 `window-too-large`
+ * 归入终态而非重试。行为链（真收到拒绝帧后停在 idle）由真机判据覆盖。
  */
 import Foundation
 import XCTest
@@ -152,5 +156,28 @@ final class FollowReplayTests: XCTestCase {
             if case .waiting = lastPhase { return true }
             return false
         }(), "K3 无端点建连请求 → 不产连接任务，进入退避等待（激活后自愈）")
+    }
+
+    /// R9 T4 —— 打开帧上限与拒绝的归属（Plan R9 期1 决定 1 / 决定 3）。
+    ///
+    /// 契约的另一半在网关侧：那边承诺打开帧不超过 4 MiB（`DEFAULT_LIMITS.maxOpeningBytes`），
+    /// 这边把接收上限取它的两倍，两端因此配套。`window-too-large` 与「不存在 / 读不出来」
+    /// 同类 —— 重连不会让那个窗口变小，所以是终态而不是该退避的码。
+    func testOpeningSizeCap() {
+        XCTAssertTrue(FollowClient.maximumMessageSize == 8 * 1024 * 1024,
+                      "O1a 客户端单帧接收上限有据（8 MiB），不是留在默认的 1 MiB")
+        XCTAssertTrue(FollowClient.maximumMessageSize > 4 * 1024 * 1024,
+                      "O1b 显著大于网关承诺的 4 MiB 上界（两端配套）")
+
+        XCTAssertTrue(FollowClient.isTerminal(code: GatewayErrorCode.windowTooLarge.rawValue),
+                      "O2a window-too-large 是终态（重连只会再收到同一个超界窗口）")
+        XCTAssertTrue(FollowClient.isTerminal(code: GatewayErrorCode.unknownSession.rawValue),
+                      "O2b 既有终态语义不变：会话不存在")
+        XCTAssertTrue(FollowClient.isTerminal(code: GatewayErrorCode.unreadableSession.rawValue),
+                      "O2c 既有终态语义不变：日志读不出来")
+        XCTAssertFalse(FollowClient.isTerminal(code: GatewayErrorCode.internalError.rawValue),
+                       "O2d 其余拒绝仍然退避重连")
+        XCTAssertFalse(FollowClient.isTerminal(code: "some-future-code"),
+                       "O2e 未知码按可重试处理 —— 新码不该让会话卡死")
     }
 }
