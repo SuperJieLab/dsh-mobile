@@ -48,6 +48,7 @@ function install(
   port: number,
   credentialsPath: string,
   services: Record<string, unknown> = {},
+  config: Record<string, unknown> = {},
 ): { teardown: () => void; gateway: FakeGateway } {
   let cleanup: (() => void) | undefined
   const pushes: ((frame: { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }) => void)[] = []
@@ -105,7 +106,7 @@ function install(
         },
       },
     } as never,
-    { host, port, credentialsPath, deviceTokenSeed: DEVICE_TOKEN },
+    { host, port, credentialsPath, deviceTokenSeed: DEVICE_TOKEN, ...config },
   )
   // The credentials file lives exactly as long as the listener does.
   return {
@@ -910,6 +911,48 @@ test('one row whose projection read throws still lists — without its cells', {
     ])
     // The degraded row keeps its header facts: only the cells are missing.
     assert.equal(body.sessions?.[0].updatedAt, 1_700_000_400_000)
+  } finally {
+    teardown()
+  }
+})
+
+// MARK: - the opening size cap (R9 T3: the configured value reaches the adapter)
+
+test('the configured opening cap narrows the window through the real assembly', { timeout: 15_000 }, async () => {
+  const port = freshPort(49_200)
+  const credentialsPath = tempCredentialsPath()
+  // Two turns, each padded past the cap configured below: the assembled adapter must
+  // narrow the window to the later turn rather than ship a frame the phone cannot take.
+  const big = 'x'.repeat(400)
+  const follow = fakeFollowHost({
+    cursor: 3,
+    records: [
+      { type: 'event', event: { type: 'turn/start', seq: 0, time: 1, data: {} } },
+      { type: 'event', event: { type: 'user/message', seq: 1, time: 2, data: { text: big } } },
+      { type: 'event', event: { type: 'turn/start', seq: 2, time: 3, data: {} } },
+      { type: 'event', event: { type: 'user/message', seq: 3, time: 4, data: { text: big } } },
+    ],
+    hasMore: false,
+  })
+  const { teardown } = install('127.0.0.1', port, credentialsPath, follow.services, { maxOpeningBytes: 700 })
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+    const { socket, frames, waitFor } = await openStream(port, access)
+
+    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
+
+    const opening = openingOf(frames)!
+    assert.equal(opening['pageStart'], 2, 'the configured cap reached the adapter and narrowed the window')
+    assert.equal(opening['hasOlder'], true, 'the narrowed-away part stays reachable')
+    assert.equal(opening['cursor'], 4, 'the water mark does not move with the window')
+    const wire = Buffer.byteLength(JSON.stringify(frames.find(frame => frame.type === 'item')), 'utf8')
+    assert.ok(wire <= 700, `the opening frame fits the configured cap (was ${wire})`)
+
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
     teardown()
   }

@@ -23,6 +23,7 @@ import {
   type MuxServerFrame,
 } from '../contract/mux.ts'
 import { fitOpeningToBytes, upstreamWindow } from '../contract/window.ts'
+import { DEFAULT_LIMITS, positiveOrDefault } from '../contract/rpc.ts'
 import { describeError, isNotFound, isUnreadable } from '../contract/errors.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import {
@@ -132,13 +133,12 @@ export interface Broadcaster {
 export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
 
 /**
- * 打开帧的默认字节上界（R9 期1）—— 本机观测到的最大窗口（1.25 MB）的 3 倍余量，
- * 于是普通会话根本不进收窄路径；同时它留在客户端单帧上限（8 MiB）之下的一端。
- *
- * 做成可传参而非常量，理由与 `maxDeltaEvents` 相同：让收窄路径**可被端到端
- * 观测**（调到极小值就能看见它发生），而不是只活在文档里。
+ * 打开帧的默认字节上界（R9 期1）—— 与 HTTP 路径的上限同处一族，定义在
+ * `contract/rpc.ts` 的 `DEFAULT_LIMITS`（那里有取值来由）。做成可传参而非常量，
+ * 理由与 `maxDeltaEvents` 相同：让收窄路径**可被端到端观测**（调到极小值就能
+ * 看见它发生），而不是只活在文档里。
  */
-export const DEFAULT_OPENING_BYTES = 4 * 1024 * 1024
+export const DEFAULT_OPENING_BYTES = DEFAULT_LIMITS.maxOpeningBytes
 
 /** 流适配器的可调项。 */
 export interface StreamOptions {
@@ -221,7 +221,9 @@ async function handleUpgrade(
 /** 每连接的状态与循环。 */
 function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: StreamOptions): void {
   const parser = new WsFrameParser()
-  const openingCapBytes = options.openingCapBytes ?? DEFAULT_OPENING_BYTES
+  // 非正的上界会让每次打开都被判成「装不下」—— 归一化规则与 HTTP 路径共享
+  // 同一实现（`positiveOrDefault`），不在这里重写一遍。
+  const openingCapBytes = positiveOrDefault(options.openingCapBytes, DEFAULT_OPENING_BYTES)
   const streams = new Map<number, { abort: AbortController }>()
 
   // 参考服务端用同样的预算断连（`stream-server.ts`）。

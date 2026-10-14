@@ -544,3 +544,27 @@ test('opening narrowing: a single turn over the cap is refused, not truncated', 
     server.close()
   }
 })
+
+test('opening narrowing: a nonsensical cap falls back to the default instead of refusing everything', { timeout: 10_000 }, async () => {
+  // A zero or negative cap makes every frame "too large" — a config typo must not
+  // become "no session opens at all".
+  const log = [turn(0), filler(1, 100)]
+  const source = fakeSource([snapshotFrame(log, 2)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 0 })
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+    const socket = await connect(server)
+    send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+
+    const opening = await receive(socket)
+    assert.equal(opening.type, 'item', 'a nonsense cap must not turn into a refusal')
+    assert.equal((opening.payload as { pageStart: number }).pageStart, 0, 'the default cap applies instead')
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})

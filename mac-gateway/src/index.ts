@@ -57,11 +57,27 @@ export interface Config {
   maxDeltaEvents?: number
   /** 一条应答 `events` 序列化尺寸的软上限，字节。 @default 1048576 */
   maxDeltaBytes?: number
+  /** follow 打开单帧的字节上界，字节（R9 期1）。与上两个同理做成配置：调到
+   * 极小值就能看见收窄路径真的发生。 @default 4194304 */
+  maxOpeningBytes?: number
   /** 凭据文件位置；可覆盖，让装配冒烟测试绝不碰真实 home。
    * @default '~/.dsh/dsh-mobile/credentials.json' */
   credentialsPath?: string
   /** 用该 device token 预配对保险库（仅测试）—— 生产配对走配对码。 */
   deviceTokenSeed?: string
+}
+
+/**
+ * 配置 → 应答上限。缺省项回退到 {@link DEFAULT_LIMITS}。抽成纯函数是为了让
+ * 「配置里的值真的落到了上限上」有一条可断言的路径 —— `apply` 本身依赖宿主
+ * 上下文，测它等于测整个运行时。
+ */
+export function resolveLimits(config: Config): Limits {
+  return {
+    maxDeltaEvents: config.maxDeltaEvents ?? DEFAULT_LIMITS.maxDeltaEvents,
+    maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
+    maxOpeningBytes: config.maxOpeningBytes ?? DEFAULT_LIMITS.maxOpeningBytes,
+  }
 }
 
 /** 全接口绑定的兜底值；生产经 config.host 改绑 tailnet 地址（100.64.0.1）。 */
@@ -83,12 +99,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     listSourceOver(ctx),
     modelSelectionSourceOver(ctx),
   )
-  // 上限是配置而非常量：它们存在的意义就是被调低直到分块读可观测，
-  // 这正是它们的验证方式。
-  const limits: Limits = {
-    maxDeltaEvents: config.maxDeltaEvents ?? DEFAULT_LIMITS.maxDeltaEvents,
-    maxDeltaBytes: config.maxDeltaBytes ?? DEFAULT_LIMITS.maxDeltaBytes,
-  }
+  // 上限是配置而非常量：它们存在的意义就是被调低直到分块读（以及收窄）
+  // 可观测，这正是它们的验证方式。
+  const limits = resolveLimits(config)
 
   // 保险库持有三张票（M4 §4.2）。
   // `pair` / `refresh` 绕过闸门 —— 它们自带凭据。
@@ -120,6 +133,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
     const broadcaster = attachStreamHandler(server, streamSourceOver(ctx), vault, {
+      // 打开帧的字节上界与 HTTP 路径的上限同源（同一个 `limits`）—— 两端各自
+      // 记一个数才是口径不一致的来源。
+      openingCapBytes: limits.maxOpeningBytes,
       // 新接入的手机先拿到对账帧（所有挂起问题的 id），再逐条重放 ——
       // 它因此可以丢掉那些在其离线期间 `cancel` 已触发的转发卡片：
       // 缺席的 id 是权威的。

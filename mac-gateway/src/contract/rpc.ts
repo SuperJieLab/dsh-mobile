@@ -130,10 +130,20 @@ export interface Limits {
   maxDeltaEvents: number
   /** 单条应答 `events` 序列化尺寸的软上限。 */
   maxDeltaBytes: number
+  /**
+   * follow 打开那一帧的字节上界（R9 期1）。它与上面两个不同：**不经由本文件的
+   * `handle`，而且是硬上限** —— 装不下就按轮边界收窄，连一轮都装不下则拒绝。
+   * HTTP 路径的软上限允许首条事件独自超限放行（否则客户端无法前进），那条规则
+   * 在这里等于必然断连，不能照搬。
+   */
+  maxOpeningBytes: number
 }
 
-/** LAN 演示的上限：宽到很少生效，小到确实有界。 */
-export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_048_576 }
+/**
+ * LAN 演示的上限：宽到很少生效，小到确实有界。`maxOpeningBytes` 取 4 MiB ——
+ * 本机观测到的最大窗口（1.25 MB）的 3 倍余量，于是普通会话根本不进收窄路径。
+ */
+export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_048_576, maxOpeningBytes: 4 * 1024 * 1024 }
 
 /**
  * 调用方不指定时一条 `page` 返回的消息数；对照参考客户端的页大小。
@@ -422,18 +432,20 @@ function wireBytesOf(event: WireEvent): number {
 
 const ENCODER = new TextEncoder()
 
+/** 无意义的上限不得变成卡死：非正或非整数即回退默认值。 */
+export function positiveOrDefault(value: number | undefined, fallback: number): number {
+  return value !== undefined && isPositiveInteger(value) ? value : fallback
+}
+
 /**
- * 无意义的上限不得变成卡死：非正或非整数即回退默认值，绝不产生任何
- * 客户端都读不完的应答。
+ * 三条上限各自归一化。无意义的值绝不产生任何客户端都读不完的应答 ——
+ * 在流通道上后果更重：一个非正的上界会让每一次打开都被判成「装不下」。
  */
 function normalizeLimits(limits: Limits): Limits {
   return {
-    maxDeltaEvents: isPositiveInteger(limits.maxDeltaEvents)
-      ? limits.maxDeltaEvents
-      : DEFAULT_LIMITS.maxDeltaEvents,
-    maxDeltaBytes: isPositiveInteger(limits.maxDeltaBytes)
-      ? limits.maxDeltaBytes
-      : DEFAULT_LIMITS.maxDeltaBytes,
+    maxDeltaEvents: positiveOrDefault(limits.maxDeltaEvents, DEFAULT_LIMITS.maxDeltaEvents),
+    maxDeltaBytes: positiveOrDefault(limits.maxDeltaBytes, DEFAULT_LIMITS.maxDeltaBytes),
+    maxOpeningBytes: positiveOrDefault(limits.maxOpeningBytes, DEFAULT_LIMITS.maxOpeningBytes),
   }
 }
 
