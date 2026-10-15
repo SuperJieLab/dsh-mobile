@@ -1,5 +1,6 @@
 /**
- * SessionMirror 的契约测试（SM1–SM19）：状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
+ * SessionMirror 的契约测试（SM1–SM19）与「对不上」告知状态机的测试（SM20–SM21）：
+ * 状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
  * 跑法 = `xcodebuild test`（unit test target）；出处：M1 §5.1。
  */
 import Foundation
@@ -243,5 +244,26 @@ final class SessionMirrorTests: XCTestCase {
                   "SM19 服务端给的位置比本地还靠前 ⇒ 本地位置被否定")
     XCTAssertTrue(ResetReason.cursorVoid.invalidatesLocalContent == true,
                   "SM19 服务端明确说这个位置不存在 ⇒ 本地位置被否定")
+
+    // MARK: SM20 「未接上」的说明不被一次接得上的重连抹掉（R10 期2 决定 3）
+
+    var notices = ResyncNoticeState()
+    notices.observe(.resetRequired(.gap))
+    XCTAssertTrue(notices.notice == ResyncNotice(kind: .unresolved, reason: .gap),
+                  "SM20 保留分支 ⇒ 说明是「未接上」，并带上原因")
+    notices.observe(.merged(added: 0))
+    XCTAssertTrue(notices.notice == ResyncNotice(kind: .unresolved, reason: .gap),
+                  "SM20 随后一次接得上的重连不清除它 —— 洞还在，界面不该假装没事")
+
+    // MARK: SM21 重置的说明由 clear() 清除；接得上的判定不置位（R10 期2 决定 3 / 4）
+
+    var resetNotices = ResyncNoticeState()
+    resetNotices.observe(.merged(added: 3))
+    XCTAssertTrue(resetNotices.notice == nil, "SM21 接得上的判定不自己置位")
+    resetNotices.observe(.resetRequired(.waterMarkWentBack))
+    XCTAssertTrue(resetNotices.notice == ResyncNotice(kind: .reset, reason: .waterMarkWentBack),
+                  "SM21 位置被否定 ⇒ 说明是「已重置」，并带上原因")
+    resetNotices.clear()
+    XCTAssertTrue(resetNotices.notice == nil, "SM21 重新建立是说明唯一的清除点")
   }
 }
