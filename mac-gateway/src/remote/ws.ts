@@ -101,6 +101,79 @@ const PING_INTERVAL_MS = 2_000
 const MISSED_PONG_LIMIT = 2
 
 /**
+ * 心跳所要的 socket 窄面 —— 只取它读的那几样。做成窄面是为了让**这条规则本身**
+ * 可以脱离真 socket 被断言（写不出去的 socket 只能靠一只假 socket 复现）。
+ */
+export interface HeartbeatSocket {
+  /** 还在排队、尚未落盘的字节数。大于 0 = 这一拍我们自己的 ping 也排在那队后面。 */
+  readonly writableLength: number
+  readonly destroyed: boolean
+  destroy(): void
+  write(buffer: Buffer): unknown
+}
+
+/** 一段连接的心跳句柄。 */
+export interface Heartbeat {
+  /**
+   * 收到对端的**任何一帧**：连失数归零。不只认 pong —— 客户端每 2 秒一次的 ping 走的是
+   * **未被堵住**的方向（客户端 → 网关），它同样证明客户端在看；而我们的 pong 可能正排在一大帧
+   * 后面（来由见 `startHeartbeat`）。
+   */
+  heardFrame(): void
+  /** 停拍（连接收尾时调用）。 */
+  stop(): void
+}
+
+/**
+ * 起一段连接的心跳。
+ *
+ * 规则三句话：**写还在排队时不判活；对端送来任何一帧都算它还活着；排空之后连失到上限即判死。**
+ *
+ * 第一条是踩出来的（2026-10-14 真机）：1.25 MB 的打开帧在慢链路上要 ~10 秒才传完，
+ * 而我们自己的 ping 与那一大帧走同一条 TCP、排在它**后面** —— 客户端此刻根本收不到
+ * ping，收不到就不会回 pong。把这段的「没回」算成死亡证据，等于把「正在传大帧」判成
+ * 「客户端死了」，于是连接在帧传到一半时被自己掐断。参考服务端有这个同样的问题，只是
+ * 它的链路快到撞不上（`stream-server.ts` 的服务端预算照抄，判据不能照抄）。
+ *
+ * 第二条是同一次现场的另半边：`writableLength` 只说明**用户态**队列排空了，内核与中继里的
+ * 字节还在路上 —— 那时我们刚发出 ping，客户端却还没收到，它自然回不了 pong。**只有 pong 算数
+ * 就等于要求「对端在被我们的大帧堵住的间隙里还能应答」**。客户端每 2 秒的 ping 走的是反向、
+ * 未被堵住的那条路：收到它，就说明对面活着（与客户端侧同一条规则，见
+ * `FollowClient.livenessTick`）。
+ *
+ * 代价：写不出去的连接不再由心跳判死，交给 TCP 自己的超时；客户端那侧的心跳会在它
+ * 自己发现链路死掉时关掉这条连接（两端都留着各自的判据）。
+ */
+export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['heartbeat'] = {}): Heartbeat {
+  const intervalMs = options?.intervalMs ?? PING_INTERVAL_MS
+  const limit = options?.missedPongLimit ?? MISSED_PONG_LIMIT
+  let unanswered = 0
+  const timer = setInterval(() => {
+    if (socket.destroyed) return
+    if (socket.writableLength > 0) {
+      // 见函数注释：这一拍说明不了对面死活，且发出去的 ping 也会排在队尾 ——
+      // 既不计数也不发。
+      unanswered = 0
+      return
+    }
+    unanswered += 1
+    if (unanswered > limit) {
+      // 留痕：客户端死亡是常态，但「死于我们自己关掉它」与「客户端自己走了」
+      // 是两件事 —— 没有这一行，Mac 侧的日志答不出这次连接怎么结束的
+      // （客户端那半边见 `FollowClient` 心跳放弃时的 warn）。
+      log.info(`heartbeat: no pong in ${limit + 1} rounds — closing socket`)
+      socket.destroy()
+      return
+    }
+    socket.write(encodePing())
+  }, intervalMs)
+  return {
+    heardFrame() { unanswered = 0 },
+    stop() { clearInterval(timer) },
+  }
+}
+
+/**
  * 一条帧过 send 边界时携带的计时上下文（R8 期1 链路 A）—— pump 在循环里
  * 取 gwRecv（上游帧到达），send 在写出前补 gwSend 与字节数，合成一条 gw
  * 记录。窗口重放（opening）与事件帧同占这一段，故两者都走这条路：
@@ -173,6 +246,12 @@ export interface StreamOptions {
   onClientConnected?: ClientHook
   /** 打开帧的字节上界；缺省即 {@link DEFAULT_OPENING_BYTES}。 */
   openingCapBytes?: number
+  /**
+   * 心跳的节拍与容错轮数。**做成可传参不是为了灵活性，是为了让「写还在排队时判不判活」
+   * 这条路径能被快速观测**（节拍调到 10ms 就能在测试里看见它）—— 与 `openingCapBytes`
+   * 同一条理由。缺省即 {@link PING_INTERVAL_MS} / {@link MISSED_PONG_LIMIT}。
+   */
+  heartbeat?: { intervalMs?: number; missedPongLimit?: number }
 }
 
 /**
@@ -253,19 +332,11 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
   const openingCapBytes = positiveOrDefault(options.openingCapBytes, DEFAULT_OPENING_BYTES)
   const streams = new Map<number, { abort: AbortController }>()
 
-  // 参考服务端用同样的预算断连（`stream-server.ts`）。
-  let unansweredPings = 0
-  const heartbeat = setInterval(() => {
-    unansweredPings += 1
-    if (unansweredPings > MISSED_PONG_LIMIT) {
-      socket.destroy()
-      return
-    }
-    write(socket, encodePing())
-  }, PING_INTERVAL_MS)
+  // 心跳规则在 `startHeartbeat`（含「写还在排队时不判活」那条，来由见那里）。
+  const heartbeat = startHeartbeat(socket, options.heartbeat)
 
   const closeAll = (): void => {
-    clearInterval(heartbeat)
+    heartbeat.stop()
     for (const stream of streams.values()) stream.abort.abort()
     streams.clear()
   }
@@ -279,10 +350,12 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
       return
     }
     for (const frame of frames) {
+      // 对端送来的任何一帧都是「它还活着」的证据 —— 与客户端侧同一条规则
+      //（`FollowClient.livenessTick`）。最要紧的那一帧是客户端每 2 秒一次的 ping：它走的是
+      // **未被堵住**的方向（客户端 → 网关），而我们的 pong 可能正排在一大帧后面
+      //（真机：1.25 MB 的打开帧 + 中继链路）。此刻收不到它的 pong 说明不了什么。
+      heartbeat.heardFrame()
       switch (frame.kind) {
-        case 'pong':
-          unansweredPings = 0
-          break
         case 'ping':
           write(socket, encodePong(frame.payload))
           break
@@ -463,8 +536,18 @@ async function pump(
         }
 
         const sentCount = events.length - shrink.start
+        // 字节数进 info 行（不是只在 debug 的 perf 记录里）：慢链路上「帧有多大」与
+        // 「传了多久」是两件事，而这一行是「传了多久」的一半已知量 ——
+        // 另一半在客户端。**并把两半分开报**：收窄只裁得动 `events`，瞬态基线 /
+        // 占用 / 模型基线都裁不动，却同样占着上界的额度（真机：某会话事件 1.2 MiB、
+        // 帧却 >4 MiB —— 多出来的 2.8 MiB 全在裁不动的那一半里）。
+        const openingBytes = frameBytesAt(shrink.start)
+        const fixedBytes = encodeTextFrame(encodeServerFrame({
+          type: 'item', streamId, payload: { ...openingPayload(shrink.start), events: [] },
+        })).length
         log.info(`follow opening for "${request.sessionId}": cursor=${cursor}, ${sentCount} events`
-          + (shrink.cutEvents === 0 ? '' : ` (narrowed by ${shrink.cutEvents} events / ${shrink.cutTurns} turns)`))
+          + (shrink.cutEvents === 0 ? '' : ` (narrowed by ${shrink.cutEvents} events / ${shrink.cutTurns} turns)`)
+          + `, ${openingBytes} bytes (fixed ${fixedBytes} + events ${openingBytes - fixedBytes})`)
         sendItem(openingPayload(shrink.start), {
           // 窗口重放也占 t2 段，且通常是整条流里最大的一帧 —— 它的尺寸
           // 是「这一帧为什么超限」唯一的现场证据。

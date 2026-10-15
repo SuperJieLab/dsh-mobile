@@ -104,7 +104,7 @@ final class FollowReplayTests: XCTestCase {
         }
 
         let decodedOpening = OpeningFrame.decode(openingData)
-        XCTAssertTrue(opening != nil, "G1a opening 帧原文直解成功")
+        XCTAssertTrue(decodedOpening != nil, "G1a opening 帧原文直解成功")
         XCTAssertTrue(decodedOpening?.events == legacyEvents, "G1b 直解与 JSONValue 往返产出逐字一致")
         XCTAssertTrue(decodedOpening?.cursor == 3 && decodedOpening?.pageStart == 0 && decodedOpening?.hasOlder == true,
                       "G1c 外壳字段（cursor/pageStart/hasOlder）一次解码齐备")
@@ -179,5 +179,47 @@ final class FollowReplayTests: XCTestCase {
                        "O2d 其余拒绝仍然退避重连")
         XCTAssertFalse(FollowClient.isTerminal(code: "some-future-code"),
                        "O2e 未知码按可重试处理 —— 新码不该让会话卡死")
+    }
+
+    /// R9 T8 / T11 —— 心跳判据与迟到回调的代次隔离（Plan R9 期1 的 T8 / T11，判据 O5 / O7）。
+    ///
+    /// T7 真机复验把「打不开」换成了新症状：连接每 **2.02 秒**一转（= 一个 `pingInterval`），
+    /// `reconnect` 的 attempt 爬到 9 且编号跳着走 —— 成因在「状态没按代次隔离」上。第三次复验
+    /// （两端日志第一次同时到齐）逼出第二个成因：心跳的**证据**取得太弱。两处都与尺寸无关，
+    /// 但同样让会话进不去，所以同属 spec 2.1 的「不出现连接反复断开」。
+    func testConnectionLivenessScope() {
+        // ① 心跳只在**已建成的流**上判死。升级后网关**先**发一条 approval 对账帧
+        //（`index.ts:142`），它比 opening 早到；上一版规则（「收到过任何一帧就够格计数」）于是
+        // 被它当场激活 —— 而 opening 的 1.25 MB 正堵着这条 TCP，网关的 pong 排在那一大帧
+        // **后面**，一拍也到不了 ⇒ 每代连接恰好活 6 秒（3 拍）就被自己判死
+        //（真机：`g2 heartbeat: no pong in 3 rounds — closing`，connect 后 6.15 秒）。
+        XCTAssertTrue(FollowClient.livenessTick(established: false, heardFromPeer: true, missed: 0, limit: 2) == .probe(missed: 0),
+                      "O7a 未成流：收到过东西也不计数 —— 先到的 approval 对账帧不该够格激活心跳")
+        XCTAssertTrue(FollowClient.livenessTick(established: false, heardFromPeer: true, missed: 9, limit: 2) == .probe(missed: 0),
+                      "O7b 未成流：连失账一并归零 —— 上一代的欠账不继承（真机里每一代都因此死在第一拍）")
+        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: true, missed: 9, limit: 2) == .probe(missed: 0),
+                      "O7c 已成流但本拍收到过东西：归零 —— 对端在给我们发东西，它就是活的")
+        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: false, missed: 0, limit: 2) == .probe(missed: 1),
+                      "O7d 已成流且本拍什么都没收到：第 1 拍连失 1")
+        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: false, missed: 1, limit: 2) == .probe(missed: 2),
+                      "O7e 第 2 拍连失 2，仍在容错内")
+        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: false, missed: 2, limit: 2) == .dead,
+                      "O7f 连失到上限判死 —— 半开连接仍会被发现")
+
+        // ② 迟到回调：代次或承载任一不等即不适用 —— 它不得关掉当前连接、不得再排重连。
+        XCTAssertTrue(FollowClient.callbackApplies(generation: 7, current: 7, sameTask: true),
+                      "O5a 本代当前的连接：回调算数")
+        XCTAssertTrue(!FollowClient.callbackApplies(generation: 6, current: 7, sameTask: false),
+                      "O5b 上一代的回调：不算数（否则它会把刚建立的新连接掐掉，自锁成 2 秒一转）")
+        XCTAssertTrue(!FollowClient.callbackApplies(generation: 7, current: 7, sameTask: false),
+                      "O5c 同代但承载已被替换：同样不算数")
+
+        // O6：就绪硬超时由「网关承诺的打开帧上界 ÷ 实测最慢吞吐」定出来，不是抄上游的 15s ——
+        // 抄 15s 的那个版本在真机上活不过 1.25 MB 的打开帧（慢链路要 ~10 秒，且 4 MiB 上界
+        // 的最坏情况更久）。判据钉住的是「这个关系」，不是某个魔法数。
+        let worstCaseSeconds = Double(4 * 1024 * 1024) / (125 * 1024) // 4 MiB ÷ 125 KB/s ≈ 33.6s
+        XCTAssertTrue(FollowClient.readyTimeout >= worstCaseSeconds,
+                      "O6a 就绪硬超时应覆盖最慢链路上传完承诺上界所需的时间（否则大窗口必被自己掐断）")
+        XCTAssertTrue(FollowClient.readyTimeout == 45, "O6b 取值 = 33.6s + 建连 ~2s，取整到 45s")
     }
 }
