@@ -1,5 +1,5 @@
 /**
- * SessionMirror 的契约测试（SM1–SM18）：状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
+ * SessionMirror 的契约测试（SM1–SM19）：状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
  * 跑法 = `xcodebuild test`（unit test target）；出处：M1 §5.1。
  */
 import Foundation
@@ -232,5 +232,16 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertTrue(verdictAgain == .merged(added: 0), "SM18 第二次重对齐一条也不新增")
     XCTAssertTrue(redelivered.events.map(\.seq) == afterFirst, "SM18 事件序列与第一次逐条相同")
     XCTAssertTrue(redelivered.cursor == 14 && redelivered.pageStart == 0, "SM18 位置不累积偏差")
+
+    // MARK: SM19 「对不上」分两档：本地位置有没有被服务端否定（R10 期2 决定 1）
+
+    // 这一档决定「保留本地」还是「清空重来」：本地那段仍然是真的 ⇒ 保住它；位置被否定 ⇒ 它可能不是
+    // 真的，宁可重置。
+    XCTAssertTrue(ResetReason.gap.invalidatesLocalContent == false,
+                  "SM19 两段之间有洞 —— 本地那段本身仍是真的，不算否定位置")
+    XCTAssertTrue(ResetReason.waterMarkWentBack.invalidatesLocalContent == true,
+                  "SM19 服务端给的位置比本地还靠前 ⇒ 本地位置被否定")
+    XCTAssertTrue(ResetReason.cursorVoid.invalidatesLocalContent == true,
+                  "SM19 服务端明确说这个位置不存在 ⇒ 本地位置被否定")
   }
 }

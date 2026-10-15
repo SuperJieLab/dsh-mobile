@@ -70,6 +70,19 @@ enum ResetReason: Equatable {
   case waterMarkWentBack
   /// 服务端明确拒绝了这个位置（`resync-required`）。
   case cursorVoid
+
+  /// 这一因是否**否定了本地位置本身** —— 决定「对不上」时保住本地还是清空重来（R10 期2 决定 1）。
+  ///
+  /// 分档的依据不是「对不上」这件事：两段之间有洞（`.gap`）时，本地那一段本身仍然完整、仍然是真的，
+  /// 只是缺了更新的部分 —— 保住它、把「更新没接上」如实说出来即可。而水位倒退与位置作废是
+  /// **服务端在说本地这个位置不作数**，此时留在屏幕上的内容可能不是真的 —— 宁可重置
+  /// （spec 2.4.3：不允许「看起来正常但少了内容」）。
+  var invalidatesLocalContent: Bool {
+    switch self {
+    case .gap: return false
+    case .waterMarkWentBack, .cursorVoid: return true
+    }
+  }
 }
 
 /// 一次合并的判定。调用方据它决定界面显示什么。
