@@ -150,7 +150,14 @@ export function fitOpeningToBytes(
   if (window.length === 0) return { start: 0, cutTurns: 0, cutEvents: 0 }
 
   const turnStarts = window.flatMap((event, index) => (event.type === 'turn/start' ? [index] : []))
-  const candidates = turnStarts.length > 0 ? turnStarts : [...window.keys()]
+  // 候选起点：**0 永远在列**（「本来就装得下」是最该被选中的那一支），加上窗口内各
+  // `turn/start`。窗口起点**不保证**落在轮边界上 —— 窗口是整份日志、或对齐目标在首个
+  // `turn` 之前就到了，都会让 index 0 不是 `turn/start`。少了 0，装得下也会被裁到第一个
+  // 轮边界上（真机：`1253711 bytes (fixed 542 + events 1253169)` 的帧在 4 MiB 上界下被报
+  // `narrowed by 4 events / 0 turns`，客户端首屏因此少 4 条）。
+  const candidates = turnStarts.length === 0
+    ? [...window.keys()] // 一个轮边界都没有（退化窗口）：按字节切
+    : [0, ...turnStarts.filter(index => index !== 0)]
 
   for (const start of candidates) {
     if (frameBytesOf(start) > cap) continue

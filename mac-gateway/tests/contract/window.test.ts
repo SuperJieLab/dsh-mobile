@@ -79,3 +79,23 @@ test('fitOpeningToBytes: an empty window is untouched, not refused', () => {
   // same as failing to fit — the refusal path must not swallow it.
   assert.deepEqual(fitOpeningToBytes([], 300, sizer([])), { start: 0, cutTurns: 0, cutEvents: 0 })
 })
+
+test('fitOpeningToBytes: a window whose head is not a turn boundary', () => {
+  // 真机抓到的那一条（2026-10-14）：窗口是整份日志，而日志开头不是 `turn/start`
+  // （前 4 条事件属于日志的头部）。旧实现只从「第一个 `turn/start`」开始试 ⇒
+  // **永远不会试 start = 0** ⇒ 装得下也会被裁到那个边界上。现场读数：
+  // `cursor=209, 205 events (narrowed by 4 events / 0 turns), 1253711 bytes (fixed 542 + events 1253169)`
+  // —— 1.25 MB 的帧在 4 MiB 的上界下被裁，客户端首屏因此少 4 条。
+  const head = [
+    event('session/start', 0), event('user/message', 1),
+    event('user/message', 2), event('user/message', 3),
+  ]
+  const window = [...head, event('turn/start', 4), event('user/message', 5)]
+  const bytes = sizer([10, 10, 10, 10, 10, 100])
+
+  // ① 整窗装得下（= 真机那一支）：不动它 —— 起点 0 必须在候选里，即便它不在轮边界
+  assert.deepEqual(fitOpeningToBytes(window, 100_000, bytes), { start: 0, cutTurns: 0, cutEvents: 0 })
+
+  // ② 装不下：仍吸附到第一个 turn 边界（不是按字节硬切）—— 收窄该发生时照旧发生
+  assert.deepEqual(fitOpeningToBytes(window, 180, bytes), { start: 4, cutTurns: 0, cutEvents: 4 })
+})
