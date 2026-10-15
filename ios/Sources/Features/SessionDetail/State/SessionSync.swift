@@ -267,7 +267,8 @@ final class SessionSync: ObservableObject {
 
     /// 打开详情页即跟随：服务端推 opening（首屏窗口）与后续事件，不再轮询。判定全在状态机
     /// 里 —— 与 HTTP 路径共用同一台 `SessionMirror`：
-    /// - opening → `mirror.open(with:)`（**替换**窗口，重连重建同此一途）
+    /// - opening → `mirror.realign(with:)`（**重对齐**：本地更早的部分保留、只换尾部；
+    ///   手里空着时等价于打开。重连因此不再把翻出来的历史还回去，R10 期1）
     /// - 事件帧 → `mirror.apply(.received(Snapshot(asOfSeq: seq + 1, …)))` —— 一条事件就是
     ///   一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
     func startFollowing() {
@@ -288,7 +289,11 @@ final class SessionSync: ObservableObject {
     }
 
     private func applyOpening(_ opening: OpeningFrame) {
-        _ = mirror.open(with: Window(
+        // 首次建立窗口与重连重建共用这一个入口，但语义不同（R10 期1）：手里空着时等价于
+        // 「打开」（整段取窗口）；重连时本地可能已有翻出来的历史，那时走「重对齐」——
+        // 本地更早的部分原样保留，只换尾部。
+        let wasEmpty = mirror.isEmpty
+        let verdict = mirror.realign(with: Window(
             pageStart: opening.pageStart,
             asOfSeq: opening.cursor,
             hasOlder: opening.hasOlder,
@@ -310,8 +315,22 @@ final class SessionSync: ObservableObject {
             displayedModel = modelState.displayed
         }
 
-        status = .done(added: opening.events.count, recovered: false)
+        // 状态行只在**首次建立窗口**时更新：重连是传输层事件，用户没做任何事，不该看到
+        // 一行变化（spec 2.3.1）；`added` 取净增，于是它不再等于整个窗口的长度。
+        if wasEmpty {
+            status = .done(added: addedCount(verdict), recovered: false)
+        } else if case .resetRequired(let reason) = verdict {
+            // 接不上：本地与新版之间有洞、或水位倒退。期1 不做重置（spec 2.4 归期2），
+            // 但也不能让它静默冻结 —— 状态行如实说，视图保持重连前的内容（比替换安全）。
+            status = .failed("重连后没能接上本地的内容（\(label(reason))）—— 屏幕上仍是重连前的内容，下拉可重新同步。")
+        }
         refreshView()
+    }
+
+    /// 一条判定带来的净增条数 —— 只有 `merged` 携带这个数，其余（追平 / 重置 / 拒绝 / 失败）算 0。
+    private func addedCount(_ verdict: Verdict) -> Int {
+        if case .merged(let count) = verdict { return count }
+        return 0
     }
 
     private func applyLiveEvent(_ event: SessionEvent) {
