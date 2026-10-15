@@ -178,5 +178,59 @@ final class SessionMirrorTests: XCTestCase {
     let verdictBlank = blank.open(with: window(0, 0, [], hasOlder: false))
     XCTAssertTrue(verdictBlank == .caughtUp, "SM14 空日志不是错误")
     XCTAssertTrue(blank.isEmpty && !blank.hasOlder, "SM14 空视图且没有更早的")
+
+    // MARK: SM15 重连重对齐：本地更早的部分原样保留（R10 期1 决定 1 / 决定 3）
+
+    // 真机现场：用户往回翻到日志开头（本地因此是整份日志、hasOlder 已归假），一次传输层
+    // 重连送来一个新窗口 —— 它的起点落在本地内部。旧码整段替换，于是那几页连同「读到哪」
+    // 一起丢了；重对齐只换尾部。
+    var following = SessionMirror()
+    _ = following.open(with: window(0, 10, (0..<10).map(event), hasOlder: false))
+    let verdictRealign = following.realign(with: window(6, 14, (6..<14).map(event), hasOlder: true))
+    XCTAssertTrue(verdictRealign == .merged(added: 4), "SM15 新增只算新覆盖到的那几条，不是整个窗口的长度")
+    XCTAssertTrue(following.events.map(\.seq) == Array(0..<14), "SM15 本地更早的 0..5 原样在，尾部换成新窗口")
+    XCTAssertTrue(following.pageStart == 0, "SM15 左端没动，起点就不动")
+    XCTAssertTrue(following.hasOlder == false, "SM15 已经翻到顶，重连不该让「加载更早」重新长出来")
+    XCTAssertTrue(following.cursor == 14, "SM15 末尾跟着新窗口前进")
+
+    // MARK: SM16 新窗口起点更早 ⇒ 整组采用（服务端给得更全）
+
+    // 与 SM15 相对的另一支：新窗口的起点比本地还早（服务端窗口变大、或本地只拿到很少）。
+    // 这时它覆盖了本地，没有可保留的部分 —— 左端坐标改由服务端说了算。
+    var widened = SessionMirror()
+    _ = widened.open(with: window(6, 10, (6..<10).map(event), hasOlder: true))
+    let verdictWidened = widened.realign(with: window(2, 14, (2..<14).map(event), hasOlder: true))
+    XCTAssertTrue(verdictWidened == .merged(added: 8), "SM16 新窗口覆盖得更早，净增 = 新条数减被换掉的")
+    XCTAssertTrue(widened.pageStart == 2, "SM16 起点跟着新窗口前移")
+    XCTAssertTrue(widened.events.map(\.seq) == Array(2..<14), "SM16 事件与新窗口逐条相同")
+    XCTAssertTrue(widened.hasOlder == true, "SM16 左端变了之后，左端坐标也由新窗口给")
+
+    // MARK: SM17 接不上 ⇒ 沿用既有的重置判定，且一条都不动
+
+    var gapped = SessionMirror()
+    _ = gapped.open(with: window(0, 10, (0..<10).map(event), hasOlder: false))
+    let verdictGapped = gapped.realign(with: window(12, 14, (12..<14).map(event), hasOlder: false))
+    XCTAssertTrue(verdictGapped == .resetRequired(.gap), "SM17 新窗口起点越过本地末尾 ⇒ 中间有洞，宁可重置")
+    XCTAssertTrue(gapped.events.map(\.seq) == Array(0..<10), "SM17 判定缺口时视图一条不动")
+    XCTAssertTrue(gapped.cursor == 10 && gapped.pageStart == 0 && gapped.hasOlder == false,
+                  "SM17 判定缺口时位置也不动")
+
+    var rewound = SessionMirror()
+    _ = rewound.open(with: window(0, 10, (0..<10).map(event), hasOlder: true))
+    let verdictRewound = rewound.realign(with: window(0, 8, (0..<8).map(event), hasOlder: true))
+    XCTAssertTrue(verdictRewound == .resetRequired(.waterMarkWentBack), "SM17 新窗口末尾比本地还靠前 ⇒ 位置不可信")
+    XCTAssertTrue(rewound.events.map(\.seq) == Array(0..<10), "SM17 水位倒退时视图也不动")
+
+    // MARK: SM18 同一条 opening 再来一次：幂等，不累积偏差
+
+    var redelivered = SessionMirror()
+    _ = redelivered.open(with: window(0, 10, (0..<10).map(event), hasOlder: false))
+    let recon = window(6, 14, (6..<14).map(event), hasOlder: true)
+    _ = redelivered.realign(with: recon)
+    let afterFirst = redelivered.events.map(\.seq)
+    let verdictAgain = redelivered.realign(with: recon)
+    XCTAssertTrue(verdictAgain == .merged(added: 0), "SM18 第二次重对齐一条也不新增")
+    XCTAssertTrue(redelivered.events.map(\.seq) == afterFirst, "SM18 事件序列与第一次逐条相同")
+    XCTAssertTrue(redelivered.cursor == 14 && redelivered.pageStart == 0, "SM18 位置不累积偏差")
   }
 }

@@ -135,6 +135,57 @@ struct SessionMirror {
     return window.events.isEmpty ? .caughtUp : .merged(added: window.events.count)
   }
 
+  /// 重连：把新拿到的窗口与本地已有的内容重对齐 —— **本地更早的部分原样保留，只换尾部**。
+  ///
+  /// 与 `open` 的分工是「手里有没有东西」：`open` 用于手里空着时取一个窗口（HTTP 路径的
+  /// 冷启动，见 `SessionSync.sync()` 的 `isEmpty` 门），整段替换是它的正解；本方法用于手里
+  /// **已经有**内容时的重连 —— 那时替换会把用户在详情里逐次翻出来的历史一并丢掉，而那是
+  /// 业务层已经确立的状态、重连只是传输层事件（R10 期1）。
+  ///
+  /// 三支，按新窗口的起点落在哪决定：
+  /// - **更早或相同** ⇒ 它覆盖了本地，整组采用（等同 `open`，本地没有任何损失）；
+  /// - **落在本地内部** ⇒ 保留 `seq < window.pageStart` 的那段，尾部换成新窗口；
+  /// - **接不上**（起点越过本地末尾，或末尾比本地还靠前）⇒ 沿用既有的重置判定，
+  ///   视图与位置一条不动。
+  ///
+  /// **左端坐标只在左端真的动了时才改**：保留本地头部时，`pageStart` 与 `hasOlder` 描述的
+  /// 还是本地那个左端 —— 照抄新窗口的值，会让已经翻到顶的会话重新长出「加载更早」。
+  ///
+  /// - Parameter window: opening 帧给出的窗口（与 `page` 回包同形）。
+  /// - Returns: 本次的判定。`merged(added:)` 的 `added` 是**净增**条数，不是窗口长度。
+  mutating func realign(with window: Window) -> Verdict {
+    inFlight = false
+
+    // 新窗口自己的边界要与内容自洽 —— 与 `open` 同一条校验，合并前先过。
+    if let first = window.events.first, first.seq != window.pageStart {
+      return .resetRequired(.gap)
+    }
+
+    // 手里什么都没有：这与「打开会话」是同一件事。
+    guard !events.isEmpty else { return open(with: window) }
+
+    if window.asOfSeq < cursor {
+      return .resetRequired(.waterMarkWentBack)
+    }
+    if window.pageStart > cursor {
+      return .resetRequired(.gap)
+    }
+
+    let before = events.count
+    if window.pageStart <= pageStart {
+      // 新窗口覆盖了本地（起点更早或相同）⇒ 左端跟着它走。
+      pageStart = window.pageStart
+      hasOlder = window.hasOlder
+      events = window.events
+    } else {
+      // 保留本地更早的那段；它与新窗口紧邻（新起点落在本地已覆盖的范围里）⇒ 拼起来无缝。
+      events = events.filter { $0.seq < window.pageStart } + window.events
+    }
+    cursor = window.asOfSeq
+
+    return events.isEmpty ? .caughtUp : .merged(added: events.count - before)
+  }
+
   /// 往回翻：把更早的一段**前插**。`cursor` 不动 —— 往回翻改的是视图起点，不是末尾。
   /// - Parameter window: `page` 的响应，带 `beforeSeq` 的那一种。
   /// - Returns: 本次的判定。
