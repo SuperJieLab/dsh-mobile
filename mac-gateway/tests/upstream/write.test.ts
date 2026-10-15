@@ -7,12 +7,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ApprovalRelay, pumpPrompt, type RemoteEventGatewayLike, type UpstreamWireFrame } from '../../src/upstream/write.ts'
+import { ApprovalRelay, pumpPrompt, refusalOf, type RemoteEventGatewayLike, type UpstreamWireFrame } from '../../src/upstream/write.ts'
 
 // -- helpers -----------------------------------------------------------------
 
 /** A fake gateway: one controlled `$events` stream plus a recorded result door. */
-function fakeGateway() {
+function fakeGateway(options: { refuse?: unknown } = {}) {
   const pushes: ((frame: UpstreamWireFrame) => void)[] = []
   const results: { clientId: string; eventId: string; outcome: unknown }[] = []
   let resolveFirst: (() => void) | undefined
@@ -35,7 +35,7 @@ function fakeGateway() {
     async dispatchRpc(_endpoint, payload) {
       const args = (payload as { args: { clientId: string; eventId: string; outcome: unknown } }).args
       results.push(args)
-      return { ok: true, value: undefined }
+      return options.refuse ?? { ok: true, value: undefined }
     },
     push(frame) {
       for (const push of pushes) push(frame)
@@ -49,8 +49,8 @@ function broadcaster() {
   return { frames, broadcast(frame: unknown): void { frames.push(frame) } }
 }
 
-async function liveRelay() {
-  const { gateway, results, streamStarted } = fakeGateway()
+async function liveRelay(options: { refuse?: unknown } = {}) {
+  const { gateway, results, streamStarted } = fakeGateway(options)
   const sink = broadcaster()
   const relay = new ApprovalRelay(gateway, sink)
   relay.start(AbortSignal.timeout(10_000))
@@ -105,6 +105,40 @@ test('relay: a retried answerId replays the first outcome without a second deliv
   } finally {
     stop()
   }
+})
+
+test('relay: a refused answer is not reported as delivered, and the question stays held', async () => {
+  // What the runtime does now (`dsh-api-gateway/lib/index.js:961-977` at 0.2.1-alpha.3):
+  // the `$events/result` door validates the Peer, so a mismatch comes back as a value,
+  // not a throw. Treating that as "delivered" hides a turn that is still waiting.
+  const { gateway, results, relay, stop } = await liveRelay({
+    refuse: { ok: false, error: { code: 'gateway/interactions-forbidden', message: 'Remote event result belongs to another Peer' } },
+  })
+  try {
+    gateway.push(waterfallFrame('e1'))
+    await new Promise((r) => setTimeout(r, 30))
+
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k' }), 'undelivered')
+    assert.equal(results.length, 1, 'the answer still goes out exactly once')
+    assert.deepEqual(relay.held().map(held => held.eventId), ['e1'],
+      'the question is still open upstream — dropping it here would leave the phone with no way to retry')
+
+    // A second attempt is a second delivery attempt, not a replay of a success.
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2' }), 'undelivered')
+  } finally {
+    stop()
+  }
+})
+
+test('refusalOf: reads the gateway’s encoded failure, and only that', () => {
+  assert.equal(refusalOf({ ok: true, value: undefined }), undefined)
+  assert.equal(refusalOf({ ok: true }), undefined)
+  assert.equal(refusalOf(undefined), undefined, 'a door that hands back nothing is not a refusal')
+  assert.equal(
+    refusalOf({ ok: false, error: { code: 'gateway/peer-disposed', message: 'the calling Peer has been disposed' } }),
+    'gateway/peer-disposed: the calling Peer has been disposed',
+  )
+  assert.equal(refusalOf({ ok: false }), 'unknown', 'a refusal without a readable code still counts as one')
 })
 
 test('relay: a cancel frame clears the question; late answer meets unknown-approval and the phone is told', async () => {

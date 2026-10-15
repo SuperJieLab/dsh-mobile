@@ -63,22 +63,36 @@ function install(
     {
       effect: (fn: () => () => void) => { cleanup = fn() },
       ...services,
-      /** Mirrored from the runtime gateway at 0.1.7-alpha.2: `wireStream.open` takes
-       * `uplink` / `peer` ahead of the signal and combines it with a registration lifetime
-       * (`dsh-api-gateway/lib/index.js:602,805`); feeding it positionally is how the relay
-       * died on the real machine (实施期修正 15). */
+      /** The in-process Peer source the relay resolves once at assembly (R11) —
+       * upstream's `connection.createPeer`, mirrored after
+       * `dsh-client-connection/lib/types/rpc-host.d.ts:40-44`. Placed ahead of
+       * `services` so a caller can still override it. */
+      connection: {
+        createPeer(values: { principal: { kind: string }; interactions?: string }) {
+          return {
+            principal: values.principal,
+            interactions: values.interactions ?? 'answer',
+            signal: new AbortController().signal,
+          }
+        },
+      },
+      /** Mirrored from the runtime gateway at 0.2.1-alpha.3: `wireStream.open` takes
+       * `peer` as a required argument ahead of the signal and reads `peer.signal`
+       * before `$events` can open (`dsh-api-gateway/lib/index.js:752,1493`). That is
+       * the shape the relay died against while this fixture said `undefined` (R11). */
       typertGateway: {
         wireStream: {
           async open(
             endpoint: string,
             payload: unknown,
             uplink: AsyncIterable<unknown>,
-            peer: unknown,
+            peer: { signal: AbortSignal },
             signal: AbortSignal,
           ) {
             // The names are upstream's own, so this fixture exercises the
             // named path the wrong way round just as faithfully as the right one.
-            void [endpoint, payload, uplink, peer]
+            void [endpoint, payload, uplink]
+            void peer.signal.aborted
             AbortSignal.any([signal, AbortSignal.timeout(60_000)])
             return (async function* () {
               yield { type: 'ready', clientId: 'fake-client' }
@@ -97,9 +111,11 @@ function install(
           endpoint: string,
           payload: { args: { clientId: string; eventId: string; outcome: unknown } },
           signal: AbortSignal,
-          peer: unknown,
+          peer: { signal: AbortSignal },
         ) {
-          void [endpoint, peer]
+          void endpoint
+          // Upstream's answering door reads the Peer first too (`assertPeerLive`).
+          void peer.signal.aborted
           AbortSignal.any([signal, AbortSignal.timeout(60_000)])
           results.push(payload.args)
           return { ok: true, value: undefined }

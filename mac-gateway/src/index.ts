@@ -44,6 +44,8 @@ export const inject = [
   // approval 中继：网关的 `$events` 流是远程客户端接收并应答
   // approval waterfall 请求的通路。
   'typertGateway',
+  // 中继的身份来源：进程内调用者只能经它取到开流所需的 Peer（R11）。
+  'connection',
 ]
 
 /** 插件配置，由所属 patch 行提供。 */

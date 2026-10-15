@@ -3,52 +3,64 @@
  * 实施期修正 15): the opener's parameter *positions* move between upstream builds,
  * names do not. The fake here mirrors the runtime gateway's opener verbatim —
  * signature, `AbortSignal.any` and all — so a positional call breaks end to end.
+ *
+ * The opener's shape moved again at 0.2.1-alpha.3 (R11): the `Peer` became a required
+ * parameter and the runtime dereferences it before `$events` can open. The fake keeps
+ * that dereference, so a caller that hands over `undefined` fails here exactly as the
+ * relay did on the real machine.
  */
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { callThrough, openStreamThrough, parameterNamesOf } from '../../src/upstream/call-through.ts'
+import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from '../../src/upstream/call-through.ts'
 
-// -- 实施期修正 15: the opener's parameter *positions* move -------------------
+/** One Peer as the runtime hands it to a stream opener (`PeerScope`). */
+function peerScope(): PeerScopeLike {
+  return { principal: { kind: 'owner' }, interactions: 'answer', signal: new AbortController().signal }
+}
+
+// -- 实施期修正 15 / R11: the opener's parameter *positions* move --------------
 
 /**
- * The runtime gateway's opener, mirrored from dsh-api-gateway/lib/index.js:779 at
- * 0.1.7-alpha.2 — `openWireStream(endpoint, payload, uplink, peer, signal, control)`
- * — with the `AbortSignal.any` its `$events` branch performs (index.js:805). A caller
- * feeding arguments by position breaks here exactly as the phone-side relay did: the
- * signal lands in the uplink slot and cancellation is `undefined`.
+ * The runtime gateway's opener, mirrored from dsh-api-gateway/lib/index.js:752 at
+ * 0.2.1-alpha.3 — `open(endpoint, payload, uplink, peer, signal)` — with what its
+ * `$events` branch does with the Peer: `assertPeerLive` reads `peer.signal.aborted`
+ * (index.js:1493) and `openRemoteEvents` folds `peer.signal` into the lifetime
+ * (index.js:1000). A caller that hands over `undefined` breaks here first, which is
+ * how the relay died on the real machine.
  */
 function runtimeOpenerLike() {
-  const opened: { endpoint: unknown; payload: unknown; uplink: unknown; peer: unknown; signal: unknown; control: unknown }[] = []
+  const opened: { endpoint: unknown; payload: unknown; uplink: unknown; peer: unknown; signal: unknown }[] = []
   const opener = async (
     endpoint: unknown,
     payload: unknown,
     _uplink: unknown,
     peer: unknown,
     signal: unknown,
-    control: unknown,
   ) => {
-    opened.push({ endpoint, payload, uplink: _uplink, peer, signal, control })
-    // Cancellation is combined with the registration's lifetime, as upstream does.
-    const lifetime = AbortSignal.any([signal as AbortSignal, AbortSignal.timeout(10_000)])
+    opened.push({ endpoint, payload, uplink: _uplink, peer, signal })
+    // Cancellation is combined with the Peer's lifetime, as upstream does.
+    const scope = peer as { signal: AbortSignal }
+    const lifetime = AbortSignal.any([signal as AbortSignal, scope.signal, AbortSignal.timeout(10_000)])
     return (async function* () { yield { type: 'ready', clientId: 'upstream' }; if (lifetime.aborted) return })()
   }
   return { opener, opened }
 }
 
-test('opener: the signal reaches its own slot in a six-parameter list, not the uplink slot', async () => {
+test('opener: the signal reaches its own slot in a five-parameter list, not the uplink slot', async () => {
   const { opener, opened } = runtimeOpenerLike()
   const signal = new AbortController().signal
+  const peer = peerScope()
 
-  const stream = await openStreamThrough(opener, { endpoint: '$events', payload: { args: {} }, signal })
+  const stream = await openStreamThrough(opener, { endpoint: '$events', payload: { args: {} }, peer, signal })
 
   assert.equal(opened.length, 1)
   assert.deepEqual(opened[0]!.endpoint, '$events')
   assert.deepEqual(opened[0]!.payload, { args: {} })
   assert.equal(opened[0]!.signal, signal, 'cancellation must reach the parameter named signal')
-  assert.equal(opened[0]!.peer, undefined, "undefined is the operator's own in-process carrier")
-  assert.equal(opened[0]!.control, undefined, 'an unknown parameter is left to the gateway')
+  assert.equal(opened[0]!.peer, peer, 'the Peer must reach the parameter named peer')
   assert.notEqual(opened[0]!.uplink, signal, 'the uplink slot must not receive the signal')
+  assert.notEqual(opened[0]!.uplink, peer, 'the uplink slot must not receive the Peer either')
   const uplink = opened[0]!.uplink as AsyncIterable<unknown>
   assert.equal(typeof uplink[Symbol.asyncIterator], 'function', 'the uplink must be iterable — the gateway releases it on open')
 
@@ -56,6 +68,18 @@ test('opener: the signal reaches its own slot in a six-parameter list, not the u
   const frames: unknown[] = []
   for await (const frame of stream) frames.push(frame)
   assert.deepEqual(frames, [{ type: 'ready', clientId: 'upstream' }])
+})
+
+test('opener: a missing Peer fails inside the runtime, which is the failure R11 fixes', async () => {
+  const { opener } = runtimeOpenerLike()
+  const signal = new AbortController().signal
+
+  // This is the real-machine failure, reproduced verbatim: the fixture dereferences
+  // the Peer just as the runtime does, so nothing downstream has to remember it.
+  await assert.rejects(
+    openStreamThrough(opener, { endpoint: '$events', payload: { args: {} }, peer: undefined as unknown as PeerScopeLike, signal }),
+    { message: "Cannot read properties of undefined (reading 'signal')" },
+  )
 })
 
 test('opener: an older three-parameter list still receives the signal', async () => {
@@ -67,24 +91,27 @@ test('opener: an older three-parameter list still receives the signal', async ()
   }
   const signal = new AbortController().signal
 
-  await openStreamThrough(opener, { endpoint: '$events', payload: { args: {} }, signal })
+  await openStreamThrough(opener, { endpoint: '$events', payload: { args: {} }, peer: peerScope(), signal })
 
   assert.equal(seen[2], signal)
 })
 
-test('opener: an unreadable parameter list falls back to arity with cancellation last', async () => {
+test('opener: an unreadable parameter list falls back to arity, Peer and cancellation in their slots', async () => {
   const seen: unknown[] = []
   // A bound function exposes `function () { [native code] }`: no names to read.
-  const target = async (_endpoint: unknown, _payload: unknown, _uplink: unknown, _peer: unknown, signal: unknown) => {
-    seen.push(signal)
-    AbortSignal.any([signal as AbortSignal, AbortSignal.timeout(10_000)])
+  const target = async (_endpoint: unknown, _payload: unknown, _uplink: unknown, peer: unknown, signal: unknown) => {
+    seen.push(peer, signal)
+    const scope = peer as { signal: AbortSignal }
+    AbortSignal.any([signal as AbortSignal, scope.signal, AbortSignal.timeout(10_000)])
     return (async function* () {})()
   }
   const signal = new AbortController().signal
+  const peer = peerScope()
 
-  await openStreamThrough(target.bind(null), { endpoint: '$events', payload: { args: {} }, signal })
+  await openStreamThrough(target.bind(null), { endpoint: '$events', payload: { args: {} }, peer, signal })
 
-  assert.equal(seen[0], signal)
+  assert.equal(seen[0], peer, 'the arity fallback must still put the Peer in the peer slot')
+  assert.equal(seen[1], signal)
 })
 
 test('opener: renamed parameters fall back to their positional slots', async () => {
@@ -96,10 +123,11 @@ test('opener: renamed parameters fall back to their positional slots', async () 
     return (async function* () {})()
   }
   const signal = new AbortController().signal
+  const peer = peerScope()
 
-  await openStreamThrough(opener, { endpoint: '$events', payload: { args: {} }, signal })
+  await openStreamThrough(opener, { endpoint: '$events', payload: { args: {} }, peer, signal })
 
-  assert.deepEqual(seen, ['$events', { args: {} }, seen[2], undefined, signal])
+  assert.deepEqual(seen, ['$events', { args: {} }, seen[2], peer, signal])
   assert.equal(typeof (seen[2] as AsyncIterable<unknown>)[Symbol.asyncIterator], 'function')
 })
 
@@ -112,7 +140,7 @@ test('opener: a rewritten multi-line parameter list with a trailing comma still 
   assert.deepEqual(parameterNamesOf(rewritten), ['endpoint', 'payload', 'uplink', 'peer', 'signal'])
 })
 
-test('call: a parameter added ahead of the signal does not displace it', async () => {
+test('call: a parameter added ahead of the signal does not displace it, and the Peer still arrives', async () => {
   const seen: Record<string, unknown> = {}
   const callee = async (endpoint: unknown, payload: unknown, options: unknown, signal: unknown, peer: unknown) => {
     // What upstream does with the cancellation it was handed.
@@ -120,11 +148,56 @@ test('call: a parameter added ahead of the signal does not displace it', async (
     Object.assign(seen, { endpoint, payload, options, signal, peer })
   }
   const signal = new AbortController().signal
+  const peer = peerScope()
 
-  await callThrough(callee, { endpoint: '$events/result', payload: { args: {} }, signal })
+  await callThrough(callee, { endpoint: '$events/result', payload: { args: {} }, signal, peer })
 
   assert.equal(seen.endpoint, '$events/result')
   assert.deepEqual(seen.payload, { args: {} })
   assert.equal(seen.signal, signal, 'the signal must reach the parameter of that name, wherever it moved')
+  assert.equal(seen.peer, peer, 'the Peer must reach the parameter of that name too')
   assert.notEqual(seen.options, signal, 'an argument we cannot supply must not be handed the signal')
+  assert.notEqual(seen.options, peer, 'an argument we cannot supply must not be handed the Peer')
+})
+
+// -- R11, second cut: the host's members are *methods* ------------------------
+
+/**
+ * The runtime's `dispatchRpc` is a class method whose body starts by reading a field off
+ * `this` (`this.remoteEventClients.get(...)`, dsh-api-gateway/lib/index.js:967). Pulling it
+ * out of the instance and calling it as a bare function loses `this`, and the failure is the
+ * one the phone hit on the real machine: `Cannot read properties of undefined
+ * (reading 'remoteEventClients')`. `wireStream.open` escaped this because it is an arrow
+ * function *field* — lexically bound, indifferent to how it is called.
+ */
+class HostLike {
+  readonly remoteEventClients = new Map([['c1', 'the client']])
+
+  async dispatchRpc(endpoint: unknown, payload: unknown, signal: unknown, peer: unknown) {
+    void [endpoint, payload, signal, peer]
+    return { ok: true, value: this.remoteEventClients.get('c1') }
+  }
+}
+
+test('call: a host method reaches its own state when the receiver comes along', async () => {
+  const host = new HostLike()
+  const signal = new AbortController().signal
+
+  const reply = await callThrough(
+    host.dispatchRpc,
+    { endpoint: '$events/result', payload: { args: {} }, signal, peer: peerScope() },
+    host,
+  )
+
+  assert.deepEqual(reply, { ok: true, value: 'the client' })
+})
+
+test('call: without a receiver the host method fails exactly as it did on the real machine', async () => {
+  const host = new HostLike()
+  const signal = new AbortController().signal
+
+  await assert.rejects(
+    callThrough(host.dispatchRpc, { endpoint: '$events/result', payload: { args: {} }, signal, peer: peerScope() }),
+    { message: "Cannot read properties of undefined (reading 'remoteEventClients')" },
+  )
 })

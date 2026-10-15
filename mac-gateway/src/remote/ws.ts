@@ -122,6 +122,11 @@ export interface Heartbeat {
   heardFrame(): void
   /** 停拍（连接收尾时调用）。 */
   stop(): void
+  /**
+   * 这条连接是不是**被这一拍掐掉的**（而不是对端自己走的）。用来让「连接结束」那行说出
+   * 是谁关的 —— 没有它，一次断连在 Mac 侧只留下「什么都没记」。
+   */
+  readonly killed: boolean
 }
 
 /**
@@ -148,6 +153,7 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
   const intervalMs = options?.intervalMs ?? PING_INTERVAL_MS
   const limit = options?.missedPongLimit ?? MISSED_PONG_LIMIT
   let unanswered = 0
+  let killed = false
   const timer = setInterval(() => {
     if (socket.destroyed) return
     if (socket.writableLength > 0) {
@@ -162,6 +168,7 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
       // 是两件事 —— 没有这一行，Mac 侧的日志答不出这次连接怎么结束的
       // （客户端那半边见 `FollowClient` 心跳放弃时的 warn）。
       log.info(`heartbeat: no pong in ${limit + 1} rounds — closing socket`)
+      killed = true
       socket.destroy()
       return
     }
@@ -170,6 +177,7 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
   return {
     heardFrame() { unanswered = 0 },
     stop() { clearInterval(timer) },
+    get killed() { return killed },
   }
 }
 
@@ -326,11 +334,14 @@ async function handleUpgrade(
 
 /** 每连接的状态与循环。 */
 function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: StreamOptions): void {
+  const openedAt = Date.now()
   const parser = new WsFrameParser()
   // 非正的上界会让每次打开都被判成「装不下」—— 归一化规则与 HTTP 路径共享
   // 同一实现（`positiveOrDefault`），不在这里重写一遍。
   const openingCapBytes = positiveOrDefault(options.openingCapBytes, DEFAULT_OPENING_BYTES)
   const streams = new Map<number, { abort: AbortController }>()
+  /** 对端是否发过 WebSocket close 帧 —— 收尾日志靠它把「人家自己走的」与「链路掉的」分开。 */
+  let peerClosedCleanly = false
 
   // 心跳规则在 `startHeartbeat`（含「写还在排队时不判活」那条，来由见那里）。
   const heartbeat = startHeartbeat(socket, options.heartbeat)
@@ -360,6 +371,10 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
           write(socket, encodePong(frame.payload))
           break
         case 'close':
+          // 对端**明确**说了再见（WebSocket close 帧）。这是「对端主动关」与「链路直接断」
+          // 之间唯一可靠的分界 —— 两者在网关侧都表现为一次 socket close，只有这一帧能区分
+          // （真机 2026-10-15：`the peer went away` 分不出「用户切了会话」还是「链路掉了」）。
+          peerClosedCleanly = true
           write(socket, encodeClose())
           socket.end()
           break
@@ -373,8 +388,39 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
   // 帧可能搭在升级请求的最后字节里。
   if (head.length > 0) onChunk(head)
   socket.on('data', onChunk)
-  socket.on('close', closeAll)
-  socket.on('error', closeAll)
+  // 连接收尾必须留痕：此前这里是 `on('close', closeAll)`，只做清理、一行不记 —— 于是
+  // 「谁关的、活了多久、有没有 error」全无据可查（真机 2026-10-15 的「每 35–60 秒断一次」
+  // 就卡在这里：客户端有日志，而 Mac 侧沉默）。与 `upgrade accepted → 101` 同属进出边界。
+  let finished = false
+  let errored = false
+  const finish = () => {
+    if (finished) return
+    finished = true
+    const facts = { killed: heartbeat.killed, cleanClose: peerClosedCleanly, errored }
+    log.info(`stream ended — ${endReasonOf(facts)}, after ${Math.round((Date.now() - openedAt) / 1000)}s`)
+    closeAll()
+  }
+  socket.on('close', finish)
+  socket.on('error', (error) => {
+    errored = true
+    log.warn(`stream error: ${describeError(error)}`)
+    finish()
+  })
+}
+
+/**
+ * 一次连接是怎么结束的 —— 四档，且**可判定**。四者在网关侧都只表现为「socket 关了」，
+ * 但后续动作完全不同：**我们掐的**要改心跳规则；**对端主动关的**是正常（用户切了会话、
+ * 关了 App）；**链路掉的**要查承载/系统；**报错的**直接读错误原文。
+ *
+ * 判据取真实收到的信号，不靠推断：`error` 事件 > 自己心跳留下的标记 > 对端发来的
+ * WebSocket close 帧。三者都没有 = 断在半路（FIN 都没来得及）。
+ */
+export function endReasonOf(facts: { killed: boolean; cleanClose: boolean; errored: boolean }): string {
+  if (facts.errored) return 'the socket errored'
+  if (facts.killed) return 'we closed it (no pong)'
+  if (facts.cleanClose) return 'the peer closed it cleanly'
+  return 'the link dropped'
 }
 
 /**

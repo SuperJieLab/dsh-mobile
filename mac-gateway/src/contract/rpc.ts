@@ -251,6 +251,11 @@ async function approvalAnswer(envelope: Record<string, unknown>, write: WritePor
   if (outcome === 'unknown-approval') {
     return failure('unknown-approval', `no pending approval answers to "${answer.eventId}" — already decided, cancelled, or never asked`)
   }
+  if (outcome === 'undelivered') {
+    // 上游拒了这条回答：问题仍挂在它那里等着，所以这里不能说 `ok`（`ok` 意为
+    // 「已投递给挂起的问题」）。原因在上游的 code 里，网关日志已记。
+    return failure('internal-error', `the gateway refused the answer for "${answer.eventId}" — see the gateway log for its code`)
+  }
   return { v: PROTOCOL_VERSION, ok: true, eventId: answer.eventId }
 }
 

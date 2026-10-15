@@ -119,6 +119,8 @@ export class ApprovalRelay {
           }
           if (frame.type === 'cancel') {
             this.#pending.delete(frame.eventId)
+            // 上游自己结算了这个问题（别处先答、或它被撤回）—— 这是「卡为什么消失」的唯一线索。
+            log.info(`approval ${frame.eventId} was cancelled upstream`)
             this.#broadcaster.broadcast({ type: 'approval', payload: { kind: 'cancel', eventId: frame.eventId } })
             continue
           }
@@ -169,27 +171,49 @@ export class ApprovalRelay {
    * 线路侧：通过网关的结果门交付一个应答；重试的 `answerId` 重放首个结果（W1），
    * 未指向已暂存问题的一律拒绝（W2）。
    */
-  async answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval'> {
+  async answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval' | 'undelivered'> {
     return this.#replay.remember(answer.answerId, () => this.deliver(answer)).value
   }
 
   /** 实际的一次性交付。运行在 `ReplayTable.remember` 内部。 */
-  private async deliver(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval'> {
+  private async deliver(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval' | 'undelivered'> {
     if (this.#clientId === undefined || !this.#pending.has(answer.eventId)) {
       log.info(`answer for ${answer.eventId}: no held question — unknown-approval`)
       return 'unknown-approval'
     }
-    await this.#gateway.dispatchRpc('$events/result', {
+    const reply = await this.#gateway.dispatchRpc('$events/result', {
       args: {
         clientId: this.#clientId,
         eventId: answer.eventId,
         outcome: { kind: 'result', value: outcomeOfDecision(answer.decision) },
       },
     }, this.#lifetime ?? neverAborted())
+    // 上游把失败**编码进返回值**而不是抛出 —— 不看它就区分不出「答上了」与
+    // 「上游拒了」，而后者的现场是：我们还以为答完，轮次其实卡在原地等应答。
+    const refusal = refusalOf(reply)
+    if (refusal !== undefined) {
+      log.error(`answer for ${answer.eventId} was refused by the gateway (${refusal}) — the question stays held, the turn is still waiting`)
+      return 'undelivered'
+    }
     this.#pending.delete(answer.eventId)
     log.info(`delivered ${answer.decision} for ${answer.eventId}`)
     return 'delivered'
   }
+}
+
+/**
+ * 上游对一条应答的失败反馈；`undefined` = 它收下了。上游的 RPC 门把失败编码进返回值
+ * （`{ok:false, error:{code,message}}`）而不是抛异常，所以「调用没炸」不构成「答上了」——
+ * 判据必须落在返回值的形状上。
+ */
+export function refusalOf(reply: unknown): string | undefined {
+  if (typeof reply !== 'object' || reply === null) return undefined
+  const record = reply as Record<string, unknown>
+  if (record.ok !== false) return undefined
+  const error = record.error as Record<string, unknown> | undefined
+  const code = typeof error?.code === 'string' ? error.code : 'unknown'
+  const message = typeof error?.message === 'string' ? `: ${error.message}` : ''
+  return `${code}${message}`
 }
 
 /** 永不中止的信号，供无 lifetime 的调用路径使用。 */

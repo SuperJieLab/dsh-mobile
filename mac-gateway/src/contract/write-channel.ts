@@ -63,10 +63,14 @@ export function sessionPromptOf(message: Record<string, unknown>): SessionPrompt
 /** 两条写 op 所依赖的数据源 —— 写契约的唯一依赖。 */
 export interface WritePort {
   /**
-   * 把一条回答投递给挂起的 approval；没有挂起 approval 对应该 id
-   * （已消费、已取消、或从未问过）时报告之。
+   * 把一条回答投递给挂起的 approval。
+   *
+   * 三个结局：`delivered` = 上游收下了（它随后自己结算并记审计）；`unknown-approval` =
+   * 没有挂起 approval 对应该 id（已消费 / 已取消 / 从未问过）；**`undelivered` = 上游
+   * 拒了这条回答**（身份、准入或形状不合适）—— 此时问题仍挂在上游等着，客户端该看到
+   * 一个失败而不是 `ok`。
    */
-  answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval'>
+  answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval' | 'undelivered'>
   /**
    * 把一条 prompt 收进会话的 agent 收件箱；会话不存在时报告之。
    * 其余上游失败归调用方的 `internal-error`。

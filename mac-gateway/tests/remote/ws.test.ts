@@ -12,7 +12,7 @@ import test from 'node:test'
 import { createServer, request as httpRequest, type Server } from 'node:http'
 import { once } from 'node:events'
 import { connect as tcpConnect } from 'node:net'
-import { attachStreamHandler, startHeartbeat, STREAM_PATH, type FollowSource, type HeartbeatSocket, type UpstreamFollowFrame } from '../../src/remote/ws.ts'
+import { attachStreamHandler, endReasonOf, startHeartbeat, STREAM_PATH, type FollowSource, type HeartbeatSocket, type UpstreamFollowFrame } from '../../src/remote/ws.ts'
 import type { WireEvent } from '../../src/contract/rpc.ts'
 import { setPerfSink } from '../../src/log.ts'
 
@@ -685,6 +685,47 @@ test('heartbeat: a socket still draining a big frame is not judged dead', { time
     assert.equal(socket.destroyed, true, 'once drained, silence is still death')
   } finally {
     beat.stop()
+  }
+})
+
+test('endReasonOf: the four ways a connection can end are told apart, strongest evidence first', () => {
+  // 网关侧只看得到「socket 关了」，但四档的后续动作完全不同（改心跳规则 / 什么都不做 /
+  // 查承载 / 读错误原文）。判据取真实收到的信号，不靠推断。
+  assert.equal(endReasonOf({ killed: false, cleanClose: false, errored: false }), 'the link dropped',
+    'no signal at all means it broke in the middle, without even a goodbye')
+  assert.equal(endReasonOf({ killed: false, cleanClose: true, errored: false }), 'the peer closed it cleanly')
+  assert.equal(endReasonOf({ killed: true, cleanClose: false, errored: false }), 'we closed it (no pong)')
+  assert.equal(endReasonOf({ killed: false, cleanClose: false, errored: true }), 'the socket errored')
+  assert.equal(endReasonOf({ killed: true, cleanClose: true, errored: true }), 'the socket errored',
+    'an error outranks everything: it names the cause most precisely')
+})
+
+test('heartbeat: a killed connection can name its killer, an untouched one says otherwise', { timeout: 5_000 }, async () => {
+  // 「连接结束」那行必须说出是谁关的。Mac 侧此前对断连一行不记，于是真机上「客户端每 35–60 秒
+  // 断一次」在网关侧完全看不出来（2026-10-15）—— 两端只有一端有日志，问题就永远定不了性。
+  const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+  const alive = fakeSocket(0)
+  const beat = startHeartbeat(alive, { intervalMs: 10, missedPongLimit: 1 })
+  try {
+    assert.equal(beat.killed, false, 'nothing has been closed yet')
+    const pongs = setInterval(() => beat.heardFrame(), 3)
+    await sleep(60)
+    clearInterval(pongs)
+    assert.equal(alive.destroyed, false)
+    assert.equal(beat.killed, false, 'a connection the peer keeps alive was not closed by us')
+  } finally {
+    beat.stop()
+  }
+
+  const doomed = fakeSocket(0)
+  const killer = startHeartbeat(doomed, { intervalMs: 10, missedPongLimit: 1 })
+  try {
+    await sleep(60)
+    assert.equal(doomed.destroyed, true)
+    assert.equal(killer.killed, true, 'the heartbeat must be able to name itself as the closer')
+  } finally {
+    killer.stop()
   }
 })
 

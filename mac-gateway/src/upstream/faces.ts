@@ -13,7 +13,7 @@ import type { ModelPort } from '../contract/model-selection.ts'
 import { createSessionPort, type ListSource, type ModelSelectionSource, type ModelSelectionView, type PersistenceLike } from './sessions.ts'
 import type { FollowSource } from '../remote/ws.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
-import { callThrough, openStreamThrough, parameterNamesOf } from './call-through.ts'
+import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from './call-through.ts'
 import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './write.ts'
 import { createLogger, LogModule } from '../log.ts'
 
@@ -199,6 +199,9 @@ export function modelChannelOver(ctx: Context): ModelPort | undefined {
  * （真机日志 `signals[0] is not of type AbortSignal.`）。对策：收流优先走**声明面**
  * `wireStream.open`（types.d.ts:87）；缺席才碰私有 `openWireStream`，实参**按形参名**填
  * （`openStreamThrough`），形参表读不出（bind/native 包过）时按 arity 兜底并告警。
+ *
+ * 本函数还负责中继的**身份**：向 `connection` 服务要一个进程内 Peer（{@link peerFor}）——
+ * 自 0.2 起开流必须以一个真实 Peer 的名义，而它在该版是必需实参（R11）。
  */
 export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
   const view = ctx.typertGateway as unknown as Record<PropertyKey, unknown> | undefined
@@ -227,6 +230,9 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
     throw new Error('ctx.typertGateway exposes neither wireStream.open nor openWireStream — approval relay cannot run')
   }
   const opener = opening as (...args: unknown[]) => Promise<AsyncIterable<unknown>>
+  // 两个候选开流者的归属不同：声明面 `wireStream.open` 是**字段**（挂在 `wireStream` 上，
+  // 且上游写成箭头函数、不依赖 this），私有兜底 `openWireStream` 是**方法**（必须带 raw）。
+  const openerOwner = opener === declared?.open ? declared : raw
   log.info(
     `approval relay gateway: ${opener === declared?.open ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
   )
@@ -239,14 +245,67 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
     )
   }
 
+  // 开流的身份：一次取定，两个端口共用（应答路径按对象相等校验身份，见 peerFor）。
+  const peer = peerFor(ctx)
+
   return {
     // `$events` 说的是中继自己的词汇，所以仅在这一个边界把流类型按此标注 ——
     // opener 本身在上游是无类型的。
     openWireStream: (endpoint, payload, signal) =>
-      openStreamThrough(opener, { endpoint, payload, signal }) as Promise<AsyncIterable<UpstreamWireFrame>>,
-    // 与 opener 同理：应答门同样是私有成员，形参也可能移动。
-    dispatchRpc: (endpoint, payload, signal) => callThrough(dispatchRpc, { endpoint, payload, signal }),
+      openStreamThrough(opener, { endpoint, payload, peer, signal }, openerOwner) as Promise<AsyncIterable<UpstreamWireFrame>>,
+    // 与 opener 同理：应答门同样是私有成员，形参也可能移动；而它是**实例方法**，
+    // 接收者必须是 raw（见 callThrough 的注释：丢 this 就是丢应答）。
+    dispatchRpc: (endpoint, payload, signal) => callThrough(dispatchRpc, { endpoint, payload, signal, peer }, raw),
   }
+}
+
+/**
+ * 开流与应答所代表的身份（上游 `PeerScope`）。
+ *
+ * 上游自 0.2 起把 `peer` 列为**必需**，且在开流时解引用它（`assertPeerLive` 读
+ * `peer.signal.aborted`）；而进程内调用者没有连接准入那条路 —— 上游为此在 `connection`
+ * 服务上开了 `createPeer`（其声明注释：Create one in-process Peer owned by the Context
+ * that read this service）。取 `owner` + `answer`：前者是应答路径的准入要求，后者是开
+ * forwarded-event 流的要求。
+ *
+ * **一次取定、两个端口共用**：应答路径按**对象相等**校验身份（上游 `client.peer !== peer`
+ * 即拒），两处各造一个会在「点批准」那一刻才失败 —— 比开流失败更晚、更难查。
+ */
+function peerFor(ctx: Context): PeerScopeLike {
+  const connection = (ctx as unknown as { connection?: { createPeer?: unknown } }).connection
+  const createPeer = connection?.createPeer
+  if (typeof createPeer !== 'function') {
+    // 这一段是我们与宿主的接线，缺了它中继整块不可用 —— 在装配时说清，而不是把
+    // `undefined` 传进每一代建流（R11 修的正是后者）。
+    log.error(`approval relay peer source: connection=${typeof connection}, createPeer=${typeof createPeer}`)
+    throw new Error('ctx.connection.createPeer is unavailable — the approval relay cannot open $events without a Peer')
+  }
+  const peer = (createPeer as (options: unknown) => unknown).call(connection, {
+    principal: { kind: 'owner' },
+    interactions: 'answer',
+  })
+  const problem = peerShapeProblem(peer)
+  if (problem !== undefined) {
+    log.error(`approval relay peer: createPeer returned a Peer that is ${problem}`)
+    throw new Error(`ctx.connection.createPeer returned a Peer that is ${problem} — the approval relay cannot speak for it`)
+  }
+  log.info('approval relay peer: owner/answer via connection.createPeer')
+  return peer as PeerScopeLike
+}
+
+/**
+ * `undefined` = 形状可用，否则是缺的那一项（拼进错误信息）。做成纯函数是为了让「装配期
+ * 探测探什么」可被单测直接钉住：中继要的是 `principal`、`signal`（宿主会解引用）与
+ * `interactions=answer`（否则开不了 `$events`）。**判据是「成员与能力」，不是「形参名
+ * 读得出」** —— 后者在宿主把服务成员包成 native 时一律失效，报出来就是误报。
+ */
+export function peerShapeProblem(peer: unknown): string | undefined {
+  if (typeof peer !== 'object' || peer === null) return 'not an object'
+  const record = peer as Record<string, unknown>
+  if (typeof record.principal !== 'object' || record.principal === null) return 'missing principal'
+  if (!(record.signal instanceof AbortSignal)) return 'missing an AbortSignal signal'
+  if (record.interactions !== 'answer') return 'missing interactions=answer'
+  return undefined
 }
 
 /** 中继的广播切面：WS 适配器的 socket 集合要等监听 effect 运行才存在，
