@@ -31,6 +31,12 @@ final class SessionSync: ObservableObject {
     /// 还能往回翻吗。为真时界面给出入口。
     @Published private(set) var hasOlder = false
     @Published private(set) var status: Status = .idle
+    /// 「对不上」的告知 —— 底部**固定面**的数据源（R10 期2 链路 C）。判定全在值类型里。
+    ///
+    /// 与 `status` 的分工：`status` 说「同步到哪了」，只在**取窗口时**更新（重连不跳它，spec 2.3.1）；
+    /// 本项说的是「有内容没能接上、或已被清空重来」—— 它要出现在**不随内容滚动**的面上，
+    /// 否则用户往回翻时看不见（那正是 spec 2.4.3 要防的「看起来正常但少了内容」）。
+    @Published private(set) var notice: ResyncNotice?
     /// 正在生成的回复（打字机）；没有进行中的 attempt 就是空串。
     @Published private(set) var transientText = ""
     /// 跟随流的连接阶段 —— 连接态指示器的数据源，从 `FollowClient` 转发。
@@ -49,6 +55,8 @@ final class SessionSync: ObservableObject {
     /// 服务端此刻给的比本地残留可信。
     private var mirror = SessionMirror()
     private var isSyncing = false
+    /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
+    private var noticeState = ResyncNoticeState()
 
     /// 跟随流：打开详情页即开启，实时收 opening / 事件 / 瞬态帧。
     private lazy var follow: FollowClient = {
@@ -198,6 +206,9 @@ final class SessionSync: ObservableObject {
                 }
                 recovered = true
                 mirror.reset()
+                // 这是**编排自己**执行的重置：`sync()` 是用户显式要求的「重新同步」，撞上缺口时
+                // 保留无法收敛（下一次拉到的增量仍接不上），所以它一律重置 —— 告知如实记「已重置」。
+                noteReset(reason)
                 // 位置已作废，没有内容可续。下一次同步会以「取窗口」的形态重来。
                 status = .done(added: added, recovered: true)
                 refreshView()
@@ -218,6 +229,9 @@ final class SessionSync: ObservableObject {
             if !more { break }
         }
 
+        // 一次干净走完的同步 = 重新建立：本地与服务端已经对齐，此前的「未接上」到此为止 ——
+        // 这是告知的清除点之一（另一处是离开再进入会话，视图销毁时一并消失）。
+        clearNotice()
         status = .done(added: added, recovered: recovered)
         refreshView()
     }
@@ -250,10 +264,12 @@ final class SessionSync: ObservableObject {
             status = .done(added: count, recovered: false)
         case .caughtUp:
             status = .done(added: 0, recovered: false)
-        case .resetRequired:
-            // 这一段接不上当前视图的起点 —— 与其留一个看不见的缺口，不如清空重来。
-            mirror.reset()
-            status = .failed("更早的历史接不上这一段 —— 已清空，下拉可重新同步。")
+        case .resetRequired(let reason):
+            // 分档（R10 期2 决定 1 / 决定 2）：取回的是一段**更早**的历史，它接不上**不影响**当前
+            // 视图的真实性 —— 当前视图仍然完整、仍然是真的。所以 `.gap` 一律保留（清空它 = 用
+            // 「你多点了一下」换掉用户已经读到的全部内容）；只有服务端否定了本地位置时才清空重来。
+            if reason.invalidatesLocalContent { mirror.reset() }
+            observeNotice(verdict)
         case .refused(let code):
             status = .failed("服务端拒绝了这次读取：\(code)")
         case .failed:
@@ -320,9 +336,12 @@ final class SessionSync: ObservableObject {
         if wasEmpty {
             status = .done(added: addedCount(verdict), recovered: false)
         } else if case .resetRequired(let reason) = verdict {
-            // 接不上：本地与新版之间有洞、或水位倒退。期1 不做重置（spec 2.4 归期2），
-            // 但也不能让它静默冻结 —— 状态行如实说，视图保持重连前的内容（比替换安全）。
-            status = .failed("重连后没能接上本地的内容（\(label(reason))）—— 屏幕上仍是重连前的内容，下拉可重新同步。")
+            // 接不上：本地与新版之间有洞、或位置被否定。分档（R10 期2 决定 1）—— 洞（`.gap`）
+            // 保留本地（内容是旧的，但不是错的）；位置被否定则清空重来（留下的内容可能不是真的）。
+            // 两种处置都交给告知，由它出现在**不随滚动离开**的面上（链路 C）—— 期1 那行只写进
+            // footer 的状态行，用户往回翻时在屏幕外，等于没说。
+            if reason.invalidatesLocalContent { mirror.reset() }
+            observeNotice(verdict)
         }
         refreshView()
     }
@@ -333,9 +352,30 @@ final class SessionSync: ObservableObject {
         return 0
     }
 
+    /// 跟随路径（opening / 往回翻）收下一条判定 —— 置位规则在值类型里（`.gap` 保留、「位置被否定」重置）。
+    private func observeNotice(_ verdict: Verdict) {
+        noticeState.observe(verdict)
+        notice = noticeState.notice
+    }
+
+    /// 编排自己重置过之后改记「已重置」（`sync()` 的收场，见 `ResyncNoticeState.didReset`）。
+    private func noteReset(_ reason: ResetReason) {
+        noticeState.didReset(reason)
+        notice = noticeState.notice
+    }
+
+    /// 重新建立 —— 告知唯一的清除点（一次成功的重新同步、或离开再进入会话）。
+    private func clearNotice() {
+        noticeState.clear()
+        notice = noticeState.notice
+    }
+
     private func applyLiveEvent(_ event: SessionEvent) {
         // 一条事件 = 一次覆盖到 seq+1 的快照；上游 gap-free 是契约（网关另有目击），幂等照旧生效。
-        _ = mirror.apply(.received(Snapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])))
+        let verdict = mirror.apply(.received(Snapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])))
+        // 「未接上」之后事件进不来（中间有洞）。这个判定**不再被丢掉** —— 它让告知跟上现状，
+        // 界面就不会一边静止、一边看起来正常（R10 期2 链路 C）。
+        if case .resetRequired = verdict { observeNotice(verdict) }
         // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
         modelState.absorb(event: event)
         displayedModel = modelState.displayed
@@ -519,6 +559,16 @@ struct ResyncNoticeState {
       kind: reason.invalidatesLocalContent ? .reset : .unresolved,
       reason: reason
     )
+  }
+
+  /// 编排**自己**执行了一次重置 —— 如实记成「已重置」。
+  ///
+  /// 为什么不复用 `observe(_:)`：那里按 `invalidatesLocalContent` 分档，是给**跟随路径**
+  /// （opening / 往回翻）的规则 —— 那种处境下 `.gap` 该保留。而 `sync()` 是用户显式要求的
+  /// 「重新同步」，它撞上缺口时**保留无法收敛**（下一次拉到的增量仍接不上），所以它一律重置：
+  /// 这里记的是**做过的**，不是**该做的**。
+  mutating func didReset(_ reason: ResetReason) {
+    notice = ResyncNotice(kind: .reset, reason: reason)
   }
 
   /// 重新建立 —— 说明唯一的清除点。
