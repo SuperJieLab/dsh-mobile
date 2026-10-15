@@ -1,5 +1,5 @@
 /**
- * SessionMirror 的契约测试（SM1–SM14）：状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
+ * SessionMirror 的契约测试（SM1–SM18）：状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
  * 跑法 = `xcodebuild test`（unit test target）；出处：M1 §5.1。
  */
 import Foundation
