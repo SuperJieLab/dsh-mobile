@@ -232,12 +232,14 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
   const opener = opening as (...args: unknown[]) => Promise<AsyncIterable<unknown>>
   // 两个候选开流者的归属不同：声明面 `wireStream.open` 是**字段**（挂在 `wireStream` 上，
   // 且上游写成箭头函数、不依赖 this），私有兜底 `openWireStream` 是**方法**（必须带 raw）。
-  const openerOwner = opener === declared?.open ? declared : raw
+  const declaredOpener = opener === declared?.open
+  const openerOwner = declaredOpener ? declared : raw
   log.info(
-    `approval relay gateway: ${opener === declared?.open ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
+    `approval relay gateway: ${declaredOpener ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
   )
-  // 中继离不开的实参只有取消信号：若本构建对它的拼写不同，在这里说出来，
-  // 而不是在重连循环里见。
+  // 必需实参有两个：取消信号与 peer。这里只对 `signal` 报警，是因为 `peer` 另有兜底
+  // （`positionalArguments` 的 4 / 5 档都带它）；而拼写不匹配的信号在重连循环里是看不见的，
+  // 所以必须在装配时说出来。
   const names = parameterNamesOf(opener)
   if (names === undefined || !names.includes('signal')) {
     log.warn(

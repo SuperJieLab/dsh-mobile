@@ -62,11 +62,10 @@ function install(
   apply(
     {
       effect: (fn: () => () => void) => { cleanup = fn() },
-      ...services,
       /** The in-process Peer source the relay resolves once at assembly (R11) —
        * upstream's `connection.createPeer`, mirrored after
-       * `dsh-client-connection/lib/types/rpc-host.d.ts:40-44`. Placed ahead of
-       * `services` so a caller can still override it. */
+       * `dsh-client-connection/lib/types/rpc-host.d.ts:40-44`. Ahead of `services`
+       * so a caller that passes its own `connection` still wins. */
       connection: {
         createPeer(values: { principal: { kind: string }; interactions?: string }) {
           return {
@@ -76,6 +75,7 @@ function install(
           }
         },
       },
+      ...services,
       /** Mirrored from the runtime gateway at 0.2.1-alpha.3: `wireStream.open` takes
        * `peer` as a required argument ahead of the signal and reads `peer.signal`
        * before `$events` can open (`dsh-api-gateway/lib/index.js:752,1493`). That is

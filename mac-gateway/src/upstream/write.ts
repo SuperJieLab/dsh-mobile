@@ -25,6 +25,7 @@ import {
   ReplayTable,
   outcomeOfDecision,
   type ApprovalAnswerMessage,
+  type ApprovalOutcome,
   type SessionPromptMessage,
 } from '../contract/write-channel.ts'
 
@@ -66,7 +67,7 @@ export class ApprovalRelay {
   readonly #gateway: RemoteEventGatewayLike
   readonly #broadcaster: BroadcasterLike
   readonly #pending = new Map<string, HeldRequest>()
-  readonly #replay = new ReplayTable<'delivered' | 'unknown-approval'>()
+  readonly #replay = new ReplayTable<ApprovalOutcome>()
   #clientId: string | undefined
   #abort: AbortController | undefined
   #lifetime: AbortSignal | undefined
@@ -171,12 +172,12 @@ export class ApprovalRelay {
    * 线路侧：通过网关的结果门交付一个应答；重试的 `answerId` 重放首个结果（W1），
    * 未指向已暂存问题的一律拒绝（W2）。
    */
-  async answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval' | 'undelivered'> {
+  async answerApproval(answer: ApprovalAnswerMessage): Promise<ApprovalOutcome> {
     return this.#replay.remember(answer.answerId, () => this.deliver(answer)).value
   }
 
   /** 实际的一次性交付。运行在 `ReplayTable.remember` 内部。 */
-  private async deliver(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval' | 'undelivered'> {
+  private async deliver(answer: ApprovalAnswerMessage): Promise<ApprovalOutcome> {
     if (this.#clientId === undefined || !this.#pending.has(answer.eventId)) {
       log.info(`answer for ${answer.eventId}: no held question — unknown-approval`)
       return 'unknown-approval'

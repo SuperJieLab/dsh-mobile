@@ -58,11 +58,10 @@ export interface StreamOpening {
  * 调用宿主的一个成员 —— 按形参名摆实参，并**带着它的接收者**。
  *
  * `receiver` 不是可有可无的一半：宿主的成员大多是**实例方法**，取出引用就与实例脱钩，
- * `this` 在方法体里成了 `undefined`，第一处 `this.xxx` 当场读出
- * `Cannot read properties of undefined`。真机 2026-10-15 的现场正是如此 —— `dispatchRpc`
- * 的第一句 `this.remoteEventClients.get(...)`，于是**手机的每一条应答都进不去上游**，
- * 而它看起来还「成功」（R11）。箭头函数字段（如 `wireStream.open`）不受影响，但没有任何
- * 理由省掉接收者。
+ * `this` 在方法体里成了 `undefined`，读到自己的字段时当场抛 `Cannot read properties of
+ * undefined`（`dsh-api-gateway/lib/index.js:967` 的 `this.remoteEventClients`）—— 真机
+ * 2026-10-15 的现场正是如此：**手机的每一条应答都进不去上游**，而它看起来还「成功」（R11）。
+ * 箭头函数字段（如 `wireStream.open`）不受影响，但没有任何理由省掉接收者。
  */
 export function callThrough<T>(
   callee: (...args: unknown[]) => T,
@@ -112,5 +111,8 @@ export function parameterNamesOf(opener: (...args: unknown[]) => unknown): strin
  */
 function positionalArguments(arity: number, values: Record<string, unknown>): unknown[] {
   if (arity >= 5) return [values.endpoint, values.payload, values.uplink, values.peer, values.signal]
+  // 4 参是**应答门**（`dispatchRpc(endpoint, payload, signal, peer)`，dsh-api-gateway/lib/index.js:961）。
+  // 少了这一档，兜底会把 peer 整段丢掉 —— 而 peer 恰恰是它必需的那个实参（审查发现，R11）。
+  if (arity === 4) return [values.endpoint, values.payload, values.signal, values.peer]
   return [values.endpoint, values.payload, values.signal]
 }

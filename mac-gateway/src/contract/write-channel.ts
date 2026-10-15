@@ -60,6 +60,13 @@ export function sessionPromptOf(message: Record<string, unknown>): SessionPrompt
   return { sessionId, text, promptId }
 }
 
+/**
+ * 一条 approval 应答的三个结局，见 {@link WritePort.answerApproval}。
+ * 具名是为了**只此一处定义** —— 这组字面量此前被手抄在四处，其中 `ReplayTable` 那处漏了
+ * `undelivered`（精简审计发现，R11）：重复本身会漂。
+ */
+export type ApprovalOutcome = 'delivered' | 'unknown-approval' | 'undelivered'
+
 /** 两条写 op 所依赖的数据源 —— 写契约的唯一依赖。 */
 export interface WritePort {
   /**
@@ -70,7 +77,7 @@ export interface WritePort {
    * 拒了这条回答**（身份、准入或形状不合适）—— 此时问题仍挂在上游等着，客户端该看到
    * 一个失败而不是 `ok`。
    */
-  answerApproval(answer: ApprovalAnswerMessage): Promise<'delivered' | 'unknown-approval' | 'undelivered'>
+  answerApproval(answer: ApprovalAnswerMessage): Promise<ApprovalOutcome>
   /**
    * 把一条 prompt 收进会话的 agent 收件箱；会话不存在时报告之。
    * 其余上游失败归调用方的 `internal-error`。

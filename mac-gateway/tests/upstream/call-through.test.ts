@@ -163,10 +163,10 @@ test('call: a parameter added ahead of the signal does not displace it, and the 
 // -- R11, second cut: the host's members are *methods* ------------------------
 
 /**
- * The runtime's `dispatchRpc` is a class method whose body starts by reading a field off
- * `this` (`this.remoteEventClients.get(...)`, dsh-api-gateway/lib/index.js:967). Pulling it
- * out of the instance and calling it as a bare function loses `this`, and the failure is the
- * one the phone hit on the real machine: `Cannot read properties of undefined
+ * The runtime's `dispatchRpc` is a class method whose body reads a field off `this`
+ * (`this.remoteEventClients.get(...)`, dsh-api-gateway/lib/index.js:967). Pulling it out of
+ * the instance and calling it as a bare function loses `this`, and the failure is the one the
+ * phone hit on the real machine: `Cannot read properties of undefined
  * (reading 'remoteEventClients')`. `wireStream.open` escaped this because it is an arrow
  * function *field* — lexically bound, indifferent to how it is called.
  */
@@ -178,6 +178,23 @@ class HostLike {
     return { ok: true, value: this.remoteEventClients.get('c1') }
   }
 }
+
+test('call: an unreadable four-parameter answering door still gets its Peer', async () => {
+  const seen: unknown[] = []
+  // 应答门同样是方法，也可能被包成 native —— 那时按名填失效，只剩 arity 兜底，
+  // 而 peer 在最后一槽：兜底漏掉它就等于把「应答进不去」重新演一遍（审查发现，R11）。
+  const target = async (_endpoint: unknown, _payload: unknown, signal: unknown, peer: unknown) => {
+    seen.push(signal, peer)
+    AbortSignal.any([signal as AbortSignal, AbortSignal.timeout(10_000)])
+  }
+  const signal = new AbortController().signal
+  const peer = peerScope()
+
+  await callThrough(target.bind(null), { endpoint: '$events/result', payload: { args: {} }, signal, peer })
+
+  assert.equal(seen[0], signal)
+  assert.equal(seen[1], peer, 'the answering door must not lose its Peer when its names are unreadable')
+})
 
 test('call: a host method reaches its own state when the receiver comes along', async () => {
   const host = new HostLike()

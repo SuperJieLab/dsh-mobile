@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { mock, test } from 'node:test'
 import { gatewayOver, peerShapeProblem } from '../../src/upstream/faces.ts'
 import type { PeerScopeLike } from '../../src/upstream/call-through.ts'
 
@@ -44,8 +44,8 @@ function fakeContext(options: { peer?: unknown; withoutCreatePeer?: boolean; unr
    * `Symbol.for('cordis.original')` when the host wraps it) and calls its members with it as
    * the receiver. The two members do *not* share a shape — `wireStream.open` is an
    * arrow-function **field** (`dsh-api-gateway/lib/index.js:752`), indifferent to how it is
-   * called; `dispatchRpc` is a class **method** reading `this.remoteEventClients` first
-   * (same file, `:963`).
+   * called; `dispatchRpc` is a class **method** reading `this.remoteEventClients`
+   * (same file, `:967`).
    */
   const ctx = {
     connection,
@@ -77,6 +77,46 @@ function fakeContext(options: { peer?: unknown; withoutCreatePeer?: boolean; unr
 }
 
 const SIGNAL = AbortSignal.timeout(60_000)
+
+/** Run `body` with the warn/error channel captured; returns what it received (log.ts: only
+ * warn/error go to stderr, info/debug to stdout — so this is exactly the advisory channel). */
+async function captureRefusals(body: () => Promise<void> | void): Promise<string[]> {
+  const captured: string[] = []
+  const spy = mock.method(console, 'error', (...parts: unknown[]) => { captured.push(parts.map(String).join(' ')) })
+  try {
+    await body()
+  } finally {
+    spy.mock.restore()
+  }
+  return captured
+}
+
+test('assembly: a complete host assembles without a single warning', async () => {
+  // spec 2.2.3「依赖面都齐时，启动不新增告警」—— 这一半此前没有断言（审查发现，R11）。
+  const { ctx } = fakeContext()
+
+  const captured = await captureRefusals(async () => {
+    const gateway = gatewayOver(ctx as never)
+    await gateway.openWireStream('$events', { args: {} }, SIGNAL)
+  })
+
+  assert.deepEqual(captured, [], 'a host whose members are all readable must not produce warnings')
+})
+
+test('assembly: an unreadable parameter list warns exactly once and still assembles', async () => {
+  // 另一半：native 包装不是故障（不得拒绝装配），但必须留下一条 warn —— 按名填已失效、
+  // 该成员退到按位置。两半合起来才是 U5。
+  const { ctx, opens } = fakeContext({ unreadableOpener: true })
+
+  const captured = await captureRefusals(async () => {
+    const gateway = gatewayOver(ctx as never)
+    await gateway.openWireStream('$events', { args: {} }, SIGNAL)
+  })
+
+  assert.equal(captured.length, 1, 'exactly one warning — the one that says positional fallback is in play')
+  assert.match(captured[0]!, /declares/)
+  assert.equal(opens.length, 1, 'a warning is not a refusal: the connection still opens')
+})
 
 test('assembly: the opener and the answering door speak for one and the same Peer', async () => {
   // No fixed Peer: every `createPeer` call mints a fresh one, so this test fails the
