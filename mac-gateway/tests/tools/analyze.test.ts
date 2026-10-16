@@ -133,6 +133,22 @@ test('H6: 指认随数据变 —— 换一批产物结论跟着换', () => {
   assert.equal(second.segment, 't3')
 })
 
+test('H5: 旧产物（整数毫秒）与新产物（亚毫秒）同吃 —— 只做减法不依赖分辨力', () => {
+  // 与第一条同样的段长，但全部时刻为整数毫秒（R8-B001 时代的产物形状）。
+  const records: PerfLike[] = []
+  for (let i = 0; i < 10; i += 1) {
+    const evTime = 1_000 + i * 100
+    const gwRecv = evTime + 10
+    const gwSend = gwRecv + 2
+    records.push(gw(i, evTime, gwRecv, gwSend), dev(i, gwSend + 5, gwSend + 6))
+  }
+  const dist = analyzeRecords(records)
+  assert.ok(dist !== undefined)
+  assert.equal(dist.t2.clean.p95, 2)
+  assert.equal(dist.t3.clean.p50, 5)
+  assert.equal(dist.e2e.clean.p50, 18)
+})
+
 // MARK: - 曲线点（Task 6：两条曲线的原料）
 
 test('曲线点：跟随延迟取事件 e2e 的排停顿分布，追平延迟取 opening 的端到端', () => {

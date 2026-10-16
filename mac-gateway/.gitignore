@@ -1,3 +1,2 @@
 # 压测产物（单文件数 MB，扫参一次 10+ 份）—— 现场数据，不进仓库；结论在 dev/features/R8-e2e-latency-bench/ 的 curves.md 与 budget.md
 tools/bench/artifacts/
-.sweep-out.txt

@@ -45,6 +45,8 @@ export interface RunArtifact {
   }
   records: Record<string, unknown>[]
   verdict: { valid: boolean; reasons: string[] }
+  /** 生成器落后量（决定 2 的旁证）随产物走 —— 曲线点的有效性判定②要用它。 */
+  lag: { samples: number; maxMs: number; lastMs: number }
 }
 
 /** 一次场景运行：起网关（假上游）→ 跑固定秒数 → 落产物。 */
@@ -94,8 +96,12 @@ export async function runBenchScenario(options: RunOptions): Promise<RunArtifact
     reasons.push(`generator lag max ${Math.round(lag.maxMs)} ms > ${lagLimitMs} ms`)
   }
   const gens = new Set(devRecords.map(record => record.gen))
-  if (gens.size > 1 || client.lastError() !== undefined) {
-    reasons.push(`connection unsettled: gens=${[...gens].join(',')}, error=${JSON.stringify(client.lastError())}`)
+  if (gens.size > 1 || client.lastError() !== undefined || client.connectionBroke() !== undefined) {
+    reasons.push(
+      `connection unsettled: gens=${[...gens].join(',')}`
+        + `, error=${JSON.stringify(client.lastError())}`
+        + `, socket=${client.connectionBroke() ?? 'ok'}`,
+    )
   }
 
   const artifact: RunArtifact = {
@@ -110,6 +116,7 @@ export async function runBenchScenario(options: RunOptions): Promise<RunArtifact
     },
     records: [...gatewayRecords, ...devRecords],
     verdict: { valid: reasons.length === 0, reasons },
+    lag: { samples: lag.samples, maxMs: lag.maxMs, lastMs: lag.lastMs },
   }
 
   mkdirSync(options.outDir, { recursive: true })

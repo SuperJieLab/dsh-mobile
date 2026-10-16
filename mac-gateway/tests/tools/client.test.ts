@@ -52,7 +52,7 @@ test('H3: 真 WS 打开 + 事件流 → dev 记录齐全且与 gw 记录同 seq 
   assert.equal(openings[0].seg, 'dev')
   assert.equal(openings[0].sessionId, 's1')
   assert.equal(openings[0].gen, 1, 'the connection generation rides the record')
-  assert.equal(openings[0].seq, 3, 'the opening records the gateway\'s exclusive cursor as its seq')
+  assert.equal(openings[0].seq, 3, 'the opening records the gateway\'s exclusive cursor as its seq (backlog 3 → cursor 3)')
   assert.ok(openings[0].bytes > 0, 'the opening frame really arrived over the wire')
   assert.ok(openings[0].devRecv <= openings[0].devApply, 'apply happens after recv')
 

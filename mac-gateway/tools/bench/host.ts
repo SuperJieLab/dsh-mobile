@@ -138,7 +138,8 @@ export async function installBench(
   }
 
   const cleanups: (() => void)[] = []
-  const credentialsPath = join(mkdtempSync(join(tmpdir(), 'mac-gateway-bench-')), 'credentials.json')
+  const credentialsDir = mkdtempSync(join(tmpdir(), 'mac-gateway-bench-'))
+  const credentialsPath = join(credentialsDir, 'credentials.json')
 
   let lastError: unknown
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -157,7 +158,7 @@ export async function installBench(
         teardown: () => {
           for (const cleanup of [...cleanups].reverse()) cleanup()
           cleanups.length = 0
-          rmSync(credentialsPath, { force: true })
+          rmSync(credentialsDir, { recursive: true, force: true })
         },
       }
     }
@@ -166,6 +167,8 @@ export async function installBench(
     for (const cleanup of [...cleanups].reverse()) cleanup()
     cleanups.length = 0
   }
+  // 全部尝试失败：临时目录不留残留（收口审查 Minor 4）。
+  rmSync(credentialsDir, { recursive: true, force: true })
   throw lastError
 }
 

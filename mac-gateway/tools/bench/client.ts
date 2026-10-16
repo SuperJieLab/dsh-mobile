@@ -57,6 +57,10 @@ export class BenchClient {
   /** fold 等价物：实时事件逐条进镜像（opening 的窗口计入 opening 记录，不进这里）。 */
   private readonly mirror = new Map<number, unknown>()
   private error: { code: string; message: string } | undefined
+  /** 连接层故障（区别于 error 帧）—— 中途断流要进 verdict，不能崩进程。 */
+  private socketFailure: string | undefined
+  /** 连接是否还开着（判据③「连接存活覆盖整个 run 窗口」的脚本侧形态）。 */
+  private closedEarly = false
   private socket: WebSocket | undefined
   private gen = 0
   private waiters: Waiter[] = []
@@ -72,12 +76,17 @@ export class BenchClient {
     const url = `ws://${this.options.host}:${this.options.port}/rpc/stream`
     const socket = new WebSocket(url, { headers: { authorization: `Bearer ${access}` } })
     this.socket = socket
+    const upgradeTimeout = setTimeout(() => reject(new Error('bench client upgrade timed out')), 5_000)
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true })
       socket.addEventListener('error', () => reject(new Error('bench client upgrade failed')), { once: true })
-      setTimeout(() => reject(new Error('bench client upgrade timed out')), 5_000)
     })
+    clearTimeout(upgradeTimeout)
     this.gen += 1
+    // 持久的连接层监听：中途断流/报错记下来进 verdict（收口审查 Major 3）——
+    // 没有它，error 事件是未处理异常，压测进程当场崩而不是落进产物。
+    socket.addEventListener('error', () => { this.socketFailure = 'socket error' })
+    socket.addEventListener('close', () => { this.closedEarly = true })
     socket.addEventListener('message', event => this.onMessage(String((event as { data: unknown }).data)))
     socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: this.options.sessionId } }))
   }
@@ -105,6 +114,14 @@ export class BenchClient {
 
   lastError(): { code: string; message: string } | undefined {
     return this.error
+  }
+
+  /** 连接层是否中途出过故障（socket error / 提前关闭）—— verdict 判定③用。
+   * 主动 `close()` 之后的关闭是自己走的，不算。 */
+  connectionBroke(): string | undefined {
+    if (this.closed) return this.socketFailure
+    if (this.socketFailure !== undefined) return this.socketFailure
+    return this.closedEarly ? 'socket closed before the run ended' : undefined
   }
 
   /** 取消流并关闭连接（留出 close 传播的时间）。 */

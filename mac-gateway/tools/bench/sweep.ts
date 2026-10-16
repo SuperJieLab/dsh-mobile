@@ -12,7 +12,7 @@
  * 每点带负载条件、样本数与有效/无效判定（决定 6：无效点标注而不丢弃），
  * 并附该点的瓶颈段指认（决定 7：排停顿后的分段 p95 最大者）。
  */
-import { runBenchScenario } from './run.ts'
+import { runBenchScenario, type RunArtifact } from './run.ts'
 import { analyzeRecords, attributeBottleneck, curvePoint, type CurvePoint } from './analyze.ts'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -69,15 +69,26 @@ async function main(): Promise<void> {
   mkdirSync(outDir, { recursive: true })
   const rows: PointRow[] = []
 
+  /** 一个产物 → 曲线点行（sweep 两处共用，收口审查 Minor 13）。 */
+  const pointOf = (artifact: RunArtifact): { point: CurvePoint; attribution: string } => {
+    const point = curvePoint(
+      { condition: artifact.condition, records: artifact.records, lagMaxMs: artifact.lag?.maxMs },
+      { lagLimitMs: 500 },
+    )
+    const dist = analyzeRecords(artifact.records)
+    const attribution = dist === undefined
+      ? '无可对账事件'
+      : (() => {
+          const b = attributeBottleneck(dist, artifact.records)
+          return `${b.segment} p95 ${b.p95.toFixed(1)} ms${b.secondary === undefined ? '' : `（次级 ${b.secondary.field}=${b.secondary.value.toFixed(1)}）`}`
+        })()
+    return { point, attribution }
+  }
+
   console.log('[sweep] curve 1: follow latency vs event rate')
   for (const { rate, seconds } of RATE_SWEEP) {
     const artifact = await runBenchScenario({ eventRate: rate, payloadShape: 'small', backlogSeq: 0, seconds, outDir })
-    const point = curvePoint(artifact, { seconds })
-    const dist = analyzeRecords(artifact.records)
-    const attribution = dist === undefined ? '无可对账事件' : (() => {
-      const b = attributeBottleneck(dist, artifact.records)
-      return `${b.segment} p95 ${b.p95.toFixed(1)} ms${b.secondary === undefined ? '' : `（次级 ${b.secondary.field}=${b.secondary.value.toFixed(1)}）`}`
-    })()
+    const { point, attribution } = pointOf(artifact)
     rows.push({ label: `rate=${rate}`, point, attribution })
     console.log(`[sweep] rate=${rate}: ${fmtStats(point)} ｜ 瓶颈 ${attribution}`)
   }
@@ -85,12 +96,7 @@ async function main(): Promise<void> {
   console.log('[sweep] curve 2: catch-up latency vs backlog')
   for (const { backlog, seconds } of BACKLOG_SWEEP) {
     const artifact = await runBenchScenario({ eventRate: 50, payloadShape: 'small', backlogSeq: backlog, seconds, outDir })
-    const point = curvePoint(artifact, { seconds })
-    const dist = analyzeRecords(artifact.records)
-    const attribution = dist === undefined ? '无可对账事件' : (() => {
-      const b = attributeBottleneck(dist, artifact.records)
-      return `${b.segment} p95 ${b.p95.toFixed(1)} ms${b.secondary === undefined ? '' : `（次级 ${b.secondary.field}=${b.secondary.value.toFixed(1)}）`}`
-    })()
+    const { point, attribution } = pointOf(artifact)
     rows.push({ label: `backlog=${backlog}`, point, attribution })
     console.log(`[sweep] backlog=${backlog}: ${fmtStats(point)} ｜ 瓶颈 ${attribution}`)
   }
