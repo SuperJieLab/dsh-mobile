@@ -12,7 +12,16 @@
  * `setPerfSink` 是测试后门：只有测试会替换行的去向。
  */
 
-import { monitorEventLoopDelay } from 'node:perf_hooks'
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
+
+/**
+ * 亚毫秒 epoch 时刻（R8 期2 精度加精）：`Date.now()` 只有整数毫秒，而 t2 段
+ * （`gwRecv` → `gwSend`）正是瓶颈指认要看的段 —— R8-B001 实测它恒为 0，
+ * 1 ms 的分辨力看不见它。字段名与语义不变，只换取时刻的钟。
+ */
+export function perfNow(): number {
+  return performance.timeOrigin + performance.now()
+}
 
 /** 记录来自哪一端 —— 契约的四个 seg 值。 */
 export type PerfSeg = 'gw' | 'dev' | 'res' | 'clock'

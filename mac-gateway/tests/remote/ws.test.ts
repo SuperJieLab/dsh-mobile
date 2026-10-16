@@ -473,6 +473,10 @@ test('pump: one perf record per forwarded frame — opening and events alike', {
     assert.equal(typeof record.bytes, 'number')
     assert.ok((record.bytes as number) > 0, 'the frame really was serialised')
     assert.ok((record.gwRecv as number) <= (record.gwSend as number), 'same-machine boundaries do not invert')
+    // R8 期2 U2：t2 段（gwRecv → gwSend）是瓶颈指认的依据，1 ms 的整数分辨力
+    // 让它恒为 0 —— 两端必须是亚毫秒值。
+    assert.ok(!Number.isInteger(record.gwRecv as number), 'gwRecv carries sub-ms precision')
+    assert.ok(!Number.isInteger(record.gwSend as number), 'gwSend carries sub-ms precision')
   }
 
   // The window replay crosses the same send boundary and is the largest single

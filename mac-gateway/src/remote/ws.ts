@@ -35,7 +35,7 @@ import {
   encodeTextFrame,
   handshakeResponse,
 } from '../contract/ws-frames.ts'
-import { createLogger, LogModule, perfRecord } from '../log.ts'
+import { createLogger, LogModule, perfNow, perfRecord } from '../log.ts'
 
 const log = createLogger(LogModule.ws)
 
@@ -527,7 +527,8 @@ async function pump(
     for await (const frame of iterable) {
       if (signal.aborted) return
       // R8 期1：t1 段终点 —— 上游帧到达网关的时刻（与 harness 同机同时钟）。
-      const gwRecv = Date.now()
+      // R8 期2：取亚毫秒（perfNow），t2 的分辨力不再止于 1 ms。
+      const gwRecv = perfNow()
 
       if (frame.type === 'snapshot') {
         // 窗口已由源自身的分页切好 —— 与 `page` 建模所依据的是同一条
@@ -572,7 +573,7 @@ async function pump(
             events: events.length,
             rejected: 'window-too-large',
             gwRecv,
-          }, Date.now(), frameBytesAt(0)))
+          }, perfNow(), frameBytesAt(0)))
           send(socket, {
             type: 'error',
             streamId,
@@ -672,7 +673,7 @@ function send(socket: Duplex, frame: MuxServerFrame, perf?: PerfContext): void {
   if (perf !== undefined) {
     // t2 段终点 = 写出时刻。t 与 gwSend 同值有意重复一次：消费方不必记
     // 「t 对 gw 记录意味着什么」这个约定。
-    const gwSend = Date.now()
+    const gwSend = perfNow()
     perfRecord(LogModule.ws, gwRecord(perf, gwSend, frameBytes.length))
   }
   write(socket, frameBytes)

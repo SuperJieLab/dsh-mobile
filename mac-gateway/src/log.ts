@@ -32,6 +32,7 @@ export function createLogger(module: string): Logger {
 export {
   perfEnabled,
   perfLine,
+  perfNow,
   perfRecord,
   resourceRecord,
   setPerfSink,
