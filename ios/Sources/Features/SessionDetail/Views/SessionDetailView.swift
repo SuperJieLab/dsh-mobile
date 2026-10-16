@@ -175,6 +175,25 @@ struct SessionDetailView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
 
+                    // 「内容没能接上 / 已被清空重来」的告知（R10 期2 链路 C）。它挂在**不随内容
+                    // 滚动**的底栏里 —— 同步状态行那句在 List 的 footer（跟着内容一起滚），用户
+                    // 往回翻时正好看不见，而那正是最需要看见的时候。非模态、不需用户点掉，
+                    // 一直显示到重新建立（判定在 `SessionSync`，这里只画）。
+                    if let notice = sync.notice {
+                        Label {
+                            Text(notice.line)
+                        } icon: {
+                            Image(systemName: notice.kind == .reset
+                                  ? "arrow.counterclockwise.circle"
+                                  : "exclamationmark.triangle")
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(notice.kind == .reset ? Color.red : Color.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 4)
+                    }
+
                     // 连接态指示器：跟随流断开时如实说「已断开」，旧内容照常可读。
                     ConnectionBadge(state: ConnectionBadge.Status(followPhase: sync.connectionPhase),
                                     meshPath: store.meshPath.map(ConnectionBadge.MeshPath.init))
