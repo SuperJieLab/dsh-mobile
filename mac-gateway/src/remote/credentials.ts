@@ -28,7 +28,7 @@ import {
   PAIRING_TTL_MS,
   sha256Hex,
   type StoredCredentials,
-} from '../contract/auth.ts'
+} from '../protocol/auth.ts'
 
 /** 无特别指定时凭据文件的所在。 */
 export const DEFAULT_CREDENTIALS_PATH = join(homedir(), '.dsh', 'dsh-mobile', 'credentials.json')

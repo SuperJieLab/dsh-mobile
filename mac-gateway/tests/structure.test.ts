@@ -152,8 +152,8 @@ export function resolutionOf(
 /**
  * 一个文件的 import 里，**跨出 `directory`** 的那些（纯函数，样本可直接钉住它）。
  *
- * 「跨出」按**解析后的路径**判，不按字符串前缀：`'../wire/../../contract/x.ts'`
- * 前缀像 `../wire/`，实际落在 `contract/`。裸包名一律算跨出 —— 底座目录不该引
+ * 「跨出」按**解析后的路径**判，不按字符串前缀：`'../wire/../../protocol/x.ts'`
+ * 前缀像 `../wire/`，实际落在 `protocol/`。裸包名一律算跨出 —— 底座目录不该引
  * 任何第三方包。
  */
 export function escapedFrom(
@@ -335,20 +335,20 @@ test('the escaping-import judge tells same-directory, wire, and outside apart', 
   const file = join(wire, 'mux.ts')
   // 前提：这条样本用真文件（`resolutionOf` 会查文件系统）。文件被挪走时，先在这里说清，
   // 而不是让读者对着 `cannot resolve` 猜是判据坏了还是源码变了。
-  requireFiles([file, join(wire, 'rpc.ts'), join(SRC, 'contract', 'rpc.ts')])
+  requireFiles([file, join(wire, 'rpc.ts'), join(SRC, 'protocol', 'rpc.ts')])
   // 同目录：不算跨出
   assert.deepEqual(escapedFrom(file, ['./rpc.ts'], wire), [], 'same-directory import is not escaping')
   // Node 内建：两种写法都不算（裸写 `fs` 也算内建 —— 否则会假红）
   assert.deepEqual(escapedFrom(file, ['node:fs', 'fs'], wire), [], 'node builtins are allowed, bare or prefixed')
   // 跨目录：按解析后的路径判
   assert.deepEqual(
-    escapedFrom(file, ['../contract/rpc.ts'], wire).map(e => e.specifier),
-    ['../contract/rpc.ts'],
+    escapedFrom(file, ['../protocol/rpc.ts'], wire).map(e => e.specifier),
+    ['../protocol/rpc.ts'],
     'a sibling directory is escaping',
   )
   assert.deepEqual(
-    escapedFrom(file, ['../wire/../contract/rpc.ts'], wire).map(e => e.specifier),
-    ['../wire/../contract/rpc.ts'],
+    escapedFrom(file, ['../wire/../protocol/rpc.ts'], wire).map(e => e.specifier),
+    ['../wire/../protocol/rpc.ts'],
     'a path that merely *starts* with ../wire/ still escapes — judged by target, not by prefix',
   )
   // 裸包名：底座目录不该引第三方包
@@ -373,16 +373,16 @@ test('the directory-level judge reports across files and honours the directory i
   assert.ok(units.some(u => u.specifiers.length > 0), 'and it must actually read their imports')
 
   // 样本用内存文件视图，不依赖源码树此刻长什么样。
-  const files = new Set([join(wire, 'a.ts'), join(wire, 'b.ts'), join(wire, 'c.ts'), join(wire, 'd.ts'), join(SRC, 'contract', 'rpc.ts')])
+  const files = new Set([join(wire, 'a.ts'), join(wire, 'b.ts'), join(wire, 'c.ts'), join(wire, 'd.ts'), join(SRC, 'protocol', 'rpc.ts')])
   const exists = (path: string): boolean => files.has(path)
   const escaped = escapedAmong([
     { file: join(wire, 'a.ts'), specifiers: ['./b.ts'] },
-    { file: join(wire, 'c.ts'), specifiers: ['../contract/rpc.ts'] },
+    { file: join(wire, 'c.ts'), specifiers: ['../protocol/rpc.ts'] },
     { file: join(wire, 'd.ts'), specifiers: ['node:fs', 'zod'] },
   ], wire, exists)
   assert.deepEqual(
     escaped.map(e => `${e.file.endsWith('c.ts') ? 'c' : e.file.endsWith('d.ts') ? 'd' : 'a'} ${e.specifier}`),
-    ['c ../contract/rpc.ts', 'd zod'],
+    ['c ../protocol/rpc.ts', 'd zod'],
     'only the escaping ones are reported, with files identified',
   )
 })
@@ -401,13 +401,13 @@ test('the file reader descends into subdirectories', () => {
 
 test('the two directory entries actually report on a directory that has something to report', () => {
   // 零命中型判据的死穴：入口失效与判据通过长得一样。所以入口本身要在**真目录**上
-  // 证一次活性 —— 那批判据是「wire 不许跨出去」，这里反过来用「contract 确实跨出去」
+  // 证一次活性 —— 那批判据是「wire 不许跨出去」，这里反过来用「protocol 确实跨出去」
   // 证明扫描器还看得见东西。少了这一条，把 `outgoingImports` 改成恒返回空数组，
   // V1/V2/V3 会一起变绿而没人发现。
-  const contracts = outgoingImports(join(SRC, 'contract'))
-  assert.ok(contracts.length > 0,
-    'contract/ imports wire/ and ports/, so the escaping judge must report something — an empty answer here means the judge is blind')
-  assert.ok(contracts.some(e => e.target?.includes(`${sep}wire${sep}`)),
+  const fromProtocol = outgoingImports(join(SRC, 'protocol'))
+  assert.ok(fromProtocol.length > 0,
+    'protocol/ imports wire/ and ports/, so the escaping judge must report something — an empty answer here means the judge is blind')
+  assert.ok(fromProtocol.some(e => e.target?.includes(`${sep}wire${sep}`)),
     'and the reported targets must point where the imports actually go')
 
   // 环检测的入口同理：wire/ 内部有多条边，扫出空图就是失明。
@@ -419,9 +419,9 @@ test('the two directory entries actually report on a directory that has somethin
 
 test('the graph keeps only intra-directory edges, and resolves lazy specifiers', () => {
   const wire = join(SRC, 'wire')
-  const files = new Set([join(wire, 'a.ts'), join(wire, 'b.ts'), join(wire, 'c.ts'), join(SRC, 'contract', 'rpc.ts')])
+  const files = new Set([join(wire, 'a.ts'), join(wire, 'b.ts'), join(wire, 'c.ts'), join(SRC, 'protocol', 'rpc.ts')])
   const graph = graphAmong([
-    { file: join(wire, 'a.ts'), specifiers: ['./b.ts', '../contract/rpc.ts', 'node:fs'] },
+    { file: join(wire, 'a.ts'), specifiers: ['./b.ts', '../protocol/rpc.ts', 'node:fs'] },
     { file: join(wire, 'b.ts'), specifiers: ['./a'] },       // 无扩展名也要成为一条边
     { file: join(wire, 'c.ts'), specifiers: [] },
   ], wire, (path: string) => files.has(path))
@@ -474,6 +474,37 @@ test('ports/ only reaches into wire/', () => {
 })
 
 // ---------------------------------------------------------------------------
+// V2b：判定层的依赖面 —— 只经装配边界与共守形状认识世界
+// ---------------------------------------------------------------------------
+
+test('protocol/ only reaches into wire/ and ports/', () => {
+  const allowed = [join(SRC, 'wire'), join(SRC, 'ports')]
+  const escaped = outgoingImports(join(SRC, 'protocol'))
+    .filter(({ target }) => target === undefined || !allowed.some(directory => within(target, directory)))
+  assert.deepEqual(escaped, [],
+    `the protocol layer judges messages; it must not know any transport or host adapter:\n${format(escaped)}`)
+})
+
+/**
+ * 内建模块在跨目录判定里是放行的（`node:crypto` 之类合法），所以 HTTP 那三个要单独挡：
+ * 「判定不认识 HTTP」不会因为它们恰好是内建而自动成立。
+ */
+test('protocol/ does not import an HTTP module', () => {
+  const offenders = unitsUnder(join(SRC, 'protocol'))
+    .flatMap(({ file, specifiers }) => specifiers
+      .filter(specifier => HTTP_MODULES.has(specifier))
+      .map(specifier => `${where(file)} → ${specifier}`))
+  assert.deepEqual(offenders, [],
+    'status codes and request bodies belong to remote/ — a judge that names HTTP is a transport')
+})
+
+/** `node:` 前缀与裸写两种形态都算 —— 与 `isBuiltinModule` 认的一样宽。 */
+const HTTP_MODULES: ReadonlySet<string> = new Set([
+  'node:http', 'node:https', 'node:net', 'node:http2',
+  'http', 'https', 'net', 'http2',
+])
+
+// ---------------------------------------------------------------------------
 // V3：面向宿主的适配层不认识传输层
 // ---------------------------------------------------------------------------
 
@@ -482,6 +513,13 @@ test('upstream/ does not import remote/', () => {
   const escaped = outgoingImports(join(SRC, 'upstream')).filter(({ target }) => target !== undefined && within(target, remote))
   assert.deepEqual(escaped, [],
     `the host adapter must not know the transport — a port it needs belongs in ports/:\n${format(escaped)}`)
+})
+
+test('upstream/ does not import protocol/', () => {
+  const protocol = join(SRC, 'protocol')
+  const escaped = outgoingImports(join(SRC, 'upstream')).filter(({ target }) => target !== undefined && within(target, protocol))
+  assert.deepEqual(escaped, [],
+    `the host adapter meets the judgements only through ports/ — importing protocol/ welds the two layers:\n${format(escaped)}`)
 })
 
 // ---------------------------------------------------------------------------
@@ -756,4 +794,56 @@ test('no source comment points into the workspace docs', () => {
   }
   assert.deepEqual(offenders, [],
     'workspace docs are not published — a comment that only points at them is a dead link to repo readers')
+})
+
+// ---------------------------------------------------------------------------
+// V7：opening 只有一个装配者
+// ---------------------------------------------------------------------------
+
+test('no second opening assembler exists', () => {
+  // 第二个装配器不缺别的，只缺「后来加的那个字段」：它一旦被接线，手机端拿到的基线
+  // 就永远缺席，而测试仍全绿（判据只查窗口几何）。装配这件事只能有一个执行者。
+  const offenders = filesUnder(SRC)
+    .filter(file => /\bfollowOpening\s*\(/.test(stripComments(readFileSync(file, 'utf8'))))
+    .map(where)
+  assert.deepEqual(offenders, [],
+    'opening is assembled in remote/ws.ts only — the second assembler omits fields the wire requires')
+})
+
+// ---------------------------------------------------------------------------
+// V8：判定层搬空后的临时残留（期3 删目录时本条随之删）
+// ---------------------------------------------------------------------------
+
+test('contract/ holds only the framing implementation', () => {
+  const directory = join(SRC, 'contract')
+  const names = filesUnder(directory).map(file => relative(directory, file)).sort()
+  assert.deepEqual(names, ['ws-frames.ts'],
+    'judgements live in protocol/; the RFC framing implementation stays here until phase 3')
+})
+
+// ---------------------------------------------------------------------------
+// V9：判定符号只有一个声明
+// ---------------------------------------------------------------------------
+
+/**
+ * 搬家最容易留下的痕迹不是死代码，是**两边各留一份**：旧文件没删干净、新文件又写了一遍，
+ * 编译通过、测试也过，两处从此各自演进。断言这些符号各只有一个声明处。
+ */
+test('each judgement symbol is declared exactly once', () => {
+  const symbols = ['handle', 'pageWindow', 'upstreamWindow', 'usageSnapshotOf', 'StoredCredentials']
+  const declaredAt = new Map<string, string[]>()
+  for (const file of filesUnder(SRC)) {
+    const code = stripComments(readFileSync(file, 'utf8'))
+    for (const match of code.matchAll(/\bexport\s+(?:async\s+)?(?:interface|type|class|function|const)\s+([A-Za-z_$][\w$]*)/g)) {
+      const name = match[1]
+      if (name === undefined) continue
+      declaredAt.set(name, [...(declaredAt.get(name) ?? []), where(file)])
+    }
+  }
+  const suspicious = symbols.flatMap(name => {
+    const places = declaredAt.get(name) ?? []
+    return places.length === 1 ? [] : [`${name}: ${places.join(', ') || 'no declaration at all'}`]
+  })
+  assert.deepEqual(suspicious, [],
+    'a judgement declared in two places forks silently — one of them will stop being updated')
 })

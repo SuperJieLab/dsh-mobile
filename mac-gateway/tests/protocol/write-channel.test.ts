@@ -7,16 +7,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { handle, type SessionPort } from '../../src/contract/rpc.ts'
-import {
-  ReplayTable,
-  approvalAnswerOf,
-  outcomeOfDecision,
-  sessionPromptOf,
-  type ApprovalAnswerMessage,
-  type SessionPromptMessage,
-  type WritePort,
-} from '../../src/contract/write-channel.ts'
+import { handle } from '../../src/protocol/rpc.ts'
+import type { SessionPort } from '../../src/ports/session.ts'
+import { ReplayTable, outcomeOfDecision } from '../../src/upstream/write.ts'
+import { approvalAnswerOf, sessionPromptOf } from '../../src/wire/write.ts'
+import type { ApprovalAnswerMessage, SessionPromptMessage } from '../../src/wire/write.ts'
+import type { WritePort } from '../../src/ports/write.ts'
 
 // -- helpers -----------------------------------------------------------------
 

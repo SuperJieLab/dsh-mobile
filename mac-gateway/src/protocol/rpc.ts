@@ -13,9 +13,10 @@
  * （M1 §3.3.2 决定 4）。
  */
 
-import { describeError, isUnreadable } from './errors.ts'
-// 形状已搬到 `wire/`（两端共守）。这里 import 再用（文件体自己还要用它们），同时
-// 重导出，让下游的 import 路径不必一次改完 —— 期2 搬算法时统一改成直连。
+import { describeError, isUnreadable } from '../ports/errors.ts'
+import type { SessionPort } from '../ports/session.ts'
+import type { ModelPort } from '../ports/model.ts'
+import type { WritePort } from '../ports/write.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type {
   WireEvent,
@@ -24,27 +25,14 @@ import type {
   ErrorResponse,
   Response,
 } from '../wire/rpc.ts'
-// 只转出下游此刻在用的名字。`WireError` 与 `OkResponse` 只有 `Response` 联合本身要用，
-// 对外没人读 —— 转出去只会让人以为它们是这个文件的出口。
-export { PROTOCOL_VERSION }
-export type { WireEvent, SessionRow, SessionSlice, ErrorResponse, Response }
-import type { ModelPort, ModelSelection } from './model-selection.ts'
-import { modelSelectRequestOf } from './model-selection.ts'
+import { modelSelectRequestOf } from '../wire/model.ts'
+import { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
 import {
   LogNotDenseError,
   CursorPastEndError,
   pageWindow,
   type PageWindow,
 } from './window.ts'
-import {
-  approvalAnswerOf,
-  sessionPromptOf,
-  type WritePort,
-} from './write-channel.ts'
-
-// 端口已搬到装配边界 `ports/session.ts`；这里 import 再用并重导出。
-import type { SessionPort } from '../ports/session.ts'
-export type { SessionPort } from '../ports/session.ts'
 
 /**
  * 一条 `snapshot` 应答可能有多大；只约束单条应答，从不是客户端的视图。

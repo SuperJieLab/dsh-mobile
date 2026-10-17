@@ -7,9 +7,11 @@
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
-import { DEFAULT_LIMITS, handle, PROTOCOL_VERSION, type Limits, type SessionPort } from '../contract/rpc.ts'
-import type { WritePort } from '../contract/write-channel.ts'
-import type { ModelPort } from '../contract/model-selection.ts'
+import { DEFAULT_LIMITS, handle, type Limits } from '../protocol/rpc.ts'
+import { PROTOCOL_VERSION } from '../wire/rpc.ts'
+import type { SessionPort } from '../ports/session.ts'
+import type { WritePort } from '../ports/write.ts'
+import type { ModelPort } from '../ports/model.ts'
 import { CredentialVault } from './credentials.ts'
 import { createLogger, LogModule } from '../log.ts'
 

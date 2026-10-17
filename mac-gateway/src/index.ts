@@ -19,7 +19,8 @@
  * 在 dsh 安装树之外无法解析。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { DEFAULT_LIMITS, type Limits, type SessionPort } from './contract/rpc.ts'
+import { DEFAULT_LIMITS, type Limits } from './protocol/rpc.ts'
+import type { SessionPort } from './ports/session.ts'
 import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/ws.ts'
 import { createRpcListener } from './remote/http.ts'

@@ -7,15 +7,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { handle, type SessionPort } from '../../src/contract/rpc.ts'
-import { modelSelectRequestOf, type ModelPort } from '../../src/contract/model-selection.ts'
+import { handle } from '../../src/protocol/rpc.ts'
+import type { SessionPort } from '../../src/ports/session.ts'
+import { modelSelectRequestOf } from '../../src/wire/model.ts'
+import type { ModelPort } from '../../src/ports/model.ts'
 
 // -- helpers -----------------------------------------------------------------
 
 const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
 
 /** A write port the model tests never expect to be called (write wiring is T3's concern). */
-const fakeWritePort = (): import('../../src/contract/write.ts').WritePort => ({
+const fakeWritePort = (): import('../../src/ports/write.ts').WritePort => ({
   answerApproval: () => Promise.reject(new Error('model tests must not touch the write channel')),
   promptSession: () => Promise.reject(new Error('model tests must not touch the write channel')),
 })

@@ -19,7 +19,7 @@ import { attachStreamHandler, STREAM_PATH } from '../src/remote/ws.ts'
 import type { FollowSource } from '../src/ports/follow.ts'
 import { modelSelectionSourceOver, streamSourceOver } from '../src/upstream/faces.ts'
 import { createSessionPort, type ListRecord, type PersistenceLike } from '../src/upstream/sessions.ts'
-import type { ModelSelection } from '../src/contract/model-selection.ts'
+import type { ModelSelection } from '../src/wire/model.ts'
 
 /** 宿主 `modelSelection` 投影的原样视图：两格都在，`next` 与 `lastUsed` 不同 ——
  * 取错了哪一格，断言会直接看出来。 */

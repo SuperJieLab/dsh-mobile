@@ -22,13 +22,14 @@ import {
   parseClientFrame,
   type FollowOpening,
   type MuxServerFrame,
-} from '../contract/mux.ts'
-import { fitOpeningToBytes, upstreamWindow } from '../contract/window.ts'
-import { DEFAULT_LIMITS, positiveOrDefault } from '../contract/rpc.ts'
-import type { WireEvent } from '../contract/rpc.ts'
-import { describeError, isNotFound, isUnreadable } from '../contract/errors.ts'
-import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
-import type { ModelSelection } from '../contract/model-selection.ts'
+} from '../wire/mux.ts'
+import { fitOpeningToBytes, upstreamWindow } from '../protocol/window.ts'
+import { DEFAULT_LIMITS, positiveOrDefault } from '../protocol/rpc.ts'
+import type { WireEvent } from '../wire/rpc.ts'
+import { describeError, isNotFound, isUnreadable } from '../ports/errors.ts'
+import { usageIsTrigger, usageShouldEmit } from '../protocol/usage.ts'
+import type { UsageSnapshot } from '../wire/usage.ts'
+import type { ModelSelection } from '../wire/model.ts'
 import {
   WsFrameParser,
   acceptKeyOf,

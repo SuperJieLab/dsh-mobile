@@ -17,17 +17,12 @@
  * `promptId` 即请求 id，controller 会去重。
  */
 
-import { describeError, isNotFound } from '../contract/errors.ts'
+import { describeError, isNotFound } from '../ports/errors.ts'
+import type { ApprovalOutcome } from '../ports/write.ts'
+import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.relay)
-import {
-  ReplayTable,
-  outcomeOfDecision,
-  type ApprovalAnswerMessage,
-  type ApprovalOutcome,
-  type SessionPromptMessage,
-} from '../contract/write-channel.ts'
 
 /** 网关 `$events` 线上流的一帧，仅到中继关心的程度。 */
 export type UpstreamWireFrame =
@@ -259,4 +254,28 @@ export async function pumpPrompt(controller: PromptControllerLike, prompt: Sessi
     if (isNotFound(error)) return 'unknown-session'
     throw error
   }
+}
+
+/**
+ * 记住每个幂等键的第一次结果，此后永远重放它：`produce` 每键至多运行一次，
+ * 其副作用因此只发生一次。
+ *
+ * 它是**上游语义的簿记**，不是两端约定：键与结论都来自网关 `$events` 流，
+ * 手机端从来看不见这张表。所以它住宿主适配层，不进 `wire/`、也不进 `protocol/`。
+ */
+export class ReplayTable<V> {
+  readonly #entries = new Map<string, V>()
+
+  remember(key: string, produce: () => V): { value: V; fresh: boolean } {
+    const existing = this.#entries.get(key)
+    if (existing !== undefined) return { value: existing, fresh: false }
+    const value = produce()
+    this.#entries.set(key, value)
+    return { value, fresh: true }
+  }
+}
+
+/** 把客户端的两键词汇映射到上游的结论词汇。 */
+export function outcomeOfDecision(decision: 'allow' | 'deny'): 'allowed-once' | 'rejected' {
+  return decision === 'allow' ? 'allowed-once' : 'rejected'
 }

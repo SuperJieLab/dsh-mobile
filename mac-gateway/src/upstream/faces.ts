@@ -7,9 +7,10 @@
  * 不再多断。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { usageSnapshotOf } from '../contract/usage.ts'
-import type { WritePort } from '../contract/write-channel.ts'
-import type { ModelPort, ModelSelection } from '../contract/model-selection.ts'
+import { usageSnapshotOf } from './usage.ts'
+import type { WritePort } from '../ports/write.ts'
+import type { ModelPort } from '../ports/model.ts'
+import type { ModelSelection } from '../wire/model.ts'
 import { createSessionPort, nextOf, type ListSource, type ModelSelectionSource, type HostModelSelectionView, type PersistenceLike } from './sessions.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'

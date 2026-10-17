@@ -2,12 +2,14 @@
  * Contract tests for the protocol: one wire message in, one wire message out. They
  * are the reason `handle` exists standalone: no server, no runtime, no filesystem,
  * no network — the data source is injected, so the protocol layer decides alone.
- * Run: node --test tests/contract/rpc.test.ts
+ * Run: node --test tests/protocol/rpc.test.ts
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handle, DEFAULT_LIMITS } from '../../src/contract/rpc.ts'
-import type { Limits, SessionPort, SessionRow, WireEvent } from '../../src/contract/rpc.ts'
+import { handle, DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
+import type { Limits } from '../../src/protocol/rpc.ts'
+import type { SessionPort } from '../../src/ports/session.ts'
+import type { SessionRow, WireEvent } from '../../src/wire/rpc.ts'
 
 /** One fake session: the row the list path sees, and the log the read path sees. */
 interface FakeSession {
@@ -588,4 +590,24 @@ test('a slice carrying a model baseline publishes it; a bare slice leaves the fi
   const withoutModel = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, fakePort([{ row: { id: 's-1', createdAt: 1 }, events: [event(0)] }]), CLOCK)
   assert.ok(withoutModel.ok)
   assert.equal('model' in withoutModel, false)
+})
+
+test('page refuses a sparse log and a cursor past the end with distinct codes', async () => {
+  // 两种拒绝，客户端应对不同：越过末端是「重同步」，日志不可解读是「展示不了」。
+  // 合并成一个码会让客户端在一种情况下做错事。
+  const log = mixedLog(10)
+  const pastEnd = await handle(
+    { v: 2, op: 'page', sessionId: 's-1', beforeSeq: 999 },
+    fakePort([{ row: row('s-1', 100), events: log }]),
+    CLOCK,
+  )
+  assert.ok(!pastEnd.ok && pastEnd.error.code === 'resync-required', JSON.stringify(pastEnd))
+
+  const sparse = log.map((item, index) => index === 5 ? { ...item, seq: 99 } : item)
+  const sparseReply = await handle(
+    { v: 2, op: 'page', sessionId: 's-1' },
+    fakePort([{ row: row('s-1', 100), events: sparse }]),
+    CLOCK,
+  )
+  assert.ok(!sparseReply.ok && sparseReply.error.code === 'unreadable-session', JSON.stringify(sparseReply))
 })

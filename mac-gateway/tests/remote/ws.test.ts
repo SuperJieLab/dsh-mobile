@@ -14,7 +14,7 @@ import { once } from 'node:events'
 import { connect as tcpConnect } from 'node:net'
 import { attachStreamHandler, endReasonOf, startHeartbeat, STREAM_PATH, type HeartbeatSocket } from '../../src/remote/ws.ts'
 import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
-import type { WireEvent } from '../../src/contract/rpc.ts'
+import type { WireEvent } from '../../src/wire/rpc.ts'
 import { setPerfSink } from '../../src/log.ts'
 
 /** A follow source replaying scripted frames, optionally lying. */

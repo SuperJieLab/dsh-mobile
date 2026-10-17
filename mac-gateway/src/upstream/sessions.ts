@@ -17,8 +17,9 @@
  * `cwd === undefined` 的会话跳过，参照列表同样隐藏它；其余规则（subagent、
  * 归档、空白）属于客户端，而这一条本身已是头部事实。
  */
-import type { ModelSelection } from '../contract/model-selection.ts'
-import type { SessionPort, SessionRow, SessionSlice, WireEvent } from '../contract/rpc.ts'
+import type { ModelSelection } from '../wire/model.ts'
+import type { SessionPort } from '../ports/session.ts'
+import type { SessionRow, SessionSlice, WireEvent } from '../wire/rpc.ts'
 
 /** 本适配器读取的头部字段。 */
 interface HeaderLike {

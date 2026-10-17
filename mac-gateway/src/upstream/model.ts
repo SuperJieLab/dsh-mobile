@@ -10,8 +10,9 @@
  * 的拷贝正是两个真理的来源。
  */
 
-import { isRemoteError, isNotFound } from '../contract/errors.ts'
-import type { ModelCatalog, ModelPort, ModelSelection, ModelSelectMessage, ModelSelectOutcome } from '../contract/model-selection.ts'
+import { isRemoteError, isNotFound } from '../ports/errors.ts'
+import type { ModelCatalog, ModelSelection, ModelSelectMessage } from '../wire/model.ts'
+import type { ModelPort, ModelSelectOutcome } from '../ports/model.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.model)
