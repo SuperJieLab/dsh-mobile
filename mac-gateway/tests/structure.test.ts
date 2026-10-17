@@ -1046,3 +1046,20 @@ test('the transport is split by lifetime, and the old single file is gone', () =
   assert.deepEqual(names, expected,
     'ws.ts must be gone: one file cannot show three lifetimes')
 })
+
+// ---------------------------------------------------------------------------
+// V11：凭据类 op 的形状有唯一出处
+// ---------------------------------------------------------------------------
+
+test('the credential ops\' shapes are declared only in wire/auth.ts', () => {
+  // 这两条 op 绕过统一入口，形状曾经只写在传输层的函数体里 —— 手机端另有一份
+  // Swift 声明，两边靠人对齐。现在它们与其余 op 一样住在 wire/。
+  const home = join(SRC, 'wire', 'auth.ts')
+  const expected = ['PairRequest', 'RefreshRequest', 'PairResponse', 'RefreshResponse']
+  assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).shapes.sort(), [...expected].sort(),
+    'auth shapes belong in wire/ like every other op — a transport-local declaration is a second source')
+
+  // 它们没有编解码器：解析与校验在别的层（见该文件的头注释），所以函数面必须为空。
+  assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).functions, [],
+    'no codec here — validating a pairing code is a rule, not a shape')
+})

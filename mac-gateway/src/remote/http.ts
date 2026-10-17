@@ -13,6 +13,7 @@ import type { SessionPort } from '../ports/session.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import { CredentialVault } from './credentials.ts'
+import type { PairResponse, RefreshResponse } from '../wire/auth.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.http)
@@ -112,20 +113,23 @@ async function respond(
   response.end(`${JSON.stringify(answer)}\n`)
 }
 
-/** auth 路径共用的拒绝信封（读路径在 `handle` 内自建）。 */
+/** auth 路径共用的拒绝信封（读路径在 `handle` 内自建）。形状与两个回包的 `error` 字段同源。 */
 function refusal(code: string, message: string): { v: number; ok: false; error: { code: string; message: string } } {
   return { v: PROTOCOL_VERSION, ok: false, error: { code, message } }
 }
 
 /**
- * 应答 `pair` / `refresh`。放在闸门旁而非 `handle` 内，让协议契约保持为
- * 纯读协议：凭据来自体内而非头部的消息只有这两条。
+ * 应答 `pair` / `refresh`。放在闸门旁而非 `handle` 内：凭据来自体内而非头部的
+ * 消息只有这两条，而其余 op 都要先过头部那道闸。
+ *
+ * 形状在 `wire/auth.ts`（两端共守）；**校验不在这里也不在那里** —— 它在
+ * `protocol/auth.ts` 的配对规则里，那四种失败原因必须原样传到手机上。
  */
 async function handleAuthOp(
   op: 'pair' | 'refresh',
   message: unknown,
   vault: CredentialVault,
-): Promise<{ status: number; body: unknown }> {
+): Promise<{ status: number; body: PairResponse | RefreshResponse }> {
   const payload = message as { code?: unknown; deviceToken?: unknown }
 
   if (op === 'pair') {
