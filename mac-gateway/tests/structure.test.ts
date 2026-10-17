@@ -1013,3 +1013,42 @@ test('the export index sees the modules it is supposed to see', async () => {
   assert.ok([...walked].some(file => !file.includes('/')), 'no name was indexed from a top-level file (log.ts, perf.ts)')
   assert.equal(values.has('thisNameDoesNotExistAnywhere'), false)
 })
+
+// ---------------------------------------------------------------------------
+// V10：传输层按故障域分三段
+// ---------------------------------------------------------------------------
+
+/**
+ * 传输层的三段各有自己的存活范围：整个进程（连接集合）、一条 socket、一条流。
+ * 拆的时候最容易出的错是**成环** —— 连接要起泵（connection → stream），而泵要写一帧
+ * （stream → connection）。共享的写出口因此单列（`egress.ts`），它不是第四段。
+ */
+test('remote/ has no import cycle', () => {
+  const cycle = firstCycle(importGraph(join(SRC, 'remote')))
+  assert.equal(cycle, undefined,
+    `the three transport lifetimes must not depend on each other in a loop: ${cycle?.map(where).join(' → ')}`)
+})
+
+test('the RFC framing implementation is reached only from the transport', () => {
+  // 成帧跟着它唯一的消费者走：手机端有系统自带的 WebSocket，不用我们这份实现，
+  // 所以它不该再挂在「两端共守」的名下。
+  const frames = join(SRC, 'remote', 'frames.ts')
+  const outsiders = filesUnder(SRC)
+    .filter(file => !within(file, join(SRC, 'remote')))
+    .flatMap(file => importsOf(readFileSync(file, 'utf8'))
+      .filter(specifier => specifier.startsWith('.') && resolutionOf(file, specifier) === frames)
+      .map(specifier => `${where(file)} → ${specifier}`))
+  assert.deepEqual(outsiders, [], 'framing has one consumer: the transport layer')
+})
+
+test('the transport is split by lifetime, and the old single file is gone', () => {
+  const directory = join(SRC, 'remote')
+  const names = filesUnder(directory).map(file => relative(directory, file)).sort()
+  // 三份生命周期各一文件 + 共享出口 + 成帧 + 一元调用 + 凭据保管。
+  const expected = [
+    'connection.ts', 'credentials.ts', 'egress.ts', 'frames.ts',
+    'http.ts', 'server.ts', 'stream.ts',
+  ]
+  assert.deepEqual(names, expected,
+    'ws.ts must be gone: one file cannot show three lifetimes')
+})
