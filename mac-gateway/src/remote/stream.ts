@@ -18,7 +18,8 @@ import {
 import { encodeServerFrame } from '../wire/mux.ts'
 import { fitOpeningToBytes, upstreamWindow } from '../protocol/window.ts'
 import { usageIsTrigger, usageShouldEmit } from '../protocol/usage.ts'
-import { describeError, isNotFound, isUnreadable } from '../ports/errors.ts'
+import { describeError } from '../ports/errors.ts'
+import { streamErrorOf } from '../protocol/error-codes.ts'
 import type { WireEvent } from '../wire/rpc.ts'
 import type { UsageSnapshot } from '../wire/usage.ts'
 import type { ModelSelection } from '../wire/model.ts'
@@ -254,26 +255,9 @@ async function pump(
     send(socket, { type: 'end', streamId })
   } catch (error) {
     if (!signal.aborted) {
-      send(socket, { type: 'error', streamId, payload: mapError(error) })
+      send(socket, { type: 'error', streamId, payload: streamErrorOf(error) })
     }
   } finally {
     done()
   }
-}
-
-/**
- * 把源的失败映射到协议的错误对象，错误码与 HTTP 路径一致：不可解读的日志
- * 是 `unreadable-session`，源不认识的会话是 `unknown-session`，其余是
- * `internal-error`。
- */
-function mapError(error: unknown): { code: string; message: string } {
-  if (isUnreadable(error)) {
-    return { code: 'unreadable-session', message: describeError(error) }
-  }
-  // 本通道所读的一切都按会话寻址，not-found 就是会话的；谓词与写路径
-  // 共享，两者因此不会漂移。
-  if (isNotFound(error)) {
-    return { code: 'unknown-session', message: describeError(error) }
-  }
-  return { code: 'internal-error', message: describeError(error) }
 }

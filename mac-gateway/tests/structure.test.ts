@@ -904,6 +904,11 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   { home: 'protocol/usage.ts', values: ['usageIsTrigger', 'usageShouldEmit'], types: [] },
   {
+    home: 'protocol/error-codes.ts',
+    values: ['streamErrorOf', 'readErrorOf'],
+    types: ['ProtocolRefusal'],
+  },
+  {
     home: 'protocol/auth.ts',
     values: [
       'ACCESS_TTL_MS', 'PAIRING_TTL_MS', 'PAIRING_MAX_ATTEMPTS', 'emptyCredentials', 'sha256Hex',

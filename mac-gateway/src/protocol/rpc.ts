@@ -14,6 +14,7 @@
  */
 
 import { describeError, isUnreadable } from '../ports/errors.ts'
+import { readErrorOf } from './error-codes.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WritePort } from '../ports/write.ts'
@@ -117,10 +118,9 @@ export async function handle(
     }
   } catch (error) {
     // 两种拒绝，客户端应对不同：本运行时不解读的日志是「无法展示的会话」，
-    // 其余是我们的错。
-    return isUnreadable(error)
-      ? failure('unreadable-session', describeError(error))
-      : failure('internal-error', describeError(error))
+    // 其余是我们的错。规则本身在 `./error-codes.ts` —— 与流通道那份并列，不合并。
+    const refusal = readErrorOf(error)
+    return failure(refusal.code, refusal.message)
   }
 }
 
