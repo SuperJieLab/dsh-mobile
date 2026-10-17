@@ -48,7 +48,7 @@ export async function connect(server: Server): Promise<WebSocket> {
  * One event from the client socket. Node's built-in WebSocket is an EventTarget, not
  * an EventEmitter — `events.once` never sees its events, which is a hang, not an error.
  */
-export function socketEvent(socket: WebSocket, type: string): Promise<{ data?: unknown; code?: unknown }> {
+function socketEvent(socket: WebSocket, type: string): Promise<{ data?: unknown; code?: unknown }> {
   return new Promise((resolve, reject) => {
     socket.addEventListener(type, event => {
       resolve(event as { data?: unknown; code?: unknown })
@@ -70,7 +70,7 @@ export async function receive(socket: WebSocket): Promise<Record<string, unknown
  */
 const receivers = new WeakMap<WebSocket, { receive: (timeoutMs?: number) => Promise<Record<string, unknown>> }>()
 
-export function receiverFor(socket: WebSocket): { receive: (timeoutMs?: number) => Promise<Record<string, unknown>> } {
+function receiverFor(socket: WebSocket): { receive: (timeoutMs?: number) => Promise<Record<string, unknown>> } {
   const existing = receivers.get(socket)
   if (existing !== undefined) return existing
 

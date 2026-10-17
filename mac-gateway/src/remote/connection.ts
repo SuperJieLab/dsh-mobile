@@ -86,8 +86,8 @@ export interface Heartbeat {
  * 自己发现链路死掉时关掉这条连接（两端都留着各自的判据）。
  */
 export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['heartbeat'] = {}): Heartbeat {
-  const intervalMs = options?.intervalMs ?? PING_INTERVAL_MS
-  const limit = options?.missedPongLimit ?? MISSED_PONG_LIMIT
+  const intervalMs = options.intervalMs ?? PING_INTERVAL_MS
+  const limit = options.missedPongLimit ?? MISSED_PONG_LIMIT
   let unanswered = 0
   let killed = false
   const timer = setInterval(() => {

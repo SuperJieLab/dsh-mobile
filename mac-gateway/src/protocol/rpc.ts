@@ -13,7 +13,6 @@
  * （M1 §3.3.2 决定 4）。
  */
 
-import { describeError, isUnreadable } from '../ports/errors.ts'
 import { readErrorOf } from './error-codes.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { ModelPort } from '../ports/model.ts'

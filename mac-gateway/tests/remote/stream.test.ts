@@ -537,18 +537,6 @@ test('pump: a refused opening is recorded with its reason', { timeout: 10_000 },
   }
 })
 
-/** A socket the heartbeat alone reads — its write queue can be set from the test. */
-function fakeSocket(writableLength: number) {
-  const socket = {
-    writableLength,
-    destroyed: false,
-    writes: 0,
-    destroy(): void { socket.destroyed = true },
-    write(): void { socket.writes += 1 },
-  }
-  return socket
-}
-
 test('one stream failing leaves the other stream on the same connection alive', { timeout: 10_000 }, async () => {
   // 这是「三条流各有故障域」里最该被验证的一条：同一部手机同时开两个会话时，
   // 一个会话的源坏了，另一个不该跟着断。泵的 catch 只折自己那条，

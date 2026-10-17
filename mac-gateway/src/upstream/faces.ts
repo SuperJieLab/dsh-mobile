@@ -70,7 +70,7 @@ export function listSourceOver(ctx: Context): ListSource {
 const OCCUPANCY_KEYS = ['contextPressure', 'contextBreakdown'] as const
 
 export function streamSourceOver(ctx: Context): FollowSource {
-  // 断言直接点名 `ws.ts` 的形状而非重写一遍：这里的第二份拷贝曾静默过期
+  // 断言直接点名 `ports/follow.ts` 的形状而非重写一遍：这里的第二份拷贝曾静默过期
   // （漏了 `turnWindow`）。
   const controller = ctx.sessionController as unknown as Pick<FollowSource, 'follow'>
   return {

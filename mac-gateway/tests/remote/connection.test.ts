@@ -12,7 +12,7 @@ import { once } from 'node:events'
 import { connect as tcpConnect } from 'node:net'
 import { attachStreamHandler } from '../../src/remote/server.ts'
 import { endReasonOf, startHeartbeat, STREAM_PATH, type HeartbeatSocket } from '../../src/remote/connection.ts'
-import { connect, event, fakeSource, snapshotFrame, send } from './harness.ts'
+import { connect, event, fakeSource, snapshotFrame } from './harness.ts'
 
 test('an unknown upgrade path is declined without speaking WebSocket', { timeout: 10_000 }, async () => {
   const source = fakeSource([])

@@ -850,14 +850,14 @@ test('the retired second opening assembler name does not come back', () => {
     .filter(file => /\bfollowOpening\s*\(/.test(stripComments(readFileSync(file, 'utf8'))))
     .map(where)
   assert.deepEqual(offenders, [],
-    'opening is assembled in remote/ws.ts only — the retired assembler omitted fields the wire requires')
+    'opening is assembled in remote/stream.ts only — the retired assembler omitted fields the wire requires')
 })
 
 test('the retired assembler is not exported under any name binding', async () => {
   // 文本扫描之外再加一条运行时断言：哪怕源码里只是一句文案、或者被重导出改了名，
   // 「有模块交出 followOpening 这个值」都能被抓到 —— 这一半不会被字符串骗过。
   const exported = [...(await valueIndex()).get('followOpening') ?? []]
-  assert.deepEqual(exported, [], 'no module may hand out an opening assembler besides remote/ws.ts internal one')
+  assert.deepEqual(exported, [], 'no module may hand out an opening assembler besides the one inside remote/stream.ts')
 })
 
 // ---------------------------------------------------------------------------
