@@ -3,7 +3,7 @@
  * （`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift`）—— 改字段那边必须同改。
  *
  * 这里**只有形状**。怎么算出这个窗口（对齐轮次边界、上限与拒绝）是服务端的
- * 判定，住在 `contract/window.ts` —— 手机端不重算它，也不该重算。
+ * 判定，住在 `protocol/window.ts` —— 手机端不重算它，也不该重算。
  */
 
 import type { WireEvent } from './rpc.ts'

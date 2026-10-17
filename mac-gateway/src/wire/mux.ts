@@ -8,8 +8,8 @@
  * 无需关联。HTTP 信封的 `{v, op, ok}` 外壳不进流，因为流没有可标 ok 的应答；
  * 版本闸门在 `mux v1` 成帧契约里（"word for word"）。
  *
- * 这里**只有形状与编解码**。「这条打开怎么从整条日志装出来」是服务端的事，
- * 住在 `contract/mux.ts`。
+ * 这里**只有形状与编解码**。「这条打开装哪些事件」是传输层的事，由
+ * `remote/ws.ts` 的 `openingPayload` 从宿主给出的窗口装配。
  */
 
 import type { WireEvent } from './rpc.ts'

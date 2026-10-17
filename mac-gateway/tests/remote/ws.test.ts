@@ -327,6 +327,33 @@ test('the opening asks upstream for a window that starts on a turn boundary', { 
   }])
 })
 
+test('an explicit maxMessages reaches upstream as its own target, not the default', { timeout: 10_000 }, async () => {
+  // 默认目标那条已由上一条钉住；这条问的是**显式尺寸有没有被丢在半路**：
+  // `followRequestOf` 解出来的 `maxMessages` 若没传到 `upstreamWindow`，宿主就会按
+  // 默认窗口切，而客户端拿到的首屏比它要的更宽 —— 无报错、只是多了。
+  const source = fakeSource([snapshotFrame([event(0)], 1)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true })
+  server.listen(0)
+
+  const socket = await connect(server)
+  try {
+    send(socket, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1', maxMessages: 7 } })
+    await receive(socket) // the opening frame
+  } finally {
+    socket.close()
+    server.closeAllConnections()
+    server.close()
+  }
+
+  assert.deepEqual(source.requests, [{
+    address: { kind: 'session', sessionId: 's1' },
+    maxMessages: 14,
+    turnWindow: { minMessages: 7, minTurns: 1 },
+    assistantStream: true,
+  }])
+})
+
 test('cancel stops the stream; the pump yields no further frames for it', { timeout: 10_000 }, async () => {
   // A source that would keep yielding forever unless aborted.
   const source: FollowSource = {

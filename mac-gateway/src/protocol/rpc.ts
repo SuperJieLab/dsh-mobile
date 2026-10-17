@@ -27,12 +27,8 @@ import type {
 } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
-import {
-  LogNotDenseError,
-  CursorPastEndError,
-  pageWindow,
-  type PageWindow,
-} from './window.ts'
+import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
+import type { PageWindow } from '../wire/window.ts'
 
 /**
  * 一条 `snapshot` 应答可能有多大；只约束单条应答，从不是客户端的视图。
@@ -53,7 +49,7 @@ export interface Limits {
 
 /**
  * LAN 演示的上限：宽到很少生效，小到确实有界。`maxOpeningBytes` 取 4 MiB ——
- * 本机观测到的最大窗口（1.25 MB）的 3 倍余量，于是普通会话根本不进收窄路径。
+ * 比一个典型会话的整条窗口宽出数倍，于是普通会话根本不进收窄路径。
  */
 export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_048_576, maxOpeningBytes: 4 * 1024 * 1024 }
 
@@ -255,7 +251,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
 
 /**
  * 反向窗口：最新 `maxMessages` 条消息，或恰好终止于 `beforeSeq` 之前的
- * 一轮 —— 边界规则见 `contract/window.ts` 的 `pageWindow`。
+ * 一轮 —— 边界规则见 `./window.ts` 的 `pageWindow`。
  */
 async function page(envelope: Record<string, unknown>, port: SessionPort): Promise<Response> {
   const sessionId = envelope.sessionId

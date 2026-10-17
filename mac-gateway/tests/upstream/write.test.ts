@@ -7,7 +7,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ApprovalRelay, pumpPrompt, refusalOf, type RemoteEventGatewayLike, type UpstreamWireFrame } from '../../src/upstream/write.ts'
+import {
+  ApprovalRelay, ReplayTable, outcomeOfDecision, pumpPrompt, refusalOf,
+  type RemoteEventGatewayLike, type UpstreamWireFrame,
+} from '../../src/upstream/write.ts'
 
 // -- helpers -----------------------------------------------------------------
 
@@ -223,4 +226,22 @@ test('pump: any not-found namespace folds to unknown-session; other failures ret
   // client's to fix by resending.
   await assert.rejects(pumpPrompt(failing(remote('session/busy')), prompt), /session\/busy/)
   await assert.rejects(pumpPrompt(failing(new Error('boom')), prompt), /boom/)
+})
+
+// -- 幂等簿记 ---------------------------------------------------------------
+
+test('decision maps onto the one-shot upstream vocabulary only', () => {
+  assert.equal(outcomeOfDecision('allow'), 'allowed-once')
+  assert.equal(outcomeOfDecision('deny'), 'rejected')
+})
+
+test('replay table: first produce runs once, retries replay the first outcome', () => {
+  const table = new ReplayTable<string>()
+  let runs = 0
+  const first = table.remember('k', () => { runs += 1; return 'first' })
+  assert.equal(first.fresh, true)
+  const retry = table.remember('k', () => { runs += 1; return 'second' })
+  assert.equal(retry.fresh, false)
+  assert.equal(retry.value, 'first')
+  assert.equal(runs, 1)
 })

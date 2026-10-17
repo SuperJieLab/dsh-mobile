@@ -14,7 +14,7 @@ import type { ModelSelectMessage } from '../../src/wire/model.ts'
 
 // -- helpers -----------------------------------------------------------------
 
-/** A remote failure the way the runtime throws it (structural, see contract/errors.ts). */
+/** A remote failure the way the runtime throws it (structural, see ports/errors.ts). */
 function remoteError(code: string, message: string): Error {
   return Object.assign(new Error(message), { isDSHRemoteError: true, code })
 }

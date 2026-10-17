@@ -6,7 +6,11 @@
  * 命令，因此每条畸形写都以 `invalid-request` 拒绝。
  *
  * 这里**只有形状与解析**。答应的结局词汇住在 `ports/write.ts`（装配边界），
- * 重放簿记与结论词映射住在 `upstream/write.ts`（它们用的是上游的词汇，手机端看不见）。
+ * 结论词映射住在 `upstream/write.ts`（上游的词汇）。
+ *
+ * `answerId` 的幂等语义是**协议承诺**：同键重试必须得到第一次的结论。实现那张
+ * 重放表在宿主机侧（`upstream/write.ts` 的 `ReplayTable`），手机端看不见表，
+ * 但可以依赖它的效果。
  */
 
 /** 校验通过的 `approval-answer` 消息。 */

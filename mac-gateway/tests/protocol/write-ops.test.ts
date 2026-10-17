@@ -1,7 +1,8 @@
 /**
- * The write contract's tests (M5, M5 §五 W1–W3
- * plus the `handle` dispatch; W4's server-side rebuild was retired by 实施期修正 11 —
- * rebuilding is the phone's display concern now). The port is a fake; no network.
+ * 两条写 op 经 `handle` 的分派：写通道没接线时的拒绝、上游结论怎么变成协议应答。
+ *
+ * 这里只问「分派对不对」：载荷解析在 `wire/write.ts`，重放表在 `upstream/write.ts`。
+ * 三条路径各有一处自己的判据，混在一个文件里时哪一层坏了都指不出。
  */
 
 import assert from 'node:assert/strict'
@@ -9,12 +10,8 @@ import { test } from 'node:test'
 
 import { handle } from '../../src/protocol/rpc.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
-import { ReplayTable, outcomeOfDecision } from '../../src/upstream/write.ts'
-import { approvalAnswerOf, sessionPromptOf } from '../../src/wire/write.ts'
-import type { ApprovalAnswerMessage, SessionPromptMessage } from '../../src/wire/write.ts'
 import type { WritePort } from '../../src/ports/write.ts'
-
-// -- helpers -----------------------------------------------------------------
+import type { ApprovalAnswerMessage, SessionPromptMessage } from '../../src/wire/write.ts'
 
 const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
 
@@ -37,61 +34,6 @@ function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; promp
     },
   }
 }
-
-// -- parsing (fail-closed, W3) -----------------------------------------------
-
-test('approval-answer: well-formed payload parses', () => {
-  assert.deepEqual(
-    approvalAnswerOf({ eventId: 'a', decision: 'allow', answerId: 'k' }),
-    { eventId: 'a', decision: 'allow', answerId: 'k' },
-  )
-})
-
-test('approval-answer: malformed payloads are refused, not normalized', () => {
-  for (const bad of [
-    {},
-    { eventId: 'a', decision: 'allow' },
-    { eventId: 'a', decision: 'ALLOW', answerId: 'k' },
-    { eventId: '', decision: 'allow', answerId: 'k' },
-    { eventId: 'a', decision: 'allow', answerId: 7 },
-  ]) {
-    assert.equal(approvalAnswerOf(bad as Record<string, unknown>), undefined, JSON.stringify(bad))
-  }
-})
-
-test('session-prompt: well-formed payload parses; blank text refused', () => {
-  assert.deepEqual(
-    sessionPromptOf({ sessionId: 's', text: ' hi ', promptId: 'p' }),
-    { sessionId: 's', text: ' hi ', promptId: 'p' },
-  )
-  for (const bad of [
-    { sessionId: 's', text: '   ', promptId: 'p' },
-    { sessionId: 's', text: 'hi' },
-    { sessionId: '', text: 'hi', promptId: 'p' },
-  ]) {
-    assert.equal(sessionPromptOf(bad as Record<string, unknown>), undefined, JSON.stringify(bad))
-  }
-})
-
-test('decision maps onto the one-shot upstream vocabulary only', () => {
-  assert.equal(outcomeOfDecision('allow'), 'allowed-once')
-  assert.equal(outcomeOfDecision('deny'), 'rejected')
-})
-
-// -- replay table (W1) -------------------------------------------------------
-
-test('replay table: first produce runs once, retries replay the first outcome', () => {
-  const table = new ReplayTable<string>()
-  let runs = 0
-  const first = table.remember('k', () => { runs += 1; return 'first' })
-  assert.equal(first.fresh, true)
-  const retry = table.remember('k', () => { runs += 1; return 'second' })
-  assert.equal(retry.fresh, false)
-  assert.equal(retry.value, 'first')
-  assert.equal(runs, 1)
-})
-
-// -- handle dispatch ---------------------------------------------------------
 
 test('handle dispatches approval-answer to the write port and answers delivered', async () => {
   const { port } = fakeWrite()

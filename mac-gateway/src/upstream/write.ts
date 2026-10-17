@@ -260,8 +260,13 @@ export async function pumpPrompt(controller: PromptControllerLike, prompt: Sessi
  * 记住每个幂等键的第一次结果，此后永远重放它：`produce` 每键至多运行一次，
  * 其副作用因此只发生一次。
  *
- * 它是**上游语义的簿记**，不是两端约定：键与结论都来自网关 `$events` 流，
- * 手机端从来看不见这张表。所以它住宿主适配层，不进 `wire/`、也不进 `protocol/`。
+ * **幂等这条保证属于协议**：键是客户端铸造的 `answerId`（`wire/write.ts` 里写明
+ * 「同键重试重放第一次的结果」），所以「重发得到同一个结论」是两端约定的一部分。
+ * 这张表只是它的**实现** —— 手机端看不见表，但它依赖表的效果。
+ *
+ * 它住宿主适配层，理由是实现层面的：表里存的是 `ApprovalOutcome`（上游词汇，住
+ * `ports/write.ts`），唯一消费者是 `ApprovalRelay`，而状态必须跟着交付它的中继走。
+ * 放进 `protocol/` 会让 `upstream/` 必须 import `protocol/`，撞「宿主适配不认识判定层」。
  */
 export class ReplayTable<V> {
   readonly #entries = new Map<string, V>()

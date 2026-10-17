@@ -89,11 +89,9 @@ test('fitOpeningToBytes: an empty window is untouched, not refused', () => {
 })
 
 test('fitOpeningToBytes: a window whose head is not a turn boundary', () => {
-  // 真机抓到的那一条（2026-10-14）：窗口是整份日志，而日志开头不是 `turn/start`
-  // （前 4 条事件属于日志的头部）。旧实现只从「第一个 `turn/start`」开始试 ⇒
-  // **永远不会试 start = 0** ⇒ 装得下也会被裁到那个边界上。现场读数：
-  // `cursor=209, 205 events (narrowed by 4 events / 0 turns), 1253711 bytes (fixed 542 + events 1253169)`
-  // —— 1.25 MB 的帧在 4 MiB 的上界下被裁，客户端首屏因此少 4 条。
+  // 窗口是整份日志、而日志开头不是 `turn/start` 时（前几条事件属于日志头部），
+  // 候选起点若只取「第一个 `turn/start`」，**永远不会试 start = 0** —— 装得下也会被
+  // 裁到那个边界上，而日志只留一行「narrowed by N events / 0 turns」，看不出是候选漏了。
   const head = [
     event('session/start', 0), event('user/message', 1),
     event('user/message', 2), event('user/message', 3),

@@ -3,7 +3,7 @@
  * （`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift`）—— 改字段那边必须同改。
  *
  * 这里**只有形状与 `model-select` 的解析**。目录怎么从宿主读住在 `upstream/model.ts`，
- * 选择怎么安装、上游的拒绝怎么翻成协议码住在 `contract/rpc.ts` 的 `modelSelect` ——
+ * 选择怎么安装、上游的拒绝怎么翻成协议码住在 `protocol/rpc.ts` 的 `modelSelect` ——
  * 那些是服务端的事，手机端看不见。
  *
  * 上游的规范化形状原样转发：校验与规范化都在控制器的门后，契约只转达门后

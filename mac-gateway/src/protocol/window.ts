@@ -1,13 +1,21 @@
 /**
- * 反向窗口算术，被 `page`（rpc.ts）、follow 打开（mux.ts）与 follow 请求的
- * 窗口拼法（适配器 → remote/ws.ts）共享。
+ * 反向窗口算术。三个导出各服务一条路径，别把它们当成同一件事：
+ *
+ *   pageWindow          在整条日志上切一个窗口 —— 只有 `page` 调用它
+ *   upstreamWindow      把同一个**目标**翻成宿主要的分页参数 —— 流 opening 用这条：
+ *                       窗口由宿主切好交回来，本地不重切
+ *   fitOpeningToBytes   把窗口按字节二次收窄 —— 流 opening 在装帧前调用
+ *
+ * 「`page` 与流 opening 给出同一个窗口」靠的是**同一个目标**，不是同一段代码：
+ * 前者本地切，后者把目标交出去。两条路都在 `TURN_ALIGN_CEILING` 这个上限上收口。
  *
  * `maxMessages` 是**目标**，不是承诺：调用方拿到的窗口**始于 turn 边界** ——
  * 一轮中间打开没有折叠头，只能平摊，回翻到该轮的打开处会把同一轮整体折起
- * （同内容、两形状）。目标的两倍即终止走查，够不到
- * 的边界因此不会无界撑大窗口。真实日志到不了 —— 四个会话的对齐代价
- * 为 5–18 条事件。
+ * （同内容、两形状）。目标的两倍即终止走查，够不到的边界因此不会无界撑大窗口。
  */
+
+import type { WireEvent } from '../wire/rpc.ts'
+import type { PageWindow } from '../wire/window.ts'
 
 /** 回走找 `turn/start` 时，窗口允许比目标宽多少。 */
 const TURN_ALIGN_CEILING = 2
@@ -22,9 +30,8 @@ const MESSAGE_EVENT_TYPES: ReadonlySet<string> = new Set(['user/message', 'assis
 /**
  * {@link pageWindow} 在日志 seq 不从 0 稠密时抛出。
  *
- * **层次与去向**：这是**窗口算术层**的错误（既不是契约层的拒绝，也不是传输层的失败）；唯一的
- * 消费者 `contract/rpc.ts` 把它映射为协议码 `unreadable-session`。名字读作「被违反的不变量」——
- * R13 复核后判定**不改名**（合 `XxxError` 约定），只补这一句层次说明。
+ * **层次与去向**：这是**窗口算术层**的错误（既不是协议拒绝，也不是传输失败）；唯一的
+ * 消费者 `./rpc.ts` 把它映射为协议码 `unreadable-session`。名字读作「被违反的不变量」。
  */
 export class LogNotDenseError extends Error {
   constructor(sessionId: string, index: number, seq: string) {
@@ -41,21 +48,17 @@ export class CursorPastEndError extends Error {
   }
 }
 
-// 窗口的形状已搬到 `wire/`（两端共守）；这里 import 再用（算术自己要用它），并重导出。
-export type { PageWindow } from '../wire/window.ts'
-
 /**
- * 在整条日志上取一个反向窗口 —— `page` 与 follow 打开共享的算术，两者因此
- * 不会漂移。按*消息数*约束，但按整个区间交付，因为被画 seq 的邻居常常不是
- * 消息。**起点**回退到最近的 `turn/start`，
- * 因此绝不会在一轮中间打开 —— {@link TURN_ALIGN_CEILING} 说明原因与幅度。
+ * 在整条日志上取一个反向窗口。按*消息数*约束，但按整个区间交付，因为被画 seq 的
+ * 邻居常常不是消息。**起点**回退到最近的 `turn/start`，因此绝不会在一轮中间打开
+ * —— {@link TURN_ALIGN_CEILING} 说明原因与幅度。
+ *
+ * 唯一的调用方是 `page`。流 opening 不调它：那条路径把同一个目标交给宿主
+ * （见 {@link upstreamWindow}），窗口由宿主切好交回来。
  *
  * @throws {@link LogNotDenseError} 当 seq 不是 `0..n-1`：算术把位置当 seq 读，
- *   稠密是前置条件。两个调用方都以 `unreadable-session` 拒绝。
+ *   稠密是前置条件。
  */
-import type { WireEvent } from '../wire/rpc.ts'
-import type { PageWindow } from '../wire/window.ts'
-
 export function pageWindow(
   sessionId: string,
   events: readonly WireEvent[],
@@ -151,8 +154,8 @@ export function fitOpeningToBytes(
   // 候选起点：**0 永远在列**（「本来就装得下」是最该被选中的那一支），加上窗口内各
   // `turn/start`。窗口起点**不保证**落在轮边界上 —— 窗口是整份日志、或对齐目标在首个
   // `turn` 之前就到了，都会让 index 0 不是 `turn/start`。少了 0，装得下也会被裁到第一个
-  // 轮边界上（真机：`1253711 bytes (fixed 542 + events 1253169)` 的帧在 4 MiB 上界下被报
-  // `narrowed by 4 events / 0 turns`，客户端首屏因此少 4 条）。
+  // 轮边界上，于是装得下也被裁掉开头几条 —— 客户端首屏因此缺内容，而日志里只留一行
+  // 「narrowed by N events / 0 turns」，看不出是这里选错了候选。
   const candidates = turnStarts.length === 0
     ? [...window.keys()] // 一个轮边界都没有（退化窗口）：按字节切
     : [0, ...turnStarts.filter(index => index !== 0)]

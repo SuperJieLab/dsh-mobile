@@ -1,7 +1,9 @@
 /**
- * The model contract's tests (M7, M7 §4.1 T1,
- * 判据 G1). The model port is a fake; no network, no DSH runtime. Routing lives
- * on `handle` — one wire message in, one wire message out, same as every op.
+ * 两条模型 op 经 `handle` 的分派与应答形状。模型端口是假件：无网络、无 DSH 运行时。
+ *
+ * 分派与被测符号的层次：`handle` 与两条 op 在 `protocol/rpc.ts`；载荷解析在
+ * `wire/model.ts`（`modelSelectRequestOf` 的用例也在这里，因为它是这两个 op
+ * 唯一被校验的入口）。宿主目录怎么读在 `upstream/model.ts`，另有其测试。
  */
 
 import assert from 'node:assert/strict'

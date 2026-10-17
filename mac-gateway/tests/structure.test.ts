@@ -489,11 +489,17 @@ test('protocol/ only reaches into wire/ and ports/', () => {
  * 内建模块在跨目录判定里是放行的（`node:crypto` 之类合法），所以 HTTP 那三个要单独挡：
  * 「判定不认识 HTTP」不会因为它们恰好是内建而自动成立。
  */
+/** 某个目录里点名 HTTP 的 import。判据本体在这儿，自证也调它 —— 不调它，「自证」只是自说自话。 */
+export function httpImportsAmong(
+  units: readonly { file: string; specifiers: readonly string[] }[],
+): string[] {
+  return units.flatMap(({ file, specifiers }) => specifiers
+    .filter(specifier => HTTP_MODULES.has(specifier))
+    .map(specifier => `${where(file)} → ${specifier}`))
+}
+
 test('protocol/ does not import an HTTP module', () => {
-  const offenders = unitsUnder(join(SRC, 'protocol'))
-    .flatMap(({ file, specifiers }) => specifiers
-      .filter(specifier => HTTP_MODULES.has(specifier))
-      .map(specifier => `${where(file)} → ${specifier}`))
+  const offenders = httpImportsAmong(unitsUnder(join(SRC, 'protocol')))
   assert.deepEqual(offenders, [],
     'status codes and request bodies belong to remote/ — a judge that names HTTP is a transport')
 })
@@ -567,11 +573,28 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
  *
  * 要支持新形态，先改这里，别让它静默变成「没有导出函数」。
  */
-export function exportSurfaceOf(source: string): { functions: string[]; shapes: string[] } {
+export function exportSurfaceOf(
+  source: string,
+  options: { allowClasses?: boolean } = {},
+): { functions: string[]; shapes: string[]; classes: string[] } {
   const code = stripComments(source)
   const functions: string[] = []
   const shapes: string[] = []
+  const classes: string[] = []
   for (const statement of exportStatementsOf(code)) {
+    // class 默认不允许：`wire/` 只装形状与编解码，一个 class 就是行为。
+    // 判定层则允许（`LogNotDenseError` 这类错误类型），所以它是选项而不是硬规则。
+    const classMatch = /^export\s+class\s+([A-Za-z_$][\w$]*)/.exec(statement)
+    if (classMatch?.[1] !== undefined) {
+      if (options.allowClasses !== true) {
+        throw new Error(
+          'unsupported export form in wire/ — a class carries behaviour, not a shape: '
+          + statement.slice(0, 70),
+        )
+      }
+      classes.push(classMatch[1])
+      continue
+    }
     let match = /^export\s+interface\s+([A-Za-z_$][\w$]*)/.exec(statement)
     if (match?.[1] !== undefined) {
       shapes.push(match[1])
@@ -595,7 +618,7 @@ export function exportSurfaceOf(source: string): { functions: string[]; shapes: 
       `unsupported export form in wire/ — extend exportSurfaceOf() first: ${statement.slice(0, 70)}`,
     )
   }
-  return { functions, shapes }
+  return { functions, shapes, classes }
 }
 
 /** 从 `start`（一个引号）跳到它闭合之后。反引号按普通字符串处理（本仓不写模板插值）。 */
@@ -746,7 +769,7 @@ test('the export-surface reader refuses forms it cannot classify', () => {
       'const marker = 1; export function i(): void {}',
       'export const J = { depth: 2 }',
     ].join('\n')),
-    { functions: ['c', 'd', 'e', 'i'], shapes: ['A', 'B'] },
+    { functions: ['c', 'd', 'e', 'i'], shapes: ['A', 'B'], classes: [] },
     'the allowed forms are classified, including an export that is not at line start',
   )
 })
@@ -800,15 +823,36 @@ test('no source comment points into the workspace docs', () => {
 // V7：opening 只有一个装配者
 // ---------------------------------------------------------------------------
 
-test('no second opening assembler exists', () => {
-  // 第二个装配器不缺别的，只缺「后来加的那个字段」：它一旦被接线，手机端拿到的基线
-  // 就永远缺席，而测试仍全绿（判据只查窗口几何）。装配这件事只能有一个执行者。
+test('the retired second opening assembler name does not come back', () => {
+  // 它不缺别的，只缺「后来加的那个字段」：一旦被接线，手机端拿到的基线就永远缺席，
+  // 而测试仍全绿（判据只查窗口几何）。装配这件事只能有一个执行者。
+  //
+  // 断言的是**这个名字不再出现**，不是「不存在任何第二装配器」—— 一个叫别的名字的
+  // 第二装配器它看不见，这里不假装看得见。
   const offenders = filesUnder(SRC)
-    .filter(file => /\bfollowOpening\s*\(/.test(stripComments(readFileSync(file, 'utf8'))))
+    .filter(file => /\bfollowOpening\s*\(/.test(withoutStrings(stripComments(readFileSync(file, 'utf8')))))
     .map(where)
   assert.deepEqual(offenders, [],
-    'opening is assembled in remote/ws.ts only — the second assembler omits fields the wire requires')
+    'opening is assembled in remote/ws.ts only — the retired assembler omitted fields the wire requires')
 })
+
+/** 把字符串字面量换成空串：判据找的是代码里的调用，不是注释或文案里的同名文本。 */
+function withoutStrings(code: string): string {
+  let out = ''
+  let i = 0
+  while (i < code.length) {
+    const ch = code[i] as string
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const end = skipString(code, i)
+      out += '""'
+      i = end
+      continue
+    }
+    out += ch
+    i += 1
+  }
+  return out
+}
 
 // ---------------------------------------------------------------------------
 // V8：判定层搬空后的临时残留（期3 删目录时本条随之删）
@@ -822,28 +866,182 @@ test('contract/ holds only the framing implementation', () => {
 })
 
 // ---------------------------------------------------------------------------
-// V9：判定符号只有一个声明
+// V9：判定符号只有一个声明，且住在它该住的目录
 // ---------------------------------------------------------------------------
 
 /**
- * 搬家最容易留下的痕迹不是死代码，是**两边各留一份**：旧文件没删干净、新文件又写了一遍，
- * 编译通过、测试也过，两处从此各自演进。断言这些符号各只有一个声明处。
+ * 判定层的导出面清单：**每个文件必须声明的符号**。
+ *
+ * 两件事由它同时守住：① 每个符号在全 `src/` 只有一处声明（复制一份就红）；
+ * ② 那一处就是这里写的家（整体搬去别处也红）。
+ *
+ * 表要覆盖 `protocol/` 的**每一个**导出 —— 下一条判据会核对，新加导出不补表就红。
+ * 手法与 `WIRE_CODECS` 同一套：改表这个动作逼人回答「它归哪一层」。
+ *
+ * `upstream/usage.ts` 是唯一的例外，且是刻意的：`usageSnapshotOf` 认宿主的投影键名
+ * （`contextPressure` / `contextBreakdown`），消费者在宿主适配层。放进 `protocol/`
+ * 会让 `upstream/` 必须 import `protocol/`（撞 V3）。
  */
-test('each judgement symbol is declared exactly once', () => {
-  const symbols = ['handle', 'pageWindow', 'upstreamWindow', 'usageSnapshotOf', 'StoredCredentials']
-  const declaredAt = new Map<string, string[]>()
-  for (const file of filesUnder(SRC)) {
-    const code = stripComments(readFileSync(file, 'utf8'))
-    for (const match of code.matchAll(/\bexport\s+(?:async\s+)?(?:interface|type|class|function|const)\s+([A-Za-z_$][\w$]*)/g)) {
-      const name = match[1]
-      if (name === undefined) continue
-      declaredAt.set(name, [...(declaredAt.get(name) ?? []), where(file)])
+const JUDGEMENT_SURFACE: readonly { home: string; names: readonly string[] }[] = [
+  {
+    home: 'protocol/rpc.ts',
+    names: ['Limits', 'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault'],
+  },
+  {
+    home: 'protocol/window.ts',
+    names: [
+      'LogNotDenseError', 'CursorPastEndError', 'OpeningShrink',
+      'pageWindow', 'upstreamWindow', 'fitOpeningToBytes',
+    ],
+  },
+  { home: 'protocol/usage.ts', names: ['usageIsTrigger', 'usageShouldEmit'] },
+  {
+    home: 'protocol/auth.ts',
+    names: [
+      'ACCESS_TTL_MS', 'PAIRING_TTL_MS', 'PAIRING_MAX_ATTEMPTS', 'StoredCredentials',
+      'PairingOutcome', 'emptyCredentials', 'sha256Hex', 'newPairingCode', 'newToken',
+      'bearerTokenOf', 'isPlausiblePairingCode', 'attemptPairing', 'issueAccess', 'isLiveAccess',
+    ],
+  },
+  { home: 'upstream/usage.ts', names: ['usageSnapshotOf'] },
+]
+
+/**
+ * 顶层声明**关键字**的集合 —— 这里必须闭，否则判据会静默看不见。
+ *
+ * 为什么枚举声明而不枚举导出：导出写法是开放集（`export { x }`、`export default`、
+ * `export let`、`export =`、重导出……），枚举它必然漏掉下一种；而**任何模块级声明
+ * 都离不开这七个关键字之一**，不管它怎么被导出。上一轮 V5 已经在这条路上翻过车
+ * （正则只认 `export const`/`export function`），这一次换成闭集。
+ *
+ * 一个已知的边界：`const { a, b } = …` 这类解构声明把名字放在括号里，关键字不邻接。
+ * 那种写法在模块顶层本仓没有，且它会绕过——所以下面显式拒绝它，而不是假装看不见。
+ */
+const DECLARATION_KEYWORDS = 'function|class|interface|type|const|let|var|enum'
+
+/** 一个文件的顶层声明：`名字 → 出现在第几行`。认不出的解构声明直接抛错。 */
+export function declarationsOf(source: string): Map<string, number> {
+  const code = stripComments(source)
+  const found = new Map<string, number>()
+  const declaration = new RegExp(
+    `^(?:export\\s+(?:default\\s+)?)?(?:async\\s+)?(?:${DECLARATION_KEYWORDS})\\s*\\*?\\s+([A-Za-z_$][\\w$]*)`,
+    'gm',
+  )
+  for (const match of code.matchAll(declaration)) {
+    const name = match[1]
+    if (name !== undefined && !found.has(name)) {
+      found.set(name, code.slice(0, match.index).split('\n').length)
     }
   }
-  const suspicious = symbols.flatMap(name => {
-    const places = declaredAt.get(name) ?? []
-    return places.length === 1 ? [] : [`${name}: ${places.join(', ') || 'no declaration at all'}`]
+  // 导出列表：`export { a as b }` 把 `b` 这个名字交出去了，而 `b` 从没被声明过。
+  // 不记它，`export { duplicate as handle }` 就能在别处再造一个 `handle` 而不被计数。
+  // 同一文件里已声明过的名字跳过 —— 否则 `log.ts` 这种「声明 + 末尾再列一次」会自己撞自己。
+  for (const match of code.matchAll(/^export\s*\{([^}]*)\}/gm)) {
+    const line = code.slice(0, match.index).split('\n').length
+    for (const part of (match[1] ?? '').split(',')) {
+      const alias = part.includes(' as ') ? part.split(' as ')[1] : part
+      const name = alias?.trim()
+      if (name !== undefined && /^[A-Za-z_$][\w$]*$/.test(name) && !found.has(name)) found.set(name, line)
+    }
+  }
+
+  // 解构声明：关键字后面跟 `{` 或 `[` —— 名字在括号里，上面的正则看不见。
+  for (const match of code.matchAll(new RegExp(`^(?:const|let|var)\\s*([\\[{])`, 'gm'))) {
+    const line = code.slice(0, match.index).split('\n').length
+    throw new Error(
+      `line ${line}: destructuring declaration — this judge cannot see the names inside; `
+      + 'declare them one per line so a duplicate copy stays visible',
+    )
+  }
+  return found
+}
+
+test('each judgement symbol is declared exactly once, at its stated home', () => {
+  // 全 `src/` 的声明索引：`名字 → [{file, line}]`
+  const index = new Map<string, { file: string; line: number }[]>()
+  for (const file of filesUnder(SRC)) {
+    for (const [name, line] of declarationsOf(readFileSync(file, 'utf8'))) {
+      index.set(name, [...(index.get(name) ?? []), { file, line }])
+    }
+  }
+
+  const expected = JUDGEMENT_SURFACE.flatMap(({ home, names }) => names.map(name => ({ name, home })))
+  const complaints = expected.flatMap(({ name, home }) => {
+    const places = index.get(name) ?? []
+    if (places.length === 0) return [`${name}: no declaration at all — renamed? then update JUDGEMENT_SURFACE`]
+    if (places.length > 1) {
+      const list = places.map(({ file, line }) => `${where(file)}:${line}`).join(', ')
+      return [`${name}: declared ${places.length} times (${list}) — one copy will silently stop being updated`]
+    }
+    const only = places[0] as { file: string; line: number }
+    const actual = relative(SRC, only.file)
+    return actual === home ? [] : [`${name}: lives in ${actual}:${only.line}, expected ${home}`]
   })
-  assert.deepEqual(suspicious, [],
-    'a judgement declared in two places forks silently — one of them will stop being updated')
+  assert.deepEqual(complaints, [],
+    'a judgement symbol is either duplicated or no longer at its home — both make the layer boundary a lie')
+})
+
+/**
+ * `protocol/` 里**每一个**导出都必须在这张表里有归属。
+ *
+ * 没有这一条，新增一个判定符号时不会有人想起去补 `JUDGEMENT_HOME`，而那条判据只查
+ * 表里已有的名字 —— 名单会和 protocol/ 的实际面越差越远。手法与 `WIRE_CODECS` 同一套：
+ * 新增导出必须先改表，改表这个动作逼人回答「它归哪一层」。
+ */
+test('every export of protocol/ is listed as a judgement symbol', () => {
+  const listed = new Set(JUDGEMENT_SURFACE.flatMap(({ names }) => names))
+  const unlisted: string[] = []
+  for (const file of filesUnder(join(SRC, 'protocol'))) {
+    const surface = exportSurfaceOf(readFileSync(file, 'utf8'), { allowClasses: true })
+    for (const name of [...surface.functions, ...surface.shapes, ...surface.classes]) {
+      if (!listed.has(name)) unlisted.push(`${where(file)}: ${name}`)
+    }
+  }
+  assert.deepEqual(unlisted, [],
+    'a new export in protocol/ needs a home in JUDGEMENT_SURFACE — otherwise nothing stops a second copy of it')
+})
+
+test('the HTTP judge really reports every spelling it claims to cover', () => {
+  // 这张表是内联常量：删掉一项只会让判据变弱，不会有任何样本红。所以逐项喂给**判据本体**，
+  // 要求它报出来 —— 不是拿表去比表（那样恒真）。
+  const file = join(SRC, 'protocol', 'x.ts')
+  const silentlyAllowed = [...HTTP_MODULES].filter(specifier => httpImportsAmong([{ file, specifiers: [specifier] }]).length === 0)
+  assert.deepEqual(silentlyAllowed, [], 'a spelling the judge cannot see is a hole in the layer boundary')
+
+  // 反方向：一个不相干的模块名不得被误报（否则判据会靠假红让人把它关掉）。
+  assert.deepEqual(httpImportsAmong([{ file, specifiers: ['node:crypto', './window.ts'] }]), [])
+
+  // 两种拼法都要在：只留 `node:` 前缀会让裸写那一半静默失明。
+  for (const bare of ['http', 'https', 'net', 'http2']) {
+    assert.ok(HTTP_MODULES.has(bare) && HTTP_MODULES.has(`node:${bare}`),
+      `${bare} needs both spellings — a bundler-free file writes the bare one`)
+  }
+})
+
+test('the declaration reader sees every export syntax, and refuses destructuring', () => {
+  // 每一条都是「导出写在别处」的形态：它们全都要有一个模块级声明，
+  // 所以按声明枚举时**必须**都看得见（上一版按导出枚举，这四种全部漏掉）。
+  for (const [source, why] of [
+    ['function handle() {}\nexport { handle }', '本地具名导出'],
+    ['export default function handle() {}', 'default 导出'],
+    ['export let handle = 1', 'let 声明'],
+    ['export var handle = 1', 'var 声明'],
+    ['function* handle() {}\nexport { handle }', 'generator'],
+    ['class Handle {}\nexport { Handle as handle }', 'class 改别名导出'],
+  ] as [string, string][]) {
+    assert.ok(declarationsOf(source).size > 0, `must see a declaration (${why}): ${source.replace(/\n/g, ' ')}`)
+  }
+  // 正控：名字取到的是声明，不是引用；同一名字只记一次（行号取首次）。
+  assert.deepEqual([...declarationsOf('interface A { x: number }\nfunction b(): void {}\nb()\nconst C = 1')],
+    [['A', 1], ['b', 2], ['C', 4]],
+    'only declarations, first occurrence, with a 1-based line')
+  // 别名导出交出的是**新名字**，要计进来（否则 `export { dup as handle }` 造得出第二个 handle）。
+  assert.deepEqual([...declarationsOf('function b(): void {}\nexport { b as c }')],
+    [['b', 1], ['c', 2]], 'an export alias introduces a name that no declaration mentions')
+  // 正控：同一文件里「已声明 + 末尾再列一次」不得自我碰撞（`log.ts` 就是这个形态）。
+  assert.deepEqual([...declarationsOf('function a(): void {}\nexport { a }')],
+    [['a', 1]], 'listing an already-declared name is not a second declaration')
+  // 解构声明：名字在括号里，判据看不见 —— 报错而不是静默放过。
+  assert.throws(() => declarationsOf('const { a, b } = thing'), /destructuring/)
+  assert.throws(() => declarationsOf('let [x] = list'), /destructuring/)
 })

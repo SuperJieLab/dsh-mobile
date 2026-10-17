@@ -195,7 +195,7 @@ export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
 
 /**
  * 打开帧的默认字节上界（R9 期1）—— 与 HTTP 路径的上限同处一族，定义在
- * `contract/rpc.ts` 的 `DEFAULT_LIMITS`（那里有取值来由）。做成可传参而非常量，
+ * `protocol/rpc.ts` 的 `DEFAULT_LIMITS`（那里有取值来由）。做成可传参而非常量，
  * 理由与 `maxDeltaEvents` 相同：让收窄路径**可被端到端观测**（调到极小值就能
  * 看见它发生），而不是只活在文档里。
  */

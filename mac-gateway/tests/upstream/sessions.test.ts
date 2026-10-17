@@ -5,7 +5,6 @@
  * Two things need pinning: where each field comes from, and that no log is ever
  * opened — proved by a persistence stub that throws if anything opens a handle.
  * Run: node --test tests/upstream/sessions.test.ts
- * See dev/contract/protocol.md §4.1 and M1 §3.2.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
