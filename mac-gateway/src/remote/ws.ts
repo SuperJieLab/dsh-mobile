@@ -38,7 +38,7 @@ import {
   encodePong,
   encodeTextFrame,
   handshakeResponse,
-} from '../contract/ws-frames.ts'
+} from './frames.ts'
 import { createLogger, LogModule, perfNow, perfRecord } from '../log.ts'
 
 const log = createLogger(LogModule.ws)

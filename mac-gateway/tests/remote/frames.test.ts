@@ -16,7 +16,7 @@ import {
   encodePong,
   encodeTextFrame,
   handshakeResponse,
-} from '../../src/contract/ws-frames.ts'
+} from '../../src/remote/frames.ts'
 
 /**
  * Encode one client frame the way a real client would: masked, standard length

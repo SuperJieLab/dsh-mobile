@@ -400,7 +400,7 @@ test('the file reader descends into subdirectories', () => {
   const found = filesUnder(join(SRC, '..'))
   assert.ok(found.every(file => file.endsWith('.ts')), 'only TypeScript files')
   assert.ok(
-    found.some(file => file.includes(`${sep}tests${sep}contract${sep}`)),
+    found.some(file => file.includes(`${sep}tests${sep}protocol${sep}`)),
     'a nested file must be found — a top-level-only reader would miss it',
   )
 })
@@ -472,8 +472,8 @@ test('wire/ does not reach outside itself', () => {
 
 test('ports/ only reaches into wire/', () => {
   const wire = join(SRC, 'wire')
-  // 按**解析后的目标**判，不看 specifier 的字符串前缀：`'../wire/../contract/x.ts'`
-  // 前缀像 wire/，实际落在 contract/。
+  // 按**解析后的目标**判，不看 specifier 的字符串前缀：`'../wire/../upstream/x.ts'`
+  // 前缀像 wire/，实际落在 upstream/。
   const escaped = outgoingImports(join(SRC, 'ports')).filter(({ target }) => target === undefined || !within(target, wire))
   assert.deepEqual(escaped, [],
     `ports/ is the assembly boundary: it may import wire/ (its signatures name wire types) and nothing else:\n${format(escaped)}`)
@@ -853,17 +853,6 @@ test('the retired assembler is not exported under any name binding', async () =>
   // 「有模块交出 followOpening 这个值」都能被抓到 —— 这一半不会被字符串骗过。
   const exported = [...(await valueIndex()).get('followOpening') ?? []]
   assert.deepEqual(exported, [], 'no module may hand out an opening assembler besides remote/ws.ts internal one')
-})
-
-// ---------------------------------------------------------------------------
-// V8：判定层搬空后的临时残留（期3 删目录时本条随之删）
-// ---------------------------------------------------------------------------
-
-test('contract/ holds only the framing implementation', () => {
-  const directory = join(SRC, 'contract')
-  const names = filesUnder(directory).map(file => relative(directory, file)).sort()
-  assert.deepEqual(names, ['ws-frames.ts'],
-    'judgements live in protocol/; the RFC framing implementation stays here until phase 3')
 })
 
 // ---------------------------------------------------------------------------
