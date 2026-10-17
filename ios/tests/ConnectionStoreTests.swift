@@ -13,7 +13,7 @@ import XCTest
 final class ConnectionStoreTests: XCTestCase {
 
     func testOrchestration() async {
-        // —— N1：全组合投影（5 节点态 × 2 身份 × 2 承载）——
+        // —— N1：全组合投影（5 节点态 × 2 身份 × 2 组网）——
         // noKey 与节点态无关 → needsSetup（含 isPaired 的组合：身份轴不并入连接阶段，决定 5）
         for paired in [true, false] {
             for hasSession in [true, false] {
@@ -31,9 +31,9 @@ final class ConnectionStoreTests: XCTestCase {
         // running 的两半：session 未建成的窄窗口 = connecting；建成 = ready
         for paired in [true, false] {
             XCTAssertTrue(ConnectionPhase.resolve(nodeState: .running, isPaired: paired, hasGatewaySession: false) == .connecting,
-                          "N1c running 但承载未切换（paired=\(paired)）→ connecting")
+                          "N1c running 但传输未切换（paired=\(paired)）→ connecting")
             XCTAssertTrue(ConnectionPhase.resolve(nodeState: .running, isPaired: paired, hasGatewaySession: true) == .ready,
-                          "N1d running 且承载已切换（paired=\(paired)）→ ready")
+                          "N1d running 且传输已切换（paired=\(paired)）→ ready")
         }
         // failed 原因可区分（badKey ≠ unreachable）
         for paired in [true, false] {
@@ -71,7 +71,7 @@ final class ConnectionStoreTests: XCTestCase {
         let activationsBefore = client.activations.count
         await store.start(config: config)
         XCTAssertTrue(client.activations.count == activationsBefore,
-                      "N2d start 幂等：重复 start 不重复兜底激活（承载切换只此一次）")
+                      "N2d start 幂等：重复 start 不重复兜底激活（传输切换只此一次）")
         XCTAssertTrue(node.launchCount == 1,
                       "N2e start 幂等：重复 start 不再拉起节点（tsnet 重启会杀活连接）")
 

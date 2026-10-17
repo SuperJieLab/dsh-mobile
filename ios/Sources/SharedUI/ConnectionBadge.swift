@@ -7,7 +7,8 @@ import SwiftUI
 /// 防闪烁（一旦显示至少停留 `minDisplaySeconds`，期间恢复也不一闪而过）。
 ///
 /// 状态由各屏自己映射后传入，本组件不知道列表与详情的区别：列表域看刷新请求成败
-/// （`isLoading` / `failure`），详情域看跟随流连接阶段（`SessionSync.connectionPhase`）。
+/// （`isLoading` / `failure`），详情域看订阅流连接阶段（`SessionSync.connectionPhase`）。
+/// 消费方两处：`SessionListView`（列表域）与 `SessionDetailView`（详情域）。
 struct ConnectionBadge: View {
     enum Status: Equatable {
         /// 数据源可达 —— 不显示。
@@ -102,6 +103,11 @@ struct ConnectionBadge: View {
 
 extension ConnectionBadge.Status {
     /// 列表域：刷新在途 = 连接中；上次刷新失败 = 已断开（旧列表照常可读）。
+    ///
+    /// **为什么不与详情域的入口合一（R13 判定）**：两屏能拿到的信号本来就不同 —— 列表只有
+    /// 一元刷新的 `isLoading` / `lastFailure`，详情才有订阅流的相位（`idle` / `connecting` /
+    /// `ready` / `waiting`）。合成一个入口只能让调用方给另一半传 `nil`，那等于把「这一屏没有这个
+    /// 信号」伪装成「这个信号现在是空值」。
     init(isLoading: Bool, lastFailure: String?) {
         if lastFailure != nil {
             self = .offline
@@ -112,7 +118,7 @@ extension ConnectionBadge.Status {
         }
     }
 
-    /// 详情域：跟随流的连接阶段直译。`idle` 不显示 —— 首次加载有既有的占位 UI。
+    /// 详情域：订阅流的连接阶段直译。`idle` 不显示 —— 首次加载有既有的占位 UI。
     init(followPhase: FollowClient.Phase) {
         switch followPhase {
         case .idle, .ready:

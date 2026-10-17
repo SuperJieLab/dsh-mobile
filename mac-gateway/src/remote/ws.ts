@@ -411,7 +411,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
 /**
  * 一次连接是怎么结束的 —— 四档，且**可判定**。四者在网关侧都只表现为「socket 关了」，
  * 但后续动作完全不同：**我们掐的**要改心跳规则；**对端主动关的**是正常（用户切了会话、
- * 关了 App）；**链路掉的**要查承载/系统；**报错的**直接读错误原文。
+ * 关了 App）；**链路掉的**要查传输/系统；**报错的**直接读错误原文。
  *
  * 判据取真实收到的信号，不靠推断：`error` 事件 > 自己心跳留下的标记 > 对端发来的
  * WebSocket close 帧。三者都没有 = 断在半路（FIN 都没来得及）。
@@ -585,7 +585,7 @@ async function pump(
         const sentCount = events.length - shrink.start
         // 字节数进 info 行（不是只在 debug 的 perf 记录里）：慢链路上「帧有多大」与
         // 「传了多久」是两件事，而这一行是「传了多久」的一半已知量 ——
-        // 另一半在客户端。**并把两半分开报**：收窄只裁得动 `events`，瞬态基线 /
+        // 另一半在客户端。**并把两半分开报**：收窄只裁得动 `events`，未定稿基线 /
         // 占用 / 模型基线都裁不动，却同样占着上界的额度（真机：某会话事件 1.2 MiB、
         // 帧却 >4 MiB —— 多出来的 2.8 MiB 全在裁不动的那一半里）。
         const openingBytes = frameBytesAt(shrink.start)

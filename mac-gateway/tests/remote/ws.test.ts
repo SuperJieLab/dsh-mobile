@@ -694,7 +694,7 @@ test('heartbeat: a socket still draining a big frame is not judged dead', { time
 
 test('endReasonOf: the four ways a connection can end are told apart, strongest evidence first', () => {
   // 网关侧只看得到「socket 关了」，但四档的后续动作完全不同（改心跳规则 / 什么都不做 /
-  // 查承载 / 读错误原文）。判据取真实收到的信号，不靠推断。
+  // 查传输 / 读错误原文）。判据取真实收到的信号，不靠推断。
   assert.equal(endReasonOf({ killed: false, cleanClose: false, errored: false }), 'the link dropped',
     'no signal at all means it broke in the middle, without even a goodbye')
   assert.equal(endReasonOf({ killed: false, cleanClose: true, errored: false }), 'the peer closed it cleanly')

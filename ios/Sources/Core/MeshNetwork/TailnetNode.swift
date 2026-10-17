@@ -37,7 +37,7 @@ final class TailnetNode: ObservableObject {
     /// 展示层的唯一数据源 —— `ConnectionBadge` 只吃这个值，不感知本类型。
     @Published private(set) var meshPath: MeshPath?
 
-    /// 节点验证 Running、tailnet session 建成的那一刻（App 据此把承载切进虚拟网）。
+    /// 节点验证 Running、tailnet session 建成的那一刻（App 据此把传输切进虚拟网）。
     /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调。
     var onVerifiedRunning: ((URLSession) -> Void)?
 
@@ -88,7 +88,7 @@ final class TailnetNode: ObservableObject {
         case .running:
             // 幂等（真机 2026-10-10：同一进程内二次 launch——旧 socket 全被杀，
             // socks5/localapi 报 use of closed network connection，徽章掉路径标签）：
-            // 节点已验证 Running 且承载 session 还活着时不再 re-up，只把激活
+            // 节点已验证 Running 且组网 session 还活着时不再 re-up，只把激活
             // 回调补到位。冷启动（新进程、gatewaySession 必为 nil）不受影响。
             if let session = gatewaySession {
                 Log.info(Log.Module.mesh, "launch: node already running with live session — skip re-up")
@@ -261,7 +261,7 @@ final class TailnetNode: ObservableObject {
                 transition(.registrationSucceeded)
                 startPathPolling()
                 // 根部激活回调：App 的 onChange(of: state) 在同值迁移
-                // （running→running）时不触发，隧道承载的激活只能挂在「session 刚建成」
+                // （running→running）时不触发，隧道组网的激活只能挂在「session 刚建成」
                 // 这个确定性时点上，不能靠状态 diff。
                 onVerifiedRunning?(gatewaySession!)
             } else {

@@ -1,5 +1,5 @@
 /**
- * 模型选择的协议解码测试（M7 T5，判据：解码用例全绿）+ 跟随更新状态机（T6，V1–V4）。
+ * 模型选择的协议解码测试（M7 T5，判据：解码用例全绿）+ 订阅更新状态机（T6，V1–V4）。
  *
  * 判据与出处：M7 §五；协议 dev/contract/protocol.md §4.7
  * 与 §4.2 opening 的 `model` 字段。解码的核心是**缺省安全**：字段缺省是陈述不是故障，
@@ -89,7 +89,7 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(withoutModel?.model == nil, "D3b opening 不带 model = 服务端不知道，字段缺省不是故障")
     }
 
-    // MARK: - 跟随更新状态机（V1–V4）
+    // MARK: - 订阅更新状态机（V1–V4）
 
     /// 造一条 `model/selection` 事件（data = 选择本身，投影源码逐字核实）。
     private func selectionEvent(_ seq: Int, _ provider: String, _ model: String) -> SessionEvent {

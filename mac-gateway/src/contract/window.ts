@@ -19,7 +19,13 @@ const TURN_ALIGN_CEILING = 2
  */
 const MESSAGE_EVENT_TYPES: ReadonlySet<string> = new Set(['user/message', 'assistant/message'])
 
-/** {@link pageWindow} 在日志 seq 不从 0 稠密时抛出。 */
+/**
+ * {@link pageWindow} 在日志 seq 不从 0 稠密时抛出。
+ *
+ * **层次与去向**：这是**窗口算术层**的错误（既不是契约层的拒绝，也不是传输层的失败）；唯一的
+ * 消费者 `contract/rpc.ts` 把它映射为协议码 `unreadable-session`。名字读作「被违反的不变量」——
+ * R13 复核后判定**不改名**（合 `XxxError` 约定），只补这一句层次说明。
+ */
 export class LogNotDenseError extends Error {
   constructor(sessionId: string, index: number, seq: string) {
     super(`session "${sessionId}" log is not dense: index ${index} holds seq ${seq}`)
@@ -137,7 +143,7 @@ export type OpeningShrink =
  * @param window - 窗口内的事件，下标 0 即当前起点。
  * @param cap - 最终**帧**的字节上界（不止事件：外壳与随行基线都算在内）。
  * @param frameBytesOf - 量尺：给定候选起点，算出那一帧的序列化字节数。由调用方
- *   注入，因为帧里还有事件之外的东西（外壳、占用、模型基线、瞬态基线），
+ *   注入，因为帧里还有事件之外的东西（外壳、占用、模型基线、未定稿基线），
  *   那些只有调用方知道 —— 纯函数不猜。
  */
 export function fitOpeningToBytes(

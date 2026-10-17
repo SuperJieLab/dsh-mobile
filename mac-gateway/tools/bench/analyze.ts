@@ -214,9 +214,9 @@ export interface CurvePointInput {
 
 export interface CurvePoint {
   condition: Record<string, unknown>
-  /** 参与跟随延迟对账的事件数。 */
+  /** 参与订阅延迟对账的事件数。 */
   n: number
-  /** 跟随延迟（事件 e2e）——两套分布，曲线取 `clean`。 */
+  /** 订阅延迟（事件 e2e）——两套分布，曲线取 `clean`。 */
   follow: { all: SegmentStats; clean: SegmentStats }
   /**
    * 追平延迟：opening 的 `devApply − gwRecv − offset` —— 网关装窗口 + 传输

@@ -7,7 +7,7 @@ import SwiftUI
 /// 用户要的时候才拉，不偷偷多拉一批；`hasOlder` 由服务端给，客户端不自己猜。
 ///
 /// 对话流 = 消息气泡 + **折起的过程行**（工具调用与轮次边界进流，默认收起成一行摘要，
-/// 点开才是工具行与思考行）；打字机、占位行与审批卡另占各自的位置。
+/// 点开才是工具行与思考行）；流式输出、占位行与审批卡另占各自的位置。
 struct SessionDetailView: View {
     let client: GatewayClient
     let session: SessionSummary
@@ -68,7 +68,7 @@ struct SessionDetailView: View {
                     }
                 }
 
-                // 打字机：正在生成的回复。它不在镜像里 —— 瞬态内容没有 seq，不属于「已读到的
+                // 流式输出：正在生成的回复。它不在镜像里 —— 未定稿内容没有 seq，不属于「已读到的
                 // 位置」（镜像的第一条纪律）。它逐 chunk 增长，源文变化时 `MarkdownText` 只重
                 // 解析尾部、已渲染的块原样留着。
                 if !sync.transientText.isEmpty {
@@ -113,7 +113,7 @@ struct SessionDetailView: View {
                 }
             }
             .refreshable { await sync.sync() }
-            // 进屏即跟随：opening 给首屏，事件与瞬态实时推。
+            // 进屏即订阅：opening 给首屏，事件与未定稿实时推。
             // 离屏即停。`sync()`（HTTP 全量对齐）保留给下拉刷新作兜底。
             .task { sync.startFollowing() }
             .onDisappear { sync.stopFollowing() }
@@ -194,7 +194,7 @@ struct SessionDetailView: View {
                         .padding(.bottom, 4)
                     }
 
-                    // 连接态指示器：跟随流断开时如实说「已断开」，旧内容照常可读。
+                    // 连接态指示器：订阅流断开时如实说「已断开」，旧内容照常可读。
                     ConnectionBadge(state: ConnectionBadge.Status(followPhase: sync.connectionPhase),
                                     meshPath: store.meshPath.map(ConnectionBadge.MeshPath.init))
                         .padding(.vertical, 4)

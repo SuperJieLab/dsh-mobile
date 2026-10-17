@@ -270,10 +270,10 @@ final class SessionMirrorTests: XCTestCase {
 
     // `sync()`（用户显式下拉「重新同步」）撞上缺口时也走到重置 —— 那时「保留」无法收敛
     // （下一次拉到的增量仍接不上），所以它不能按 `observe(verdict)` 分档：那条规则是给
-    // 跟随路径（opening / 往回翻）的。界面必须说「做过的」，不能只说「该做的」。
+    // 订阅路径（opening / 往回翻）的。界面必须说「做过的」，不能只说「该做的」。
     var synced = ResyncNoticeState()
     synced.observe(.resetRequired(.gap))
-    XCTAssertTrue(synced.notice?.kind == .unresolved, "SM22 跟随路径的缺口先记为「未接上」")
+    XCTAssertTrue(synced.notice?.kind == .unresolved, "SM22 订阅路径的缺口先记为「未接上」")
     synced.didReset(.gap)
     XCTAssertTrue(synced.notice == ResyncNotice(kind: .reset, reason: .gap),
                   "SM22 编排自己重置过之后改记「已重置」—— 否则界面说的与做的不一致")

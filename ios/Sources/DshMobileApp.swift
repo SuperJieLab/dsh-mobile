@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// dsh-mobile 的 iPhone 客户端：会话列表 / 会话详情 / 配对 / 审批四个场景的根部，
+/// dsh-mobile 的 iPhone 客户端：会话列表 / 会话详情 / 配对 / 审批四个界面的根部，
 /// 也是协议纯度的一面镜子 —— 客户端若需要改协议才跑得起来，说明协议没设计对。
 ///
 /// 根部只做一行级接线（R3 决定 6）：创建 `TailnetNode` / `GatewayClient` /

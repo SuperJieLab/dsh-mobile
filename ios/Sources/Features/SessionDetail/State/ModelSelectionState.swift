@@ -1,5 +1,5 @@
 /**
- * 会话内「当前模型」的跟随更新状态机 —— 一台纯状态机。
+ * 会话内「当前模型」的订阅更新状态机 —— 一台纯状态机。
  *
  * 不 import SwiftUI / UIKit、不碰网络：输入是 opening 基线、流事件与 select 回包，
  * 输出是当前显示的选择。更新规则是上游投影（`model-selection-projection.js` 的

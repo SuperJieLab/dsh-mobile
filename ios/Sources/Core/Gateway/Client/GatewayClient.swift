@@ -7,13 +7,22 @@ import Foundation
 /// 协议的类型与语义都在 `GatewayProtocol.swift`，传输机制在 `GatewayTransport.swift`，
 /// SwiftUI 在这里没有位置。`struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享
 /// 状态**，值语义会在视图间复制出各自为政的凭证；仍 `@MainActor`，因为所有调用方本就在主线程。
+///
+/// **命名口径（R13 定，按副作用分）**：有副作用的写操作读作祈使动词短语（`pair` /
+/// `refreshAccess` / `answerApproval` / `sendPrompt` / `selectModel`）；无副作用的读操作读作名词短语、
+/// 与协议 op 同名（`snapshot` / `page` / `modelCatalog`）。**已知例外**：`listSessions` 是读操作
+/// 却用了动词短语 —— 改成 `sessions()` 会与属性读起来相混，故保留并在此登记。
+///
+/// 与 op 的对应：`pair`→`pair` · `refreshAccess`→`refresh` · `listSessions`→`list-sessions` ·
+/// `snapshot`→`snapshot` · `page`→`page` · `answerApproval`→`approval-answer` ·
+/// `sendPrompt`→`session-prompt` · `modelCatalog`→`model-catalog` · `selectModel`→`model-select`。
 @MainActor
 final class GatewayClient: ObservableObject {
     /// 网关端点 —— **激活前不存在**（R5 契约）：App 在节点验证 Running 之前不持有
     /// 任何网关地址，`activate` 是它从无到有的唯一时刻。
     private(set) var baseURL: URL?
 
-    /// 组网激活后的承载：激活前 = `.shared`（但端点不存在，请求不会发出）。
+    /// 组网激活后的传输：激活前 = `.shared`（但端点不存在，请求不会发出）。
     /// 与 transport 分开存：`FollowClient` 的建连源每次现取，激活后下一轮连接即走隧道。
     private(set) var meshSession: URLSession = .shared
 
@@ -37,12 +46,12 @@ final class GatewayClient: ObservableObject {
 
     /// 组网激活：节点验证 Running 后由 store 调用（R5：唯一激活点）——
     /// HTTP 换 transport、WebSocket 换建连源，整体切到 tailnet。消息层零感知：
-    /// 协议、凭证、身份状态机都不动，只换承载与地址。
+    /// 协议、凭证、身份状态机都不动，只换传输与地址。
     func activate(session: URLSession, baseURL: URL) {
         meshSession = session
         self.baseURL = baseURL
         transport = GatewayTransport(baseURL: baseURL, credentials: credentials, session: session)
-        // 承载切换是局域网 → tailnet 的分界点状态迁移，在此留痕。
+        // 传输切换是局域网 → tailnet 的分界点状态迁移，在此留痕。
         Log.info(Log.Module.gateway, "activated: HTTP+WS switched to \(baseURL.absoluteString)")
     }
 
@@ -184,7 +193,7 @@ final class GatewayClient: ObservableObject {
     /// 安装一次会话级选择。`ok` = **已安装给下一轮**，不是「已生效」——
     /// 生效的证据是流里的 `model/selection` 与随后的 `request/header`。
     @discardableResult
-    func modelSelect(sessionId: String, selection: ModelSelection) async throws -> ModelSelection {
+    func selectModel(sessionId: String, selection: ModelSelection) async throws -> ModelSelection {
         let response: ModelSelectResponse = try await send(
             ModelSelectRequest(
                 sessionId: sessionId,

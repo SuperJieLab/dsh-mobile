@@ -2,7 +2,7 @@
  * 连接域的唯一宿主：把「组网 × 身份 × 传输」三段收敛为一个对外阶段（R3）。
  *
  * 分工：迁移判定仍在纯状态机 `TailnetNodeState`（断言在 tests/MeshNodeStateTests.swift），这里不做
- * 第二台状态机 —— `ConnectionPhase.resolve` 只是它加身份/承载两个输入后的**投影**
+ * 第二台状态机 —— `ConnectionPhase.resolve` 只是它加身份/组网两个输入后的**投影**
  * （决定 1）；启动兜底激活、VerifiedRunning 激活内化、回前台探活的编排住这里（决定 2、6）。
  *
  * 与 `GatewayClient` 的关系（决定 3）：client 是 op 门面 + 身份状态机，由根部创建
@@ -18,7 +18,7 @@ import Combine
 // （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
 // TailscaleKit / GatewayClient，见 tests/ConnectionStoreTests.swift）。
 
-/// 承载激活能力：`GatewayClient.activate` 的窄面。
+/// 组网激活能力：`GatewayClient.activate` 的窄面。
 @MainActor protocol GatewayActivating: AnyObject {
     /// 当前身份关系是否存在（投影输入；身份轴不并入连接阶段，决定 5）。
     var isPaired: Bool { get }
@@ -57,7 +57,7 @@ final class ConnectionStore: ObservableObject {
 
     /// 对外连接阶段 —— 视图读连接态的唯一出处（决定 4）。
     @Published private(set) var phase: ConnectionPhase
-    /// 节点层状态的细粒度透传：`phase` 把 registering 与 running-未承载都折进
+    /// 节点层状态的细粒度透传：`phase` 把 registering 与 running-未组网都折进
     /// connecting，组网管理屏要区分这两态，故单独暴露（读取面仍唯一出处）。
     @Published private(set) var nodeState: TailnetNodeState
     /// 直连 / 中继；非 ready 期为 nil。徽章的独立数据源，口径与重构前一致。
@@ -65,7 +65,7 @@ final class ConnectionStore: ObservableObject {
 
     private let client: GatewayActivating
     private let node: MeshNodeControlling
-    /// tailnet 承载是否已激活（回调已 firing 且 activate 已调）。
+    /// 组网是否已激活（回调已 firing 且 activate 已调）。
     private var tailnetActivated = false
     /// 组网配置的当前值：start 存底，组网管理动作（submitKey / retry）刷新 ——
     /// VerifiedRunning 回调读它而不是读 start 时刻的快照（收口审查 M1：
@@ -151,9 +151,9 @@ final class ConnectionStore: ObservableObject {
 enum ConnectionPhase: Equatable {
     /// 无 key：引导去设置页。
     case needsSetup
-    /// 注册中，或已 running 但承载尚未切换（`gatewaySession` 建成前的窄窗口）。
+    /// 注册中，或已 running 但传输尚未切换（`gatewaySession` 建成前的窄窗口）。
     case connecting
-    /// tailnet 承载已就绪。连接方式（直连 / 中继）单独走 `meshPath`，不进枚举 ——
+    /// 组网已就绪。连接方式（直连 / 中继）单独走 `meshPath`，不进枚举 ——
     /// 徽章的两个数据源口径与重构前一致（`ConnectionBadge.swift` 头注释）。
     case ready
     /// 节点失败，原因可区分（badKey 引导重输 / unreachable 如实显示）。

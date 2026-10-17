@@ -6,7 +6,7 @@
  *     node tools/bench/sweep.ts --out <artifactsDir> --curves <curves.md 路径>
  *
  * 两条曲线（spec 收口判据 1）：
- * ① 跟随延迟 vs 事件率 —— backlog 0，事件率逐级上抬；
+ * ① 订阅延迟 vs 事件率 —— backlog 0，事件率逐级上抬；
  * ② 追平延迟 vs 积压量 —— 事件率固定，打开时预置的 backlog 逐级放大。
  *
  * 每点带负载条件、样本数与有效/无效判定（决定 6：无效点标注而不丢弃），
@@ -17,7 +17,7 @@ import { analyzeRecords, attributeBottleneck, curvePoint, type CurvePoint } from
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** 跟随延迟曲线：事件率清单（每点秒数统一）。 */
+/** 订阅延迟曲线：事件率清单（每点秒数统一）。 */
 const RATE_SWEEP: { rate: number; seconds: number }[] = [
   { rate: 10, seconds: 10 },
   { rate: 50, seconds: 10 },
@@ -109,10 +109,10 @@ async function main(): Promise<void> {
       '',
       '> 由 `tools/bench/sweep.ts` 生成；每点带负载条件、样本数与有效/无效标注（决定 6），'
         + '瓶颈指认取排停顿后的分段 p95 最大者（决定 7）。'
-        + '跟随延迟 = 事件端到端（排停顿）；追平延迟 = opening 的 `devApply − gwRecv`。'
+        + '订阅延迟 = 事件端到端（排停顿）；追平延迟 = opening 的 `devApply − gwRecv`。'
         + '**真机校验轮（client=device）的点另起一节追加，绝不与本表混画同一条曲线**（决定 4）。',
       '',
-      '## 曲线 ① 跟随延迟 vs 事件率（backlog=0）',
+      '## 曲线 ① 订阅延迟 vs 事件率（backlog=0）',
       '',
       '| 事件率 (ev/s) | 点读数 | 瓶颈指认 |',
       '|---|---|---|',

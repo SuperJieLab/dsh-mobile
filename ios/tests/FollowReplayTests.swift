@@ -1,8 +1,8 @@
 /**
- * 跟随承载下的镜像重放（C3）与退避曲线（C1 可测部分）。
+ * 订阅流下的镜像重放（C3）与退避曲线（C1 可测部分）。
  *
  * ## C3（M2 §5.2）
- * 跟随流的形状：opening 即 `page` 的窗口（`Window`），一条事件帧即一次覆盖到
+ * 订阅流的形状：opening 即 `page` 的窗口（`Window`），一条事件帧即一次覆盖到
  * `seq + 1` 的快照（`Snapshot`）。不碰 `SessionSync`、不碰网络，按投喂顺序重放 ——
  * M1 那台状态机若为 WebSocket 改任何一行，这里先红。
  *
@@ -28,7 +28,7 @@ final class FollowReplayTests: XCTestCase {
 
     func testReplayAndBackoff() async {
 
-        // MARK: C3 —— 跟随流按投喂顺序重放进同一台镜像
+        // MARK: C3 —— 订阅流按投喂顺序重放进同一台镜像
 
         var mirror = SessionMirror()
 
@@ -146,7 +146,7 @@ final class FollowReplayTests: XCTestCase {
         do { _ = try await activated.listSessions() } catch GatewayClientError.notActivated { k2Hit = false } catch GatewayClientError.transport { k2Hit = true } catch {}
         XCTAssertTrue(k2Hit, "K2b 激活后失败降为传输层错误（端点确实来自 activate）")
 
-        // K3：无端点时跟随流不建连——直接进退避等待，激活后下一轮自愈。
+        // K3：无端点时订阅流不建连——直接进退避等待，激活后下一轮自愈。
         let follow = FollowClient()
         follow.baseURLProvider = { nil }
         var lastPhase: FollowClient.Phase?
@@ -206,13 +206,13 @@ final class FollowReplayTests: XCTestCase {
         XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: false, missed: 2, limit: 2) == .dead,
                       "O7f 连失到上限判死 —— 半开连接仍会被发现")
 
-        // ② 迟到回调：代次或承载任一不等即不适用 —— 它不得关掉当前连接、不得再排重连。
+        // ② 迟到回调：代次或传输任一不等即不适用 —— 它不得关掉当前连接、不得再排重连。
         XCTAssertTrue(FollowClient.callbackApplies(generation: 7, current: 7, sameTask: true),
                       "O5a 本代当前的连接：回调算数")
         XCTAssertTrue(!FollowClient.callbackApplies(generation: 6, current: 7, sameTask: false),
                       "O5b 上一代的回调：不算数（否则它会把刚建立的新连接掐掉，自锁成 2 秒一转）")
         XCTAssertTrue(!FollowClient.callbackApplies(generation: 7, current: 7, sameTask: false),
-                      "O5c 同代但承载已被替换：同样不算数")
+                      "O5c 同代但传输已被替换：同样不算数")
 
         // O6：就绪硬超时由「网关承诺的打开帧上界 ÷ 实测最慢吞吐」定出来，不是抄上游的 15s ——
         // 抄 15s 的那个版本在真机上活不过 1.25 MB 的打开帧（慢链路要 ~10 秒，且 4 MiB 上界

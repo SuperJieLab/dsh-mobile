@@ -1,7 +1,7 @@
 import Foundation
 
 /**
- * 跟随流的连接编排 —— `URLSessionWebSocketTask` 上的三件事：
+ * 订阅流的连接编排 —— `URLSessionWebSocketTask` 上的三件事：
  *
  * 1. **代次**：本地单调计数；每次（重）连接都是新代次，旧代次回调一律丢弃 ——
  * 迟到的旧帧不能污染新代次视图。
@@ -31,7 +31,7 @@ final class FollowClient: NSObject {
     var onOpening: ((OpeningFrame) -> Void)?
     /// 一条持久事件（DSH 事件对象原样）。
     var onEvent: ((SessionEvent) -> Void)?
-    /// 一条瞬态帧（start/chunk/end，原样）。
+    /// 一条未定稿帧（start/chunk/end，原样）。
     var onTransient: ((JSONValue) -> Void)?
     /// 一条连接级审批帧（`{kind:'request'|'cancel', ...}` 原样）。
     var onApproval: ((JSONValue) -> Void)?
@@ -45,7 +45,7 @@ final class FollowClient: NSObject {
     var onPhaseChange: ((Phase) -> Void)?
     /// 取一张有效的访问凭证 —— upgrade 请求带上它，没有就裸连（必被 401 拒）。
     var authorizationProvider: (() -> String?)?
-    /// 建连的承载与地址每次现取：store 激活后下一轮连接即走隧道，本类零改动。
+    /// 建连的传输与地址每次现取：store 激活后下一轮连接即走隧道，本类零改动。
     /// 返回 nil = 端点不存在（未激活）——不猜地址，connect 据此进退避等待。
     var sessionProvider: () -> URLSession = { .shared }
     var baseURLProvider: () -> URL? = { nil }
@@ -104,12 +104,12 @@ final class FollowClient: NSObject {
     /// 不设为 `private`：它是两端配套契约的一半，测试要能断言它（见 O1）。
     static let maximumMessageSize = 8 * 1024 * 1024
 
-    /// 是否仍在跟随（`stop()` 之后一切重连都停）。
+    /// 是否仍在订阅（`stop()` 之后一切重连都停）。
     private var following = false
 
     // MARK: - 生命周期
 
-    /// 开始跟随一个会话。重复调用同一会话是幂等的；换会话会先停旧的。
+    /// 开始订阅一个会话。重复调用同一会话是幂等的；换会话会先停旧的。
     func start(sessionId newSessionId: String) {
         if following, sessionId == newSessionId { return }
         stop()
@@ -118,7 +118,7 @@ final class FollowClient: NSObject {
         connect()
     }
 
-    /// 停止跟随：关连接、取消一切定时器。之后不再重连。
+    /// 停止订阅：关连接、取消一切定时器。之后不再重连。
     func stop() {
         following = false
         sessionId = nil
@@ -129,7 +129,7 @@ final class FollowClient: NSObject {
         phase = .idle
     }
 
-    /// 重开当前流：用于瞬态断号 —— 现有连接还活着，但这一段的基线已经丢了。
+    /// 重开当前流：用于未定稿断号 —— 现有连接还活着，但这一段的基线已经丢了。
     /// 重新 open（同一条连接上）拿新 opening；连接本身不重建。
     func reopenStream() {
         guard following, let sessionId else { return }
@@ -214,7 +214,7 @@ final class FollowClient: NSObject {
         heartbeat(on: webSocketTask, generation: current)
     }
 
-    /// 在当前连接上发一条 open 帧，开始（或重建）跟随流。
+    /// 在当前连接上发一条 open 帧，开始（或重建）订阅流。
     private func openFollowStream(sessionId sessionIdToFollow: String) {
         phase = .connecting
         let open: [String: JSONValue] = [
@@ -372,7 +372,7 @@ final class FollowClient: NSObject {
             if let sessionId { openFollowStream(sessionId: sessionId) }
 
         case "approval":
-            // 连接级审批推送（无 streamId）：连接活着就有，与跟随流无关。
+            // 连接级审批推送（无 streamId）：连接活着就有，与订阅流无关。
             if let payload = frame.payload { onApproval?(payload) }
 
         case "usage":
@@ -394,7 +394,7 @@ final class FollowClient: NSObject {
     private func send(_ json: [String: JSONValue]) {
         guard let data = try? JSONEncoder().encode(json),
               let text = String(data: data, encoding: .utf8) else { return }
-        // 发起时的代次与承载要捕捉下来：回调回来时它们可能已经过时。被取代的 send 以取消
+        // 发起时的代次与传输要捕捉下来：回调回来时它们可能已经过时。被取代的 send 以取消
         // （-999）告终，而那个回调若还算数，就会把**刚建立的新连接**关掉、再排一次重连 ——
         // 新连接的重连又把它掐回来。真机抓到过这条自锁（每代 2 秒一转、永不恢复）。
         let sentGeneration = generation
@@ -492,9 +492,9 @@ final class FollowClient: NSObject {
     }
 
     /**
-     迟到的回调该不该起作用 —— 代次与承载**双重相等**才算「本代当前的那条连接」。
+     迟到的回调该不该起作用 —— 代次与传输**双重相等**才算「本代当前的那条连接」。
 
-     单独一个代次判据不够：同一代之内承载也可能已被替换（`connect` 里的先关后建）。判据松一格，
+     单独一个代次判据不够：同一代之内传输也可能已被替换（`connect` 里的先关后建）。判据松一格，
      一个被取代的 `send` 回调就会把新连接掐掉，而它自己又会再排一次重连（真机抓到过）。
      */
     static func callbackApplies(generation: Int, current: Int, sameTask: Bool) -> Bool {

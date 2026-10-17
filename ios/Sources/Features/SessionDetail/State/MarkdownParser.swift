@@ -64,7 +64,7 @@ extension Block: Identifiable {
 // MARK: - 解析结果
 
 /// 一次解析的结果。除块本身外，另带两件给流式用的记账。
-struct MarkdownParse: Equatable {
+struct MarkdownParseResult: Equatable {
     /// 这次解析对应的源文。`extending` 靠它判断「新源文是不是在旧源文后面接着长」。
     let source: String
     let blocks: [Block]
@@ -83,9 +83,9 @@ enum MarkdownParser {
     private static let fence = "```"
 
     /// 全量解析。
-    static func parse(_ source: String) -> MarkdownParse {
+    static func parse(_ source: String) -> MarkdownParseResult {
         let blocks = scan(lines(of: source), from: 0)
-        return MarkdownParse(source: source,
+        return MarkdownParseResult(source: source,
                              blocks: blocks,
                              frozenCount: frozenCount(of: source, blocks: blocks),
                              reparsedFrom: 0)
@@ -95,7 +95,7 @@ enum MarkdownParser {
     ///
     /// 新源文是旧源文的前缀延长时，冻结段原样搬运、只重扫尾部；否则老实全量重解 ——
     /// 宁可多算，不可算错。
-    static func parse(_ source: String, extending previous: MarkdownParse) -> MarkdownParse {
+    static func parse(_ source: String, extending previous: MarkdownParseResult) -> MarkdownParseResult {
         guard source.hasPrefix(previous.source) else { return parse(source) }
 
         // 冻结边界之后第一块的起点；全部冻结（源文以空行结尾）时从旧源文末尾接着扫，位置仍是行首。
@@ -108,7 +108,7 @@ enum MarkdownParser {
         let all = lines(of: source)
         let start = all.firstIndex { $0.offset >= resume } ?? all.count
         let blocks = frozen + scan(all, from: start)
-        return MarkdownParse(source: source,
+        return MarkdownParseResult(source: source,
                              blocks: blocks,
                              frozenCount: frozenCount(of: source, blocks: blocks),
                              reparsedFrom: resume)

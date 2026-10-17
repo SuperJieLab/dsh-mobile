@@ -125,7 +125,7 @@ enum JSONValue: Decodable, Encodable, Equatable {
     }
 
     /// 对称的编码：跟解码一样按实际类型走 —— `JSONValue` 要能在两个方向上
-    /// 原样表示任意 JSON（跟随流要往回发帧）。
+    /// 原样表示任意 JSON（订阅流要往回发帧）。
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
@@ -512,7 +512,7 @@ struct SessionSnapshot {
     let hasMore: Bool
     let events: [SessionEvent]
     /// 会话的模型基线：**下一轮**将使用的模型。缺省 = 服务端不知道，
-    /// 客户端退到目录默认；进会话后的增量走跟随流。
+    /// 客户端退到目录默认；进会话后的增量走订阅流。
     var model: ModelSelection? = nil
 }
 

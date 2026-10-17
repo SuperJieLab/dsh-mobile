@@ -151,7 +151,7 @@ test('H5: 旧产物（整数毫秒）与新产物（亚毫秒）同吃 —— �
 
 // MARK: - 曲线点（Task 6：两条曲线的原料）
 
-test('曲线点：跟随延迟取事件 e2e 的排停顿分布，追平延迟取 opening 的端到端', () => {
+test('曲线点：订阅延迟取事件 e2e 的排停顿分布，追平延迟取 opening 的端到端', () => {
   const records: PerfLike[] = []
   // opening：gwRecv=1000, gwSend=1050, devApply=1080 → 追平 = 80 ms。
   records.push(

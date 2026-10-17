@@ -37,9 +37,9 @@ final class SessionSync: ObservableObject {
     /// 本项说的是「有内容没能接上、或已被清空重来」—— 它要出现在**不随内容滚动**的面上，
     /// 否则用户往回翻时看不见（那正是 spec 2.4.3 要防的「看起来正常但少了内容」）。
     @Published private(set) var notice: ResyncNotice?
-    /// 正在生成的回复（打字机）；没有进行中的 attempt 就是空串。
+    /// 正在生成的回复（流式输出）；没有进行中的 attempt 就是空串。
     @Published private(set) var transientText = ""
-    /// 跟随流的连接阶段 —— 连接态指示器的数据源，从 `FollowClient` 转发。
+    /// 订阅流的连接阶段 —— 连接态指示器的数据源，从 `FollowClient` 转发。
     @Published private(set) var connectionPhase: FollowClient.Phase = .idle
     /// 上下文占用。为 `nil` 时界面**隐藏整行**。
     @Published private(set) var usage: UsagePayload? = nil
@@ -58,7 +58,7 @@ final class SessionSync: ObservableObject {
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
 
-    /// 跟随流：打开详情页即开启，实时收 opening / 事件 / 瞬态帧。
+    /// 订阅流：打开详情页即开启，实时收 opening / 事件 / 未定稿帧。
     private lazy var follow: FollowClient = {
         let followClient = FollowClient()
         followClient.onOpening = { [weak self] opening in self?.applyOpening(opening) }
@@ -71,7 +71,7 @@ final class SessionSync: ObservableObject {
         followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
         // upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
         followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
-        // 承载与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
+        // 传输与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
         followClient.sessionProvider = { [weak self] in self?.client.meshSession ?? .shared }
         followClient.baseURLProvider = { [weak self] in self?.client.baseURL }
         return followClient
@@ -84,7 +84,7 @@ final class SessionSync: ObservableObject {
     }
     /// 占用值的吸收。判定（严格高水位胜）全在值类型里，这里只持有并转发结果。
     private var usageState = UsageState()
-    /// 当前模型的跟随更新。判定全在值类型里，这里只持有并转发结果。
+    /// 当前模型的订阅更新。判定全在值类型里，这里只持有并转发结果。
     private var modelState = ModelSelectionState()
     /// 把嵌套状态机的变化冒泡成自己的 objectWillChange ——
     /// 不转发的话审批卡的增删不触发视图重算（真机踩实）。
@@ -93,7 +93,7 @@ final class SessionSync: ObservableObject {
     private var refreshGate = RefreshGate()
     /// flush 是否已有一次调度在途（防重复调度）。
     private var flushScheduled = false
-    /// 合并窗口 = 一个渲染帧量级。瞬态打字机逐帧到达无感知；事件文本晚一帧出现。
+    /// 合并窗口 = 一个渲染帧量级。未定稿内容逐帧到达无感知；事件文本晚一帧出现。
     private static let flushWindowNanos: UInt64 = 16_000_000
 
     init(client: GatewayClient, sessionId: String) {
@@ -104,7 +104,7 @@ final class SessionSync: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
-    /// 下发一条指令：回包 ok = 已受理，回答本身从跟随流里来；失败如实进状态行，
+    /// 下发一条指令：回包 ok = 已受理，回答本身从订阅流里来；失败如实进状态行，
     /// 输入的字还在框里。
     func sendPrompt(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -141,7 +141,7 @@ final class SessionSync: ObservableObject {
     func selectModel(_ selection: ModelSelection) async {
         let generation = modelState.beginSelect()
         do {
-            let selected = try await client.modelSelect(sessionId: sessionId, selection: selection)
+            let selected = try await client.selectModel(sessionId: sessionId, selection: selection)
             if modelState.settle(generation: generation, selected: selected) {
                 displayedModel = modelState.displayed
             }
@@ -279,9 +279,9 @@ final class SessionSync: ObservableObject {
         refreshView()
     }
 
-    // MARK: - 跟随
+    // MARK: - 订阅
 
-    /// 打开详情页即跟随：服务端推 opening（首屏窗口）与后续事件，不再轮询。判定全在状态机
+    /// 打开详情页即订阅：服务端推 opening（首屏窗口）与后续事件，不再轮询。判定全在状态机
     /// 里 —— 与 HTTP 路径共用同一台 `SessionMirror`：
     /// - opening → `mirror.realign(with:)`（**重对齐**：本地更早的部分保留、只换尾部；
     ///   手里空着时等价于打开。重连因此不再把翻出来的历史还回去，R10 期1）
@@ -291,7 +291,7 @@ final class SessionSync: ObservableObject {
         follow.start(sessionId: sessionId)
     }
 
-    /// 离开详情页：关流、清瞬态。镜像留在内存里（视图销毁时一起消失）。
+    /// 离开详情页：关流、清未定稿。镜像留在内存里（视图销毁时一起消失）。
     func stopFollowing() {
         follow.stop()
         transient = TransientChannel()
@@ -316,7 +316,7 @@ final class SessionSync: ObservableObject {
             events: opening.events
         ))
 
-        // 瞬态基线：opening 里带了进行中的 attempt 就恢复打字机，没有就清场。
+        // 未定稿基线：opening 里带了进行中的 attempt 就恢复流式输出，没有就清场。
         if let baseline = opening.assistantStream {
             transient.apply(baseline: parseBaseline(baseline))
         } else {
@@ -352,7 +352,7 @@ final class SessionSync: ObservableObject {
         return 0
     }
 
-    /// 跟随路径（opening / 往回翻）收下一条判定 —— 置位规则在值类型里（`.gap` 保留、「位置被否定」重置）。
+    /// 订阅路径（opening / 往回翻）收下一条判定 —— 置位规则在值类型里（`.gap` 保留、「位置被否定」重置）。
     private func observeNotice(_ verdict: Verdict) {
         noticeState.observe(verdict)
         notice = noticeState.notice
@@ -410,7 +410,7 @@ final class SessionSync: ObservableObject {
     }
 
     private func handleStreamRefusal(_ failure: GatewayFailure) {
-        status = .failed("跟随流被拒绝：\(failure.readableDescription)")
+        status = .failed("订阅流被拒绝：\(failure.readableDescription)")
         refreshView()
     }
 
@@ -421,7 +421,7 @@ final class SessionSync: ObservableObject {
         usage = usageState.usage
     }
 
-    /// opening 的瞬态基线 → 通道的输入。只认我们声明的字段，其余忽略。
+    /// opening 的未定稿基线 → 通道的输入。只认我们声明的字段，其余忽略。
     private func parseBaseline(_ json: JSONValue) -> TransientBaseline {
         let active = json["activeAttempt"]
         return TransientBaseline(
@@ -564,7 +564,7 @@ struct ResyncNoticeState {
 
   /// 编排**自己**执行了一次重置 —— 如实记成「已重置」。
   ///
-  /// 为什么不复用 `observe(_:)`：那里按 `invalidatesLocalContent` 分档，是给**跟随路径**
+  /// 为什么不复用 `observe(_:)`：那里按 `invalidatesLocalContent` 分档，是给**订阅路径**
   /// （opening / 往回翻）的规则 —— 那种处境下 `.gap` 该保留。而 `sync()` 是用户显式要求的
   /// 「重新同步」，它撞上缺口时**保留无法收敛**（下一次拉到的增量仍接不上），所以它一律重置：
   /// 这里记的是**做过的**，不是**该做的**。
