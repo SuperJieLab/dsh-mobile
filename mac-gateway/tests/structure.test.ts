@@ -24,7 +24,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { isBuiltin as isBuiltinModule } from 'node:module'
 import { dirname, join, relative, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../src')
@@ -106,7 +106,7 @@ export function importsOf(source: string): string[] {
   return specifiers
 }
 
-/** 目录下全部 `.ts` 文件（递归，不跟进符号链接）。 */
+/** 目录下的全部源码文件（递归，不跟进符号链接）。三种扩展名都要收：漏一种就等于不扫它。 */
 export function filesUnder(directory: string): string[] {
   if (!existsSync(directory) || !statSync(directory).isDirectory()) {
     throw new Error(`${relative(SRC, directory)}/ does not exist yet — create the directory this judge guards`)
@@ -115,10 +115,16 @@ export function filesUnder(directory: string): string[] {
   for (const entry of readdirSync(directory)) {
     const path = join(directory, entry)
     if (statSync(path).isDirectory()) found.push(...filesUnder(path))
-    else if (entry.endsWith('.ts')) found.push(path)
+    else if (SOURCE_EXTENSIONS.some(extension => entry.endsWith(extension))) found.push(path)
   }
   return found
 }
+
+/**
+ * 算得上「本仓源码」的扩展名。`src/` 今天全用 `.ts`，但 `.mts` / `.cts` 也是合法
+ * TypeScript —— 只收 `.ts` 的话，一个 `.mts` 文件对所有判据都是隐形的。
+ */
+const SOURCE_EXTENSIONS = ['.ts', '.mts', '.cts'] as const
 
 /** `target` 是否落在 `directory` 内（含该目录本身）。 */
 function within(target: string, directory: string): boolean {
@@ -140,12 +146,12 @@ export function resolutionOf(
   const base = resolve(dirname(file), specifier)
   // 只有「带扩展名」与「省略扩展名」两种。目录 import（`./sub` → `sub/index.ts`）当前
   // 全仓没有，不做猜测：真出现会在这里报错，那时再补候选 —— 猜错比报错更难查。
-  const candidates = [base, `${base}.ts`]
+  const candidates = [base, ...SOURCE_EXTENSIONS.map(extension => `${base}${extension}`)]
   for (const candidate of candidates) {
-    if (candidate.endsWith('.ts') && exists(candidate)) return candidate
+    if (SOURCE_EXTENSIONS.some(extension => candidate.endsWith(extension)) && exists(candidate)) return candidate
   }
   throw new Error(
-    `${relative(dirname(file), base)}: cannot resolve this import to a .ts file — the structure judge only understands explicit targets`,
+    `${relative(dirname(file), base)}: cannot resolve this import to a source file — the structure judge only understands explicit targets`,
   )
 }
 
@@ -693,7 +699,8 @@ function exportStatementsOf(code: string): string[] {
  */
 function assertLiteralConstant(statement: string): void {
   const match = /^export\s+const\s+[\p{ID_Start}$][\p{ID_Continue}$]*\s*(?::[^=]+)?=\s*([\s\S]*)$/u.exec(statement)
-  const value = match?.[1]?.trim() ?? ''
+  // 末尾的 `as const` 是标准写法（把字面量类型收窄），剥掉再看形状。
+  const value = (match?.[1]?.trim() ?? '').replace(/\s+as\s+const\s*$/, '')
   if (value === '') throw new Error('`export const … =` has no value — extend exportSurfaceOf() first')
 
   // **先剥字符串**，再做任何判断。否则 `= 'a => b'` 会被当成箭头函数 —— 假红会让人
@@ -866,134 +873,131 @@ test('contract/ holds only the framing implementation', () => {
 })
 
 // ---------------------------------------------------------------------------
-// V9：判定符号只有一个声明，且住在它该住的目录
+// V9：判定符号只从一个模块导出，且那个模块就是它该在的地方
 // ---------------------------------------------------------------------------
 
 /**
- * 判定层的导出面清单：**每个文件必须声明的符号**。
+ * 这两条判据**不解析语法**，它们问运行时：每个模块到底导出了什么。
  *
- * 两件事由它同时守住：① 每个符号在全 `src/` 只有一处声明（复制一份就红）；
- * ② 那一处就是这里写的家（整体搬去别处也红）。
+ * 为什么不用正则扫声明：`export` 的写法是开放集（`export {x}` / `export default` /
+ * `const enum` / `abstract class` / `declare` / 缩进 / 命名空间 / `.mts` …），枚举它
+ * 必然漏掉下一种 —— 这条路上已经走过三轮，每轮都被找到新形态。而**模块的导出表是
+ * 闭集**：Node 加载完一个模块，`Object.keys(namespace)` 就是它交出的全部名字，
+ * 没有第五种写法能绕过去。
  *
- * 表要覆盖 `protocol/` 的**每一个**导出 —— 下一条判据会核对，新加导出不补表就红。
+ * 两条边界，都是刻意的：
+ *
+ * ① 只看**导出**。一个声明了同名符号、但不导出的副本看不见 —— 那是死代码，
+ *    归 `code-slim-audit`，不归结构判据。
+ * ② `declare function handle()` **不算**。`declare` 在编译后什么都不留，运行时没有这个
+ *    函数，因此它构不成「第二份实现」—— 调用它会在运行时报 undefined。判据放行它是对的。
+ */
+
+/**
+ * 判定层的导出面清单。**值**（函数 / 常量 / 类）与**类型**分开列，因为它们的
+ * 证据来源不同：
+ *
+ *   值    运行时真话 —— `Object.keys(namespace)`。闭集，没有语法能绕过。
+ *   类型  编译期产物，运行时被擦除，所以只能读源码：`exportSurfaceOf` 是**白名单式**的，
+ *         认不出的写法直接抛错（`class` 要显式允许），不会静默当成「没有导出」。
+ *
+ * 表要覆盖 `protocol/` 的**每一个**导出（下面第二条判据会核对，新加导出不补表就红）。
  * 手法与 `WIRE_CODECS` 同一套：改表这个动作逼人回答「它归哪一层」。
  *
  * `upstream/usage.ts` 是唯一的例外，且是刻意的：`usageSnapshotOf` 认宿主的投影键名
  * （`contextPressure` / `contextBreakdown`），消费者在宿主适配层。放进 `protocol/`
  * 会让 `upstream/` 必须 import `protocol/`（撞 V3）。
  */
-const JUDGEMENT_SURFACE: readonly { home: string; names: readonly string[] }[] = [
+const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; types: readonly string[] }[] = [
   {
     home: 'protocol/rpc.ts',
-    names: ['Limits', 'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault'],
+    values: ['DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault'],
+    types: ['Limits'],
   },
   {
     home: 'protocol/window.ts',
-    names: [
-      'LogNotDenseError', 'CursorPastEndError', 'OpeningShrink',
-      'pageWindow', 'upstreamWindow', 'fitOpeningToBytes',
-    ],
+    values: ['LogNotDenseError', 'CursorPastEndError', 'pageWindow', 'upstreamWindow', 'fitOpeningToBytes'],
+    types: ['OpeningShrink'],
   },
-  { home: 'protocol/usage.ts', names: ['usageIsTrigger', 'usageShouldEmit'] },
+  { home: 'protocol/usage.ts', values: ['usageIsTrigger', 'usageShouldEmit'], types: [] },
   {
     home: 'protocol/auth.ts',
-    names: [
-      'ACCESS_TTL_MS', 'PAIRING_TTL_MS', 'PAIRING_MAX_ATTEMPTS', 'StoredCredentials',
-      'PairingOutcome', 'emptyCredentials', 'sha256Hex', 'newPairingCode', 'newToken',
-      'bearerTokenOf', 'isPlausiblePairingCode', 'attemptPairing', 'issueAccess', 'isLiveAccess',
+    values: [
+      'ACCESS_TTL_MS', 'PAIRING_TTL_MS', 'PAIRING_MAX_ATTEMPTS', 'emptyCredentials', 'sha256Hex',
+      'newPairingCode', 'newToken', 'bearerTokenOf', 'isPlausiblePairingCode', 'attemptPairing',
+      'issueAccess', 'isLiveAccess',
     ],
+    types: ['StoredCredentials', 'PairingOutcome'],
   },
-  { home: 'upstream/usage.ts', names: ['usageSnapshotOf'] },
+  { home: 'upstream/usage.ts', values: ['usageSnapshotOf'], types: [] },
 ]
 
-/**
- * 顶层声明**关键字**的集合 —— 这里必须闭，否则判据会静默看不见。
- *
- * 为什么枚举声明而不枚举导出：导出写法是开放集（`export { x }`、`export default`、
- * `export let`、`export =`、重导出……），枚举它必然漏掉下一种；而**任何模块级声明
- * 都离不开这七个关键字之一**，不管它怎么被导出。上一轮 V5 已经在这条路上翻过车
- * （正则只认 `export const`/`export function`），这一次换成闭集。
- *
- * 一个已知的边界：`const { a, b } = …` 这类解构声明把名字放在括号里，关键字不邻接。
- * 那种写法在模块顶层本仓没有，且它会绕过——所以下面显式拒绝它，而不是假装看不见。
- */
-const DECLARATION_KEYWORDS = 'function|class|interface|type|const|let|var|enum'
-
-/** 一个文件的顶层声明：`名字 → 出现在第几行`。认不出的解构声明直接抛错。 */
-export function declarationsOf(source: string): Map<string, number> {
-  const code = stripComments(source)
-  const found = new Map<string, number>()
-  const declaration = new RegExp(
-    `^(?:export\\s+(?:default\\s+)?)?(?:async\\s+)?(?:${DECLARATION_KEYWORDS})\\s*\\*?\\s+([A-Za-z_$][\\w$]*)`,
-    'gm',
-  )
-  for (const match of code.matchAll(declaration)) {
-    const name = match[1]
-    if (name !== undefined && !found.has(name)) {
-      found.set(name, code.slice(0, match.index).split('\n').length)
-    }
-  }
-  // 导出列表：`export { a as b }` 把 `b` 这个名字交出去了，而 `b` 从没被声明过。
-  // 不记它，`export { duplicate as handle }` 就能在别处再造一个 `handle` 而不被计数。
-  // 同一文件里已声明过的名字跳过 —— 否则 `log.ts` 这种「声明 + 末尾再列一次」会自己撞自己。
-  for (const match of code.matchAll(/^export\s*\{([^}]*)\}/gm)) {
-    const line = code.slice(0, match.index).split('\n').length
-    for (const part of (match[1] ?? '').split(',')) {
-      const alias = part.includes(' as ') ? part.split(' as ')[1] : part
-      const name = alias?.trim()
-      if (name !== undefined && /^[A-Za-z_$][\w$]*$/.test(name) && !found.has(name)) found.set(name, line)
-    }
-  }
-
-  // 解构声明：关键字后面跟 `{` 或 `[` —— 名字在括号里，上面的正则看不见。
-  for (const match of code.matchAll(new RegExp(`^(?:const|let|var)\\s*([\\[{])`, 'gm'))) {
-    const line = code.slice(0, match.index).split('\n').length
-    throw new Error(
-      `line ${line}: destructuring declaration — this judge cannot see the names inside; `
-      + 'declare them one per line so a duplicate copy stays visible',
-    )
-  }
-  return found
+/** 一个模块交出的**值** —— 运行时真话，不是从源码里猜的。 */
+async function valuesOf(file: string): Promise<string[]> {
+  const namespace = await import(pathToFileURL(file).href) as Record<string, unknown>
+  return Object.keys(namespace)
 }
 
-test('each judgement symbol is declared exactly once, at its stated home', () => {
-  // 全 `src/` 的声明索引：`名字 → [{file, line}]`
-  const index = new Map<string, { file: string; line: number }[]>()
+/** 一个模块交出的**类型** —— 读源码，但走的是会抛错的白名单扫描器。 */
+function typesOf(file: string): string[] {
+  return exportSurfaceOf(readFileSync(file, 'utf8'), { allowClasses: true }).shapes
+}
+
+/** 全 `src/` 的值索引：`名字 → 交出它的文件`。每个模块都要能加载 —— 载不动就是判据失明。 */
+async function valueIndex(): Promise<Map<string, string[]>> {
+  const index = new Map<string, string[]>()
   for (const file of filesUnder(SRC)) {
-    for (const [name, line] of declarationsOf(readFileSync(file, 'utf8'))) {
-      index.set(name, [...(index.get(name) ?? []), { file, line }])
+    for (const name of await valuesOf(file)) {
+      index.set(name, [...(index.get(name) ?? []), relative(SRC, file)])
     }
   }
+  return index
+}
 
-  const expected = JUDGEMENT_SURFACE.flatMap(({ home, names }) => names.map(name => ({ name, home })))
-  const complaints = expected.flatMap(({ name, home }) => {
+/** 一个文件里有哪些类型导出。 */
+function typeIndexIn(file: string): Set<string> {
+  return new Set(typesOf(join(SRC, file)))
+}
+
+/** 一个符号是否只在它该在的那个文件交出，且只交一次。 */
+function homeComplaints(kind: string, index: Map<string, string[]>, wanted: readonly { name: string; home: string }[]): string[] {
+  return wanted.flatMap(({ name, home }) => {
     const places = index.get(name) ?? []
-    if (places.length === 0) return [`${name}: no declaration at all — renamed? then update JUDGEMENT_SURFACE`]
+    if (places.length === 0) return [`${kind} ${name}: not exported by any module — renamed? then update JUDGEMENT_SURFACE`]
     if (places.length > 1) {
-      const list = places.map(({ file, line }) => `${where(file)}:${line}`).join(', ')
-      return [`${name}: declared ${places.length} times (${list}) — one copy will silently stop being updated`]
+      return [`${kind} ${name}: offered by ${places.join(', ')} — a second copy will silently stop being updated`]
     }
-    const only = places[0] as { file: string; line: number }
-    const actual = relative(SRC, only.file)
-    return actual === home ? [] : [`${name}: lives in ${actual}:${only.line}, expected ${home}`]
+    const [only] = places
+    return only === home ? [] : [`${kind} ${name}: comes from ${String(only)}, expected ${home}`]
   })
-  assert.deepEqual(complaints, [],
-    'a judgement symbol is either duplicated or no longer at its home — both make the layer boundary a lie')
+}
+
+test('each judgement value comes from exactly one module, at its stated home', async () => {
+  const wanted = JUDGEMENT_SURFACE.flatMap(({ home, values }) => values.map(name => ({ name, home })))
+  assert.deepEqual(homeComplaints('value', await valueIndex(), wanted), [],
+    'a judgement value reachable from two modules, or from the wrong one, makes the layer boundary a lie')
 })
 
-/**
- * `protocol/` 里**每一个**导出都必须在这张表里有归属。
- *
- * 没有这一条，新增一个判定符号时不会有人想起去补 `JUDGEMENT_HOME`，而那条判据只查
- * 表里已有的名字 —— 名单会和 protocol/ 的实际面越差越远。手法与 `WIRE_CODECS` 同一套：
- * 新增导出必须先改表，改表这个动作逼人回答「它归哪一层」。
- */
-test('every export of protocol/ is listed as a judgement symbol', () => {
-  const listed = new Set(JUDGEMENT_SURFACE.flatMap(({ names }) => names))
+test('each judgement type is declared in the file that owns it', () => {
+  // 只查「在不在它该在的那个文件里」，**不假装查全仓唯一**：类型是编译期产物，
+  // 而全仓类型扫描必须容下 `export { … }` 这类合法列表，一放宽就回到开放集枚举 ——
+  // 那正是前面三轮翻车的地方。危险的那一半（第二份**实现**）由上面那条值判据守。
+  const complaints = JUDGEMENT_SURFACE.flatMap(({ home, types }) => {
+    const present = typeIndexIn(home)
+    return types.filter(name => !present.has(name))
+      .map(name => `type ${name}: not declared in ${home} — renamed or moved?`)
+  })
+  assert.deepEqual(complaints, [],
+    'a judgement type that left its file leaves the layer boundary describing something that is gone')
+})
+
+test('every export of protocol/ is listed as a judgement symbol', async () => {
+  // 没有这一条，新增判定符号时不会有人想起补表 —— 上面两条只查表里已有的名字，
+  // 名单会和 protocol/ 的实际面越差越远。
+  const listed = new Set(JUDGEMENT_SURFACE.flatMap(({ values, types }) => [...values, ...types]))
   const unlisted: string[] = []
   for (const file of filesUnder(join(SRC, 'protocol'))) {
-    const surface = exportSurfaceOf(readFileSync(file, 'utf8'), { allowClasses: true })
-    for (const name of [...surface.functions, ...surface.shapes, ...surface.classes]) {
+    for (const name of [...await valuesOf(file), ...typesOf(file)]) {
       if (!listed.has(name)) unlisted.push(`${where(file)}: ${name}`)
     }
   }
@@ -1001,47 +1005,17 @@ test('every export of protocol/ is listed as a judgement symbol', () => {
     'a new export in protocol/ needs a home in JUDGEMENT_SURFACE — otherwise nothing stops a second copy of it')
 })
 
-test('the HTTP judge really reports every spelling it claims to cover', () => {
-  // 这张表是内联常量：删掉一项只会让判据变弱，不会有任何样本红。所以逐项喂给**判据本体**，
-  // 要求它报出来 —— 不是拿表去比表（那样恒真）。
-  const file = join(SRC, 'protocol', 'x.ts')
-  const silentlyAllowed = [...HTTP_MODULES].filter(specifier => httpImportsAmong([{ file, specifiers: [specifier] }]).length === 0)
-  assert.deepEqual(silentlyAllowed, [], 'a spelling the judge cannot see is a hole in the layer boundary')
-
-  // 反方向：一个不相干的模块名不得被误报（否则判据会靠假红让人把它关掉）。
-  assert.deepEqual(httpImportsAmong([{ file, specifiers: ['node:crypto', './window.ts'] }]), [])
-
-  // 两种拼法都要在：只留 `node:` 前缀会让裸写那一半静默失明。
-  for (const bare of ['http', 'https', 'net', 'http2']) {
-    assert.ok(HTTP_MODULES.has(bare) && HTTP_MODULES.has(`node:${bare}`),
-      `${bare} needs both spellings — a bundler-free file writes the bare one`)
+test('the export index sees the modules it is supposed to see', async () => {
+  // 活性正控：索引若因为加载失败或路径写错变成空表，上面几条判据会「全绿」。
+  const values = await valueIndex()
+  // 具名锚点而不是数字阈值：数字会因为重构漂，锚点只在「那个文件没被读到」时才红。
+  // 活性锚：**每个目录都要在索引里留下名字**。不按名字锚（`log.ts` 故意重导出整个
+  // perf 模块，按名字锚会误红），按目录锚 —— 要证明的本来就是「走遍了」。
+  const walked = new Set([...values.values()].flat())
+  for (const directory of ['wire', 'ports', 'protocol', 'remote', 'upstream']) {
+    assert.ok([...walked].some(file => file.startsWith(`${directory}/`)),
+      `no name was indexed from ${directory}/ — the walk never read it`)
   }
-})
-
-test('the declaration reader sees every export syntax, and refuses destructuring', () => {
-  // 每一条都是「导出写在别处」的形态：它们全都要有一个模块级声明，
-  // 所以按声明枚举时**必须**都看得见（上一版按导出枚举，这四种全部漏掉）。
-  for (const [source, why] of [
-    ['function handle() {}\nexport { handle }', '本地具名导出'],
-    ['export default function handle() {}', 'default 导出'],
-    ['export let handle = 1', 'let 声明'],
-    ['export var handle = 1', 'var 声明'],
-    ['function* handle() {}\nexport { handle }', 'generator'],
-    ['class Handle {}\nexport { Handle as handle }', 'class 改别名导出'],
-  ] as [string, string][]) {
-    assert.ok(declarationsOf(source).size > 0, `must see a declaration (${why}): ${source.replace(/\n/g, ' ')}`)
-  }
-  // 正控：名字取到的是声明，不是引用；同一名字只记一次（行号取首次）。
-  assert.deepEqual([...declarationsOf('interface A { x: number }\nfunction b(): void {}\nb()\nconst C = 1')],
-    [['A', 1], ['b', 2], ['C', 4]],
-    'only declarations, first occurrence, with a 1-based line')
-  // 别名导出交出的是**新名字**，要计进来（否则 `export { dup as handle }` 造得出第二个 handle）。
-  assert.deepEqual([...declarationsOf('function b(): void {}\nexport { b as c }')],
-    [['b', 1], ['c', 2]], 'an export alias introduces a name that no declaration mentions')
-  // 正控：同一文件里「已声明 + 末尾再列一次」不得自我碰撞（`log.ts` 就是这个形态）。
-  assert.deepEqual([...declarationsOf('function a(): void {}\nexport { a }')],
-    [['a', 1]], 'listing an already-declared name is not a second declaration')
-  // 解构声明：名字在括号里，判据看不见 —— 报错而不是静默放过。
-  assert.throws(() => declarationsOf('const { a, b } = thing'), /destructuring/)
-  assert.throws(() => declarationsOf('let [x] = list'), /destructuring/)
+  assert.ok([...walked].some(file => !file.includes('/')), 'no name was indexed from a top-level file (log.ts, perf.ts)')
+  assert.equal(values.has('thisNameDoesNotExistAnywhere'), false)
 })
