@@ -13,6 +13,7 @@ import { once } from 'node:events'
 import { attachStreamHandler } from '../../src/remote/server.ts'
 import { setPerfSink } from '../../src/log.ts'
 import type { FollowSource } from '../../src/ports/follow.ts'
+import type { WireEvent } from '../../src/wire/rpc.ts'
 import {
   connect, event, fakeSource, filler, receive, send, snapshotFrame, turn,
 } from './harness.ts'

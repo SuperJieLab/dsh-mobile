@@ -578,6 +578,11 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
  *     后者可能是工厂返回的函数，还带加载期副作用。
  *
  * 要支持新形态，先改这里，别让它静默变成「没有导出函数」。
+ *
+ * **重导出也被拒，这是有意的**：`export type { X } from './y.ts'` 会让「这个文件的
+ * 导出面」变得含糊 —— 哪些是它声明的、哪些只是转发，读代码的人分不出，而本判据
+ * 要的正是「导出面 == 白名单」这句话能逐字成立。要转出别处的名字，先想清楚它该
+ * 住在哪个文件。
  */
 export function exportSurfaceOf(
   source: string,
@@ -1047,41 +1052,70 @@ test('the transport is split by lifetime, and the old single file is gone', () =
     'ws.ts must be gone: one file cannot show three lifetimes')
 })
 
+/**
+ * 「可能含声明」的那部分代码：剥注释、剥字符串、去掉 import 与 `export … from`。
+ *
+ * 两件事必须去掉，否则不产生声明的写法会被当成声明（两种都是**假红**，
+ * 而假红会让人把判据关掉）：
+ *   ① `import { type PairResponse } from '…'` —— `type` 与名字相邻，但它只是导入；
+ *   ② `export type { PairResponse } from '…'` —— 重导出，同样不声明新名字。
+ * 字符串也要剥：`"interface PairResponse is …"` 这种文案不是声明。
+ */
+export function declarationScopeOf(source: string): string {
+  return stripComments(source)
+    .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""')
+    .replace(/\bimport\b[^;]*?\bfrom\s*""/g, '')
+    .replace(/\bimport\s*""/g, '')
+    .replace(/\bexport\b[^;]*?\bfrom\s*""/g, '')
+}
+
 // ---------------------------------------------------------------------------
 // V11：凭据类 op 的形状有唯一出处
 // ---------------------------------------------------------------------------
 
-test('the credential ops\' shapes are declared in exactly one file, and it is wire/auth.ts', () => {
+test('the credential ops\' shapes have one declaration and at least one consumer', () => {
   // 这两条 op 绕过统一入口，形状曾经只写在传输层的函数体里 —— 手机端另有一份
   // Swift 声明，两边靠人对齐。现在它们与其余 op 一样住在 wire/。
   //
-  // **必须查全仓，不能只查 home**：只查 home 的话，把形状再内联回 `http.ts` 而
-  // 留着 `wire/auth.ts` 不删，判据照样绿 —— 「唯一」与「家在哪儿」是两件事，
-  // 期2 的 C1 反过来栽过一次（只查唯一、不查家）。
-  //
-  // 类型的声明形态是闭集：`interface X` / `type X` / `class X`，**关键字紧邻名字**
-  // （不管前面挂什么修饰符）。所以这里找的是「关键字 + 名字」这一对，而不是
-  // 「行首有没有 export」—— 后者是开放集，期2 栽过三轮。
+  // 两条判据缺一不可，因为失败有两种形态：
+  //   ① **声明被复制**一份到别处 → 两边各自演进；
+  //   ② 声明还留着、但**没人用它**（形状被内联成匿名对象类型）→ 那份声明变成纯文档，
+  //      改它不会让任何地方编译失败。只查①会漏掉②，而那正是本期的失败模式。
   const home = join(SRC, 'wire', 'auth.ts')
   const expected = ['PairRequest', 'RefreshRequest', 'PairResponse', 'RefreshResponse']
 
   const declaredAt = new Map<string, string[]>()
+  const mentionedIn = new Map<string, string[]>()
   for (const file of filesUnder(SRC)) {
-    const code = stripComments(readFileSync(file, 'utf8'))
+    const source = readFileSync(file, 'utf8')
+    const scope = declarationScopeOf(source)
+    const relativePath = relative(SRC, file)
     for (const name of expected) {
-      if (new RegExp(`(?:^|[^A-Za-z0-9_$])(?:interface|type|class)\\s+${name}\\b`).test(code)) {
-        declaredAt.set(name, [...(declaredAt.get(name) ?? []), relative(SRC, file)])
+      // 类型的声明形态是闭集：`interface X` / `type X` / `class X`，关键字紧邻名字
+      // （不管前面挂什么修饰符）。不按「行首有没有 export」判 —— 那是开放集。
+      if (new RegExp(`(?:^|[^A-Za-z0-9_$])(?:interface|type|class)\\s+${name}\\b`).test(scope)) {
+        declaredAt.set(name, [...(declaredAt.get(name) ?? []), relativePath])
+      }
+      // 「提到过」用完整源码（含 import）：`import type { X }` 就是一次消费。
+      if (new RegExp(`\\b${name}\\b`).test(stripComments(source))) {
+        mentionedIn.set(name, [...(mentionedIn.get(name) ?? []), relativePath])
       }
     }
   }
+
   const complaints = expected.flatMap(name => {
     const places = declaredAt.get(name) ?? []
-    if (places.length === 0) return [`${name}: not declared anywhere — renamed?`]
-    if (places.length > 1) return [`${name}: declared in ${places.join(', ')} — a second source will drift`]
-    return places[0] === 'wire/auth.ts' ? [] : [`${name}: declared in ${String(places[0])}, expected wire/auth.ts`]
+    const out: string[] = []
+    if (places.length === 0) out.push(`${name}: not declared anywhere — renamed?`)
+    else if (places.length > 1) out.push(`${name}: declared in ${places.join(', ')} — a second source will drift`)
+    else if (places[0] !== 'wire/auth.ts') out.push(`${name}: declared in ${String(places[0])}, expected wire/auth.ts`)
+    // 消费者：home 之外至少一个文件提到它。
+    const consumers = (mentionedIn.get(name) ?? []).filter(file => file !== 'wire/auth.ts')
+    if (consumers.length === 0) out.push(`${name}: nobody uses it — an inline anonymous type is the same split`)
+    return out
   })
   assert.deepEqual(complaints, [],
-    'the credential shapes have one home; a copy elsewhere is the split this phase set out to remove')
+    'each credential shape needs one declaration in wire/auth.ts **and** a consumer that would fail to compile if it changed')
 
   // 正控：`wire/auth.ts` 的导出面恰好是这四个，多一个就红（防止形状悄悄长出来）。
   assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).shapes.sort(), [...expected].sort(),

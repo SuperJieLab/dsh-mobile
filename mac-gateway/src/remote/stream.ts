@@ -8,16 +8,21 @@
  * 一条流失败时**只有这条结束**：泵的 catch 把异常折成 error 帧，`finally` 清掉
  * 自己的 streamId；同一条连接上的其它流继续。
  *
- * **本文件里出现的两条错误码，归属各不相同**（这是 `ISSUES` A13 的分类结果）：
+ * **本文件出现三条错误码，归属各不相同**（`ISSUES` A13 的分类结果）：
  *
- *   window-too-large   传输自有 —— 它说的是「这一帧装不下」，由字节上界
+ *   window-too-large   传输自有 —— 说的是「这一帧装不下」，由字节上界
  *                      （`StreamOptions.openingCapBytes`）产生，不是会话状态
  *   unknown-op         载荷不是 follow 请求 —— 形状判定在 `wire/mux.ts` 的解析器，
- *                      这里只负责把那句话送回去
+ *                      这里只把结论送回去
+ *   internal-error     **这一条有两种产生者**：一种是上游失败经映射（那种在
+ *                      `protocol/error-codes.ts`），另一种是本层自己发现的
+ *                      「源承诺无缺口、实际却跳了 seq」—— 那不是上游抛的错，
+ *                      是传输在见证契约被违反。两个产生者同码，因为对客户端
+ *                      而言补救相同（这条流已经不可信）。
  *
- * 其余由**上游失败**折出来的码（`unreadable-session` / `unknown-session` /
- * `internal-error`）不在这里：它们在 `protocol/error-codes.ts`，因为那套规则随
- * 上游的错误语义漂，而传输层不该为上游的形状变化负责。
+ * 其余由**上游失败**折出来的码（`unreadable-session` / `unknown-session`）不在这里：
+ * 它们在 `protocol/error-codes.ts`，因为那套规则随上游的错误语义漂，而传输层不该
+ * 为上游的形状变化负责。
  */
 
 import {
