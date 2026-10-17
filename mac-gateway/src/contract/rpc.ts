@@ -2,8 +2,7 @@
  * 协议契约：一条线上消息进，一条线上消息出。
  *
  * `handle` 是注入数据源的普通 async 函数：无 HTTP、无 socket、无 DSH 运行时、
- * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL（dev/contract/protocol.md；
- * M0 §4.3 Step 3）。水位：两个边界
+ * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL。水位：两个边界
  * 均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没有」）；
  * `asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或
  * 重取。两种不重叠的读取：`snapshot` 自 cursor 前向，`page` 反向取一个
@@ -15,6 +14,20 @@
  */
 
 import { describeError, isUnreadable } from './errors.ts'
+// 形状已搬到 `wire/`（两端共守）。这里 import 再用（文件体自己还要用它们），同时
+// 重导出，让下游的 import 路径不必一次改完 —— 期2 搬算法时统一改成直连。
+import { PROTOCOL_VERSION } from '../wire/rpc.ts'
+import type {
+  WireEvent,
+  SessionRow,
+  SessionSlice,
+  WireError,
+  OkResponse,
+  ErrorResponse,
+  Response,
+} from '../wire/rpc.ts'
+export { PROTOCOL_VERSION }
+export type { WireEvent, SessionRow, SessionSlice, WireError, OkResponse, ErrorResponse, Response }
 import type { ModelPort, ModelSelection } from './model-selection.ts'
 import { modelSelectRequestOf } from './model-selection.ts'
 import {
@@ -29,98 +42,9 @@ import {
   type WritePort,
 } from './write-channel.ts'
 
-/** 本构建唯一使用的协议版本。 */
-export const PROTOCOL_VERSION = 2
-
-/**
- * 线上的一条会话事件：DSH 事件对象原样，未知字段一并保留。协议承诺下列
- * 字段存在，不承诺排他，客户端必须容忍未知字段。
- */
-export interface WireEvent {
-  /** DSH 事件类型，如 `user/message`。 */
-  type: string
-  /** 会话内单调递增的序号，从 0 连续。 */
-  seq: number
-  /** Unix 纪元毫秒。 */
-  time: number
-  /** 不透明载荷；协议层从不解读它。 */
-  data: unknown
-  [extraField: string]: unknown
-}
-
-/**
- * 会话列表的一行 —— 列表路径承诺的字段 (v2)。每个字段都来自会话头或
- * 已保留的投影，因此列表是零 I/O：这里没有任何东西需要读日志
- * （dev/contract/protocol.md §4.1）。
- */
-export interface SessionRow {
-  /** 已存储的会话 id。 */
-  id: string
-  /**
-   * 当前标题。会话没有标题、或投影不可用时都缺省 —— 缺标题是契约
-   * 的一部分，不是故障。
-   */
-  title?: string
-  /** 会话创建时间的 Unix 纪元毫秒。 */
-  createdAt: number
-  /**
-   * 最后一次用户 prompt 的 Unix 纪元毫秒；没有时取创建时间。**不是**最新
-   * 事件的时间（v1 曾那样承诺，逼出一次日志读）。
-   */
-  updatedAt: number
-  /** 该会话当前是否有 agent 在运行。 */
-  running: boolean
-  /** 会话是否还没有任何 turn。是否展示由客户端决定。 */
-  blank: boolean
-  /**
-   * 本会话是另一会话的子会话时为 `'subagent'`，否则缺省。随行是为了让
-   * 客户端自己应用参考 UI 的可见性规则 —— 服务端陈述事实，画不画仍归
-   * 客户端。
-   */
-  origin?: string
-}
-
-/** 一次读出的会话日志切片，以及它到达的水位。 */
-export interface SessionSlice {
-  /** 下一个期望的 seq —— 见上文的半开规则。 */
-  asOfSeq: number
-  /** `seq >= since` 的事件，按 seq 排序，至多请求的限额。 */
-  events: readonly WireEvent[]
-  /** 本切片之后日志是否还有事件。 */
-  hasMore: boolean
-  /**
-   * 客户端的 cursor 指向一个不可能存在的位置：`since` 为正而日志为空。
-   * 这是数据源唯一能证明的错误 cursor —— 越过水位的 `since` 会读成
-   * 「已追平」（M1 §3.3.2 决定 5）。
-   */
-  staleCursor: boolean
-  /**
-   * 会话的模型基线：*下一个*请求将用的模型，读自宿主的
-   * `modelSelection` 投影。未知时缺省 —— 客户端回退到目录默认值，
-   * 绝不猜测。
-   */
-  model?: ModelSelection
-}
-
-/**
- * 协议层所依赖的数据源 —— 契约的唯一依赖；用 fake 让测试摆脱运行时、
- * 文件系统与网络。
- */
-export interface SessionPort {
-  /** 本进程可见的所有会话。顺序无意义。 */
-  list(): Promise<readonly SessionRow[]>
-  /**
-   * 至多 `limit` 条 `seq >= since` 的事件；会话不存在时返回 `undefined`。
-   * 切片自报是否还有剩余。
-   */
-  read(id: string, since: number, limit: number): Promise<SessionSlice | undefined>
-  /**
-   * 整条日志；会话不存在时返回 `undefined`。反向窗口需要日志末端，而存储
-   * 读 API 只能自偏移处前向 —— 取整条日志是够到尾部的代价。列表路径不再
-   * 付这个价（v2 读投影）；`page` 仍付。
-   */
-  readAll(id: string): Promise<readonly WireEvent[] | undefined>
-}
+// 端口已搬到装配边界 `ports/session.ts`；这里 import 再用并重导出。
+import type { SessionPort } from '../ports/session.ts'
+export type { SessionPort } from '../ports/session.ts'
 
 /**
  * 一条 `snapshot` 应答可能有多大；只约束单条应答，从不是客户端的视图。
@@ -151,28 +75,6 @@ export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_04
  */
 export const DEFAULT_PAGE_MESSAGES = 50
 
-/** 拒绝。`code` 取 dev/contract/protocol.md §六 中的码之一。 */
-export interface WireError {
-  code: string
-  message: string
-}
-
-/** 任一成功应答。额外字段按 op 而定。 */
-export interface OkResponse {
-  v: typeof PROTOCOL_VERSION
-  ok: true
-  [field: string]: unknown
-}
-
-/** 任一被拒的应答。 */
-export interface ErrorResponse {
-  v: typeof PROTOCOL_VERSION
-  ok: false
-  error: WireError
-}
-
-/** 一条应答，成功或被拒。 */
-export type Response = OkResponse | ErrorResponse
 
 /**
  * 应答一条消息。
@@ -317,7 +219,7 @@ async function listSessions(port: SessionPort, now: () => number): Promise<Respo
 
 /**
  * 一行的线上形状，省略 `title` 而非发送 null。`eventCount` 刻意缺席：
- * 日志推导的事实会把日志拖回列表路径（dev/contract/protocol.md §4.1）。
+ * 日志推导的事实会把日志拖回列表路径。
  */
 function toWireSummary(row: SessionRow): Record<string, unknown> {
   return {
@@ -345,8 +247,7 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
   if (slice === undefined) return failure('unknown-session', `no stored session "${sessionId}"`)
 
   if (slice.staleCursor) {
-    // 用错误码，不用静默空应答：整个视图已不可信，布尔会被吞掉
-    // （dev/contract/protocol.md §六）。
+    // 用错误码，不用静默空应答：整个视图已不可信，布尔会被吞掉。
     return failure('resync-required', `since ${since} cannot exist: this session's log is empty`)
   }
 

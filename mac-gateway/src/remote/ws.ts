@@ -42,63 +42,10 @@ import { createLogger, LogModule, perfNow, perfRecord } from '../log.ts'
 
 const log = createLogger(LogModule.ws)
 
-/**
- * 泵所用的宿主窄面，在此声明是因为各服务的真实类型在 dsh 安装树之外
- * 无法解析。follow 流与占用读数作为一次注入到达，因为两者出自同一宿主
- * （M6 §四）。
- */
-export interface FollowSource {
-  follow(
-    request: {
-      address: { kind: 'session'; sessionId: string }
-      maxMessages?: number
-      /**
-       * 参考拼法的边界规则：一个可提前停下的下限与一个必须停下的上限
-       * （见 `upstreamWindow`）。缺省即宿主仅按消息数切窗，窗口会在
-       * 一轮中间打开。
-       */
-      turnWindow?: { minMessages: number; minTurns: number }
-      assistantStream: true
-    },
-    signal: AbortSignal,
-  ): AsyncIterable<UpstreamFollowFrame>
-  /**
-   * 立即读取一个会话的占用投影 —— 同步、内存内：宿主在事件落地时折叠
-   * 投影，所以这是状态读，不是日志走查
-   * （M6 §3.1 决定 3）。
-   *
-   * @returns 读数；宿主不知道该会话时 `undefined`。
-   */
-  occupancyOf(sessionId: string): UsageSnapshot | undefined
-
-  /**
-   * 会话的模型基线：下一轮将用的那个选择，未知时 undefined（缺席不是「默认值」）。
-   * 与窗口同一口气读出，手机打开时即知下一个请求用什么 —— HTTP snapshot
-   * 带同一字段，但活会话实际走的是 follow 打开这条路。
-   *
-   * 出参是**选择本身**而非宿主的投影视图：类型在这里说不出来第二种形状，
-   * 于是「把整份视图发出去」在编译期就不成立。
-   */
-  modelOf?(sessionId: string): ModelSelection | undefined
-}
-
-/**
- * 参考 follow 流的一帧，形状已在 `0d1f5000` 验证（`history.ts:119-240`）：
- * 打开的 `snapshot`，其 `records` 把每条事件包成 `{type:'event', event}`；
- * 随后是同包裹的 `event` 帧；再后是无 cursor 的 `assistant-stream` 帧。
- */
-export type UpstreamFollowFrame =
-  | {
-      type: 'snapshot'
-      /** 打开覆盖的最后一个 seq，含端；空日志为 `-1`。 */
-      cursor: number
-      records: readonly { type: 'event'; event: unknown }[]
-      /** 窗口之前是否还有更旧的事件（参考的 `hasMore`）。 */
-      hasMore: boolean
-      assistantStream?: unknown
-    }
-  | { type: 'event'; event: unknown }
-  | { type: 'assistant-stream'; frame: unknown }
+// 端口与上游帧形状已搬到装配边界 `ports/follow.ts` —— 面向宿主的适配层要的是这个
+// 接口，让它从传输层取就是反向依赖。这里 import 再用并重导出，下游路径不必一次改完。
+import type { FollowSource, UpstreamFollowFrame } from '../ports/follow.ts'
+export type { FollowSource, UpstreamFollowFrame } from '../ports/follow.ts'
 
 /** 心跳节拍，对齐参考服务端。 */
 const PING_INTERVAL_MS = 2_000

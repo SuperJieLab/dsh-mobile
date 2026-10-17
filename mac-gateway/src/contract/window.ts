@@ -41,28 +41,20 @@ export class CursorPastEndError extends Error {
   }
 }
 
-/** 一个反向窗口的几何 —— 见 {@link pageWindow}。 */
-export interface PageWindow {
-  /** 窗口首个 seq（客户端回翻页时的下一个 `beforeSeq`）。 */
-  pageStart: number
-  /** 窗口到达的排他上界。 */
-  asOfSeq: number
-  /** 窗口之前是否还有更旧的事件。 */
-  hasOlder: boolean
-  /** 窗口的事件，按 seq 排序。 */
-  events: readonly WireEvent[]
-}
+// 窗口的形状已搬到 `wire/`（两端共守）；这里 import 再用（算术自己要用它），并重导出。
+export type { PageWindow } from '../wire/window.ts'
 
 /**
  * 在整条日志上取一个反向窗口 —— `page` 与 follow 打开共享的算术，两者因此
  * 不会漂移。按*消息数*约束，但按整个区间交付，因为被画 seq 的邻居常常不是
- * 消息（dev/contract/protocol.md §4.3）。**起点**回退到最近的 `turn/start`，
+ * 消息。**起点**回退到最近的 `turn/start`，
  * 因此绝不会在一轮中间打开 —— {@link TURN_ALIGN_CEILING} 说明原因与幅度。
  *
  * @throws {@link LogNotDenseError} 当 seq 不是 `0..n-1`：算术把位置当 seq 读，
  *   稠密是前置条件。两个调用方都以 `unreadable-session` 拒绝。
  */
-import type { WireEvent } from './rpc.ts'
+import type { WireEvent } from '../wire/rpc.ts'
+import type { PageWindow } from '../wire/window.ts'
 
 export function pageWindow(
   sessionId: string,

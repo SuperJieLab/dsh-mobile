@@ -14,42 +14,14 @@
  * 两键共用一个水位，即切点的 `asOfSeq`，客户端因此不可能拿新鲜比值配陈旧
  * 分解。
  *
- * 线上形状见 dev/contract/protocol.md §4.4；`asOfSeq` 盖哪个读、以及为何保守的
- * 缓存读是错的，见 M6 §3.1 决定 3。
+ * `asOfSeq` 是这次读的切点，**不是**窗口的水位：窗口按消息数切，可能落后或
+ * 超前投影的日志，两者是独立的水位。缓存读（`cachedSnapshot`）因此不够 ——
+ * 它给出的切点可能停在更早的位置。
  */
 
-/**
- * 构成的一半：对下一个请求的启发式 system / tools / message 拆分。
- * 刻意**不是** `usedTokens` 的分解 —— 估计器低估 CJK 文本与 JSON schema，
- * 三者相加永远对不齐锚定的分子。
- */
-export interface BreakdownValues {
-  systemTokens: number
-  toolsTokens: number
-  messageTokens: number
-}
-
-/** 手机所画之物：一个比值，以及它描述多大的上下文。 */
-export interface UsagePayload {
-  /** 分子：以 provider 为锚，此处绝不估计。 */
-  usedTokens: number
-  /** 分母。 */
-  contextWindow: number
-  /**
-   * 仅当三部分全部已知且不全为零时存在；缺省省略展开行，绝不省略比值。
-   */
-  breakdown?: BreakdownValues
-}
-
-/**
- * 一个水位加上在该水位下可显示之物。`usage` 缺省是陈述，不是缺口：
- * 正在显示更旧内容的客户端据此清掉它。
- */
-export interface UsageSnapshot {
-  /** 读到这些值时的切点 —— 日志的水位，不是窗口边界。 */
-  asOfSeq: number
-  usage?: UsagePayload
-}
+// 形状已搬到 `wire/`（两端共守）：手机端也画这个比值，改字段那边必须同改。
+import type { BreakdownValues, UsagePayload, UsageSnapshot } from '../wire/usage.ts'
+export type { BreakdownValues, UsagePayload, UsageSnapshot } from '../wire/usage.ts'
 
 /**
  * 把投影值的一次切点变成要发送的快照。

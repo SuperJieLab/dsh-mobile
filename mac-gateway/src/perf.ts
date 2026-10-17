@@ -3,9 +3,9 @@
  * 同一个 debug 门控，但承载的是「挂 seq 的四段边界记录」而不是人读的消息。
  * 行格式：`ISO8601 [dsh][perf][模块] {json}`。
  *
- * 字段集与语义（seg / t / sessionId / seq 与各 seg 的附加字段）是两端契约，
- * 见 `dev/features/R8-e2e-latency-bench/plans/R8-1-observability-budget.md` 节四；
- * 本文件只负责拼行与出口，不做任何段间算术 —— 那是期2 分析层的事。
+ * 字段集与语义（seg / t / sessionId / seq 与各 seg 的附加字段）**是两端契约**：
+ * 改字段就是改协议，采集脚本与预算表都按它读。本文件只负责拼行与出口，
+ * 不做任何段间算术 —— 差值、分位与瓶颈指认属分析层。
  *
  * 出口唯一纪律的落地：调用面统一从 `log.ts` 导入 `perfRecord`（那里 re-export），
  * 物理写盘在本文件 —— 与 `log.ts` 的 `write()` 同族（同标签、同门控、同 stderr）。
