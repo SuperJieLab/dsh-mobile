@@ -10,7 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { usageSnapshotOf } from '../contract/usage.ts'
 import type { WritePort } from '../contract/write-channel.ts'
 import type { ModelPort, ModelSelection } from '../contract/model-selection.ts'
-import { createSessionPort, nextOf, type ListSource, type ModelSelectionSource, type ModelSelectionView, type PersistenceLike } from './sessions.ts'
+import { createSessionPort, nextOf, type ListSource, type ModelSelectionSource, type HostModelSelectionView, type PersistenceLike } from './sessions.ts'
 import type { FollowSource } from '../remote/ws.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from './call-through.ts'
@@ -146,7 +146,7 @@ function modelBaselineOf(ctx: Context, sessionId: string): ModelSelection | unde
   const snapshot = read.snapshot(session, ['modelSelection'])
   const view = snapshot?.values.modelSelection
   if (typeof view !== 'object' || view === null) return undefined
-  return nextOf(view as ModelSelectionView)
+  return nextOf(view as HostModelSelectionView)
 }
 
 export function modelSelectionSourceOver(ctx: Context): ModelSelectionSource {

@@ -20,10 +20,12 @@ import {
   encodeServerFrame,
   followRequestOf,
   parseClientFrame,
+  type FollowOpening,
   type MuxServerFrame,
 } from '../contract/mux.ts'
 import { fitOpeningToBytes, upstreamWindow } from '../contract/window.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../contract/rpc.ts'
+import type { WireEvent } from '../contract/rpc.ts'
 import { describeError, isNotFound, isUnreadable } from '../contract/errors.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
 import type { ModelSelection } from '../contract/model-selection.ts'
@@ -537,7 +539,11 @@ async function pump(
       if (frame.type === 'snapshot') {
         // 窗口已由源自身的分页切好 —— 与 `page` 建模所依据的是同一条
         // 消息数规则。解包即可，不要重切。
-        const events = frame.records.map(record => record.event)
+        //
+        // `record.event` 在宿主侧是不透明的，这里把它标成 `WireEvent` 是
+        // **转发契约的断言**（协议 §4.1 承诺 `{type, seq, time, data}`，我们
+        // 原样转达、不解语义）。不标它，opening 的类型就拴不住实际发出的字段。
+        const events = frame.records.map(record => record.event as WireEvent)
         const cursor = frame.cursor + 1 // 参考 cursor 含端；我们排他
         expectedSeq = cursor
         // 占用基线与窗口同一口气读出：手机打开时拿到的是同一时刻的
@@ -547,8 +553,10 @@ async function pump(
         const model = readModel()
 
         // 窗口的组装只写一处：量尺与实际发送共用它 —— 否则「量了什么」
-        // 与「发了什么」迟早漂移。
-        const openingPayload = (start: number): Record<string, unknown> => {
+        // 与「发了什么」迟早漂移。返回类型钉成 `FollowOpening`：加字段忘了
+        // 改类型、或把错形状塞进某个字段，都在编译期失败（本期 `model` 就是
+        // 这么漏了两版）。
+        const openingPayload = (start: number): FollowOpening => {
           const kept = events.slice(start)
           const first = kept[0] as { seq?: unknown } | undefined
           return {

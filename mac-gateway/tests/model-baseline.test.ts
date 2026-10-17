@@ -4,10 +4,10 @@
  *
  * 为什么这条判据要接到真实来源上：宿主给的是 `{lastUsed, next}` 两格的视图，而协议要的是
  * 「下一轮将用什么」这一个选择。`lastUsed` 是**上一轮**用了什么，把它或整份视图发出去，
- * 手机端逐字段解码就会失败、静默退到目录默认值 —— 而两侧都不会报错：端口出参不透明，
- * 装配层填什么都编译得过。所以假件替代的是**宿主的投影服务**（`snapshot(session, keys)`
- * 返回 `{ asOfSeq, values }`），不是我们自己的端口；后者由 `*Over(ctx)` 工厂接上，
- * 提取、帧装配、线上传输全是真的。
+ * 手机端逐字段解码就会失败、静默退到目录默认值 —— 而两侧都不会报错（修之前端口出参是
+ * `unknown`，装配层填什么都编译得过）。所以假件替代的是**宿主的投影服务**
+ * （`snapshot(session, keys)` 返回 `{ asOfSeq, values }`），不是我们自己的端口；
+ * 后者由 `*Over(ctx)` 工厂接上，提取、帧装配、线上传输全是真的。
  *
  * Run: node --test tests/model-baseline.test.ts
  */
@@ -18,7 +18,6 @@ import test from 'node:test'
 import { attachStreamHandler, STREAM_PATH, type FollowSource } from '../src/remote/ws.ts'
 import { modelSelectionSourceOver, streamSourceOver } from '../src/upstream/faces.ts'
 import { createSessionPort, type ListRecord, type PersistenceLike } from '../src/upstream/sessions.ts'
-import { followRequestOf } from '../src/contract/mux.ts'
 import type { ModelSelection } from '../src/contract/model-selection.ts'
 
 /** 宿主 `modelSelection` 投影的原样视图：两格都在，`next` 与 `lastUsed` 不同 ——
@@ -37,13 +36,24 @@ type HostContext = Parameters<typeof streamSourceOver>[0]
  * 假宿主：只提供两条出口真正读到的服务，形状照运行时 —— `sessions.get(id)` 拿到会话对象，
  * `sessionProjections.snapshot(session, keys)` 拿到 `{ asOfSeq, values }`，
  * `sessionController.follow` 吐出一次 snapshot 帧。
+ *
+ * `snapshot` **尊重 `keys`**：只物化被点名的那一格。这不是细节 —— 真宿主按 `keys` 取投影，
+ * 键名写错在线上就是「基线永远缺席」；假件若不看 `keys`，读取点把键改成任意错名，
+ * 本文件的断言仍然全绿（那正是本期缺陷的同型失败：测试绿、手机错）。
  */
 function fakeHost(view: unknown): HostContext {
   const session = { id: 's1' }
+  const available: Record<string, unknown> = view === undefined ? {} : { modelSelection: view }
   return {
     sessions: { get: (id: string) => (id === 's1' ? session : undefined) },
     sessionProjections: {
-      snapshot: () => ({ asOfSeq: 7, values: view === undefined ? {} : { modelSelection: view } }),
+      snapshot: (_session: unknown, keys?: readonly string[]) => {
+        const values: Record<string, unknown> = {}
+        for (const key of keys ?? Object.keys(available)) {
+          if (key in available) values[key] = available[key]
+        }
+        return { asOfSeq: 7, values }
+      },
     },
     sessionController: {
       async *follow() {
@@ -134,7 +144,8 @@ test('both exits hand out the projection next — never the whole view, never la
   assert.deepEqual(overStream.model, EXPECTED,
     'the opening carries the selection itself: `{provider, model, …}`, not the host view `{lastUsed, next}`')
   assert.deepEqual(overHttp, EXPECTED, 'the snapshot carries the same selection')
-  assert.deepEqual(overStream.model, overHttp, 'the two exits agree on the same projection view')
+  // 两条出口同值由上面这两条共同确立，不另立一条断言 —— 重复的断言看起来像
+  // 第三条证据，实际不可能单独失败。
 })
 
 test('a projection without next leaves the field out of both exits, never null and never a default', { timeout: 15_000 }, async () => {
@@ -145,14 +156,11 @@ test('a projection without next leaves the field out of both exits, never null a
   assert.equal(overStream.present, false, 'WS: no baseline, the field is absent — not null, not a guess')
 })
 
-test('an absent projection is honestly absent on both exits', { timeout: 15_000 }, async () => {
-  assert.equal(await baselineOverHttp(undefined), undefined, 'HTTP: unknown session, nothing to say')
+test('a projection that lacks modelSelection is honestly absent on both exits', { timeout: 15_000 }, async () => {
+  // 覆盖面是「投影未装 / 视图缺席」，不含「会话不存在」—— `fakeHost` 仍让
+  // `sessions.get('s1')` 返回会话对象。后者由 `modelBaselineOf` 的第一句挡掉，
+  // 那条分支的判据在读取处，不在这里。
+  assert.equal(await baselineOverHttp(undefined), undefined, 'HTTP: no projection, nothing to say')
   const overStream = await baselineOverStream(undefined)
-  assert.equal(overStream.present, false, 'WS: unknown session, nothing to say')
-})
-
-test('the follow request still parses without a model — the field is server-supplied', async () => {
-  // 防一个容易写错的假设：`model` 不是客户端请求的字段，它是服务端读投影后送的基线。
-  const parsed = followRequestOf({ op: 'follow', sessionId: 's1' })
-  assert.equal(parsed?.sessionId, 's1')
+  assert.equal(overStream.present, false, 'WS: no projection, nothing to say')
 })

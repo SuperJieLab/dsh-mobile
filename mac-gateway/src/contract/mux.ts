@@ -179,7 +179,8 @@ export interface FollowOpening {
    * 这条会话下一轮将用的模型；源不知道时缺省 —— 与 `occupancy` 同为陈述，
    * 不是故障。语义是**选择本身**（`{provider, model, …}`），不是宿主的投影视图。
    *
-   * 与 `page` 应答里的同名字段同义、同值：两条出口读的是同一份投影。
+   * 与 `snapshot` 应答里的同名字段同义、同值：两条出口读的是同一份投影
+   * （`page` 不带这个字段 —— 它不读投影）。
    */
   model?: ModelSelection
 }

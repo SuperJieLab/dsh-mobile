@@ -93,10 +93,13 @@ interface SessionListMetadataLike {
 }
 
 /**
- * 宿主 `modelSelection` 投影里本适配器读到的部分：`{lastUsed, next}` 中的 `next`。
- * 只声明读到的那一格 —— 宿主给视图加一格时不该弄坏这里。
+ * **宿主**的 `modelSelection` 投影视图（不是我们的形状）：`{lastUsed, next}` 里
+ * 本适配器只声明读到的那一格 —— 宿主给视图加一格时不该弄坏这里。
+ *
+ * 名字带 `Host`：它与 `ModelSelection`（我们的、要上线的）是两个东西，
+ * 转换只有一处（{@link nextOf}）。
  */
-export interface ModelSelectionView {
+export interface HostModelSelectionView {
   next?: ModelSelection | null
 }
 
@@ -107,7 +110,7 @@ export interface ModelSelectionView {
  * 刻意不取：协议里 `model` 的语义是「下一轮将用什么」，让每个消费者自己去挑字段，
  * 等于把一个语义判断交给两端各实现一遍 —— 而漏挑的那一处不会编译报错。
  */
-export function nextOf(view: ModelSelectionView): ModelSelection | undefined {
+export function nextOf(view: HostModelSelectionView): ModelSelection | undefined {
   const next = view.next
   return next === undefined || next === null ? undefined : next
 }
@@ -200,8 +203,8 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
           asOfSeq: last === undefined ? since : last.seq + 1,
           hasMore,
           staleCursor: false,
-          // 模型基线：投影的 `next` 原样，投影缺席则字段缺席 ——
-          // 绝不给 null，绝不猜默认值。
+          // 模型基线：来源给的选择原样，来源没有就给不出 —— 两种空值早在上游
+          // 折完（`nextOf`），这一层不做判断，也绝不猜默认值。
           ...baselineOf(id, modelSelection),
         }
       } finally {
@@ -227,10 +230,15 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
   }
 }
 
-/** 分片可选的 `model` 字段：来源给出的选择，否则什么都没有。 */
+/**
+ * 分片可选的 `model` 字段：来源给出的选择，否则什么都没有。
+ * `null` 不在这里判 —— 它已被 {@link nextOf} 折成 `undefined`，本函数的入参
+ * 类型也说不会有第二种空值。在这一层再判一次，只会造出一条**不可达**的分支
+ * 和一条喂假值的断言（那正是本期缺陷的成因：断言对着真实来源不会产生的形状写）。
+ */
 function baselineOf(id: string, modelSelection: ModelSelectionSource | undefined): { model?: ModelSelection } {
-  const next = modelSelection?.of(id)
-  return next === undefined ? {} : { model: next }
+  const selection = modelSelection?.of(id)
+  return selection === undefined ? {} : { model: selection }
 }
 
 /**

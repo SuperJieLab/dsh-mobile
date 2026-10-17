@@ -232,6 +232,7 @@ test('an absent projection leaves the model field absent, never guessed', async 
 test('nextOf turns an empty next into nothing — null and undefined alike', () => {
   // 「投影的空值」与「没有基线」是同一件事，但表现形式有两种；把这个转换放在
   // 一个有名字的函数里，是因为它是宿主形状与我们的形状之间唯一的转换点。
+  // 分片层因此不必再判空值 —— 它收到的不是「视图」而是「选择或没有选择」。
   assert.equal(nextOf({ next: null }), undefined)
   assert.equal(nextOf({ next: undefined }), undefined)
   assert.equal(nextOf({}), undefined)
