@@ -834,32 +834,26 @@ test('the retired second opening assembler name does not come back', () => {
   // 它不缺别的，只缺「后来加的那个字段」：一旦被接线，手机端拿到的基线就永远缺席，
   // 而测试仍全绿（判据只查窗口几何）。装配这件事只能有一个执行者。
   //
+  // **只剥注释，不剥字符串。** 剥字符串需要一个认模板插值的词法器 —— 手写的那个
+  // 会把 `${…}` 里的代码一起删掉，于是整个文件的后半段对本判据失明（假绿，比假红贵）。
+  // 代价是：一个**字面量文本**里出现 `followOpening(` 会假红。这条代价是选过的 ——
+  // 假红会有人来看一眼并改掉那句文案；假绿没人会知道。
+  //
   // 断言的是**这个名字不再出现**，不是「不存在任何第二装配器」—— 一个叫别的名字的
   // 第二装配器它看不见，这里不假装看得见。
   const offenders = filesUnder(SRC)
-    .filter(file => /\bfollowOpening\s*\(/.test(withoutStrings(stripComments(readFileSync(file, 'utf8')))))
+    .filter(file => /\bfollowOpening\s*\(/.test(stripComments(readFileSync(file, 'utf8'))))
     .map(where)
   assert.deepEqual(offenders, [],
     'opening is assembled in remote/ws.ts only — the retired assembler omitted fields the wire requires')
 })
 
-/** 把字符串字面量换成空串：判据找的是代码里的调用，不是注释或文案里的同名文本。 */
-function withoutStrings(code: string): string {
-  let out = ''
-  let i = 0
-  while (i < code.length) {
-    const ch = code[i] as string
-    if (ch === "'" || ch === '"' || ch === '`') {
-      const end = skipString(code, i)
-      out += '""'
-      i = end
-      continue
-    }
-    out += ch
-    i += 1
-  }
-  return out
-}
+test('the retired assembler is not exported under any name binding', async () => {
+  // 文本扫描之外再加一条运行时断言：哪怕源码里只是一句文案、或者被重导出改了名，
+  // 「有模块交出 followOpening 这个值」都能被抓到 —— 这一半不会被字符串骗过。
+  const exported = [...(await valueIndex()).get('followOpening') ?? []]
+  assert.deepEqual(exported, [], 'no module may hand out an opening assembler besides remote/ws.ts internal one')
+})
 
 // ---------------------------------------------------------------------------
 // V8：判定层搬空后的临时残留（期3 删目录时本条随之删）
