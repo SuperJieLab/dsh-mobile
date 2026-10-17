@@ -1,12 +1,12 @@
 /**
- * 结构判据（R15 期1）—— 守的是「目录名能预测内容」这件事，不是某个行为。
+ * 结构判据 —— 守的是「目录名能预测内容」这件事，不是某个行为。
  *
  * 为什么这些判据要进测试而不是开工时跑一次 `grep`：它们全是「零命中」型 —— 路径写错、
- * 目录没建、正则打错，读出来都是零命中，判据不会因为自己失效而报错。所以还要有
- * **样本自证**（`importsOf` 的用例）：违规样本必须命中、合规样本不得命中、认不出的
- * 写法（重导出 / 动态 import）必须报错而不是静默跳过。
+ * 目录没建、正则打错，读出来都是零命中，判据不会因为自己失效而报错。所以每一条
+ * 真正被调用的解析函数都配了**样本自证**：违规样本必须命中、合规样本不得命中、
+ * 认不出的写法（重导出 / 动态 import / 认不出的导出形态）必须报错而不是静默跳过。
  *
- * 目录分工（判据来源见 `dev/features/R15-gateway-layering/spec.md` 的场景 1、2）：
+ * 目录分工（判据来源是需求文档的场景 1、2，那份文档不随仓库发布，所以这里把它说清）：
  *
  *   wire/      两端共守的形状与编解码 —— 改它，手机端必须同改
  *   ports/     装配边界：端口接口与上游失败的词汇
@@ -14,10 +14,15 @@
  *   remote/    面向手机的传输
  *   upstream/  面向 DSH 宿主的适配
  *
+ * 已知边界（写在代码里而不是留给下一个人踩）：`importsOf` 不区分模板字符串与
+ * 正则字面量里的 `from '…'`，`src/` 目前没有这种形态；真出现时会假红或翻乱引号
+ * 状态，到那时扩展 `stripComments`。
+ *
  * Run: node --test tests/structure.test.ts
  */
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { isBuiltin as isBuiltinModule } from 'node:module'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
@@ -85,23 +90,24 @@ export function commentSpans(source: string): { start: number; end: number; text
   return spans
 }
 
-/** `export … from '…'` —— 它会在 import 图里造出一条边，而我们的扫描器只认 `import`。 */
-const RE_EXPORT = /^[ \t]*export\b[^;]*\bfrom\s*(['"])/m
-/** 动态 `import(...)` —— 同上，边在运行期才出现。 */
+/** 动态 `import(...)` —— 边在运行期才出现，静态扫描读不到，必须报错而不是跳过。 */
 const DYNAMIC_IMPORT = /\bimport\s*\(/
 
 /**
- * 一个文件的 import 边（模块说明符，原样）。
+ * 一个文件的 import 边（模块说明符，原样）。**含 `export … from` 的重导出边** ——
+ * 它同样是一条依赖，看不见它就会让 V1/V2 漏判。
  *
- * **认不出的写法直接抛错**，不静默跳过：跳过等于把一条真实的依赖从图里抹掉，
- * 而判据是「零命中」型，抹掉之后它更绿。要支持新写法，先改这里。
+ * **动态 `import()` 直接抛错**，不静默跳过：跳过等于把一条真实的依赖从图里抹掉，
+ * 而判据是「零命中」型，抹掉之后它更绿。要支持这种写法，先改这里。
  */
 export function importsOf(source: string): string[] {
   const code = stripComments(source)
-  if (RE_EXPORT.test(code)) throw new Error('unsupported import form: `export … from` — extend importsOf() first')
   if (DYNAMIC_IMPORT.test(code)) throw new Error('unsupported import form: dynamic `import()` — extend importsOf() first')
   const specifiers: string[] = []
-  for (const pattern of [/\bfrom\s*(['"])([^'"]+)\1/g, /\bimport\s*(['"])([^'"]+)\1/g]) {
+  for (const pattern of [
+    /\bfrom\s*(['"])([^'"]+)\1/g,
+    /\bimport\s*(['"])([^'"]+)\1/g,
+  ]) {
     for (const match of code.matchAll(pattern)) {
       const specifier = match[2]
       if (specifier !== undefined && !specifiers.includes(specifier)) specifiers.push(specifier)
@@ -124,48 +130,119 @@ export function filesUnder(directory: string): string[] {
   return found
 }
 
-/** Node 内建模块：`node:fs` 与裸写 `fs` 两种写法都算。 */
+/** Node 内建模块。用运行时的判据，而不是自己维护名单 —— 裸写 `fs` 与 `node:fs` 都算。 */
 function isBuiltin(specifier: string): boolean {
-  return specifier.startsWith('node:')
+  return isBuiltinModule(specifier)
+}
+
+/** `target` 是否落在 `directory` 内（含该目录本身）。 */
+function within(target: string, directory: string): boolean {
+  return target === directory || target.startsWith(directory + sep)
 }
 
 /**
- * 某目录内、跨出该目录的 import。返回 `{ file, specifier }`。
+ * 一条相对 import 的**归一化目标文件**。
  *
- * 「跨出」= 解析后的目标文件不在该目录下。同目录的相对引用（`./x.ts`）不算 ——
- * 目录内部的边当然存在，判据管的是**它伸出去了没有**。
+ * `import './b'` 与 `import './sub'` 都指得到实际文件，但字符串形态
+ * 各不相同。不做这一步，环检测会把它们当成「图外节点」静默丢边 —— 而本条判据是
+ * 零命中型，丢边只会让它更绿。**认不出就抛错**，与「认不出的写法必须报错」同一原则。
  */
-export function outgoingImports(directory: string): { file: string; specifier: string }[] {
-  const escaped: { file: string; specifier: string }[] = []
-  for (const file of filesUnder(directory)) {
-    for (const specifier of importsOf(readFileSync(file, 'utf8'))) {
-      if (isBuiltin(specifier)) continue
-      if (!specifier.startsWith('.')) {
-        escaped.push({ file, specifier }) // 裸包名：也不该出现在底座目录里
-        continue
-      }
-      const target = resolve(dirname(file), specifier)
-      if (target !== directory && !target.startsWith(directory + sep)) {
-        escaped.push({ file, specifier })
-      }
+export function resolutionOf(
+  file: string,
+  specifier: string,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  const base = resolve(dirname(file), specifier)
+  const candidates = [base, `${base}.ts`, join(base, 'index.ts')]
+  for (const candidate of candidates) {
+    if (candidate.endsWith('.ts') && exists(candidate)) return candidate
+  }
+  throw new Error(
+    `${relative(dirname(file), base)}: cannot resolve this import to a .ts file — the structure judge only understands explicit targets`,
+  )
+}
+
+/**
+ * 一个文件的 import 里，**跨出 `directory`** 的那些（纯函数，样本可直接钉住它）。
+ *
+ * 「跨出」按**解析后的路径**判，不按字符串前缀：`'../wire/../../contract/x.ts'`
+ * 前缀像 `../wire/`，实际落在 `contract/`。裸包名一律算跨出 —— 底座目录不该引
+ * 任何第三方包。
+ */
+export function escapedFrom(
+  file: string,
+  specifiers: readonly string[],
+  directory: string,
+  exists: (path: string) => boolean = existsSync,
+): { specifier: string; target?: string }[] {
+  const escaped: { specifier: string; target?: string }[] = []
+  for (const specifier of specifiers) {
+    if (isBuiltin(specifier)) continue
+    if (!specifier.startsWith('.')) {
+      escaped.push({ specifier })
+      continue
     }
+    const target = resolutionOf(file, specifier, exists)
+    if (!within(target, directory)) escaped.push({ specifier, target })
   }
   return escaped
 }
 
-/** 某目录内的 import 图（`文件 → 同目录内的目标文件`），用于环检测。 */
-function importGraph(directory: string): Map<string, string[]> {
+/** 读一个目录下的全部源文件与它们的 import 边 —— 判据的输入端，只此一处。 */
+export function unitsUnder(directory: string): { file: string; specifiers: string[] }[] {
+  return filesUnder(directory).map(file => ({ file, specifiers: importsOf(readFileSync(file, 'utf8')) }))
+}
+
+/**
+ * 一批文件里、跨出 `directory` 的 import（纯函数，样本可直接钉住它）。
+ *
+ * 拆出来是因为 V1/V2/V3 的入口若只是一个把三件事串起来的壳，把壳打坏（比如目录
+ * 参数传错、返回恒空）时，样本测的都是里面那件，判据已经瞎了而样本全绿。
+ */
+export function escapedAmong(
+  units: readonly { file: string; specifiers: readonly string[] }[],
+  directory: string,
+  exists: (path: string) => boolean = existsSync,
+): { file: string; specifier: string; target?: string }[] {
+  const escaped: { file: string; specifier: string; target?: string }[] = []
+  for (const { file, specifiers } of units) {
+    for (const escape of escapedFrom(file, specifiers, directory, exists)) escaped.push({ file, ...escape })
+  }
+  return escaped
+}
+
+/** 某目录内、跨出该目录的 import。 */
+export function outgoingImports(directory: string): { file: string; specifier: string; target?: string }[] {
+  return escapedAmong(unitsUnder(directory), directory)
+}
+
+/**
+ * 一批文件构成的 import 图，只保留**目录内**的边（纯函数，样本可直接钉住它）。
+ *
+ * 归一化在 {@link resolutionOf} 里：`./b`、`./sub` 都指得到真文件，
+ * 不归一化就会被当成图外节点、边被静默丢掉，而环检测是零命中型判据。
+ */
+export function graphAmong(
+  units: readonly { file: string; specifiers: readonly string[] }[],
+  directory: string,
+  exists: (path: string) => boolean = existsSync,
+): Map<string, string[]> {
   const graph = new Map<string, string[]>()
-  for (const file of filesUnder(directory)) {
+  for (const { file, specifiers } of units) {
     const targets: string[] = []
-    for (const specifier of importsOf(readFileSync(file, 'utf8'))) {
+    for (const specifier of specifiers) {
       if (!specifier.startsWith('.')) continue
-      const target = resolve(dirname(file), specifier)
-      if (target.startsWith(directory + sep)) targets.push(target)
+      const target = resolutionOf(file, specifier, exists)
+      if (within(target, directory)) targets.push(target)
     }
     graph.set(file, targets)
   }
   return graph
+}
+
+/** 某目录内的 import 图（`文件 → 同目录内的目标文件`），用于环检测。 */
+function importGraph(directory: string): Map<string, string[]> {
+  return graphAmong(unitsUnder(directory), directory)
 }
 
 /** 图里的一条回边（若存在）。DFS，返回环上的路径便于定位。 */
@@ -203,6 +280,10 @@ function format(escaped: { file: string; specifier: string }[]): string {
 
 // ---------------------------------------------------------------------------
 // 样本自证：判据自己先得会响
+//
+// 每条都钉住一个**真的会被 V1–V6 用到的**函数。理由：这些判据全是零命中型，
+// 判据失效与判据通过看起来一样；而「测了解析器 A、判据用的是 B」这种错位，
+// 会让样本绿着、判据已经瞎了。
 // ---------------------------------------------------------------------------
 
 test('the parser reads import edges, not comments or strings', () => {
@@ -224,12 +305,17 @@ test('the parser reads import edges, not comments or strings', () => {
 })
 
 test('the parser refuses forms it cannot follow', () => {
-  assert.throws(() => importsOf("export { a } from './a.ts'"), /export … from/, 're-export')
-  assert.throws(() => importsOf("export * from './a.ts'"), /export … from/, 'star re-export')
+  // 动态 import 的边只有运行期才存在，静态扫描读不到 —— 报错，别当成没有依赖。
   assert.throws(() => importsOf("const m = await import('./a.ts')"), /dynamic/, 'dynamic import')
+  // 反过来：重导出**是**一条依赖边，必须被认出来（看不见它，V1/V2 就会漏判）。
+  assert.deepEqual(
+    importsOf("export { a } from './a.ts'\nexport * from '../wire/b.ts'"),
+    ['./a.ts', '../wire/b.ts'],
+    're-exports are edges too',
+  )
 })
 
-test('the parser separates same-directory edges from escaping ones', () => {
+test('the cycle finder reports a loop, and stays quiet without one', () => {
   const graph = new Map([
     ['/w/a.ts', ['/w/b.ts']],
     ['/w/b.ts', ['/w/a.ts']],
@@ -240,6 +326,141 @@ test('the parser separates same-directory edges from escaping ones', () => {
     ['/w/b.ts', []],
   ])
   assert.equal(firstCycle(acyclic), undefined, 'no cycle, no report')
+  assert.deepEqual(firstCycle(new Map([['/w/a.ts', ['/w/a.ts']]])), ['/w/a.ts', '/w/a.ts'], 'a self-loop is a cycle')
+})
+
+/**
+ * 分层判据的样本：同目录不算跨出、Node 内建不算、跨目录算、裸包名算。
+ *
+ * 判的是「规格」而不是「解析器」：这几类正是 spec 里允许面与禁止面的边界，
+ * 任何一条判反了都会让 V1/V2/V3 给出错误的答案（假红会被人关掉，假绿会烂在原地）。
+ */
+test('the escaping-import judge tells same-directory, wire, and outside apart', () => {
+  const wire = join(SRC, 'wire')
+  const file = join(wire, 'mux.ts')
+  // 前提：这条样本用真文件（`resolutionOf` 会查文件系统）。文件被挪走时，先在这里说清，
+  // 而不是让读者对着 `cannot resolve` 猜是判据坏了还是源码变了。
+  for (const required of [file, join(wire, 'rpc.ts'), join(SRC, 'contract', 'rpc.ts')]) {
+    assert.ok(existsSync(required), `sample premise: ${relative(SRC, required)} must exist for this judge's samples`)
+  }
+  // 同目录：不算跨出
+  assert.deepEqual(escapedFrom(file, ['./rpc.ts'], wire), [], 'same-directory import is not escaping')
+  // Node 内建：两种写法都不算（裸写 `fs` 也算内建 —— 否则会假红）
+  assert.deepEqual(escapedFrom(file, ['node:fs', 'fs'], wire), [], 'node builtins are allowed, bare or prefixed')
+  // 跨目录：按解析后的路径判
+  assert.deepEqual(
+    escapedFrom(file, ['../contract/rpc.ts'], wire).map(e => e.specifier),
+    ['../contract/rpc.ts'],
+    'a sibling directory is escaping',
+  )
+  assert.deepEqual(
+    escapedFrom(file, ['../wire/../contract/rpc.ts'], wire).map(e => e.specifier),
+    ['../wire/../contract/rpc.ts'],
+    'a path that merely *starts* with ../wire/ still escapes — judged by target, not by prefix',
+  )
+  // 裸包名：底座目录不该引第三方包
+  assert.deepEqual(
+    escapedFrom(file, ['lodash'], wire).map(e => e.specifier),
+    ['lodash'],
+    'a bare package name is not allowed in a base directory',
+  )
+})
+
+/**
+ * 这条钉的是 V1/V2/V3 的入口 `escapedAmong`（以及它上面的 `unitsUnder`）。
+ *
+ * 只测 `escapedFrom` 不够：入口若把目录参数传错、或返回恒空，判据就瞎了，而那条
+ * 样本仍然绿 —— 「测了里面那件、判据用的是外面那层」是本文件反复要防的错位。
+ */
+test('the directory-level judge reports across files and honours the directory it was given', () => {
+  const wire = join(SRC, 'wire')
+  // 入口本身也要能读到真文件 —— 它若返回空列表，下面所有判据都成了空转。
+  const units = unitsUnder(wire)
+  assert.ok(units.length > 0, 'the reader must actually find files — an empty list would make every judge vacuous')
+  assert.ok(units.some(u => u.specifiers.length > 0), 'and it must actually read their imports')
+
+  // 样本用内存文件视图，不依赖源码树此刻长什么样。
+  const files = new Set([join(wire, 'a.ts'), join(wire, 'b.ts'), join(wire, 'c.ts'), join(wire, 'd.ts'), join(SRC, 'contract', 'rpc.ts')])
+  const exists = (path: string): boolean => files.has(path)
+  const escaped = escapedAmong([
+    { file: join(wire, 'a.ts'), specifiers: ['./b.ts'] },
+    { file: join(wire, 'c.ts'), specifiers: ['../contract/rpc.ts'] },
+    { file: join(wire, 'd.ts'), specifiers: ['node:fs', 'zod'] },
+  ], wire, exists)
+  assert.deepEqual(
+    escaped.map(e => `${e.file.endsWith('c.ts') ? 'c' : e.file.endsWith('d.ts') ? 'd' : 'a'} ${e.specifier}`),
+    ['c ../contract/rpc.ts', 'd zod'],
+    'only the escaping ones are reported, with files identified',
+  )
+})
+
+test('the file reader descends into subdirectories', () => {
+  // `src/` 眼下是扁平的，于是「递归」这条能力在判据里用不到 —— 但也正因为用不到，
+  // 把它改成只看顶层不会有任何判据变红。这里用 `tests/`（有子目录）把能力本身钉住：
+  // 将来 `wire/` 下分了子目录，递归就已经是验过的了。
+  const found = filesUnder(join(SRC, '..'))
+  assert.ok(found.every(file => file.endsWith('.ts')), 'only TypeScript files')
+  assert.ok(
+    found.some(file => file.includes(`${sep}tests${sep}contract${sep}`)),
+    'a nested file must be found — a top-level-only reader would miss it',
+  )
+})
+
+test('the two directory entries actually report on a directory that has something to report', () => {
+  // 零命中型判据的死穴：入口失效与判据通过长得一样。所以入口本身要在**真目录**上
+  // 证一次活性 —— 那批判据是「wire 不许跨出去」，这里反过来用「contract 确实跨出去」
+  // 证明扫描器还看得见东西。少了这一条，把 `outgoingImports` 改成恒返回空数组，
+  // V1/V2/V3 会一起变绿而没人发现。
+  const contracts = outgoingImports(join(SRC, 'contract'))
+  assert.ok(contracts.length > 0,
+    'contract/ imports wire/ and ports/, so the escaping judge must report something — an empty answer here means the judge is blind')
+  assert.ok(contracts.some(e => e.target?.includes(`${sep}wire${sep}`)),
+    'and the reported targets must point where the imports actually go')
+
+  // 环检测的入口同理：wire/ 内部有多条边，扫出空图就是失明。
+  const graph = importGraph(join(SRC, 'wire'))
+  assert.ok(graph.size > 0, 'the graph must have nodes — an empty graph makes the cycle judge vacuous')
+  assert.ok([...graph.values()].some(targets => targets.length > 0),
+    'and it must have edges — `mux` imports `rpc` and `usage`, so an edge-less graph means the reader is blind')
+})
+
+test('the graph keeps only intra-directory edges, and resolves lazy specifiers', () => {
+  const wire = join(SRC, 'wire')
+  const files = new Set([join(wire, 'a.ts'), join(wire, 'b.ts'), join(wire, 'c.ts'), join(SRC, 'contract', 'rpc.ts')])
+  const graph = graphAmong([
+    { file: join(wire, 'a.ts'), specifiers: ['./b.ts', '../contract/rpc.ts', 'node:fs'] },
+    { file: join(wire, 'b.ts'), specifiers: ['./a'] },       // 无扩展名也要成为一条边
+    { file: join(wire, 'c.ts'), specifiers: [] },
+  ], wire, (path: string) => files.has(path))
+  assert.deepEqual(graph.get(join(wire, 'a.ts')), [join(wire, 'b.ts')], 'only the sibling edge survives')
+  assert.deepEqual(graph.get(join(wire, 'b.ts')), [join(wire, 'a.ts')], 'extension-less specifier resolves to the real file')
+  assert.deepEqual(firstCycle(graph), [join(wire, 'a.ts'), join(wire, 'b.ts'), join(wire, 'a.ts')],
+    'and the loop those edges form is found — this is the only thing keeping V4 honest')
+})
+
+test('an unresolvable import is an error, not a silently dropped edge', () => {
+  // 同样依赖两个真文件；缺了就说清前提，别让它伪装成「判据不灵」。
+  for (const required of [join(SRC, 'wire', 'mux.ts'), join(SRC, 'wire', 'rpc.ts')]) {
+    assert.ok(existsSync(required), `sample premise: ${relative(SRC, required)} must exist`)
+  }
+  // 环检测与跨目录判定都靠「目标是谁」。解析不出来就说出来，别当成没有依赖 ——
+  // 静默丢边只会让零命中型判据更绿。
+  assert.throws(
+    () => resolutionOf(join(SRC, 'wire', 'mux.ts'), './no-such-file.ts'),
+    /cannot resolve/,
+  )
+  // 反过来：`./rpc`（无扩展名）指得到同一个真文件，必须归一化到它 ——
+  // 否则环检测会把这两条边当成图外节点丢掉。
+  const canonical = resolutionOf(join(SRC, 'wire', 'mux.ts'), './rpc.ts')
+  assert.equal(resolutionOf(join(SRC, 'wire', 'mux.ts'), './rpc'), canonical, 'extension-less resolves')
+  assert.equal(canonical, join(SRC, 'wire', 'rpc.ts'), 'and it resolves to the real file')
+  // `.js` 说明符**不**映射到 `.ts`：本仓的 import 一律写 `.ts`（Node 的类型剥离直接跑源码）。
+  // 若哪天工具链要求 `.js` 后缀，这条会红 —— 那时再决定是支持映射还是改全仓写法。
+  assert.throws(
+    () => resolutionOf(join(SRC, 'wire', 'mux.ts'), './rpc.js'),
+    /cannot resolve/,
+    'a .js specifier is not silently rewritten to .ts',
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -253,10 +474,10 @@ test('wire/ does not reach outside itself', () => {
 })
 
 test('ports/ only reaches into wire/', () => {
-  const escaped = outgoingImports(join(SRC, 'ports')).filter(({ specifier }) => {
-    // 同目录的 `./` 已在 outgoingImports 里被排除；这里只剩「伸出去」的，必须指向 wire/
-    return !(specifier === '../wire' || specifier.startsWith('../wire/'))
-  })
+  const wire = join(SRC, 'wire')
+  // 按**解析后的目标**判，不看 specifier 的字符串前缀：`'../wire/../contract/x.ts'`
+  // 前缀像 wire/，实际落在 contract/。
+  const escaped = outgoingImports(join(SRC, 'ports')).filter(({ target }) => target === undefined || !within(target, wire))
   assert.deepEqual(escaped, [],
     `ports/ is the assembly boundary: it may import wire/ (its signatures name wire types) and nothing else:\n${format(escaped)}`)
 })
@@ -266,8 +487,8 @@ test('ports/ only reaches into wire/', () => {
 // ---------------------------------------------------------------------------
 
 test('upstream/ does not import remote/', () => {
-  const escaped = outgoingImports(join(SRC, 'upstream'))
-    .filter(({ specifier }) => specifier === '../remote' || specifier.startsWith('../remote/'))
+  const remote = join(SRC, 'remote')
+  const escaped = outgoingImports(join(SRC, 'upstream')).filter(({ target }) => target !== undefined && within(target, remote))
   assert.deepEqual(escaped, [],
     `the host adapter must not know the transport — a port it needs belongs in ports/:\n${format(escaped)}`)
 })
@@ -301,27 +522,226 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'write.ts', name: 'sessionPromptOf', shape: 'SessionPromptMessage' },
 ]
 
-/** 导出的函数式声明：`export function x` 与 `export const x = (…) =>` 都算。 */
-export function exportedFunctionsOf(source: string): string[] {
+/**
+ * `wire/` 下允许的导出面 —— **白名单式**，认不出的写法直接抛错。
+ *
+ * 为什么不用「找函数声明的正则」：那种写法只认它想到的形态，`export { f }`、
+ * `export default`、`export const f = x => …`、generator、工厂调用全都能静默绕过 ——
+ * 而 V5 是零命中型判据，绕过之后它更绿。
+ *
+ * 三层防线，每层堵一类绕过：
+ *  ① **扫全文所有 `export`**，不只行首 —— 否则 `const a = 1; export function evil()` 溜过去。
+ *  ② **语句按括号深度取全**，不只首行 —— 否则 `export const X = { run: () => 1 }` 只看首行 `{` 就放行。
+ *  ③ **常量只认字面量**：数字 / 字符串 / 数组 / 对象字面量。标识符与调用都报错 ——
+ *     前者说不清是不是函数别名（`export const w = windowArm` 就是算法借道），
+ *     后者可能是工厂返回的函数，还带加载期副作用。
+ *
+ * 要支持新形态，先改这里，别让它静默变成「没有导出函数」。
+ */
+export function exportSurfaceOf(source: string): { functions: string[]; shapes: string[] } {
   const code = stripComments(source)
-  const names: string[] = []
-  for (const match of code.matchAll(/\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g)) {
-    if (match[1] !== undefined) names.push(match[1])
+  const functions: string[] = []
+  const shapes: string[] = []
+  for (const statement of exportStatementsOf(code)) {
+    let match = /^export\s+interface\s+([A-Za-z_$][\w$]*)/.exec(statement)
+    if (match?.[1] !== undefined) {
+      shapes.push(match[1])
+      continue
+    }
+    match = /^export\s+type\s+([A-Za-z_$][\w$]*)/.exec(statement)
+    if (match?.[1] !== undefined) {
+      shapes.push(match[1])
+      continue
+    }
+    match = /^export\s+(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/.exec(statement)
+    if (match?.[1] !== undefined) {
+      functions.push(match[1])
+      continue
+    }
+    if (/^export\s+const\b/.test(statement)) {
+      assertLiteralConstant(statement)
+      continue
+    }
+    throw new Error(
+      `unsupported export form in wire/ — extend exportSurfaceOf() first: ${statement.slice(0, 70)}`,
+    )
   }
-  for (const match of code.matchAll(/\bexport\s+const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\(|function\b)/g)) {
-    if (match[1] !== undefined) names.push(match[1])
-  }
-  return names
+  return { functions, shapes }
 }
 
-test('wire/ exports shapes and codecs, nothing else', () => {
-  const actual: string[] = []
-  for (const file of filesUnder(join(SRC, 'wire'))) {
-    for (const name of exportedFunctionsOf(readFileSync(file, 'utf8'))) actual.push(name)
+/** 从 `start`（一个引号）跳到它闭合之后。反引号按普通字符串处理（本仓不写模板插值）。 */
+function skipString(code: string, start: number): number {
+  const quote = code[start] as string
+  let i = start + 1
+  while (i < code.length) {
+    if (code[i] === '\\') {
+      i += 2
+      continue
+    }
+    if (code[i] === quote) return i + 1
+    i += 1
   }
-  const expected = WIRE_CODECS.map(codec => codec.name)
-  assert.deepEqual(actual.sort(), [...expected].sort(),
+  return i
+}
+
+/** 一条语句的结束位置：括号平衡处的 `;` 或换行。字符串里的括号与冒号不算。 */
+function statementEnd(code: string, start: number): number {
+  let depth = 0
+  let i = start
+  while (i < code.length) {
+    const ch = code[i] as string
+    if (ch === "'" || ch === '"' || ch === '`') {
+      i = skipString(code, i)
+      continue
+    }
+    if (ch === '(' || ch === '{' || ch === '[') depth += 1
+    else if (ch === ')' || ch === '}' || ch === ']') depth -= 1
+    else if (depth === 0 && (ch === ';' || ch === '\n')) break
+    i += 1
+  }
+  return i
+}
+
+/**
+ * 全文所有 `export` 语句的文本（从 `export` 起到括号平衡处的 `;` 或换行）。
+ *
+ * 三件事必须同时做到，否则判据会读错：
+ *  ① **跳过字符串** —— 字符串里的 `export` 不是导出，字符串里的 `(` 也不是括号；
+ *  ② **不只看行首** —— `const m = 1; export function evil(){}` 的导出也要被看见；
+ *  ③ **按深度取全** —— 跨行的对象字面量与形参表都要读进来。
+ */
+export function exportStatementsOf(code: string): string[] {
+  const statements: string[] = []
+  let i = 0
+  while (i < code.length) {
+    const ch = code[i] as string
+    if (ch === "'" || ch === '"' || ch === '`') {
+      i = skipString(code, i)
+      continue
+    }
+    const boundary = i === 0 || !/[\w$]/.test(code[i - 1] as string)
+    if (boundary && code.startsWith('export', i)) {
+      const end = statementEnd(code, i)
+      statements.push(code.slice(i, end).trim())
+      i = end
+      continue
+    }
+    i += 1
+  }
+  return statements
+}
+
+/**
+ * 常量初始化只认字面量 —— **白名单式**：剥掉所有字符串、对象键与 `true/false/null`
+ * 之后，值里**不允许再剩任何标识符**。
+ *
+ * 为什么不能枚举禁止形态：`= windowArm`、`= { run: windowArm }`、`= true && windowArm`、
+ * `= marker = 1, pageWindow = windowArm` 都是「一行合法常量带走一个函数」，而每一轮
+ * 枚举都会漏掉下一种。反过来问「剩下的是不是只剩数字与标点」只有一个答案。
+ */
+function assertLiteralConstant(statement: string): void {
+  const match = /^export\s+const\s+[\p{ID_Start}$][\p{ID_Continue}$]*\s*(?::[^=]+)?=\s*([\s\S]*)$/u.exec(statement)
+  const value = match?.[1]?.trim() ?? ''
+  if (value === '') throw new Error('`export const … =` has no value — extend exportSurfaceOf() first')
+
+  // **先剥字符串**，再做任何判断。否则 `= 'a => b'` 会被当成箭头函数 —— 假红会让人
+  // 关掉判据，比漏判更贵。
+  const withoutStrings = value.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""')
+  // 函数值的早期形态：好让报错直接教人怎么改。
+  if (withoutStrings.trimStart().startsWith('(') || /^\s*(async\b|function\b|<)/.test(withoutStrings)
+    || withoutStrings.includes('=>')) {
+    throw new Error(
+      '`export const … =` looks like a function value — write it as `export function` so the codec table can see it',
+    )
+  }
+  // 剥对象键（`{ key:` / `, key:`）与三个无副作用的词，然后要求**一个标识符都不剩**。
+  // 字符类用 `\p{ID_Start}`：CJK 之类非 ASCII 标识符与 ASCII 一样能藏函数，
+  // 只按 `[A-Za-z_$]` 找会漏（`export const arm = { run: 窗口 }` 就是这么溜过去的）。
+  const withoutKeys = withoutStrings.replace(/(^|[{,])\s*[\p{ID_Start}$][\p{ID_Continue}$]*\s*:/gu, '$1')
+  const withoutKeywords = withoutKeys.replace(/\b(true|false|null|undefined)\b/g, '')
+  const leftover = withoutKeywords.match(/[\p{ID_Start}$][\p{ID_Continue}$]*/u)
+  if (leftover !== null) {
+    throw new Error(
+      `\`export const … =\` still mentions \`${leftover[0]}\` — a bare identifier could be a function in disguise: ${value.slice(0, 40)}`,
+    )
+  }
+  // 到这一步只剩数字与标点。**形状**仍需是字面量：数字、字符串、数组、对象、布尔/null。
+  // 不放行 `new X()`、正则、`satisfies`、类型断言 —— 判据读不懂它们，就不猜；
+  // 真要在 wire/ 里写，先扩展这里（一句话的事，但不能默默放行）。
+  const shape = withoutKeywords.trim()
+  const isKeywordLiteral = shape === '' // 整值是 true / false / null / undefined
+  if (!isKeywordLiteral && !/^(\d|-\.?\d|""|\[|\{)/.test(withoutStrings.trim())) {
+    throw new Error(
+      `\`export const … =\` is not a literal this judge understands — extend assertLiteralConstant(): ${value.slice(0, 40)}`,
+    )
+  }
+}
+
+test('the export-surface reader refuses forms it cannot classify', () => {
+  // 每一条都是一次「静默绕过」的真实形态：判据要么认出它，要么报错 ——
+  // 绝不能当成「没有导出函数」，那样 V5 会因为看不见它而变绿。
+  const mustRefuse: [string, string][] = [
+    ['function pageWindow() {}\nexport { pageWindow }', '本地具名导出'],
+    ['export default function pageWindow() {}', 'default 导出'],
+    ['export const pageWindow = events => events', '单参箭头'],
+    ['export const pageWindow = <T>(events: T) => events', '泛型箭头'],
+    ['export const pageWindow = makeWindow()', '工厂调用'],
+    ['export class PageWindow {}', 'class'],
+    ['function windowArm() {}\nexport const pageWindow = windowArm', '标识符别名（算法借道）'],
+    ['export const pageWindow = { run: () => 1 }', '对象里藏箭头函数'],
+    ['export const pageWindow = [\n  function () {},\n]', '数组里藏函数表达式'],
+    ['function windowArm(a: number): number { return a + 1 }\nexport const marker = 1, pageWindow = windowArm', '多声明符里夹带别名'],
+    ['function windowArm(a: number): number { return a + 1 }\nexport const pageWindow = { run: windowArm }', '对象值里的裸标识符'],
+    ['function windowArm(a: number): number { return a + 1 }\nexport const pageWindow = true && windowArm', '运算符表达式里的别名'],
+    ['function 窗口(a: number): number { return a + 1 }\nexport const arm = { run: 窗口 }', '非 ASCII 标识符藏函数'],
+  ]
+  for (const [source, why] of mustRefuse) {
+    assert.throws(
+      () => exportSurfaceOf(source),
+      /unsupported export form|looks like a function value|still mentions|is not a literal|has no value/,
+      `must not slip through (${why}): ${source.replace(/\n/g, ' ')}`,
+    )
+  }
+  // 正控：允许的形态都要认得出，**行中的 export 也要被看见**。
+  assert.deepEqual(
+    exportSurfaceOf([
+      'export interface A { x: number }',
+      'export type B = string',
+      'export function c(): void {}',
+      'export async function d(): Promise<void> {}',
+      'export function* e(): Generator<number> {}',
+      'export const F = 50',
+      "export const G: readonly string[] = ['a']",
+      "export const H = 'x('",  // 字符串里的括号不是调用
+      "export const I = 'a => b'",  // 字符串里的箭头也不是函数
+      'const marker = 1; export function i(): void {}',
+      'export const J = { depth: 2 }',
+    ].join('\n')),
+    { functions: ['c', 'd', 'e', 'i'], shapes: ['A', 'B'] },
+    'the allowed forms are classified, including an export that is not at line start',
+  )
+})
+
+test('wire/ exports shapes and codecs, nothing else', () => {
+  const actual: { file: string; name: string }[] = []
+  const shapeNames = new Set<string>()
+  for (const path of filesUnder(join(SRC, 'wire'))) {
+    const surface = exportSurfaceOf(readFileSync(path, 'utf8'))
+    for (const name of surface.functions) actual.push({ file: path.slice(path.lastIndexOf(sep) + 1), name })
+    for (const shape of surface.shapes) shapeNames.add(shape)
+  }
+  assert.deepEqual(actual.map(f => f.name).sort(), WIRE_CODECS.map(c => c.name).sort(),
     'a function that cannot be paired with the shape it encodes is not a codec — it belongs in protocol/')
+
+  // 表里两列都要真的成立，否则它们只是注释：`file` 说它在哪个文件，`shape` 说它服务哪个形状。
+  const misplaced = WIRE_CODECS.filter(codec => !actual.some(f => f.name === codec.name && f.file === codec.file))
+    .map(codec => `${codec.name} 不在 ${codec.file}`)
+  assert.deepEqual(misplaced, [], `a codec must live in the file the table names: ${misplaced.join('; ')}`)
+
+  const missing = WIRE_CODECS.filter(codec => !shapeNames.has(codec.shape))
+    .map(codec => `${codec.name} → ${codec.shape}`)
+  assert.deepEqual(missing, [],
+    `each codec must name a shape that wire/ actually exports: ${missing.join(', ')}`)
 })
 
 // ---------------------------------------------------------------------------
@@ -329,8 +749,16 @@ test('wire/ exports shapes and codecs, nothing else', () => {
 // ---------------------------------------------------------------------------
 
 test('no source comment points into the workspace docs', () => {
+  // 扫 `src/` 与**本文件**：产品代码的注释是给仓库读者看的，指向不发布的文档就是死链；
+  // 判据自身也不该示范它禁止的写法。
+  //
+  // 其余测试文件不在扫描面，因为那里的工作区路径是**它们的题材**而不是出处 —— 术语检查
+  // 要说明它扫哪四份活文档，那不是「注释只给出处」。这条边界写在代码里，免得下一次有人
+  // 把它当成漏扫补上，然后不得不加一套豁免机制。
+  const self = fileURLToPath(import.meta.url)
+  const files = [...filesUnder(SRC), self]
   const offenders: string[] = []
-  for (const file of filesUnder(SRC)) {
+  for (const file of files) {
     for (const span of commentSpans(readFileSync(file, 'utf8'))) {
       if (/\bdev\//.test(span.text)) offenders.push(`${where(file)}: ${span.text.trim().slice(0, 90)}`)
     }

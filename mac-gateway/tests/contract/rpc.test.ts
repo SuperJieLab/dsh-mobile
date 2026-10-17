@@ -3,7 +3,6 @@
  * are the reason `handle` exists standalone: no server, no runtime, no filesystem,
  * no network — the data source is injected, so the protocol layer decides alone.
  * Run: node --test tests/contract/rpc.test.ts
- * See dev/contract/protocol.md and M0 §4.3 Step 3.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -391,7 +390,8 @@ test('a since past the water mark is answered, not refused — it is indistingui
 })
 
 // ---------------------------------------------------------------------------
-// `page` — the backwards window (dev/contract/protocol.md §4.3)
+// `page` — the backwards window: newest N messages, or a window ending exactly before
+// `beforeSeq`, with the start pulled back to a turn boundary
 // ---------------------------------------------------------------------------
 
 test('page with no beforeSeq hands back the newest message window', async () => {
@@ -529,7 +529,7 @@ test('page on an unknown session is the same refusal the read path uses', async 
 })
 
 // ---------------------------------------------------------------------------
-// `list-sessions` — the v2 row shape (dev/contract/protocol.md §4.1)
+// `list-sessions` — the v2 row shape: header facts plus host-kept projections, never a log read
 // ---------------------------------------------------------------------------
 
 test('a list row carries running and blank, and never an event count', async () => {

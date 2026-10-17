@@ -9,8 +9,9 @@ import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.
 
 /**
  * 一条 approval 应答的三个结局，见 {@link WritePort.answerApproval}。
- * 具名是为了**只此一处定义** —— 这组字面量曾被手抄在四处，其中 `ReplayTable`
- * 那处漏了 `undelivered`：重复本身会漂。
+ *
+ * 具名的理由是可判的：这组字面量要同时出现在端口签名、中继、重放表与协议映射里，
+ * 手抄一遍就多一处会漂的地方（漏掉一个值不会报错，只会在某个分支上静默走错）。
  */
 export type ApprovalOutcome = 'delivered' | 'unknown-approval' | 'undelivered'
 

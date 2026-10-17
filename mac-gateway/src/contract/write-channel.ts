@@ -1,20 +1,16 @@
 /**
- * 写契约：两条写 op 的解析与重放簿记 ——
- * M5 §四。写载荷从严校验，与读路径
- * 不同：畸形决定被静默执行，等于凭猜测运行一条远程命令，因此每条畸形写
- * 都以 `invalid-request` 拒绝。
+ * 写通道的服务端部分：幂等重放与结论词汇映射。
  *
- * 重放表让重试安全：回复丢失后的重发会再次得到第一次的结果。
- * 重启即清空，无害 —— 日志中的 `approval/decided` 审计才是客户端对账的
- * 真相。
+ * 载荷形状与解析在 `wire/write.ts`（两端共守，手机端同改）；端口与结局词汇在
+ * `ports/write.ts`（装配边界）。这里只剩服务端自己才需要的那两件 —— 让重试安全
+ * 的重放表，以及把客户端的两键选择翻成上游的结论词。
+ *
+ * 写载荷从严校验是**那边**的规则：畸形决定被静默执行，等于凭猜测运行一条远程
+ * 命令，所以每条畸形写都以 `invalid-request` 拒绝。
  */
 
-// 写载荷的形状与解析已搬到 `wire/`（两端共守）；这里 import 再用并重导出。
-import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
 export { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
 export type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
-
-// 端口与结局词汇已搬到装配边界 `ports/write.ts`；这里重导出，重放表留在这。
 export type { ApprovalOutcome, WritePort } from '../ports/write.ts'
 
 /**
