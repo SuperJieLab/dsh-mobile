@@ -15,7 +15,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { analyzeRecords, attributeBottleneck, curvePoint, type PerfLike } from '../../tools/bench/analyze.ts'
 
-/** 手工造一条 gw 记录：字段集与 `src/remote/ws.ts` 的 `gwRecord` 对齐。 */
+/** 手工造一条 gw 记录：字段集与 `src/remote/egress.ts` 的 `gwRecord` 对齐。 */
 function gw(seq: number, evTime: number, gwRecv: number, gwSend: number, subMs = true): PerfLike {
   return { seg: 'gw', t: gwSend, sessionId: 's1', kind: 'event', seq, evTime, gwRecv, gwSend, bytes: 100 }
 }

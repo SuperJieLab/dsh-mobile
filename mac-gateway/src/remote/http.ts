@@ -33,7 +33,7 @@ export interface RpcListenerDeps {
 /**
  * 构建插件自己的 HTTP 监听器：一个 server，`POST /rpc` 走单向调用，
  * 流升级共享端口（与其他请求同一闸门 —— 无有效 access token，就没有 101；
- * 见 remote/ws.ts）。
+ * 见 remote/server.ts）。
  */
 export function createRpcListener(deps: RpcListenerDeps): Server {
   // `respond` 从不 reject；此处抛出会成为未处理的 rejection。

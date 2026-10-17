@@ -9,7 +9,7 @@
  * 版本闸门在 `mux v1` 成帧契约里（"word for word"）。
  *
  * 这里**只有形状与编解码**。「这条打开装哪些事件」是传输层的事，由
- * `remote/ws.ts` 的 `openingPayload` 从宿主给出的窗口装配。
+ * `remote/stream.ts` 的泵从宿主给出的窗口装配。
  */
 
 import type { WireEvent } from './rpc.ts'

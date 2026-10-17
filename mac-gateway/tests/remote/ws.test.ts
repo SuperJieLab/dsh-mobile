@@ -12,7 +12,10 @@ import test from 'node:test'
 import { createServer, request as httpRequest, type Server } from 'node:http'
 import { once } from 'node:events'
 import { connect as tcpConnect } from 'node:net'
-import { attachStreamHandler, endReasonOf, startHeartbeat, STREAM_PATH, type HeartbeatSocket } from '../../src/remote/ws.ts'
+import { attachStreamHandler } from '../../src/remote/server.ts'
+import {
+  endReasonOf, startHeartbeat, STREAM_PATH, type HeartbeatSocket,
+} from '../../src/remote/connection.ts'
 import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
 import type { WireEvent } from '../../src/wire/rpc.ts'
 import { setPerfSink } from '../../src/log.ts'
