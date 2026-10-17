@@ -21,13 +21,13 @@ import type {
   WireEvent,
   SessionRow,
   SessionSlice,
-  WireError,
-  OkResponse,
   ErrorResponse,
   Response,
 } from '../wire/rpc.ts'
+// 只转出下游此刻在用的名字。`WireError` 与 `OkResponse` 只有 `Response` 联合本身要用，
+// 对外没人读 —— 转出去只会让人以为它们是这个文件的出口。
 export { PROTOCOL_VERSION }
-export type { WireEvent, SessionRow, SessionSlice, WireError, OkResponse, ErrorResponse, Response }
+export type { WireEvent, SessionRow, SessionSlice, ErrorResponse, Response }
 import type { ModelPort, ModelSelection } from './model-selection.ts'
 import { modelSelectRequestOf } from './model-selection.ts'
 import {

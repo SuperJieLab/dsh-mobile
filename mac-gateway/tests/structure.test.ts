@@ -39,7 +39,7 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../src')
  * 手写扫描器而不是按 `//` 正则删：源码里有 `'https://…'` 这类字符串，正则会把它们
  * 从 `//` 处截断 —— 于是后面若有 import 就整条消失，判据静默失明。
  */
-export function stripComments(source: string): string {
+function stripComments(source: string): string {
   let out = ''
   let cursor = 0
   for (const span of commentSpans(source)) {
@@ -52,23 +52,13 @@ export function stripComments(source: string): string {
 /** 源码里的注释区间（含定界符），按出现顺序。扫描器只认「引号之外」的注释。 */
 export function commentSpans(source: string): { start: number; end: number; text: string }[] {
   const spans: { start: number; end: number; text: string }[] = []
-  let quote: string | undefined
   let i = 0
   while (i < source.length) {
     const ch = source[i] as string
     const next = source[i + 1]
-    if (quote !== undefined) {
-      if (ch === '\\') {
-        i += 2
-        continue
-      }
-      if (ch === quote) quote = undefined
-      i += 1
-      continue
-    }
+    // 引号之内没有注释：跳过去。这一句与 `skipString` 是同一套规则，两处各写一份就会漂。
     if (ch === "'" || ch === '"' || ch === '`') {
-      quote = ch
-      i += 1
+      i = skipString(source, i)
       continue
     }
     if (ch === '/' && next === '/') {
@@ -130,11 +120,6 @@ export function filesUnder(directory: string): string[] {
   return found
 }
 
-/** Node 内建模块。用运行时的判据，而不是自己维护名单 —— 裸写 `fs` 与 `node:fs` 都算。 */
-function isBuiltin(specifier: string): boolean {
-  return isBuiltinModule(specifier)
-}
-
 /** `target` 是否落在 `directory` 内（含该目录本身）。 */
 function within(target: string, directory: string): boolean {
   return target === directory || target.startsWith(directory + sep)
@@ -153,7 +138,9 @@ export function resolutionOf(
   exists: (path: string) => boolean = existsSync,
 ): string {
   const base = resolve(dirname(file), specifier)
-  const candidates = [base, `${base}.ts`, join(base, 'index.ts')]
+  // 只有「带扩展名」与「省略扩展名」两种。目录 import（`./sub` → `sub/index.ts`）当前
+  // 全仓没有，不做猜测：真出现会在这里报错，那时再补候选 —— 猜错比报错更难查。
+  const candidates = [base, `${base}.ts`]
   for (const candidate of candidates) {
     if (candidate.endsWith('.ts') && exists(candidate)) return candidate
   }
@@ -177,7 +164,8 @@ export function escapedFrom(
 ): { specifier: string; target?: string }[] {
   const escaped: { specifier: string; target?: string }[] = []
   for (const specifier of specifiers) {
-    if (isBuiltin(specifier)) continue
+    // Node 内建：用运行时的判据，不自己维护名单 —— 裸写 `fs` 与 `node:fs` 都算。
+    if (isBuiltinModule(specifier)) continue
     if (!specifier.startsWith('.')) {
       escaped.push({ specifier })
       continue
@@ -278,6 +266,13 @@ function format(escaped: { file: string; specifier: string }[]): string {
   return escaped.map(({ file, specifier }) => `  ${where(file)} → ${specifier}`).join('\n')
 }
 
+/** 样本的前提前提：这些真文件必须在。缺了先说清，别让读者对着 `cannot resolve` 猜。 */
+function requireFiles(paths: readonly string[]): void {
+  for (const path of paths) {
+    assert.ok(existsSync(path), `sample premise: ${relative(SRC, path)} must exist for this judge's samples`)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 样本自证：判据自己先得会响
 //
@@ -340,9 +335,7 @@ test('the escaping-import judge tells same-directory, wire, and outside apart', 
   const file = join(wire, 'mux.ts')
   // 前提：这条样本用真文件（`resolutionOf` 会查文件系统）。文件被挪走时，先在这里说清，
   // 而不是让读者对着 `cannot resolve` 猜是判据坏了还是源码变了。
-  for (const required of [file, join(wire, 'rpc.ts'), join(SRC, 'contract', 'rpc.ts')]) {
-    assert.ok(existsSync(required), `sample premise: ${relative(SRC, required)} must exist for this judge's samples`)
-  }
+  requireFiles([file, join(wire, 'rpc.ts'), join(SRC, 'contract', 'rpc.ts')])
   // 同目录：不算跨出
   assert.deepEqual(escapedFrom(file, ['./rpc.ts'], wire), [], 'same-directory import is not escaping')
   // Node 内建：两种写法都不算（裸写 `fs` 也算内建 —— 否则会假红）
@@ -440,9 +433,7 @@ test('the graph keeps only intra-directory edges, and resolves lazy specifiers',
 
 test('an unresolvable import is an error, not a silently dropped edge', () => {
   // 同样依赖两个真文件；缺了就说清前提，别让它伪装成「判据不灵」。
-  for (const required of [join(SRC, 'wire', 'mux.ts'), join(SRC, 'wire', 'rpc.ts')]) {
-    assert.ok(existsSync(required), `sample premise: ${relative(SRC, required)} must exist`)
-  }
+  requireFiles([join(SRC, 'wire', 'mux.ts'), join(SRC, 'wire', 'rpc.ts')])
   // 环检测与跨目录判定都靠「目标是谁」。解析不出来就说出来，别当成没有依赖 ——
   // 静默丢边只会让零命中型判据更绿。
   assert.throws(
@@ -610,7 +601,7 @@ function statementEnd(code: string, start: number): number {
  *  ② **不只看行首** —— `const m = 1; export function evil(){}` 的导出也要被看见；
  *  ③ **按深度取全** —— 跨行的对象字面量与形参表都要读进来。
  */
-export function exportStatementsOf(code: string): string[] {
+function exportStatementsOf(code: string): string[] {
   const statements: string[] = []
   let i = 0
   while (i < code.length) {

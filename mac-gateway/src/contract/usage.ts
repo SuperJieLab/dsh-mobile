@@ -21,7 +21,9 @@
 
 // 形状已搬到 `wire/`（两端共守）：手机端也画这个比值，改字段那边必须同改。
 import type { BreakdownValues, UsagePayload, UsageSnapshot } from '../wire/usage.ts'
-export type { BreakdownValues, UsagePayload, UsageSnapshot } from '../wire/usage.ts'
+// 只有 `UsageSnapshot` 有外部消费者（流适配器把读数放进帧）；`BreakdownValues` 与
+// `UsagePayload` 只在本文件的算法签名里用到，不转出去。
+export type { UsageSnapshot } from '../wire/usage.ts'
 
 /**
  * 把投影值的一次切点变成要发送的快照。

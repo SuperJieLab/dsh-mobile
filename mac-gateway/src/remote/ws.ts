@@ -42,10 +42,9 @@ import { createLogger, LogModule, perfNow, perfRecord } from '../log.ts'
 
 const log = createLogger(LogModule.ws)
 
-// 端口与上游帧形状已搬到装配边界 `ports/follow.ts` —— 面向宿主的适配层要的是这个
-// 接口，让它从传输层取就是反向依赖。这里 import 再用并重导出，下游路径不必一次改完。
+// 端口与上游帧形状住在装配边界 `ports/follow.ts` —— 面向宿主的适配层要的是这个接口，
+// 让它从传输层取就是反向依赖。这里只用不转：本文件的读者要找端口，该去 `ports/`。
 import type { FollowSource, UpstreamFollowFrame } from '../ports/follow.ts'
-export type { FollowSource, UpstreamFollowFrame } from '../ports/follow.ts'
 
 /** 心跳节拍，对齐参考服务端。 */
 const PING_INTERVAL_MS = 2_000

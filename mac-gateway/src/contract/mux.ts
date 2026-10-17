@@ -15,22 +15,10 @@ import type { FollowOpening, FollowRequest } from '../wire/mux.ts'
 import type { WireEvent } from '../wire/rpc.ts'
 import type { UsageSnapshot } from '../wire/usage.ts'
 
-// 本文件不再声明这些形状与编解码，只重导出 —— 下游的 import 路径因此不必一次
-// 改完（期2 搬算法时统一改成直连）。
+// 形状与编解码在 `wire/mux.ts`。这里转出下游**此刻真在用**的那几个 —— 多转一个就是
+// 一个没人读的名字，期2 搬算法时还要逐个判断它该不该留。
 export { DEFAULT_FOLLOW_MESSAGES, encodeServerFrame, followRequestOf, parseClientFrame } from '../wire/mux.ts'
-export type {
-  FollowOpening,
-  FollowRequest,
-  MuxApprovalFrame,
-  MuxCancelFrame,
-  MuxClientFrame,
-  MuxEndFrame,
-  MuxErrorFrame,
-  MuxItemFrame,
-  MuxOpenFrame,
-  MuxServerFrame,
-  MuxUsageFrame,
-} from '../wire/mux.ts'
+export type { FollowOpening, MuxServerFrame } from '../wire/mux.ts'
 
 /**
  * 从一个会话的整条日志装配 follow 打开。
