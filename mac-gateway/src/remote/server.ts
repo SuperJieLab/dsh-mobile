@@ -5,6 +5,10 @@
  * 也不写帧的内容（编码与写出是 `egress.ts` 的事）—— 它只回答「现在有谁连着」。
  *
  * 广播时某个 socket 已死不影响其余：写之前检查 `destroyed`，一个死连接只是被跳过。
+ *
+ * 这一层不产生协议码 —— 握手拒绝用的是 HTTP 状态行（404 / 401 / 400），那是传输
+ * 自己的词汇，不是协议信封。身份类的 `unauthenticated` / `invalid-pairing-code`
+ * 在 `http.ts` 的闸门旁，同属 HTTP 401 一族（见 `ISSUES` A13 的分类）。
  */
 
 import type { Duplex } from 'node:stream'

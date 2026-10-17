@@ -121,7 +121,7 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
 export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
 
 /**
- * 打开帧的默认字节上界（R9 期1）—— 与 HTTP 路径的上限同处一族，定义在
+ * 打开帧的默认字节上界 —— 与 HTTP 路径的上限同处一族，定义在
  * `protocol/rpc.ts` 的 `DEFAULT_LIMITS`（那里有取值来由）。做成可传参而非常量，
  * 理由与 `maxDeltaEvents` 相同：让收窄路径**可被端到端观测**（调到极小值就能
  * 看见它发生），而不是只活在文档里。
@@ -216,8 +216,8 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
     for (const frame of frames) {
       // 对端送来的任何一帧都是「它还活着」的证据 —— 与客户端侧同一条规则
       //（`FollowClient.livenessTick`）。最要紧的那一帧是客户端每 2 秒一次的 ping：它走的是
-      // **未被堵住**的方向（客户端 → 网关），而我们的 pong 可能正排在一大帧后面
-      //（真机：1.25 MB 的打开帧 + 中继链路）。此刻收不到它的 pong 说明不了什么。
+      // **未被堵住**的方向（客户端 → 网关），而我们的 pong 可能正排在一个大帧后面。
+      // 此刻收不到它的 pong 说明不了什么。
       heartbeat.heardFrame()
       switch (frame.kind) {
         case 'ping':
@@ -225,8 +225,8 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
           break
         case 'close':
           // 对端**明确**说了再见（WebSocket close 帧）。这是「对端主动关」与「链路直接断」
-          // 之间唯一可靠的分界 —— 两者在网关侧都表现为一次 socket close，只有这一帧能区分
-          // （真机 2026-10-15：`the peer went away` 分不出「用户切了会话」还是「链路掉了」）。
+          // 之间唯一可靠的分界 —— 两者在网关侧都表现为一次 socket close，只有这一帧能区分。
+          // 少了它，「the peer went away」这句话分不出「用户切了会话」与「链路掉了」。
           peerClosedCleanly = true
           write(socket, encodeClose())
           socket.end()
@@ -241,9 +241,9 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
   // 帧可能搭在升级请求的最后字节里。
   if (head.length > 0) onChunk(head)
   socket.on('data', onChunk)
-  // 连接收尾必须留痕：此前这里是 `on('close', closeAll)`，只做清理、一行不记 —— 于是
-  // 「谁关的、活了多久、有没有 error」全无据可查（真机 2026-10-15 的「每 35–60 秒断一次」
-  // 就卡在这里：客户端有日志，而 Mac 侧沉默）。与 `upgrade accepted → 101` 同属进出边界。
+  // 连接收尾必须留痕：只做清理、不记一行的话，「谁关的、活了多久、有没有 error」三件事
+  // 就全无据可查 —— 客户端那边有日志，而 Mac 侧沉默，一次反复断连会卡在这里。
+  // 它与 `upgrade accepted → 101` 同属进出边界。
   let finished = false
   let errored = false
   const finish = () => {

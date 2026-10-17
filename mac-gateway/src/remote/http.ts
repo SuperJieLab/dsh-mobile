@@ -13,7 +13,9 @@ import type { SessionPort } from '../ports/session.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import { CredentialVault } from './credentials.ts'
-import type { PairResponse, RefreshResponse } from '../wire/auth.ts'
+import type {
+  PairRequest, PairResponse, RefreshRequest, RefreshResponse,
+} from '../wire/auth.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.http)
@@ -130,7 +132,16 @@ async function handleAuthOp(
   message: unknown,
   vault: CredentialVault,
 ): Promise<{ status: number; body: PairResponse | RefreshResponse }> {
-  const payload = message as { code?: unknown; deviceToken?: unknown }
+  // 用请求形状做名字耦合：字段改名会在这里编译失败，而不是让客户端与服务端
+  // 各读一个名字、每次配对都落到 `bad-code-shape`。**读取处仍按 `unknown` 收窄** ——
+  // 校验在 `protocol/auth.ts` 的规则里（那四种失败原因必须原样到手机上）。
+  // 字段名从形状里取（改名会在这里编译失败），但两者都可能是缺的 —— 缺了交给
+  // 规则层拒绝。不写成 `Partial<PairRequest & RefreshRequest>`：两条 op 的 `op`
+  // 是互斥字面量，交叉之后整个类型塌成 `never`。
+  const payload = message as {
+    code?: PairRequest['code']
+    deviceToken?: RefreshRequest['deviceToken']
+  }
 
   if (op === 'pair') {
     const outcome = vault.pair(payload.code)

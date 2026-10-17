@@ -7,6 +7,17 @@
  *
  * 一条流失败时**只有这条结束**：泵的 catch 把异常折成 error 帧，`finally` 清掉
  * 自己的 streamId；同一条连接上的其它流继续。
+ *
+ * **本文件里出现的两条错误码，归属各不相同**（这是 `ISSUES` A13 的分类结果）：
+ *
+ *   window-too-large   传输自有 —— 它说的是「这一帧装不下」，由字节上界
+ *                      （`StreamOptions.openingCapBytes`）产生，不是会话状态
+ *   unknown-op         载荷不是 follow 请求 —— 形状判定在 `wire/mux.ts` 的解析器，
+ *                      这里只负责把那句话送回去
+ *
+ * 其余由**上游失败**折出来的码（`unreadable-session` / `unknown-session` /
+ * `internal-error`）不在这里：它们在 `protocol/error-codes.ts`，因为那套规则随
+ * 上游的错误语义漂，而传输层不该为上游的形状变化负责。
  */
 
 import {

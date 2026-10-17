@@ -1051,15 +1051,43 @@ test('the transport is split by lifetime, and the old single file is gone', () =
 // V11：凭据类 op 的形状有唯一出处
 // ---------------------------------------------------------------------------
 
-test('the credential ops\' shapes are declared only in wire/auth.ts', () => {
+test('the credential ops\' shapes are declared in exactly one file, and it is wire/auth.ts', () => {
   // 这两条 op 绕过统一入口，形状曾经只写在传输层的函数体里 —— 手机端另有一份
   // Swift 声明，两边靠人对齐。现在它们与其余 op 一样住在 wire/。
+  //
+  // **必须查全仓，不能只查 home**：只查 home 的话，把形状再内联回 `http.ts` 而
+  // 留着 `wire/auth.ts` 不删，判据照样绿 —— 「唯一」与「家在哪儿」是两件事，
+  // 期2 的 C1 反过来栽过一次（只查唯一、不查家）。
+  //
+  // 类型的声明形态是闭集：`interface X` / `type X` / `class X`，**关键字紧邻名字**
+  // （不管前面挂什么修饰符）。所以这里找的是「关键字 + 名字」这一对，而不是
+  // 「行首有没有 export」—— 后者是开放集，期2 栽过三轮。
   const home = join(SRC, 'wire', 'auth.ts')
   const expected = ['PairRequest', 'RefreshRequest', 'PairResponse', 'RefreshResponse']
-  assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).shapes.sort(), [...expected].sort(),
-    'auth shapes belong in wire/ like every other op — a transport-local declaration is a second source')
 
-  // 它们没有编解码器：解析与校验在别的层（见该文件的头注释），所以函数面必须为空。
+  const declaredAt = new Map<string, string[]>()
+  for (const file of filesUnder(SRC)) {
+    const code = stripComments(readFileSync(file, 'utf8'))
+    for (const name of expected) {
+      if (new RegExp(`(?:^|[^A-Za-z0-9_$])(?:interface|type|class)\\s+${name}\\b`).test(code)) {
+        declaredAt.set(name, [...(declaredAt.get(name) ?? []), relative(SRC, file)])
+      }
+    }
+  }
+  const complaints = expected.flatMap(name => {
+    const places = declaredAt.get(name) ?? []
+    if (places.length === 0) return [`${name}: not declared anywhere — renamed?`]
+    if (places.length > 1) return [`${name}: declared in ${places.join(', ')} — a second source will drift`]
+    return places[0] === 'wire/auth.ts' ? [] : [`${name}: declared in ${String(places[0])}, expected wire/auth.ts`]
+  })
+  assert.deepEqual(complaints, [],
+    'the credential shapes have one home; a copy elsewhere is the split this phase set out to remove')
+
+  // 正控：`wire/auth.ts` 的导出面恰好是这四个，多一个就红（防止形状悄悄长出来）。
+  assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).shapes.sort(), [...expected].sort(),
+    'and nothing else is declared there')
+
+  // 它们没有编解码器：解析与校验在别的层（见该文件的头注释），所以其函数面必须为空。
   assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).functions, [],
     'no codec here — validating a pairing code is a rule, not a shape')
 })
