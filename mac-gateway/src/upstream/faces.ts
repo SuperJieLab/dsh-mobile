@@ -9,8 +9,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { usageSnapshotOf } from '../contract/usage.ts'
 import type { WritePort } from '../contract/write-channel.ts'
-import type { ModelPort } from '../contract/model-selection.ts'
-import { createSessionPort, type ListSource, type ModelSelectionSource, type ModelSelectionView, type PersistenceLike } from './sessions.ts'
+import type { ModelPort, ModelSelection } from '../contract/model-selection.ts'
+import { createSessionPort, nextOf, type ListSource, type ModelSelectionSource, type ModelSelectionView, type PersistenceLike } from './sessions.ts'
 import type { FollowSource } from '../remote/ws.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from './call-through.ts'
@@ -81,9 +81,8 @@ export function streamSourceOver(ctx: Context): FollowSource {
       const snapshot = read.snapshot(session, OCCUPANCY_KEYS)
       return snapshot === undefined ? undefined : usageSnapshotOf(snapshot.values, snapshot.asOfSeq)
     },
-    // 模型基线随开流走：与 snapshot 路径相同的投影读取，只是时刻更早 ——
-    // 开流是存活会话走的路径。
-    modelOf: (sessionId) => modelSelectionViewOf(ctx, sessionId),
+    // 模型基线随开流走：与 snapshot 路径同一处读取 —— 开流是存活会话走的路径。
+    modelOf: (sessionId) => modelBaselineOf(ctx, sessionId),
   }
 }
 
@@ -134,23 +133,25 @@ interface AgentsLike {
 }
 
 /**
- * 单个会话的 `modelSelection` 投影线上视图 —— snapshot 基线与跟流
- * 开场的 `model` 字段共用的那次读取。缺席（会话不存活）是诚实的 —— 字段保持
- * 缺席而非猜默认值。
+ * 单个会话下一轮将用哪个模型 —— snapshot 基线与跟流开场的 `model` 字段共用的那次读取。
+ *
+ * 宿主给的是 `{lastUsed, next}` 两格的视图，而这里只交出 `next`（{@link nextOf}）：
+ * 出参就是线上要发的那个选择，装配处没有余地塞进别的形状。缺席（会话不存活、投影
+ * 未装、`next` 为空）是诚实的 —— 字段保持缺席而非猜默认值。
  */
-function modelSelectionViewOf(ctx: Context, sessionId: string): ModelSelectionView | undefined {
+function modelBaselineOf(ctx: Context, sessionId: string): ModelSelection | undefined {
   const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
   if (session === undefined) return undefined
   const read = ctx.sessionProjections as unknown as ProjectionsLike
   const snapshot = read.snapshot(session, ['modelSelection'])
   const view = snapshot?.values.modelSelection
   if (typeof view !== 'object' || view === null) return undefined
-  return view as ModelSelectionView
+  return nextOf(view as ModelSelectionView)
 }
 
 export function modelSelectionSourceOver(ctx: Context): ModelSelectionSource {
   return {
-    of: (sessionId) => modelSelectionViewOf(ctx, sessionId),
+    of: (sessionId) => modelBaselineOf(ctx, sessionId),
   }
 }
 

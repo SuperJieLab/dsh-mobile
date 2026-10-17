@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createSessionPort } from '../../src/upstream/sessions.ts'
+import { createSessionPort, nextOf } from '../../src/upstream/sessions.ts'
 import type { ListRecord, ListSource, PersistenceLike } from '../../src/upstream/sessions.ts'
 
 /** A session header as the adapter sees it. `cwd` decides visibility (v2 keeps v1's rule). */
@@ -205,10 +205,12 @@ function oneEventPersistence(): PersistenceLike {
 /** A record the read path can find by id. */
 const READ_RECORD: ListRecord = { header: header('s-1', 1000), live: true }
 
-test('the slice carries the projection next as the model baseline', async () => {
+test('the slice carries the model baseline the source hands out', async () => {
+  // 来源交出的是**选择本身**（宿主视图 `{lastUsed, next}` 已在读取处提取过）——
+  // 这条断言因此只能喂选择，喂视图在类型上就不成立。
   const port = createSessionPort(oneEventPersistence(), sourceOf([READ_RECORD]), {
     of() {
-      return { next: { provider: 'deepseek', model: 'v3.2' } }
+      return { provider: 'deepseek', model: 'v3.2' }
     },
   })
   const slice = await port.read('s-1', 0, 10)
@@ -227,13 +229,12 @@ test('an absent projection leaves the model field absent, never guessed', async 
   assert.equal('model' in slice, false)
 })
 
-test('a null next is no baseline — the field is absent, not null', async () => {
-  const port = createSessionPort(oneEventPersistence(), sourceOf([READ_RECORD]), {
-    of() {
-      return { next: null }
-    },
-  })
-  const slice = await port.read('s-1', 0, 10)
-  assert.ok(slice)
-  assert.equal('model' in slice, false)
+test('nextOf turns an empty next into nothing — null and undefined alike', () => {
+  // 「投影的空值」与「没有基线」是同一件事，但表现形式有两种；把这个转换放在
+  // 一个有名字的函数里，是因为它是宿主形状与我们的形状之间唯一的转换点。
+  assert.equal(nextOf({ next: null }), undefined)
+  assert.equal(nextOf({ next: undefined }), undefined)
+  assert.equal(nextOf({}), undefined)
+  const selection = { provider: 'deepseek', model: 'v3.2' }
+  assert.deepEqual(nextOf({ next: selection }), selection, 'the selection itself passes through untouched')
 })

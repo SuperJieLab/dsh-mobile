@@ -26,6 +26,7 @@ import { fitOpeningToBytes, upstreamWindow } from '../contract/window.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../contract/rpc.ts'
 import { describeError, isNotFound, isUnreadable } from '../contract/errors.ts'
 import { usageIsTrigger, usageShouldEmit, type UsageSnapshot } from '../contract/usage.ts'
+import type { ModelSelection } from '../contract/model-selection.ts'
 import {
   WsFrameParser,
   acceptKeyOf,
@@ -69,11 +70,14 @@ export interface FollowSource {
   occupancyOf(sessionId: string): UsageSnapshot | undefined
 
   /**
-   * 会话的模型基线：`modelSelection` 投影的线上视图，未知时 undefined。
+   * 会话的模型基线：下一轮将用的那个选择，未知时 undefined（缺席不是「默认值」）。
    * 与窗口同一口气读出，手机打开时即知下一个请求用什么 —— HTTP snapshot
    * 带同一字段，但活会话实际走的是 follow 打开这条路。
+   *
+   * 出参是**选择本身**而非宿主的投影视图：类型在这里说不出来第二种形状，
+   * 于是「把整份视图发出去」在编译期就不成立。
    */
-  modelOf?(sessionId: string): unknown
+  modelOf?(sessionId: string): ModelSelection | undefined
 }
 
 /**
@@ -494,7 +498,7 @@ async function pump(
    * 读模型基线，规则同占用：事件之外的附加物，抛错的读记日志后
    * 跳过，绝不是 `error` 帧。
    */
-  const readModel = (): unknown => {
+  const readModel = (): ModelSelection | undefined => {
     if (source.modelOf === undefined) return undefined
     try {
       return source.modelOf(request.sessionId)

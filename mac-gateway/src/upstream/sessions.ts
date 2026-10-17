@@ -93,19 +93,34 @@ interface SessionListMetadataLike {
 }
 
 /**
- * `modelSelection` 投影的线上视图，宿主给出的形状（`{lastUsed, next}`）；
- * 只有 `next` 是基线 —— 即下一个请求将用的模型。
+ * 宿主 `modelSelection` 投影里本适配器读到的部分：`{lastUsed, next}` 中的 `next`。
+ * 只声明读到的那一格 —— 宿主给视图加一格时不该弄坏这里。
  */
 export interface ModelSelectionView {
   next?: ModelSelection | null
 }
 
 /**
+ * 宿主视图 → 我们的选择：「下一轮将用哪个模型」。
+ *
+ * 这是两种形状之间**唯一**的转换点，所以它有名字。`lastUsed`（上一轮用了什么）
+ * 刻意不取：协议里 `model` 的语义是「下一轮将用什么」，让每个消费者自己去挑字段，
+ * 等于把一个语义判断交给两端各实现一遍 —— 而漏挑的那一处不会编译报错。
+ */
+export function nextOf(view: ModelSelectionView): ModelSelection | undefined {
+  const next = view.next
+  return next === undefined || next === null ? undefined : next
+}
+
+/**
  * 会话模型基线的来源，`ListSource` 式的窄切面：由组装方从存活投影注册表填充。
- * 缺席（无会话对象、无投影）就是缺席 —— 基线只携带服务器能证明的东西。
+ * 返回的是**选择本身**，不是宿主的视图 —— 提取在这里就完成，调用方拿不到整份视图，
+ * 也就无法把整份视图发出去。
+ *
+ * 缺席（无会话对象、无投影、`next` 为空）就是缺席 —— 基线只携带服务器能证明的东西。
  */
 export interface ModelSelectionSource {
-  of(sessionId: string): ModelSelectionView | undefined
+  of(sessionId: string): ModelSelection | undefined
 }
 
 /**
@@ -212,10 +227,10 @@ export function createSessionPort(persistence: PersistenceLike, listing: ListSou
   }
 }
 
-/** 分片可选的 `model` 字段：投影的 `next`，否则什么都没有。 */
+/** 分片可选的 `model` 字段：来源给出的选择，否则什么都没有。 */
 function baselineOf(id: string, modelSelection: ModelSelectionSource | undefined): { model?: ModelSelection } {
-  const next = modelSelection?.of(id)?.next
-  return next === undefined || next === null ? {} : { model: next }
+  const next = modelSelection?.of(id)
+  return next === undefined ? {} : { model: next }
 }
 
 /**

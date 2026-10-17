@@ -16,6 +16,7 @@
 import { pageWindow } from './window.ts'
 import type { WireEvent } from './rpc.ts'
 import type { UsageSnapshot } from './usage.ts'
+import type { ModelSelection } from './model-selection.ts'
 
 /** 客户端 → 服务端：开始一条逻辑流。 */
 export interface MuxOpenFrame {
@@ -174,6 +175,13 @@ export interface FollowOpening {
    * （M6 §3.1 决定 2）。
    */
   occupancy?: UsageSnapshot
+  /**
+   * 这条会话下一轮将用的模型；源不知道时缺省 —— 与 `occupancy` 同为陈述，
+   * 不是故障。语义是**选择本身**（`{provider, model, …}`），不是宿主的投影视图。
+   *
+   * 与 `page` 应答里的同名字段同义、同值：两条出口读的是同一份投影。
+   */
+  model?: ModelSelection
 }
 
 /**
