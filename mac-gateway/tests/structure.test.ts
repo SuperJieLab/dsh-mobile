@@ -986,6 +986,44 @@ test('no source comment points into the workspace docs', () => {
 })
 
 // ---------------------------------------------------------------------------
+// V6b：README 里点名的源文件必须真的存在
+// ---------------------------------------------------------------------------
+
+test('every source file the gateway README names still exists', () => {
+  // README 是仓库读者打开这个目录看到的第一个文件，它画的是两条请求链。链条上
+  // 每个文件名都是一次改名就会静默变假的事实 —— 而注释与文档没有编译器管。
+  // 这条只查「文件在不在」：链条的**顺序**没有机械判据（那要读实现），
+  // 但「指向不存在的文件」是可判的，也是最常见的漂移形态。
+  //
+  // 三种写法都要认，否则读者与判据对同一个名字的理解可以不一致：
+  //   `src/index.ts`   —— 相对包根
+  //   `remote/http.ts` —— 相对 src/
+  //   `egress.ts`      —— 裸名，此时它必须是全仓**唯一**的，否则这个引用有歧义
+  const readme = readFileSync(join(SRC, '..', 'README.md'), 'utf8')
+  const all = filesUnder(SRC)
+  const named = [...readme.matchAll(/`([A-Za-z0-9_./-]+\.ts)`/g)]
+    .map(match => (match[1] as string).replace(/^\.\//, ''))
+  assert.ok(named.length > 0, 'the README must name its files — an empty list would make this judge vacuous')
+
+  const problems: string[] = []
+  for (const specifier of named) {
+    if (specifier.includes('src/')) {
+      if (!existsSync(join(SRC, '..', specifier))) problems.push(`${specifier}: no such file relative to the package root`)
+      continue
+    }
+    if (specifier.includes('/')) {
+      if (!existsSync(join(SRC, specifier))) problems.push(`${specifier}: no such file under src/`)
+      continue
+    }
+    const hits = all.filter(file => file.endsWith(`${sep}${specifier}`))
+    if (hits.length === 0) problems.push(`${specifier}: no file of that name anywhere under src/`)
+    else if (hits.length > 1) problems.push(`${specifier}: ambiguous — ${hits.length} files share this name, write the directory too`)
+  }
+  assert.deepEqual(problems, [],
+    `the README must point at files that exist, unambiguously (renamed? update the README in the same commit):\n${problems.join('\n')}`)
+})
+
+// ---------------------------------------------------------------------------
 // V7：opening 只有一个装配者
 // ---------------------------------------------------------------------------
 
