@@ -1,0 +1,25 @@
+// 类型检查闸门（ISSUES F1）。`npm test` 先跑 `tsc --noEmit` 再跑用例 ——
+// `node --test` 只剥类型、不校验，于是「出参收紧后错形状编译不过」这类判据
+// 长期没有执行载体。
+//
+// 三条不显然的选项：
+// - `allowImportingTsExtensions`：源码用 `.ts` 直跑（Node 的类型剥离要求显式扩展名），
+//   import 里写的就是 `.ts`；没有它整仓解析不了。它要求 `noEmit`，而本仓库本来就不产出。
+// - `types: ["node"]`：不装它则 `node:fs` 等一律解析不到。
+// - `strict`：实测开启后零错（2026-10-18），所以它不是"以后再说"的选项。
+//
+// `@deepseek-ai/cordis` 是 devDependency，只为 `Context` 的真类型；运行时仍由
+// dsh 安装树提供那一份。版本随运行时走（PROJECT.md 的上游基线）。
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "tools/**/*.ts"]
+}

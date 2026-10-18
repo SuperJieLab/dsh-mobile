@@ -12,8 +12,14 @@
  */
 import { perfNow } from '../../src/log.ts'
 
-/** 一条 dev 记录 —— 与 iOS `FollowClient` 产出的字段集逐字段对齐（期1 契约）。 */
-export interface BenchDevRecord {
+/**
+ * 一条 dev 记录 —— 与 iOS `FollowClient` 产出的字段集逐字段对齐（期1 契约）。
+ *
+ * 写成 `type` 而不是 `interface`：它是一条记录的**字面量形状**，没有可扩展的命名契约；
+ * 而 `interface` 不参与「隐式 index signature」，于是赋不进 `PerfLike` 这类带索引签名的读面
+ * —— 那会让「产物里装的是 perf 行」这条事实在类型上断掉。
+ */
+export type BenchDevRecord = {
   seg: 'dev'
   t: number
   sessionId: string
@@ -74,14 +80,21 @@ export class BenchClient {
   async start(): Promise<void> {
     const access = await benchAccessToken(this.options.port, this.options.deviceToken, this.options.host)
     const url = `ws://${this.options.host}:${this.options.port}/rpc/stream`
-    const socket = new WebSocket(url, { headers: { authorization: `Bearer ${access}` } })
+    // 第二参在运行时是 undici 的 init：`headers` 进握手请求（实测 `req.headers.authorization`
+    // 拿得到它的值，Node 22.22），而 `@types/node` 只声明协议名 `string | string[]`。
+    // 类型落后于运行时，故在此断言一次 —— 网关的 WS 闸门就要这一个头。
+    const socket = new WebSocket(url, { headers: { authorization: `Bearer ${access}` } } as unknown as string[])
     this.socket = socket
-    const upgradeTimeout = setTimeout(() => reject(new Error('bench client upgrade timed out')), 5_000)
+    // 超时在 Promise 的 executor 里挂：函数体内那个 `reject` 只在 executor 里存在，
+    // 挂在外面会在超时时抛 `ReferenceError` 而不是让这一轮失败（收口审查发现）。
     await new Promise<void>((resolve, reject) => {
-      socket.addEventListener('open', () => resolve(), { once: true })
-      socket.addEventListener('error', () => reject(new Error('bench client upgrade failed')), { once: true })
+      const upgradeTimeout = setTimeout(() => reject(new Error('bench client upgrade timed out')), 5_000)
+      socket.addEventListener('open', () => { clearTimeout(upgradeTimeout); resolve() }, { once: true })
+      socket.addEventListener('error', () => {
+        clearTimeout(upgradeTimeout)
+        reject(new Error('bench client upgrade failed'))
+      }, { once: true })
     })
-    clearTimeout(upgradeTimeout)
     this.gen += 1
     // 持久的连接层监听：中途断流/报错记下来进 verdict（收口审查 Major 3）——
     // 没有它，error 事件是未处理异常，压测进程当场崩而不是落进产物。

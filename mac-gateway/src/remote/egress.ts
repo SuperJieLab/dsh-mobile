@@ -15,7 +15,7 @@
 import type { Duplex } from 'node:stream'
 import { encodeServerFrame, type MuxServerFrame } from '../wire/mux.ts'
 import { encodeTextFrame } from './frames.ts'
-import { LogModule, perfNow, perfRecord } from '../log.ts'
+import { LogModule, perfNow, perfRecord, type PerfRecord } from '../log.ts'
 
 /**
  * 一条帧过 send 边界时携带的计时上下文 —— 泵在循环里
@@ -44,7 +44,7 @@ export interface PerfContext {
  * 一条 gw 记录的字段组装 —— 发送路径与拒绝路径共用它。拒绝时没有帧，但那条
  * 记录恰恰是「这个会话为什么打不开」的唯一答案，所以两处的字段集不能各写一遍。
  */
-export function gwRecord(perf: PerfContext, gwSend: number, bytes: number): Record<string, unknown> {
+export function gwRecord(perf: PerfContext, gwSend: number, bytes: number): PerfRecord {
   return {
     seg: 'gw',
     t: gwSend,

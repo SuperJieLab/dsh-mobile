@@ -15,17 +15,17 @@
  * 服务在 `inject` 中声明：缺了它们 fiber 保持 pending，这对一个读不了
  * 会话的网关是正确的失败（列表是「当下的整表投影」，读不出就没有可说的）。
  *
- * 导入仅限 Node 内建与自有模块；cordis 只作类型引入，因为裸 specifier
- * 在 dsh 安装树之外无法解析。
+ * 导入仅限 Node 内建与自有模块；cordis 只作类型引入 —— 运行期它是 dsh 安装树里的
+ * 那一份（裸 specifier 在本仓库的安装树之外解析不到），本仓库 devDependency 里的
+ * 同版那一个只供 `npm run typecheck`。
  */
-import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_LIMITS, type Limits } from './protocol/rpc.ts'
 import type { SessionPort } from './ports/session.ts'
 import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
-import { broadcasterOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver } from './upstream/faces.ts'
+import { broadcasterOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
 
@@ -101,7 +101,7 @@ const DEFAULT_PORT = 3081
  * 常量，切换可达性方案因此只是补一行 patch —— 可逆性主张要求绑定
  * 地址不被编译进去。
  */
-export function apply(ctx: Context, config: Config = {}): void {
+export function apply(ctx: HostContext, config: Config = {}): void {
   const host = config.host ?? DEFAULT_HOST
   const port = config.port ?? DEFAULT_PORT
   const sessionPort: SessionPort = createSessionPort(

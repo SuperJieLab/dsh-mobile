@@ -12,9 +12,10 @@
  * `seq` 接着走 —— 与协议「只补差量」的语义对齐，产物记缺口条数而非秒数。
  */
 
+import type { FollowSource } from '../../src/ports/follow.ts'
+
 /** 事件载荷形状。`small` 恒定小载荷；`mixed` 在几档尺寸间循环。 */
 export type PayloadShape = 'small' | 'mixed'
-
 export interface UpstreamParams {
   /** 提供哪些会话（每个会话独立的 seq 与日志）。 */
   sessions: readonly string[]
@@ -38,13 +39,12 @@ export interface LagSummary {
 export interface UpstreamHandle {
   /** 装进假宿主的 `sessionController` 面。 */
   controller: {
-    follow(
-      request: { address: { kind: 'session'; sessionId: string }; maxMessages?: number },
-      signal: AbortSignal,
-    ): AsyncIterable<
-      | { type: 'snapshot'; cursor: number; records: readonly { type: 'event'; event: unknown }[]; hasMore: boolean }
-      | { type: 'event'; event: unknown }
-    >
+    /**
+     * 与 `FollowSource['follow']` 同一个签名，不另写一份：假件只替**事件来源**，
+     * 请求形状是泵真正发出的那个（`assistantStream` / `turnWindow` 都在里面）。
+     * 抄窄一份的后果是泵新增字段时假件不报错、而真宿主会。
+     */
+    follow: FollowSource['follow']
   }
   /** 累计产出条数（不含 backlog）。 */
   produced(): number

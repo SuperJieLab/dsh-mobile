@@ -16,6 +16,7 @@ import { setPerfSink } from '../../src/log.ts'
 import { installBench } from './host.ts'
 import { startFakeUpstream, type PayloadShape } from './upstream.ts'
 import { BenchClient } from './client.ts'
+import type { PerfLike } from './analyze.ts'
 
 export interface RunOptions {
   eventRate: number
@@ -43,7 +44,11 @@ export interface RunArtifact {
     client: 'script' | 'device'
     seconds: number
   }
-  records: Record<string, unknown>[]
+  /**
+   * 产物里的记录就是 perf 行（`seg` / `t` + 分段字段），所以按 `PerfLike` 收 —— 按
+   * `Record<string, unknown>` 收会把「`seg` 是字符串」这个前提丢掉，而分析器正是照它分段。
+   */
+  records: PerfLike[]
   verdict: { valid: boolean; reasons: string[] }
   /** 生成器落后量（决定 2 的旁证）随产物走 —— 曲线点的有效性判定②要用它。 */
   lag: { samples: number; maxMs: number; lastMs: number }
@@ -56,10 +61,10 @@ export async function runBenchScenario(options: RunOptions): Promise<RunArtifact
   const sessionId = options.sessionId ?? 'bench-1'
 
   // 记录进程内收集（决定 5）：sink 先挂上，门控在起网关前打开。
-  const gatewayRecords: Record<string, unknown>[] = []
+  const gatewayRecords: PerfLike[] = []
   const previousDebug = process.env.DSH_LOG_DEBUG
   setPerfSink(line => {
-    gatewayRecords.push(JSON.parse(line.slice(line.indexOf(' {') + 1)) as Record<string, unknown>)
+    gatewayRecords.push(JSON.parse(line.slice(line.indexOf(' {') + 1)) as PerfLike)
   })
   process.env.DSH_LOG_DEBUG = '1'
 

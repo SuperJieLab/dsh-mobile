@@ -140,14 +140,17 @@ test('backlogSeq=N 时打开帧携带 N 条历史，续发事件 seq 连着走',
     )
     let snapshotCursor: number | undefined
     const liveSeqs: number[] = []
+    // 上游帧把事件原文放在 `event` 上（`unknown` —— 网关只是转发，不解它的内容），
+    // 而这条判据要读 seq，故在此收窄。
+    const eventOf = (frame: { event: unknown }): { seq: number } => frame.event as { seq: number }
     for await (const frame of stream) {
       if (frame.type === 'snapshot') {
         snapshotCursor = frame.cursor
         assert.equal(frame.records.length, 7, 'the opening carries exactly the backlog')
-        assert.equal(frame.records[0].event.seq, 0)
-        assert.equal(frame.records[6].event.seq, 6)
+        assert.equal(eventOf(frame.records[0]).seq, 0)
+        assert.equal(eventOf(frame.records[6]).seq, 6)
       } else if (frame.type === 'event') {
-        liveSeqs.push(frame.event.seq)
+        liveSeqs.push(eventOf(frame).seq)
         if (liveSeqs.length >= 3) break
       }
     }

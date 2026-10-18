@@ -166,7 +166,9 @@ test('曲线点：订阅延迟取事件 e2e 的排停顿分布，追平延迟取
   }
   const point = curvePoint(
     { condition: { eventRate: 100, backlogSeq: 3, client: 'script' }, records },
-    { seconds: 2 },
+    // 这里原先传 `{ seconds: 2 }`：`CurvePointOptions` 从来没有这个字段，
+    // 也就是说那两秒一直没被读过（F1 加类型闸门时抓出来的死选项）。
+    {},
   )
   assert.equal(point.valid, true, `a 20-event run with no pause is valid: ${JSON.stringify(point.reasons)}`)
   assert.equal(point.n, 20)

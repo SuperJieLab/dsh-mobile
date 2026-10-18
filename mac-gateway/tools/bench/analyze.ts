@@ -154,7 +154,7 @@ export function analyzeRecords(records: readonly PerfLike[], options: AnalyzeOpt
     indices.map(index => joined[index][key])
 
   const both = (key: 't1' | 't2' | 't3' | 't4' | 'e2e') => ({
-    all: stats(pick(key, joined.keys())),
+    all: stats(pick(key, [...joined.keys()])),
     clean: stats(pick(key, cleanIdx)),
   })
 
@@ -178,11 +178,12 @@ export function analyzeRecords(records: readonly PerfLike[], options: AnalyzeOpt
 export function attributeBottleneck(dist: SegmentDistributions, records?: readonly PerfLike[]): BottleneckAttribution {
   // 全部事件被判停顿时 clean 为空、p95 为 NaN —— NaN 进比较器顺序未定义，
   // 与其吐出「t2 p95 NaN」的假指认，不如显式给 NaN 段（收口审查 Minor 11）。
-  const candidates: { segment: BottleneckAttribution['segment']; p95: number }[] = [
+  const measured: { segment: BottleneckAttribution['segment']; p95: number }[] = [
     { segment: 't2', p95: dist.t2.clean.p95 },
     { segment: 't3', p95: dist.t3.clean.p95 },
     { segment: 't4', p95: dist.t4.clean.p95 },
-  ].filter(candidate => Number.isFinite(candidate.p95))
+  ]
+  const candidates = measured.filter(candidate => Number.isFinite(candidate.p95))
   if (candidates.length === 0) {
     return { segment: 't2', p95: Number.NaN }
   }

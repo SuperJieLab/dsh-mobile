@@ -22,6 +22,9 @@ export function fakeSource(
   return {
     calls: 0,
     requests: [],
+    // 这套夹具只造事件流：占用读数与模型基线在这里显式缺席，不伪造一个值 ——
+    // `FollowSource` 是全的形状，缺了这两格编译期就不成立。
+    occupancyOf: () => undefined,
     async *follow(request, signal) {
       this.calls += 1
       this.requests.push(request)

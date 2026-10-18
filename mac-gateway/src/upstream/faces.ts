@@ -11,7 +11,7 @@ import { usageSnapshotOf } from './usage.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { ModelSelection } from '../wire/model.ts'
-import { createSessionPort, nextOf, type ListSource, type ModelSelectionSource, type HostModelSelectionView, type PersistenceLike } from './sessions.ts'
+import { createSessionPort, nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView, type PersistenceLike } from './sessions.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from './call-through.ts'
@@ -21,6 +21,15 @@ import { createLogger, LogModule } from '../log.ts'
 const log = createLogger(LogModule.faces)
 
 /**
+ * 宿主上下文。`Context` 声明的只有 cordis 的核心服务；插件服务的名字是**运行期**才有
+ * 的事实（就是 `index.ts` 的 `inject` 那张单），所以这里把「服务名可读」写进类型：
+ * 读出来一律 `unknown`，由各消费点窄化成自己的 `*Like`。少了这一层，每读一个服务都要
+ * 先绕一次 `as unknown as` —— 断言本身仍在，但它现在只表达「窄到什么」，不再兼职
+ * 「这个属性存不存在」。
+ */
+export type HostContext = Context & Record<string, unknown>
+
+/**
  * 列表路径的来源，由宿主服务组装 —— 每一项都对应参照列表做的一件事
  * （M1 §2.2）：记录来自语料库（头部 +
  * 存活性），值在运行会话取存活投影、冷会话取存储 checkpoint，存活性来自
@@ -28,7 +37,7 @@ const log = createLogger(LogModule.faces)
  *
  * 这里没有任何日志读取。
  */
-export function listSourceOver(ctx: Context): ListSource {
+export function listSourceOver(ctx: HostContext): ListSource {
   return {
     async records() {
       const records = await (ctx.sessionQuery as unknown as CorpusLike).listSessions()
@@ -69,7 +78,7 @@ export function listSourceOver(ctx: Context): ListSource {
 /** 占用量读取所基于的投影键 —— 具名常量使读取不会物化无人消费的视图。 */
 const OCCUPANCY_KEYS = ['contextPressure', 'contextBreakdown'] as const
 
-export function streamSourceOver(ctx: Context): FollowSource {
+export function streamSourceOver(ctx: HostContext): FollowSource {
   // 断言直接点名 `ports/follow.ts` 的形状而非重写一遍：这里的第二份拷贝曾静默过期
   // （漏了 `turnWindow`）。
   const controller = ctx.sessionController as unknown as Pick<FollowSource, 'follow'>
@@ -124,8 +133,8 @@ interface ProjectionSnapshotLike {
  * `inheritedEventCount` 前缀实参；对漂移后的切面按位置传参，实参会落进 `keys`。
  */
 interface ProjectionCacheLike {
-  cachedSnapshot(header: never): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
-  cachedPredecessorTitle(header: never): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
+  cachedSnapshot(header: HeaderLike): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
+  cachedPredecessorTitle(header: HeaderLike): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
 }
 
 /** 本模块用到的 `ctx.agents` 部分。 */
@@ -140,7 +149,7 @@ interface AgentsLike {
  * 出参就是线上要发的那个选择，装配处没有余地塞进别的形状。缺席（会话不存活、投影
  * 未装、`next` 为空）是诚实的 —— 字段保持缺席而非猜默认值。
  */
-function modelBaselineOf(ctx: Context, sessionId: string): ModelSelection | undefined {
+function modelBaselineOf(ctx: HostContext, sessionId: string): ModelSelection | undefined {
   const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
   if (session === undefined) return undefined
   const read = ctx.sessionProjections as unknown as ProjectionsLike
@@ -150,7 +159,7 @@ function modelBaselineOf(ctx: Context, sessionId: string): ModelSelection | unde
   return nextOf(view as HostModelSelectionView)
 }
 
-export function modelSelectionSourceOver(ctx: Context): ModelSelectionSource {
+export function modelSelectionSourceOver(ctx: HostContext): ModelSelectionSource {
   return {
     of: (sessionId) => modelBaselineOf(ctx, sessionId),
   }
@@ -163,7 +172,7 @@ export function modelSelectionSourceOver(ctx: Context): ModelSelectionSource {
  * `session/not-found` 折叠为 `unknown-session`，其他上游失败原样重抛，
  * 让 `handle` 回答 `internal-error`。
  */
-export function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
+export function writePortOver(ctx: HostContext, relay: ApprovalRelay): WritePort {
   return {
     answerApproval: (answer) => relay.answerApproval(answer),
     promptSession: async (prompt) => pumpPrompt(promptControllerOver(ctx), prompt),
@@ -175,7 +184,7 @@ export function writePortOver(ctx: Context, relay: ApprovalRelay): WritePort {
  * 缺席是组装层事实，因此在组装时宣布，之后这些操作
  * 以 `internal-error` 信封应答 —— 手机绝不能把「本应拒答」看成死连接。
  */
-export function modelChannelOver(ctx: Context): ModelPort | undefined {
+export function modelChannelOver(ctx: HostContext): ModelPort | undefined {
   const controller = ctx.sessionController as unknown as Partial<ModelControllerLike> | undefined
   if (
     controller === undefined ||
@@ -205,7 +214,7 @@ export function modelChannelOver(ctx: Context): ModelPort | undefined {
  * 本函数还负责中继的**身份**：向 `connection` 服务要一个进程内 Peer（{@link peerFor}）——
  * 自 0.2 起开流必须以一个真实 Peer 的名义，而它在该版是必需实参（R11）。
  */
-export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
+export function gatewayOver(ctx: HostContext): RemoteEventGatewayLike {
   const view = ctx.typertGateway as unknown as Record<PropertyKey, unknown> | undefined
   if (view === undefined || typeof view !== 'object') {
     throw new Error('ctx.typertGateway is unavailable — the web profile did not provide the gateway service')
@@ -215,13 +224,16 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
     : view) as Record<PropertyKey, unknown>
 
   const members = `openWireStream=${typeof raw.openWireStream}, wireStream=${typeof raw.wireStream}, dispatchRpc=${typeof raw.dispatchRpc}`
-  const dispatchRpc = raw.dispatchRpc
-  if (typeof dispatchRpc !== 'function') {
+  const member = raw.dispatchRpc
+  if (typeof member !== 'function') {
     // 应答门是中继存在的全部理由：缺失必须在对齐时暴露，
     // 而不是在第一次点击应答时。
     log.error(`approval relay gateway members: ${members}`)
     throw new Error('ctx.typertGateway exposes no dispatchRpc — the approval relay cannot answer without it')
   }
+  // `typeof x === 'function'` 只收窄到 `Function`（上游声明里它是类方法，形参表不可读）；
+  // 交给 `callThrough` 前按它的契约收面，返回结局由 `RemoteEventGatewayLike` 定。
+  const dispatchRpc = member as (...args: unknown[]) => Promise<unknown>
 
   const declared = (typeof raw.wireStream === 'object' && raw.wireStream !== null ? raw.wireStream : undefined) as
     | { open?: unknown }
@@ -275,7 +287,7 @@ export function gatewayOver(ctx: Context): RemoteEventGatewayLike {
  * **一次取定、两个端口共用**：应答路径按**对象相等**校验身份（上游 `client.peer !== peer`
  * 即拒），两处各造一个会在「点批准」那一刻才失败 —— 比开流失败更晚、更难查。
  */
-function peerFor(ctx: Context): PeerScopeLike {
+function peerFor(ctx: HostContext): PeerScopeLike {
   const connection = (ctx as unknown as { connection?: { createPeer?: unknown } }).connection
   const createPeer = connection?.createPeer
   if (typeof createPeer !== 'function') {
@@ -326,6 +338,6 @@ export function broadcasterOver(): {
 }
 
 /** prompt 泵调用的 `ctx.sessionController` 部分。 */
-function promptControllerOver(ctx: Context): PromptControllerLike {
+function promptControllerOver(ctx: HostContext): PromptControllerLike {
   return ctx.sessionController as unknown as PromptControllerLike
 }

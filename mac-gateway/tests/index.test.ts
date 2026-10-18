@@ -160,6 +160,18 @@ async function accessTokenFor(port: number): Promise<string> {
   return body.accessToken!
 }
 
+/**
+ * 打开一条带 access token 的流通道（握手请求里那一个 `authorization` 头，与手机端同款）。
+ *
+ * 第二参在运行时是 undici 的 init —— `headers` 确实进握手（Node 22 实测），而
+ * `@types/node` 只声明协议名 `string | string[]`。类型落后于运行时，故在**这一处**
+ * 断言，调用点只表达「要一条带票的流」。
+ */
+function streamWithToken(port: number, access: string): WebSocket {
+  const url = `ws://127.0.0.1:${port}/rpc/stream`
+  return new WebSocket(url, { headers: { authorization: `Bearer ${access}` } } as unknown as string[])
+}
+
 test('the assembled plugin answers a real request on a real port', async () => {
   const port = freshPort(38_100)
   const credentialsPath = tempCredentialsPath()
@@ -336,7 +348,9 @@ test('the listener binds only to the configured address: another local address i
 
     await assert.rejects(
       fetch(`http://127.0.0.2:${port}/`, { signal: AbortSignal.timeout(3_000) }),
-      undefined,
+      // 只验「拒了」：`assert.rejects` 没有「不校验错误类型」的签名，给 `Error` 即可
+      // —— 握手失败一定落在 Error 家族里，而这一条判据要的是「连不上」这件事本身。
+      Error,
       'a device outside the bound address must not even complete a TCP handshake',
     )
   } finally {
@@ -424,7 +438,7 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
 
     // A real WebSocket handshake against the assembled listener, with the
     // access token in the upgrade request — the same header the iPhone uses.
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`, { headers: { authorization: `Bearer ${access}` } })
+    const socket = streamWithToken(port, access)
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true })
       socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
@@ -557,7 +571,7 @@ test('a freshly connected phone is reconciled first: sync frame names the standi
     })
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`, { headers: { authorization: `Bearer ${access}` } })
+    const socket = streamWithToken(port, access)
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true })
       socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
@@ -676,7 +690,7 @@ async function openStream(port: number, access: string): Promise<{
   frames: Record<string, unknown>[]
   waitFor: (predicate: (frames: Record<string, unknown>[]) => boolean, what: string) => Promise<void>
 }> {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`, { headers: { authorization: `Bearer ${access}` } })
+  const socket = streamWithToken(port, access)
   await new Promise<void>((resolve, reject) => {
     socket.addEventListener('open', () => resolve(), { once: true })
     socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })

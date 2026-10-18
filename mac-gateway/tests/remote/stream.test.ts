@@ -86,7 +86,7 @@ test('S1 at the adapter: the WS opening equals the HTTP page window', { timeout:
 })
 
 test('a transient frame passes through verbatim and cursor-less', { timeout: 10_000 }, async () => {
-  const transient = { type: 'assistant-stream', frame: { attemptId: 'a1', revision: 3, index: 0, chunk: '你好' } }
+  const transient = { type: 'assistant-stream', frame: { attemptId: 'a1', revision: 3, index: 0, chunk: '你好' } } as const
   const source = fakeSource([
     snapshotFrame([], 0),
     transient,
@@ -243,6 +243,7 @@ test('an explicit maxMessages reaches upstream as its own target, not the defaul
 test('cancel stops the stream; the pump yields no further frames for it', { timeout: 10_000 }, async () => {
   // A source that would keep yielding forever unless aborted.
   const source: FollowSource = {
+    occupancyOf: () => undefined,
     async *follow(_request, signal) {
       yield snapshotFrame([event(0)], 1)
       let seq = 1
@@ -544,6 +545,7 @@ test('one stream failing leaves the other stream on the same connection alive', 
   const goodLog = [0, 1, 2].map(event)
   const source: FollowSource & { opens: number } = {
     opens: 0,
+    occupancyOf: () => undefined,
     async *follow(request, signal) {
       this.opens += 1
       if (request.address.kind !== 'session') throw new Error('test only supports session follows')

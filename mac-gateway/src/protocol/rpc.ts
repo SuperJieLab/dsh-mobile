@@ -338,9 +338,12 @@ function normalizeLimits(limits: Limits): Limits {
   }
 }
 
-/** `value` 能否作为循环的上界。 */
-function isPositiveInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value > 0
+/**
+ * `value` 能否作为循环的上界。入参来自线上信封（形状未定），故签名收 `unknown`
+ * 并交出类型谓词 —— 少了谓词，调用处的 `envelope.maxMessages` 收窄不成 `number`。
+ */
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
 /**

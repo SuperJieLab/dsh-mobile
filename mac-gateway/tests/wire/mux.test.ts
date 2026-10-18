@@ -53,12 +53,14 @@ test('followRequestOf: op is part of the request; lenient on maxMessages, strict
 })
 
 test('encodeServerFrame: every server frame round-trips through JSON', () => {
-  const item = { type: 'item', streamId: 1, payload: { type: 'event', seq: 0 } }
+  // `as const` 保留 `type` 的字面量：宽化后它与 `MuxServerFrame` 的判别式对不上，
+  // 而这几个字面量正是「每种帧都过得去」的样本。
+  const item = { type: 'item', streamId: 1, payload: { type: 'event', seq: 0 } } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(item)), item)
 
-  const error = { type: 'error', streamId: 1, payload: { code: 'unknown-session', message: 'no stored session' } }
+  const error = { type: 'error', streamId: 1, payload: { code: 'unknown-session', message: 'no stored session' } } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(error)), error)
 
-  const end = { type: 'end', streamId: 3 }
+  const end = { type: 'end', streamId: 3 } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(end)), end)
 })

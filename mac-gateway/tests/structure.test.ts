@@ -397,10 +397,14 @@ test('the file reader descends into subdirectories', () => {
   // `src/` 眼下是扁平的，于是「递归」这条能力在判据里用不到 —— 但也正因为用不到，
   // 把它改成只看顶层不会有任何判据变红。这里用 `tests/`（有子目录）把能力本身钉住：
   // 将来 `wire/` 下分了子目录，递归就已经是验过的了。
-  const found = filesUnder(join(SRC, '..'))
+  //
+  // 扫 `tests/` 而不是它的父目录：父目录还装着 `node_modules/` 与 `tsconfig.json`，
+  // 那两者与「递归」这条能力无关，却会让「只有 .ts」那一半变成对环境的断言。
+  // 本文件就在 `tests/` 下，所以「自己的目录」就是那个有子目录的样本。
+  const found = filesUnder(dirname(fileURLToPath(import.meta.url)))
   assert.ok(found.every(file => file.endsWith('.ts')), 'only TypeScript files')
   assert.ok(
-    found.some(file => file.includes(`${sep}tests${sep}protocol${sep}`)),
+    found.some(file => file.includes(`${sep}protocol${sep}`)),
     'a nested file must be found — a top-level-only reader would miss it',
   )
 })

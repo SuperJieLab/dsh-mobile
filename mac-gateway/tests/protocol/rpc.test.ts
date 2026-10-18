@@ -109,7 +109,7 @@ const CLOCK = () => 1_758_000_999_999
 
 /** Reply caps, small enough that every case below can observe them. */
 function limits(maxDeltaEvents: number, maxDeltaBytes = DEFAULT_LIMITS.maxDeltaBytes): Limits {
-  return { maxDeltaEvents, maxDeltaBytes }
+  return { maxDeltaEvents, maxDeltaBytes, maxOpeningBytes: DEFAULT_LIMITS.maxOpeningBytes }
 }
 
 test('an unknown version is refused and the refusal still carries v', async () => {
@@ -160,7 +160,7 @@ test('a session without a title omits the field instead of sending null', async 
   ]), CLOCK)
 
   assert.equal(response.ok, true)
-  const sessions = response.ok ? (response as { sessions: unknown[] }).sessions : []
+  const sessions = response.ok ? (response as unknown as { sessions: unknown[] }).sessions : []
   assert.deepEqual(sessions, [{ id: 's-1', createdAt: 1_758_000_000_000, updatedAt: 100, running: false, blank: false }])
   assert.equal('title' in (sessions[0] as object), false)
 })
@@ -172,7 +172,7 @@ test('sessions are ordered most-recently-updated first', async () => {
     { row: row('middle', 200), events: [] },
   ]), CLOCK)
 
-  const sessions = response.ok ? (response as { sessions: { id: string }[] }).sessions : []
+  const sessions = response.ok ? (response as unknown as { sessions: { id: string }[] }).sessions : []
   assert.deepEqual(sessions.map(session => session.id), ['newest', 'middle', 'older'])
 })
 
@@ -197,21 +197,21 @@ test('snapshot returns only seq >= since', async () => {
     { row: row('s-1', 100), events: [event(0), event(1), event(2), event(3)] },
   ]), CLOCK)
 
-  const events = response.ok ? (response as { events: WireEvent[] }).events : []
+  const events = response.ok ? (response as unknown as { events: WireEvent[] }).events : []
   assert.deepEqual(events.map(e => e.seq), [2, 3])
-  assert.equal(response.ok && (response as { asOfSeq: number }).asOfSeq, 4)
+  assert.equal(response.ok && (response as unknown as { asOfSeq: number }).asOfSeq, 4)
 })
 
 test('the water-mark invariant: replaying asOfSeq as since yields nothing and moves nothing', async () => {
   const port = fakePort([{ row: row('s-1', 100), events: [event(0), event(1), event(2)] }])
 
   const first = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, port, CLOCK)
-  const waterMark = first.ok ? (first as { asOfSeq: number }).asOfSeq : -1
+  const waterMark = first.ok ? (first as unknown as { asOfSeq: number }).asOfSeq : -1
 
   const second = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: waterMark }, port, CLOCK)
   assert.equal(second.ok, true)
-  assert.deepEqual((second as { events: WireEvent[] }).events, [])
-  assert.equal((second as { asOfSeq: number }).asOfSeq, waterMark)
+  assert.deepEqual((second as unknown as { events: WireEvent[] }).events, [])
+  assert.equal((second as unknown as { asOfSeq: number }).asOfSeq, waterMark)
 })
 
 test('an absent or nonsense since is treated as 0 rather than inventing an error code', async () => {
@@ -220,7 +220,7 @@ test('an absent or nonsense since is treated as 0 rather than inventing an error
   for (const since of [undefined, -5, 1.5, 'x', null]) {
     const response = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since }, port, CLOCK)
     assert.equal(response.ok, true)
-    assert.deepEqual((response as { events: WireEvent[] }).events.map(e => e.seq), [0, 1])
+    assert.deepEqual((response as unknown as { events: WireEvent[] }).events.map(e => e.seq), [0, 1])
   }
 })
 
@@ -233,9 +233,15 @@ test('an unknown session is refused with unknown-session, including a non-string
 })
 
 test('a session the runtime cannot interpret is refused with unreadable-session', async () => {
+  const unreadable = async (): Promise<never> => {
+    throw Object.assign(new Error('unreadable'), { name: 'SessionFormatUnsupportedError' })
+  }
   const port: SessionPort = {
     async list() { return [] },
-    async read() { throw Object.assign(new Error('unreadable'), { name: 'SessionFormatUnsupportedError' }) },
+    read: unreadable,
+    // 三条读法对同一个坏日志给出同一个结局 —— 假件补齐 `readAll`，缺了它这条
+    // 用例只能证明 snapshot 那一条路（`SessionPort` 是全的形状）。
+    readAll: unreadable,
   }
   const response = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, port, CLOCK)
   assert.equal(response.ok, false)
@@ -248,14 +254,12 @@ test('events are passed through verbatim, unknown fields included', async () => 
     { row: row('s-1', 100), events: [enriched] },
   ]), CLOCK)
 
-  assert.deepEqual((response as { events: WireEvent[] }).events, [enriched])
+  assert.deepEqual((response as unknown as { events: WireEvent[] }).events, [enriched])
 })
 
 test('an unexpected data-source failure surfaces as a refusal, not a crash', async () => {
-  const port: SessionPort = {
-    async list() { throw new Error('disk on fire') },
-    async read() { throw new Error('disk on fire') },
-  }
+  const broken = async (): Promise<never> => { throw new Error('disk on fire') }
+  const port: SessionPort = { list: broken, read: broken, readAll: broken }
   const listed = await handle({ v: 2, op: 'list-sessions' }, port, CLOCK)
   assert.equal(listed.ok, false)
   assert.equal('error' in listed && listed.error.code, 'internal-error')
@@ -307,7 +311,7 @@ test('chunked reads covering the log produce exactly the same view as one full r
   const port = fakePort([{ row: row('s-1', 100), events }])
 
   const whole = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, port, CLOCK)
-  const wholeEvents = whole.ok ? (whole as { events: WireEvent[] }).events : []
+  const wholeEvents = whole.ok ? (whole as unknown as { events: WireEvent[] }).events : []
 
   const collected: WireEvent[] = []
   let since = 0
@@ -317,7 +321,7 @@ test('chunked reads covering the log produce exactly the same view as one full r
     assert.ok(rounds <= events.length + 1, 'chunked read did not terminate')
     const response = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since }, port, CLOCK, limits(2))
     assert.equal(response.ok, true)
-    const batch = response as { events: WireEvent[]; asOfSeq: number; hasMore: boolean }
+    const batch = response as unknown as { events: WireEvent[]; asOfSeq: number; hasMore: boolean }
     collected.push(...batch.events)
     since = batch.asOfSeq
     if (!batch.hasMore) break
@@ -334,7 +338,7 @@ test('the byte cap is soft: the first event is delivered even when it alone exce
   ]), CLOCK, limits(100, 64))
 
   assert.equal(response.ok, true)
-  const batch = response as { events: WireEvent[]; hasMore: boolean }
+  const batch = response as unknown as { events: WireEvent[]; hasMore: boolean }
   assert.deepEqual(batch.events.map(e => e.seq), [0], 'a hard cap here would stall the client forever')
   assert.equal(batch.hasMore, true)
 })
@@ -345,7 +349,7 @@ test('the byte cap trims the tail of a batch and reports hasMore', async () => {
     { row: row('s-1', 100), events: [bulky(0), bulky(1), bulky(2)] },
   ]), CLOCK, limits(100, 250))
 
-  const batch = response as { events: WireEvent[]; hasMore: boolean; asOfSeq: number }
+  const batch = response as unknown as { events: WireEvent[]; hasMore: boolean; asOfSeq: number }
   assert.deepEqual(batch.events.map(e => e.seq), [0], 'the events past the cap are held back, not split')
   assert.equal(batch.hasMore, true)
   assert.equal(batch.asOfSeq, 1)
@@ -423,7 +427,7 @@ test('a window that would start mid-turn backs up to where the turn does', async
     { row: row('s-1', 100), events: log },
   ]), CLOCK)
 
-  const page = response as { pageStart: number; events: WireEvent[] }
+  const page = response as unknown as { pageStart: number; events: WireEvent[] }
   // Counting five messages back from the end runs out on seq 39, a turn's
   // mid-step `assistant/message`. That is the common case, not the corner.
   assert.equal(log[39]?.type, 'assistant/message', 'the count really does run out mid-turn')
@@ -447,7 +451,7 @@ test('walking pages backwards covers the log exactly once', async () => {
     assert.ok(rounds <= 8, 'paging backwards did not terminate')
     const response = await handle({ v: 2, op: 'page', sessionId: 's-1', beforeSeq, maxMessages: 2 }, port, CLOCK)
     assert.equal(response.ok, true)
-    const page = response as { events: WireEvent[]; pageStart: number; hasOlder: boolean }
+    const page = response as unknown as { events: WireEvent[]; pageStart: number; hasOlder: boolean }
     collected.unshift(...page.events.map(event => event.seq))
     starts.unshift(page.pageStart)
     if (!page.hasOlder) break
@@ -470,7 +474,7 @@ test('a log with no messages at all is still a window, not an empty one', async 
     { row: row('s-1', 100), events: log },
   ]), CLOCK)
 
-  const page = response as { pageStart: number; asOfSeq: number; hasOlder: boolean; events: WireEvent[] }
+  const page = response as unknown as { pageStart: number; asOfSeq: number; hasOlder: boolean; events: WireEvent[] }
   assert.equal(page.hasOlder, false)
   assert.deepEqual(page.events, log, 'a window that cannot be bounded by messages falls back to the whole log')
 })
@@ -498,7 +502,7 @@ test('page defaults to the protocol page size when maxMessages is absent', async
     { row: row('s-1', 100), events: log },
   ]), CLOCK)
 
-  const page = response as { pageStart: number; hasOlder: boolean }
+  const page = response as unknown as { pageStart: number; hasOlder: boolean }
   assert.equal(page.hasOlder, true, 'an absent cap must not mean "everything"')
   // 50 is the target and 100 the ceiling: with no `turn/start` anywhere the window
   // walks to the ceiling and stops — an unreachable boundary must not widen it forever.
@@ -520,7 +524,7 @@ test('a malformed beforeSeq falls back to the newest window rather than failing'
       { row: row('s-1', 100), events: mixedLog(10) },
     ]), CLOCK)
     assert.equal(response.ok, true, `beforeSeq=${String(beforeSeq)} should degrade, not fail`)
-    assert.equal((response as { pageStart: number }).pageStart, 2)
+    assert.equal((response as unknown as { pageStart: number }).pageStart, 2)
   }
 })
 
@@ -555,7 +559,7 @@ test('a row without a title omits the field rather than sending an empty one', a
     { row: { id: 's-1', createdAt: 1000, updatedAt: 1000, running: false, blank: true }, events: [] },
   ]), CLOCK)
 
-  const sessions = (response as { sessions: Record<string, unknown>[] }).sessions
+  const sessions = (response as unknown as { sessions: Record<string, unknown>[] }).sessions
   const first = sessions[0] ?? {}
   assert.equal('title' in first, false, 'no title is an absent key')
   // v1 promised this from the log, which is exactly what v2 gave up to stop reading it.
@@ -569,7 +573,7 @@ test('a subagent origin travels with the row so the client can hide it', async (
     { row: row('s-2', 2000), events: [] },
   ]), CLOCK)
 
-  const sessions = (response as { sessions: Record<string, unknown>[] }).sessions
+  const sessions = (response as unknown as { sessions: Record<string, unknown>[] }).sessions
   assert.equal(sessions.find(s => s.id === 's-1')?.origin, 'subagent')
   assert.equal('origin' in (sessions.find(s => s.id === 's-2') ?? {}), false, 'an ordinary session carries no origin')
 })
@@ -578,7 +582,7 @@ test('a subagent origin travels with the row so the client can hide it', async (
 
 test('a slice carrying a model baseline publishes it; a bare slice leaves the field absent', async () => {
   const portWithModel: SessionPort = {
-    ...fakePort([{ row: { id: 's-1', createdAt: 1 }, events: [event(0)] }]),
+    ...fakePort([{ row: { id: 's-1', createdAt: 1, updatedAt: 1, running: false, blank: false }, events: [event(0)] }]),
     async read() {
       return { events: [event(0)], asOfSeq: 1, hasMore: false, staleCursor: false, model: { provider: 'deepseek', model: 'v3.2' } }
     },
@@ -587,7 +591,7 @@ test('a slice carrying a model baseline publishes it; a bare slice leaves the fi
   assert.ok(withModel.ok)
   assert.deepEqual(withModel.model, { provider: 'deepseek', model: 'v3.2' })
 
-  const withoutModel = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, fakePort([{ row: { id: 's-1', createdAt: 1 }, events: [event(0)] }]), CLOCK)
+  const withoutModel = await handle({ v: 2, op: 'snapshot', sessionId: 's-1', since: 0 }, fakePort([{ row: { id: 's-1', createdAt: 1, updatedAt: 1, running: false, blank: false }, events: [event(0)] }]), CLOCK)
   assert.ok(withoutModel.ok)
   assert.equal('model' in withoutModel, false)
 })

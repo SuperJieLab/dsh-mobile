@@ -62,7 +62,8 @@ export class ApprovalRelay {
   readonly #gateway: RemoteEventGatewayLike
   readonly #broadcaster: BroadcasterLike
   readonly #pending = new Map<string, HeldRequest>()
-  readonly #replay = new ReplayTable<ApprovalOutcome>()
+  /** 存的是**这一次交付**（一个 Promise），不是它的结局 —— 重试的 `answerId` 因此共用同一次交付。 */
+  readonly #replay = new ReplayTable<Promise<ApprovalOutcome>>()
   #clientId: string | undefined
   #abort: AbortController | undefined
   #lifetime: AbortSignal | undefined
@@ -168,7 +169,8 @@ export class ApprovalRelay {
    * 未指向已暂存问题的一律拒绝（W2）。
    */
   async answerApproval(answer: ApprovalAnswerMessage): Promise<ApprovalOutcome> {
-    return this.#replay.remember(answer.answerId, () => this.deliver(answer)).value
+    const { value } = this.#replay.remember(answer.answerId, () => this.deliver(answer))
+    return value
   }
 
   /** 实际的一次性交付。运行在 `ReplayTable.remember` 内部。 */

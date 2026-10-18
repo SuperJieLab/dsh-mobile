@@ -120,7 +120,9 @@ test('G2: a drifted selectModel parameter list warns at assembly time instead of
       return { selected: { provider: 'deepseek', model: 'deepseek-chat' } }
     },
   }
-  const warnings = await captureWarn(() => modelPortOver(drifted).select(REQUEST).then(() => {}))
+  // 假件**故意**不符合窄面（改形参表就是这条用例要造的那个漂移），所以断言一次 ——
+  // 否则夹具本身过不了类型检查，而它恰恰是「漂移会被说出来」的证据。
+  const warnings = await captureWarn(() => modelPortOver(drifted as unknown as ModelControllerLike).select(REQUEST).then(() => {}))
   assert.equal(warnings.length, 1, warnings.join('\n'))
   assert.match(warnings[0]!, /selectModel/)
 })
@@ -142,7 +144,8 @@ test('G2: modelCatalog growing a parameter warns as well', async () => {
       return {}
     },
   }
-  const warnings = await captureWarn(() => modelPortOver(grown).catalog().then(() => {}))
+  // 同上：多出来的那个形参就是被测的漂移。
+  const warnings = await captureWarn(() => modelPortOver(grown as unknown as ModelControllerLike).catalog().then(() => {}))
   assert.equal(warnings.length, 1, warnings.join('\n'))
 })
 

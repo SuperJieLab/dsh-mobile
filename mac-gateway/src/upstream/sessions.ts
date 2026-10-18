@@ -22,7 +22,7 @@ import type { SessionPort } from '../ports/session.ts'
 import type { SessionRow, SessionSlice, WireEvent } from '../wire/rpc.ts'
 
 /** 本适配器读取的头部字段。 */
-interface HeaderLike {
+export interface HeaderLike {
   readonly id: string
   readonly createdAt: number
   /** 缺席表示该会话不作为普通工作区会话展示。 */

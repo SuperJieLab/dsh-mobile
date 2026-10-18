@@ -13,6 +13,7 @@ import { installBench } from '../../tools/bench/host.ts'
 import { startFakeUpstream } from '../../tools/bench/upstream.ts'
 import { BenchClient } from '../../tools/bench/client.ts'
 import { setPerfSink } from '../../src/log.ts'
+import type { PerfLike } from '../../tools/bench/analyze.ts'
 
 test('H3: 真 WS 打开 + 事件流 → dev 记录齐全且与 gw 记录同 seq 对齐', { timeout: 15_000 }, async () => {
   const upstream = startFakeUpstream({
@@ -24,10 +25,10 @@ test('H3: 真 WS 打开 + 事件流 → dev 记录齐全且与 gw 记录同 seq 
   const bench = await installBench({ sessionController: upstream.controller })
 
   // 网关侧的 gw 记录：同一个 sink 后门收。
-  const gwRecords: Record<string, unknown>[] = []
+  const gwRecords: PerfLike[] = []
   const previousDebug = process.env.DSH_LOG_DEBUG
   setPerfSink(line => {
-    gwRecords.push(JSON.parse(line.slice(line.indexOf(' {') + 1)) as Record<string, unknown>)
+    gwRecords.push(JSON.parse(line.slice(line.indexOf(' {') + 1)) as PerfLike)
   })
   process.env.DSH_LOG_DEBUG = '1'
 
@@ -72,7 +73,9 @@ test('H3: 真 WS 打开 + 事件流 → dev 记录齐全且与 gw 记录同 seq 
   //（测试窗口内两端各记一条，1:1）。
   const gwEvents = gwRecords.filter(record => record.seg === 'gw' && record.kind === 'event')
   const devSeqs = events.map(record => record.seq).sort((a, b) => a - b)
-  const gwSeqs = gwEvents.map(record => record.seq).sort((a, b) => a - b)
+  // `PerfLike` 的字段读出来一律是 `unknown`（分析器要吞任意产物行），而这里要的是
+  // 网关自己写下的 `seq` —— 两侧同类记录按它对齐，故此断言一次。
+  const gwSeqs = gwEvents.map(record => record.seq as number).sort((a, b) => a - b)
   assert.deepEqual(devSeqs, gwSeqs, 'dev and gw records line up by seq, 1:1')
 
   // fold 等价物真的在收：镜像 = opening 窗口 + 实时事件，全部进了最简镜像。
