@@ -16,6 +16,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../src/index.ts'
+import { CredentialVault } from '../src/remote/credentials.ts'
+import { PROTOCOL_VERSION } from '../src/wire/rpc.ts'
 
 /** Random high port: two tests must not race each other or anything real. */
 function freshPort(base: number): number {
@@ -172,6 +174,47 @@ function streamWithToken(port: number, access: string): WebSocket {
   return new WebSocket(url, { headers: { authorization: `Bearer ${access}` } } as unknown as string[])
 }
 
+test('the pair op answers with a full envelope and issues a device token', async () => {
+  // 这条路径此前没有判据：`pair` 的四条拒绝理由由 `protocol/auth.test.ts` 覆盖，
+  // 而**回包长什么样**只在这里能看到 —— 两条成功应答现在由 `success()` 构造，
+  // 少了这条断言，构造方式变了也没人知道。
+  const port = freshPort(39_100)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    // 装配时签发的那枚码就在保险库里；重开一个同路径的保险库把它读出来，
+    // 而不是去解析控制台输出。
+    const code = new CredentialVault(credentialsPath).pairingCode()
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: PROTOCOL_VERSION, op: 'pair', code }),
+    })
+
+    assert.equal(response.status, 200)
+    const body = await response.json() as { v?: number; ok?: boolean; deviceToken?: string }
+    assert.deepEqual({ v: body.v, ok: body.ok }, { v: PROTOCOL_VERSION, ok: true },
+      'the success envelope carries the same two fixed fields as a refusal')
+    assert.match(body.deviceToken ?? '', /^\S+$/)
+
+    // 同一枚码只能用一次 —— 顺带证明这一条打的是真规则，不是某个假分支。
+    const again = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: PROTOCOL_VERSION, op: 'pair', code }),
+    })
+    assert.equal(again.status, 401)
+    const refused = await again.json() as { v?: number; ok?: boolean; error?: { code: string } }
+    assert.deepEqual({ v: refused.v, ok: refused.ok, code: refused.error?.code },
+      { v: PROTOCOL_VERSION, ok: false, code: 'invalid-pairing-code' })
+  } finally {
+    teardown()
+  }
+})
+
 test('the assembled plugin answers a real request on a real port', async () => {
   const port = freshPort(38_100)
   const credentialsPath = tempCredentialsPath()
@@ -180,7 +223,12 @@ test('the assembled plugin answers a real request on a real port', async () => {
   try {
     const response = await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     assert.equal(response.status, 200)
-    assert.match(await response.text(), /mac-gateway alive/)
+    const body = await response.text()
+    assert.match(body, /mac-gateway alive/)
+    // 版本号取常量作期望值：写死 `v2` 的断言与写死 `v2` 的实现一起过期，
+    // 于是那句话可以静默说谎（升到 v3 时报的仍是 2）。
+    assert.ok(body.includes(`protocol v${PROTOCOL_VERSION},`),
+      `the liveness line must report the running protocol version: ${body.trim()}`)
   } finally {
     teardown()
   }

@@ -23,6 +23,7 @@ import type {
   SessionRow,
   SessionSlice,
   ErrorResponse,
+  OkResponse,
   Response,
 } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
@@ -354,7 +355,24 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined
 }
 
-/** 构造拒绝。每条拒绝都带 `v`，与成功应答完全一致。 */
-function failure(code: string, message: string): ErrorResponse {
+/**
+ * 构造拒绝。每条拒绝都带 `v`，与成功应答完全一致。
+ *
+ * **导出是为了让传输层用它，而不是自己再写一份**：`pair` / `refresh` 绕过
+ * `handle`（凭据在体内），所以 `remote/http.ts` 也要作答；它只能引用这里，
+ * 不能手写 `{ v, ok: false, error }` —— 那样版本号与字段集就各有一份活法。
+ */
+export function failure(code: string, message: string): ErrorResponse {
   return { v: PROTOCOL_VERSION, ok: false, error: { code, message } }
+}
+
+/**
+ * 构造成功应答。与 {@link failure} 成对：信封的两个固定字段（`v` / `ok`）
+ * 只在这两个函数里出现，其余地方只交出各自 op 的字段。
+ *
+ * 泛型保留调用方给的字段，所以 `success({ deviceToken })` 的类型里仍有
+ * `deviceToken`，能直接填进 `PairResponse`。
+ */
+export function success<T extends Record<string, unknown>>(fields: T): OkResponse & T {
+  return { v: PROTOCOL_VERSION, ok: true, ...fields }
 }

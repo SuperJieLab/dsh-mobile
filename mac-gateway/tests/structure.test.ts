@@ -521,6 +521,70 @@ const HTTP_MODULES: ReadonlySet<string> = new Set([
 ])
 
 // ---------------------------------------------------------------------------
+// V2c：信封只在判定层构造
+// ---------------------------------------------------------------------------
+
+/**
+ * 源码里手写协议信封的地方 —— 同一个对象字面量的**顶层**同时有 `v:` 与 `ok:` 键。
+ *
+ * 为什么不按 `/\{[^{}]*\}/` 找：信封里套着 `error: { code, message }`，那个内层
+ * 花括号会让正则只能匹配到内层，外层永远配不上 —— 实测把
+ * `{ v, ok: false, error: { … } }` 注回 `remote/http.ts` **零命中**。所以这里按
+ * 括号深度扫描：先把每个成对的 `{}` 取出来，再看它自己顶层的键。
+ *
+ * 已知边界（刻意的）：字符串没剥离。远程目录里出现一个"长得像信封"的字符串会
+ * 假红 —— 可以接受，假红有人来看，假绿没人知道。
+ */
+export function envelopeLiteralsIn(source: string): string[] {
+  const code = stripComments(source)
+  const found: string[] = []
+  const open: number[] = []
+  for (let i = 0; i < code.length; i += 1) {
+    if (code[i] === '{') open.push(i)
+    else if (code[i] === '}' && open.length > 0) {
+      const start = open.pop() as number
+      const body = code.slice(start, i + 1)
+      const keys = topLevelKeysOf(body)
+      if (keys.includes('v') && keys.includes('ok')) found.push(body.replace(/\s+/g, ' ').slice(0, 80))
+    }
+  }
+  return found
+}
+
+/** 一个对象字面量**自己那一层**的键名（不进嵌套的括号）。 */
+function topLevelKeysOf(body: string): string[] {
+  const keys: string[] = []
+  let depth = 0
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i]
+    if (ch === '{' || ch === '(' || ch === '[') depth += 1
+    else if (ch === '}' || ch === ')' || ch === ']') depth -= 1
+    else if (depth === 1) {
+      const match = /^([A-Za-z_$][\w$]*)\s*:/.exec(body.slice(i))
+      if (match !== null && match[1] !== undefined) keys.push(match[1])
+    }
+  }
+  return keys
+}
+
+test('transport does not build protocol envelopes by hand', () => {
+  // 为什么需要这一条：「判定值只有一个家」那张表只列 `protocol/` 的导出，而
+  // 第二份构造器是 `remote/` 里的私有函数 —— 表看不见它。R15 期3 之前
+  // `remote/http.ts` 就有一份 `refusal()`，与 `failure()` 逐字同义；版本号或
+  // 信封字段升一次，两份就会分叉，而手机端只认其中一份。
+  const offenders = filesUnder(join(SRC, 'remote')).flatMap(file =>
+    envelopeLiteralsIn(readFileSync(file, 'utf8')).map(literal => `${where(file)}: ${literal}`))
+  assert.deepEqual(offenders, [],
+    `the envelope has two fixed fields and one home (protocol/rpc.ts 的 failure / success):\n${offenders.join('\n')}`)
+
+  // 活性断言：扫描器自己得看得见信封。拿判定层那个真构造器作正控 ——
+  // 少了这一条，扫描器瞎了与「没人手写」长得一样（F2 记的那类缺陷）。
+  const control = envelopeLiteralsIn(readFileSync(join(SRC, 'protocol', 'rpc.ts'), 'utf8'))
+  assert.ok(control.length >= 2,
+    `the scanner must see the real constructors in protocol/rpc.ts — found ${control.length}`)
+})
+
+// ---------------------------------------------------------------------------
 // V3：面向宿主的适配层不认识传输层
 // ---------------------------------------------------------------------------
 
@@ -989,7 +1053,7 @@ test('the retired assembler is not exported under any name binding', async () =>
 const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; types: readonly string[] }[] = [
   {
     home: 'protocol/rpc.ts',
-    values: ['DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault'],
+    values: ['DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault', 'failure', 'success'],
     types: ['Limits'],
   },
   {

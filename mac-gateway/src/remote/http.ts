@@ -7,7 +7,7 @@
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
-import { DEFAULT_LIMITS, handle, type Limits } from '../protocol/rpc.ts'
+import { DEFAULT_LIMITS, failure, handle, success, type Limits } from '../protocol/rpc.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { WritePort } from '../ports/write.ts'
@@ -55,9 +55,11 @@ async function respond(
 
   if (path !== '/rpc') {
     // 存活探测，以及任何未知路径的回答。纯传输层：不涉协议消息，
-    // 也不涉信封。
+    // 也不涉信封。版本号取常量而非硬编码 —— 它能升，这句话不能跟着说谎。
     response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
-    response.end(path === '/' ? 'mac-gateway alive — protocol v2, POST /rpc for the protocol\n' : 'not found\n')
+    response.end(path === '/'
+      ? `mac-gateway alive — protocol v${PROTOCOL_VERSION}, POST /rpc for the protocol\n`
+      : 'not found\n')
     return
   }
 
@@ -101,7 +103,7 @@ async function respond(
     // 静默换票重试；warn 留给 refresh 本身被拒（关系被掐）。
     log.info(`op "${String(op)}" refused: no live access token`)
     response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    response.end(`${JSON.stringify(refusal('unauthenticated', 'missing or expired access token — pair first, then refresh'))}\n`)
+    response.end(`${JSON.stringify(failure('unauthenticated', 'missing or expired access token — pair first, then refresh'))}\n`)
     return
   }
 
@@ -115,29 +117,25 @@ async function respond(
   response.end(`${JSON.stringify(answer)}\n`)
 }
 
-/** auth 路径共用的拒绝信封（读路径在 `handle` 内自建）。形状与两个回包的 `error` 字段同源。 */
-function refusal(code: string, message: string): { v: number; ok: false; error: { code: string; message: string } } {
-  return { v: PROTOCOL_VERSION, ok: false, error: { code, message } }
-}
-
 /**
  * 应答 `pair` / `refresh`。放在闸门旁而非 `handle` 内：凭据来自体内而非头部的
  * 消息只有这两条，而其余 op 都要先过头部那道闸。
  *
- * 形状在 `wire/auth.ts`（两端共守）；**校验不在这里也不在那里** —— 它在
- * `protocol/auth.ts` 的配对规则里，那四种失败原因必须原样传到手机上。
+ * 形状在 `wire/auth.ts`（两端共守）；**校验不在这里，它在 `protocol/auth.ts`
+ * 的配对规则里** —— 那四种失败原因必须原样传到手机上，所以这一层不判对错，
+ * 只选 HTTP 状态码。
  */
 async function handleAuthOp(
   op: 'pair' | 'refresh',
   message: unknown,
   vault: CredentialVault,
 ): Promise<{ status: number; body: PairResponse | RefreshResponse }> {
-  // 用请求形状做名字耦合：字段改名会在这里编译失败，而不是让客户端与服务端
-  // 各读一个名字、每次配对都落到 `bad-code-shape`。**读取处仍按 `unknown` 收窄** ——
-  // 校验在 `protocol/auth.ts` 的规则里（那四种失败原因必须原样到手机上）。
-  // 字段名从形状里取（改名会在这里编译失败），但两者都可能是缺的 —— 缺了交给
-  // 规则层拒绝。不写成 `Partial<PairRequest & RefreshRequest>`：两条 op 的 `op`
-  // 是互斥字面量，交叉之后整个类型塌成 `never`。
+  // 字段名从请求形状里取：改名会在这里编译失败，而不是让客户端与服务端各读
+  // 一个名字、每次配对都落到 `bad-code-shape`。两者都可能缺 —— 缺了交给规则层
+  // 拒绝，所以读取处按 `unknown` 收窄。
+  //
+  // 不写成 `Partial<PairRequest & RefreshRequest>`：两条 op 的 `op` 是互斥
+  // 字面量，交叉之后整个类型塌成 `never`。
   const payload = message as {
     code?: PairRequest['code']
     deviceToken?: RefreshRequest['deviceToken']
@@ -148,14 +146,11 @@ async function handleAuthOp(
     if (!outcome.ok) {
       // 配对失败值得留痕：试错配对码与码过期在这里同形，日志能区分开。
       log.warn(`pair refused: ${outcome.reason}`)
-      return { status: 401, body: refusal('invalid-pairing-code', outcome.reason) }
+      return { status: 401, body: failure('invalid-pairing-code', outcome.reason) }
     }
     // 关系建立是身份链路的状态迁移，必须留痕（配对成功但列表 401 时先看这里）。
     log.info('pair accepted — device relationship established')
-    return {
-      status: 200,
-      body: { v: PROTOCOL_VERSION, ok: true, deviceToken: outcome.deviceToken },
-    }
+    return { status: 200, body: success({ deviceToken: outcome.deviceToken }) }
   }
 
   const outcome = vault.refresh(payload.deviceToken)
@@ -164,12 +159,12 @@ async function handleAuthOp(
     log.warn('refresh refused: unknown device token — relationship severed')
     return {
       status: 401,
-      body: refusal('unauthenticated', 'unknown device token — pair again'),
+      body: failure('unauthenticated', 'unknown device token — pair again'),
     }
   }
   return {
     status: 200,
-    body: { v: PROTOCOL_VERSION, ok: true, accessToken: outcome.accessToken, expiresAt: outcome.expiresAt },
+    body: success({ accessToken: outcome.accessToken, expiresAt: outcome.expiresAt }),
   }
 }
 
