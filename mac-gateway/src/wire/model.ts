@@ -9,6 +9,7 @@
  * 上游的规范化形状原样转发：校验与规范化都在控制器的门后，契约只转达门后
  * 给出的答复。
  */
+import { nonEmptyString } from './fields.ts'
 
 /** 一条规范化后的模型选择，用上游自己的词汇。 */
 export interface ModelSelection {
@@ -73,7 +74,3 @@ export function modelSelectRequestOf(message: Record<string, unknown>): ModelSel
   }
 }
 
-/** 非空字符串，否则无。 */
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
-}

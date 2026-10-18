@@ -12,6 +12,7 @@
  * 重放表在宿主机侧（`upstream/write.ts` 的 `ReplayTable`），手机端看不见表，
  * 但可以依赖它的效果。
  */
+import { nonEmptyString } from './fields.ts'
 
 /** 校验通过的 `approval-answer` 消息。 */
 export interface ApprovalAnswerMessage {
@@ -64,7 +65,3 @@ export function sessionPromptOf(message: Record<string, unknown>): SessionPrompt
   return { sessionId, text, promptId }
 }
 
-/** 非空字符串，否则无。 */
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
-}

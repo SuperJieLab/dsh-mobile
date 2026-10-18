@@ -15,6 +15,7 @@
 import type { WireEvent } from './rpc.ts'
 import type { UsageSnapshot } from './usage.ts'
 import type { ModelSelection } from './model.ts'
+import { isIntegral, isPositiveInteger, nonEmptyString } from './fields.ts'
 
 /** 客户端 → 服务端：开始一条逻辑流。 */
 export interface MuxOpenFrame {
@@ -92,7 +93,7 @@ export function parseClientFrame(text: string): MuxClientFrame | undefined {
   const frame = parsed as Record<string, unknown>
   if (!isIntegral(frame.streamId)) return undefined
 
-  if (frame.type === 'cancel') return { type: 'cancel', streamId: frame.streamId as number }
+  if (frame.type === 'cancel') return { type: 'cancel', streamId: frame.streamId }
 
   if (frame.type === 'open') {
     return followRequestOf(frame.payload) === undefined
@@ -133,10 +134,10 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
   const record = payload as Record<string, unknown>
   if (record.op !== 'follow') return undefined
-  const sessionId = record.sessionId
-  if (typeof sessionId !== 'string' || sessionId === '') return undefined
+  const sessionId = nonEmptyString(record.sessionId)
+  if (sessionId === undefined) return undefined
   return isPositiveInteger(record.maxMessages)
-    ? { sessionId, maxMessages: record.maxMessages as number }
+    ? { sessionId, maxMessages: record.maxMessages }
     : { sessionId }
 }
 
@@ -184,10 +185,3 @@ export interface FollowOpening {
  */
 export const DEFAULT_FOLLOW_MESSAGES = 50
 
-function isIntegral(value: unknown): boolean {
-  return typeof value === 'number' && Number.isSafeInteger(value)
-}
-
-function isPositiveInteger(value: unknown): boolean {
-  return isIntegral(value) && (value as number) > 0
-}

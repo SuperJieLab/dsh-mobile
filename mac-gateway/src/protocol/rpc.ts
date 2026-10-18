@@ -27,6 +27,7 @@ import type {
 } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
+import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
 import type { PageWindow } from '../wire/window.ts'
 
@@ -336,14 +337,6 @@ function normalizeLimits(limits: Limits): Limits {
     maxDeltaBytes: positiveOrDefault(limits.maxDeltaBytes, DEFAULT_LIMITS.maxDeltaBytes),
     maxOpeningBytes: positiveOrDefault(limits.maxOpeningBytes, DEFAULT_LIMITS.maxOpeningBytes),
   }
-}
-
-/**
- * `value` 能否作为循环的上界。入参来自线上信封（形状未定），故签名收 `unknown`
- * 并交出类型谓词 —— 少了谓词，调用处的 `envelope.maxMessages` 收窄不成 `number`。
- */
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
 /**

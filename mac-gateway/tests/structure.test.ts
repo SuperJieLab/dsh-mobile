@@ -568,6 +568,23 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
 ]
 
 /**
+ * `wire/` 允许导出的**字段规则** —— 判「这个字段能不能当某种值用」的纯函数。
+ *
+ * 它们是 codec 之间重复的零件被提出来共享的结果：字段校验本来就是编解码的一部分，
+ * 所以这不是 `wire/` 承诺之外的第三类东西，只是不必在每个 codec 里抄一遍。
+ *
+ * 与 codec 表的两处差别，正是它们能防住的东西：
+ *  - 不配形状（一个字段规则配不上任何单一形状 —— 硬配就是编造）；
+ *  - **必须至少被一个 codec 用到**。只加规则不加消费者，等于把这里变成
+ *    「以后可能会用」的收纳盒，而那种东西没有任何判据在守。
+ */
+const WIRE_FIELD_GUARDS: readonly { file: string; name: string }[] = [
+  { file: 'fields.ts', name: 'nonEmptyString' },
+  { file: 'fields.ts', name: 'isIntegral' },
+  { file: 'fields.ts', name: 'isPositiveInteger' },
+]
+
+/**
  * `wire/` 下允许的导出面 —— **白名单式**，认不出的写法直接抛错。
  *
  * 为什么不用「找函数声明的正则」：那种写法只认它想到的形态，`export { f }`、
@@ -790,16 +807,21 @@ test('the export-surface reader refuses forms it cannot classify', () => {
   )
 })
 
-test('wire/ exports shapes and codecs, nothing else', () => {
+test('wire/ exports shapes, codecs and field guards — each accounted for', () => {
   const actual: { file: string; name: string }[] = []
   const shapeNames = new Set<string>()
+  const sources = new Map<string, string>()
   for (const path of filesUnder(join(SRC, 'wire'))) {
-    const surface = exportSurfaceOf(readFileSync(path, 'utf8'))
-    for (const name of surface.functions) actual.push({ file: path.slice(path.lastIndexOf(sep) + 1), name })
+    const source = readFileSync(path, 'utf8')
+    const file = path.slice(path.lastIndexOf(sep) + 1)
+    sources.set(file, source)
+    const surface = exportSurfaceOf(source)
+    for (const name of surface.functions) actual.push({ file, name })
     for (const shape of surface.shapes) shapeNames.add(shape)
   }
-  assert.deepEqual(actual.map(f => f.name).sort(), WIRE_CODECS.map(c => c.name).sort(),
-    'a function that cannot be paired with the shape it encodes is not a codec — it belongs in protocol/')
+  const allowed = [...WIRE_CODECS.map(c => c.name), ...WIRE_FIELD_GUARDS.map(g => g.name)]
+  assert.deepEqual(actual.map(f => f.name).sort(), [...allowed].sort(),
+    'a function that is neither a codec (pairs with a shape) nor a field guard (used by a codec) belongs elsewhere')
 
   // 表里两列都要真的成立，否则它们只是注释：`file` 说它在哪个文件，`shape` 说它服务哪个形状。
   const misplaced = WIRE_CODECS.filter(codec => !actual.some(f => f.name === codec.name && f.file === codec.file))
@@ -810,7 +832,71 @@ test('wire/ exports shapes and codecs, nothing else', () => {
     .map(codec => `${codec.name} → ${codec.shape}`)
   assert.deepEqual(missing, [],
     `each codec must name a shape that wire/ actually exports: ${missing.join(', ')}`)
+
+  // 字段规则的两个方向都要查：位置在表里说的那个文件，且**有人用**。
+  // 「有没有第二处」与「有没有人用」是两件事 —— 只查前者，一条没人引用的规则
+  // 照样绿（R15 期3 的教训）。
+  const guardMisplaced = WIRE_FIELD_GUARDS
+    .filter(guard => !actual.some(f => f.name === guard.name && f.file === guard.file))
+    .map(guard => `${guard.name} 不在 ${guard.file}`)
+  assert.deepEqual(guardMisplaced, [], `a field guard must live in the file the table names: ${guardMisplaced.join('; ')}`)
+
+  const unused = WIRE_FIELD_GUARDS
+    .filter(guard => !fieldGuardsImportedBy(sources).has(guard.name))
+    .map(guard => guard.name)
+  assert.deepEqual(unused, [],
+    `a field guard nobody imports is a holding pen, not a shared part: ${unused.join(', ')}`)
+
+  // 第三个方向：**副本回潮**。上面三条查的是导出面，而私有副本不在导出面里 ——
+  // 抄一份回 `mux.ts` 之后上面三条全绿（实测过）。所以名字要单独再查一遍：
+  // 除 `fields.ts` 外，`wire/` 里任何文件都不得再声明同名标识符。
+  const copies = [...sources]
+    .filter(([file]) => file !== 'fields.ts')
+    .flatMap(([file, source]) => WIRE_FIELD_GUARDS
+      .filter(guard => declarationOf(guard.name).test(source))
+      .map(guard => `${file}: ${guard.name}`))
+  assert.deepEqual(copies, [],
+    `a field guard is declared once, in fields.ts — a private copy drifts silently: ${copies.join('; ')}`)
 })
+
+/**
+ * 一个标识符的**声明**形态：`function f(`、`const f =`、`let` / `var` 同形。
+ *
+ * 三条规则的名字是固定的闭集，所以这里按名字找声明是够的 —— 不同于「枚举这门语言
+ * 能怎么写函数」那类判定（那种永远会漏）。名字在这里就是它自己要防的东西。
+ */
+function declarationOf(name: string): RegExp {
+  return new RegExp(`\\b(?:function\\s*\\*?\\s*|const|let|var)\\s+${name}\\b`, 'u')
+}
+
+/**
+ * `wire/` 里除 `fields.ts` 自身之外，各文件从 `./fields.ts` 具名导入的规则。
+ *
+ * 认不出的写法（`import * as`、动态 import、只用字符串拼出来的 specifier）**抛错**：
+ * 这一条是「有没有人用」的判据，静默跳过会让没用到的规则显得有人用 ——
+ * 与 F2 记的那类「扫描器瞎了但判据绿」同一个病。
+ */
+function fieldGuardsImportedBy(sources: ReadonlyMap<string, string>): Set<string> {
+  const names = new Set<string>()
+  for (const [file, source] of sources) {
+    if (file === 'fields.ts') continue
+    if (!source.includes('fields.ts')) continue
+    if (/\bimport\s*\*/.test(source)) throw new Error(`${file}: namespace import is not classifiable`)
+    const matches = [...source.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+['"][^'"]*fields\.ts['"]/gu)]
+    // 提到了 fields.ts 却没有一条认得出的具名导入 ⇒ 有人在用别的写法（或只剩注释）。
+    if (matches.length === 0 && /from\s+['"][^'"]*fields\.ts['"]/u.test(source)) {
+      throw new Error(`${file}: an import of fields.ts that is not a plain named import`)
+    }
+    for (const match of matches) {
+      for (const part of match[1]!.split(',')) {
+        const name = part.trim().replace(/^type\s+/u, '').split(/\s+as\s+/u)[0]!.trim()
+        if (name.length > 0) names.add(name)
+      }
+    }
+  }
+  return names
+}
+
 
 // ---------------------------------------------------------------------------
 // V6：源码注释不指向开发工作区
