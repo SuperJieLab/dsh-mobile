@@ -39,7 +39,7 @@ struct SessionDetailView: View {
                     } label: {
                         HStack {
                             Spacer()
-                            if sync.status == .syncing {
+                            if sync.status.isSyncing {
                                 ProgressView().controlSize(.small)
                             } else {
                                 Text("加载更早的消息")
@@ -47,7 +47,7 @@ struct SessionDetailView: View {
                             Spacer()
                         }
                     }
-                    .disabled(sync.status == .syncing)
+                    .disabled(sync.status.isSyncing)
                     .listRowSeparator(.hidden)
                 }
 
@@ -108,7 +108,7 @@ struct SessionDetailView: View {
                 }
             }
             .overlay {
-                if sync.status == .idle && sync.eventCount == 0 {
+                if sync.status.isIdle && sync.eventCount == 0 {
                     ProgressView("正在同步…")
                 }
             }
@@ -158,7 +158,8 @@ struct SessionDetailView: View {
 
                     HStack(spacing: 8) {
                         // 当前模型：选择器住在发送区旁（上游 composer 槽位），不占消息流。
-                        ModelPickerView(sync: sync)
+                        // 目录的三面由它自己的状态对象持有（R18 期2），这里只给门面。
+                        ModelPickerView(client: client, sync: sync)
                         TextField("发一条指令给 DSH…", text: $draft, axis: .vertical)
                             .lineLimit(1...4)
                             .textFieldStyle(.roundedBorder)

@@ -21,7 +21,7 @@ enum GatewayErrorCode: String {
 }
 
 /// 失败信封里的 `error` 对象。
-struct GatewayFailure: Decodable {
+struct GatewayFailure: Decodable, Equatable {
     let code: String
     let message: String
 }

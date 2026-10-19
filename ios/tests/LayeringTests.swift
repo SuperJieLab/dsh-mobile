@@ -5,7 +5,7 @@
  * 「目录名不能同时给出两个承诺」。视图层与目录边界都没有单测，形状本身只能靠这几条守 ——
  * 它们替代「收口时人工过一遍」。
  *
- * 九条：
+ * 十二条：
  * 1. 每个界面目录同时有 `State/` 与 `Views/`，且 `State/` 下至少一个 `.swift`；
  * 2. `State/` 下的文件不 import SwiftUI / UIKit；
  * 3. 界面 `Views/` 下声明的类型不得被别的界面当零件用（界面根视图与登记例外除外）；
@@ -14,7 +14,10 @@
  * 6. 合约目录里含中文的行必须是注释行（R18 B1）；
  * 7. 合约目录的代码行不出现显示口径的符号名（R18 B1）；
  * 8. `Display/` 不出现 `Client/`、`Stream/`、`State/` 声明的类型；
- * 9. `Core/` 不出现 `SharedUI/` 声明的类型（R18 A1）。
+ * 9. `Core/` 不出现 `SharedUI/` 声明的类型（R18 A1）；
+ * 10. 界面 `Views/` 里不把 `await` 的结果赋给自己（R18 期2 C1：取数归判定层）；
+ * 11. 会话详情的编排文件里不出现中文字符串字面量（R18 期2 D1：句子归 `Display/`）；
+ * 12. 任何 `Display/` 都不 import SwiftUI / UIKit（R18 期2：说法不漂成第二个 Views）。
  *
  * 扫的是文本，不是语法树。已知盲区：
  * - 不认 `typealias`（漏报方向）；
@@ -327,6 +330,116 @@ final class LayeringTests: XCTestCase {
             }
         }
         XCTAssertEqual(hits, 0, "Core 引用了 SharedUI 的类型")
+    }
+
+    // MARK: - 断言 10：视图不把取数结果接进自己（R18 期2）
+
+    /// 赋值右侧是 `await` —— 取数结果要落到视图上，必然先赋给属性或局部量。
+    ///
+    /// 守的是「取数结果、加载态与失败三面归判定层，视图只发起取数、只读三面」。改造前
+    /// `ModelPickerView` 一处命中（`catalog = await sync.loadModelCatalog()`），改造后应为 0。
+    ///
+    /// 盲区（都是漏报方向，写在这儿免得重修）：
+    /// - 赋值拆成两行（等号在上一行、`await` 在下一行）认不出；
+    /// - 取数封装在一个返回 `Void` 的函数里认不出 —— 那恰好是本期的正当写法（状态对象自己取数）；
+    /// - `for await` 与 `if case … = someValue` 不含「等号接 await」，不受影响。
+    private static let awaitedAssignment = try! NSRegularExpression(
+        pattern: #"(?<![=!<>+\-*/%&|^])=(?!=)\s*(try[?!]?\s+)?await"#
+    )
+
+    func testViewsDoNotTakeFetchResults() throws {
+        var scanned = 0
+        var hits = 0
+        for interface in try interfaceDirectories() {
+            for file in swiftFiles(under: interface.appendingPathComponent("Views")) {
+                scanned += 1
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) {
+                    let range = NSRange(code.startIndex..., in: code)
+                    guard Self.awaitedAssignment.firstMatch(in: code, options: [], range: range) != nil
+                    else { continue }
+                    hits += 1
+                    XCTFail("\(interface.lastPathComponent)/Views/\(file.lastPathComponent):\(line)"
+                            + " 把 await 的结果赋给了自己 —— 取数归 State/（R18 期2 C1）")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 0, "一个 Views 文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, 0, "视图里还有取数赋值")
+    }
+
+    // MARK: - 断言 11–12：句子与说法不住在编排里（R18 期2）
+
+    /// 会话详情的编排文件里，代码行不含中文字符串字面量 —— 用户看得见的句子归
+    /// `Display/SyncText.swift`，判定与编排只产出「哪一步 + 哪一类原因」。
+    ///
+    /// 判据只钉 `SessionSync.swift` 一个文件，不钉整个 `State/`：本屏的
+    /// `TranscriptAssembler`（过程摘要）与 `ApprovalStore`（两句提示）的文案仍在原地 ——
+    /// 那是本期范围边界里写明的「不做」，钉整个目录会让这条断言从第一天就红着。
+    ///
+    /// 认的是**单行双引号字面量**：三引号多行串认不出（漏报方向）。本文件的句子都是单行的，
+    /// 真出现多行串时，注释行判定会把它当代码行 —— 那一行含中文就红，所以仍然抓得住。
+    ///
+    /// **豁免整行以 `Log.` 开头的那一行**：日志文案在本项目一律写中文（`Core/Log.swift` 是唯一
+    /// 出口，`SecretFile`、`TailnetNode` 都是中文），而日志不是用户看得见的面。把用户句子写进
+    /// `Log.` 里没有意义 —— 用户看不到。
+    private var sessionSyncFile: URL {
+        sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
+    }
+
+    func testSyncOrchestrationHasNoUserFacingStrings() throws {
+        let text = try String(contentsOf: sessionSyncFile, encoding: .utf8)
+        XCTAssertTrue(text.contains("func sync()"), "读到的不是编排文件 —— 先怀疑路径推算")
+
+        var hits = 0
+        for (line, code) in codeLines(in: text) {
+            if code.trimmingCharacters(in: .whitespaces).hasPrefix("Log.") { continue }
+            for literal in quotedLiterals(in: code) where containsHan(literal) {
+                hits += 1
+                XCTFail("SessionSync.swift:\(line) 的中文字面量 \(literal) —— "
+                        + "句子应住 Display/SyncText.swift（R18 期2 D1）")
+            }
+        }
+        XCTAssertEqual(hits, 0, "编排文件里还有用户可见的句子")
+    }
+
+    /// 全部 `Display/` 目录（`Features/*/Display/` 与 `Core/**/Display/`）。
+    private func displayDirectories() -> [URL] {
+        guard let walker = FileManager.default.enumerator(at: sourcesRoot,
+                                                          includingPropertiesForKeys: [.isDirectoryKey],
+                                                          options: [.skipsHiddenFiles])
+        else { return [] }
+        var result: [URL] = []
+        for case let url as URL in walker where url.lastPathComponent == "Display" {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                result.append(url)
+            }
+        }
+        return result.sorted { $0.path < $1.path }
+    }
+
+    /// `Display/` 不 import SwiftUI / UIKit —— 它是「说法与换算」的家，不是第二个 Views。
+    func testDisplayDoesNotImportSwiftUI() throws {
+        let directories = displayDirectories()
+        XCTAssertGreaterThanOrEqual(directories.count, 2,
+                                    "只扫到 \(directories.count) 个 Display/ —— 先怀疑路径推算")
+
+        var checked = 0
+        let banned = ["import SwiftUI", "import UIKit"]
+        for directory in directories {
+            for file in swiftFiles(under: directory) {
+                checked += 1
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) {
+                    let trimmed = code.trimmingCharacters(in: .whitespaces)
+                    if let hit = banned.first(where: { trimmed.hasPrefix($0) }) {
+                        XCTFail("\(directory.lastPathComponent)/\(file.lastPathComponent):\(line) "
+                                + "出现「\(hit)」—— 说法与换算不得认识 SwiftUI（R18 期2）")
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(checked, 0, "一个 Display 文件都没扫到")
     }
 
     // MARK: - 扫描工具

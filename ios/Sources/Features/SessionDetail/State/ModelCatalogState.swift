@@ -1,0 +1,61 @@
+/**
+ * 模型目录的取数与三种面 —— 一次取数的**全部**结果，视图只读它。
+ *
+ * 三种面与列表同构（`SessionListState.Outcome`）：有内容 / 失败 / 等待。区别只在失败那一面：
+ * 这里带的是**原因**（协议拒绝时原样带 `GatewayFailure`，句子在 `Display/CatalogText.swift`），
+ * 而不是一句拼好的话 —— 说法随产品决定变，原因随协议变，两者不同源。
+ *
+ * 取数入口是注入的闭包，不是 `GatewayClient`：这条链上没有一条断言需要起网关，
+ * 而「三面怎么映射」正是本期唯一要钉住的判定（`tests/ModelCatalogStateTests.swift`）。
+ *
+ * 触发点不在这里：什么时候拉由视图决定（打开菜单时现拉一次，不订阅刷新 —— 目录只在凭证 /
+ * 适配器变更时才变，重开即新）。
+ */
+import Combine
+import Foundation
+
+@MainActor
+final class ModelCatalogState: ObservableObject {
+
+    /// 屏幕上要落成的三种面。
+    enum Outcome: Equatable {
+        /// 还没有结果，或正在重拉 —— 「等待」不是「空目录」。
+        case waiting
+        /// 拿到了目录。`groups` 为空是成功面，由视图补一句「没有可用的模型」。
+        case ready(ModelCatalog)
+        /// 没拿到。原因只有两档，分法与状态行的失败同源。
+        case failed(Cause)
+    }
+
+    /// 失败的原因。**不带句子**：说给用户听的那两句在 `Display/CatalogText.swift`。
+    enum Cause: Equatable {
+        /// 服务端按信封拒绝 —— 协议值原样带，原文怎么读由显示层定。
+        case refused(GatewayFailure)
+        /// 没连上网关（传输失败、组网未激活、身份不可用）。
+        case offline
+    }
+
+    @Published private(set) var outcome: Outcome = .waiting
+
+    private let fetch: @MainActor () async throws -> ModelCatalog
+
+    init(fetch: @escaping @MainActor () async throws -> ModelCatalog) {
+        self.fetch = fetch
+    }
+
+    /// 取一次。重试也走这里：先把面置回等待，避免「旧目录还挂着，看不出在重拉」。
+    func reload() async {
+        outcome = .waiting
+        do {
+            outcome = .ready(try await fetch())
+        } catch let error as GatewayClientError {
+            if case .refused(let failure) = error {
+                outcome = .failed(.refused(failure))
+            } else {
+                outcome = .failed(.offline)
+            }
+        } catch {
+            outcome = .failed(.offline)
+        }
+    }
+}

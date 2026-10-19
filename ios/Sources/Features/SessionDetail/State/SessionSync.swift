@@ -11,15 +11,49 @@ import Foundation
 /// 镜像只在内存里（见 `SessionMirror`）：没有任何位置或内容落盘。用 `ObservableObject`
 /// 而非 `@Observable` 宏 —— 后者要跑进程外的宏插件，本项目的验证环境不允许（**能被本地
 /// 编译验证，比写法新更重要**）。
+///
+/// **这里只剩编排与「事实」**（R18 期2）：告知的置位与清除在 `ResyncNoticeState`（同目录），
+/// 用户看得见的句子在 `Display/SyncText.swift`，两者都不该写回本文件 ——
+/// `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 守着后半句。
+///
+/// 消费者：`SessionDetailView`（整屏与底栏）、`ModelPickerView`（读显示值与发起换模型）。
 @MainActor
 final class SessionSync: ObservableObject {
 
     /// 状态行要说的事。**重置与失败必须说得出来** —— 那是用户唯一能察觉异常的地方。
-    enum Status: Equatable {
+    ///
+    /// 失败只说「哪一步 + 哪一类原因」，不说句子：句子随产品决定变，住 `Display/SyncText.swift`
+    /// （R18 期2）。因此这个类型**不再可比较**（原因里带着抛出来的错误对象）；视图要问
+    /// 「在不在同步」时读 `isSyncing` / `isIdle` 这两个形状查询。
+    enum Status {
         case idle
         case syncing
         case done(added: Int, recovered: Bool)
-        case failed(String)
+        case failed(step: Step, cause: Cause)
+    }
+
+    /// 失败发生在哪一步。六个步骤各有一句说法 —— 同一类原因在不同步骤上说的话不一样
+    /// （打开时说「这一屏还是空的」，往回翻时说「未能加载更早的消息」）。
+    enum Step {
+        case opening
+        case paging
+        case syncing
+        case sending
+        case selecting
+        case streaming
+    }
+
+    /// 失败属于哪一类。四档按**谁说的**分，不按 `GatewayClientError` 的 case 分 ——
+    /// 后者有七个，重新分类一次就多一份会漂移的对照表。
+    enum Cause {
+        /// 镜像只说「没成」：取窗口 / 追新增 / 往回翻的传输失败都没有错误对象。
+        case transport
+        /// 服务端按信封拒绝，但镜像只留了协议码。
+        case refusal(code: String)
+        /// 编排自己执行的重置撞上了缺口，连着两次。
+        case resetLoop(ResetReason)
+        /// 抛出来的错误原样带过去：编排查不出它属于哪一类，也不需要查 —— 显示层会解释。
+        case thrown(any Error)
     }
 
     /// 屏幕上要画的消息。
@@ -112,29 +146,12 @@ final class SessionSync: ObservableObject {
         do {
             try await client.sendPrompt(sessionId: sessionId, text: trimmed, promptId: UUID().uuidString)
         } catch {
-            status = .failed("指令没能送达：\(error.localizedDescription)")
+            status = .failed(step: .sending, cause: .thrown(error))
             refreshView()
         }
     }
 
     // MARK: - 模型选择
-
-    /// 拉一次目录（打开选择器时现拉，不订阅刷新——重开即新）。失败返回 `nil` 并如实进状态行。
-    func loadModelCatalog() async -> ModelCatalog? {
-        do {
-            return try await client.modelCatalog()
-        } catch let error as GatewayClientError {
-            if case .refused(let failure) = error {
-                status = .failed("目录没取到：\(failure.readableDescription)")
-            } else {
-                status = .failed("目录没取到 —— 没连上网关。")
-            }
-            return nil
-        } catch {
-            status = .failed("目录没取到 —— 没连上网关。")
-            return nil
-        }
-    }
 
     /// 安装一次会话级选择：本地先记代号，回包对号落地；事件流的
     /// `model/selection` 随后照常进来 —— 与本地即时显示一致，界面不动。失败如实进状态行。
@@ -146,7 +163,7 @@ final class SessionSync: ObservableObject {
                 displayedModel = modelState.displayed
             }
         } catch {
-            status = .failed("模型没换成：\(error.localizedDescription)")
+            status = .failed(step: .selecting, cause: .thrown(error))
         }
     }
 
@@ -173,11 +190,11 @@ final class SessionSync: ObservableObject {
                 mirror.reset()
                 recovered = true
             case .refused(let code):
-                status = .failed("服务端拒绝了这次读取：\(code)")
+                status = .failed(step: .opening, cause: .refusal(code: code))
                 refreshView()
                 return
             case .failed:
-                status = .failed("没连上网关 —— 这一屏还是空的。")
+                status = .failed(step: .opening, cause: .transport)
                 refreshView()
                 return
             }
@@ -200,7 +217,7 @@ final class SessionSync: ObservableObject {
                 // 重置只做一次：重置之后服务端又要求重置，说明继续拉也不会收敛，
                 // 停下来说清楚比无限重试好。
                 guard !recovered else {
-                    status = .failed("服务端连续要求重新同步（\(resetReasonWords(reason))）—— 已停止重试。")
+                    status = .failed(step: .syncing, cause: .resetLoop(reason))
                     refreshView()
                     return
                 }
@@ -215,13 +232,13 @@ final class SessionSync: ObservableObject {
                 return
 
             case .refused(let code):
-                status = .failed("服务端拒绝了这次同步：\(code)")
+                status = .failed(step: .syncing, cause: .refusal(code: code))
                 refreshView()
                 return
 
             case .failed:
                 // 传输失败：视图保持原样（状态机保证），只把状态说清楚。
-                status = .failed("没连上网关 —— 手机上看到的仍是上一次同步的内容。")
+                status = .failed(step: .syncing, cause: .transport)
                 refreshView()
                 return
             }
@@ -271,9 +288,9 @@ final class SessionSync: ObservableObject {
             if reason.invalidatesLocalContent { mirror.reset() }
             observeNotice(verdict)
         case .refused(let code):
-            status = .failed("服务端拒绝了这次读取：\(code)")
+            status = .failed(step: .paging, cause: .refusal(code: code))
         case .failed:
-            status = .failed("没连上网关 —— 未能加载更早的消息。")
+            status = .failed(step: .paging, cause: .transport)
         }
 
         refreshView()
@@ -410,7 +427,9 @@ final class SessionSync: ObservableObject {
     }
 
     private func handleStreamRefusal(_ failure: GatewayFailure) {
-        status = .failed("订阅流被拒绝：\(failure.readableDescription)")
+        // 它天然是一个「抛出来的错误」：包一层比多一个 `Cause` 档便宜，而显示层那句
+        // 「订阅流被拒绝：」正好等于搬家前的说法（`localizedDescription` 走 `.refused` 的解释）。
+        status = .failed(step: .streaming, cause: .thrown(GatewayClientError.refused(failure)))
         refreshView()
     }
 
@@ -496,100 +515,4 @@ final class SessionSync: ObservableObject {
         hasOlder = mirror.hasOlder
         approvals.rebuild(from: mirror.events)
     }
-}
-
-/// 重置理由的人话说法。这类文案属于界面，不属于状态机 —— 但有两处要用它（状态行的一句话、
-/// 固定面上告知的一句话），所以只在此处定义一次。
-private func resetReasonWords(_ reason: ResetReason) -> String {
-    switch reason {
-    case .gap: return "中间有事件没拿到"
-    case .waterMarkWentBack: return "服务端给的位置比本地还靠前"
-    case .cursorVoid: return "本地记的位置在 Mac 上不存在了"
-    }
-}
-
-extension SessionSync.Status {
-    /// 状态行的一句话。
-    var line: String {
-        switch self {
-        case .idle:
-            return "尚未同步"
-        case .syncing:
-            return "正在同步…"
-        case .done(let added, let recovered):
-            let prefix = recovered ? "已重新同步" : "已是最新"
-            return added == 0 ? prefix : "\(prefix)，新增 \(added) 条"
-        case .failed(let detail):
-            return detail
-        }
-    }
-}
-
-/// 要显示在底部**固定面**上的一条告知 —— 「本地与服务端对不上」这件事的可见形态（R10 期2 链路 C）。
-///
-/// 为什么不复用 `Status.line`：那一行只出现在 List 的 `Section` footer 里，**随内容滚动** ——
-/// 用户往回翻读历史时它在屏幕外，恰是最需要看见的时候看不见（spec 2.4.3 要防的
-/// 「看起来正常但少了内容」）。告知因此必须挂在不随滚动离开的面上。
-struct ResyncNotice: Equatable {
-
-  /// 两种告知 —— 对应的正是分档判据（`ResetReason.invalidatesLocalContent`）的两半。
-  enum Kind: Equatable {
-    /// 本地那段仍是真的 ⇒ 内容**保住了**，只是更新（或更早的历史）没接上。
-    case unresolved
-    /// 位置被否定 ⇒ 本地内容**已清空重来**。
-    case reset
-  }
-
-  let kind: Kind
-  let reason: ResetReason
-}
-
-/// 告知的置位与清除 —— 判定全在这里，视图只读结果（项目分层红线：视图不写判定）。
-///
-/// 两条纪律：
-/// - **一次「接得上」不清除它** —— 洞还在，界面不该假装没事；
-/// - **清除只发生在重新建立**（用户重新同步成功、或离开再进入会话），即 `clear()` 这唯一一处。
-struct ResyncNoticeState {
-
-  private(set) var notice: ResyncNotice?
-
-  /// 收下一条判定。只有「对不上」（`.resetRequired`）会置位；接得上与别的失败都不动它。
-  mutating func observe(_ verdict: Verdict) {
-    guard case .resetRequired(let reason) = verdict else { return }
-    notice = ResyncNotice(
-      kind: reason.invalidatesLocalContent ? .reset : .unresolved,
-      reason: reason
-    )
-  }
-
-  /// 编排**自己**执行了一次重置 —— 如实记成「已重置」。
-  ///
-  /// 为什么不复用 `observe(_:)`：那里按 `invalidatesLocalContent` 分档，是给**订阅路径**
-  /// （opening / 往回翻）的规则 —— 那种处境下 `.gap` 该保留。而 `sync()` 是用户显式要求的
-  /// 「重新同步」，它撞上缺口时**保留无法收敛**（下一次拉到的增量仍接不上），所以它一律重置：
-  /// 这里记的是**做过的**，不是**该做的**。
-  mutating func didReset(_ reason: ResetReason) {
-    notice = ResyncNotice(kind: .reset, reason: reason)
-  }
-
-  /// 重新建立 —— 说明唯一的清除点。
-  mutating func clear() {
-    notice = nil
-  }
-}
-
-extension ResyncNotice {
-
-  /// 固定面上的一句话 —— 三件事齐全：**发生了什么 / 丢了什么 / 怎么恢复**。
-  ///
-  /// spec 2.4.2 要求「如实说明原因」，而原因里不含「丢了什么」就等于没说明白 —— 用户离开时
-  /// 不知道自己失去了什么。
-  var line: String {
-    switch kind {
-    case .unresolved:
-      return "有更新没能接上（\(resetReasonWords(reason))）—— 屏幕上仍是已读到的内容，下拉可重新同步。"
-    case .reset:
-      return "内容已清空重来（\(resetReasonWords(reason))）—— 已翻出来的更早历史随之丢失，下拉可重新载入。"
-    }
-  }
 }
