@@ -130,3 +130,15 @@ extension ConnectionBadge.Status {
         }
     }
 }
+
+// MARK: - 从连接域取值
+
+extension ConnectionBadge.MeshPath {
+    /// 从连接域的路径取连接方式。
+    ///
+    /// 适配写在**呈现层**：方向只向下（呈现 → 通信）。反过来（通信为呈现写 init）会让
+    /// 通信层认识呈现层 —— `LayeringTests` 的 `testCoreDoesNotReferenceSharedUITypes` 会红。
+    init(_ path: CarrierPath) {
+        self = path == .direct ? .direct : .relay
+    }
+}

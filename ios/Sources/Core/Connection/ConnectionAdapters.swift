@@ -10,7 +10,8 @@ extension GatewayClient: GatewayActivating {}
 extension TailnetNode: MeshNodeControlling {
     var nodeState: TailnetNodeState { state }
 
-    /// 节点层的 `MeshPath` 适配到域内类型（语义同 `ConnectionBadge.MeshPath` 的既有适配）。
+    /// 节点层的 `MeshPath` 适配到域内类型。徽章那一侧的对应关系写在它自己的文件里
+    /// （呈现层为通信层的类型写适配）；两份枚举的合一是 R19 的范围。
     var carrierPath: CarrierPath? {
         meshPath.map { $0 == .direct ? .direct : .relay }
     }
@@ -21,12 +22,5 @@ extension TailnetNode: MeshNodeControlling {
 
     func reviveNode() async {
         await revive()
-    }
-}
-
-/// 徽章从域内类型取连接方式（原 `TailnetNode.MeshPath` 适配位的替换）。
-extension ConnectionBadge.MeshPath {
-    init(_ path: CarrierPath) {
-        self = path == .direct ? .direct : .relay
     }
 }

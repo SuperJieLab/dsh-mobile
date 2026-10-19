@@ -1,18 +1,27 @@
 /**
- * 分层形状的常驻断言（R16 期1）。
+ * 分层形状与依赖方向的常驻断言。
  *
- * 出处：`RULES.md` §八 结构 6（同类界面分层同构；新界面必须带 `State/`）与结构 5（判定层不
- * import SwiftUI）。视图层没有单测，形状本身只能靠这几条守 —— 它们替代「收口时人工过一遍」。
+ * 出处：`RULES.md` §八 结构 5（依赖方向单向）、结构 6（同类界面分层同构）与 §八.1 的
+ * 「目录名只给一个承诺」。视图层与目录边界都没有单测，形状本身只能靠这几条守 ——
+ * 它们替代「收口时人工过一遍」。
  *
- * 四条：
+ * 七条：
  * 1. 每个界面目录同时有 `State/` 与 `Views/`，且 `State/` 下至少一个 `.swift`；
  * 2. `State/` 下的文件不 import SwiftUI / UIKit；
  * 3. 界面 `Views/` 下声明的类型不得被别的界面当零件用（界面根视图与登记例外除外）；
  * 4. 例外清单本身是真的（仍在某处声明、仍被别的界面引用），免得豁免悄悄扩大。
+ * 5. 合约目录不出现 `Client/`、`Stream/`、`State/` 声明的类型（R18 B2）；
+ * 6. 合约目录的字符串字面量不含中文（R18 B1）；
+ * 7. `Core/` 不出现 `SharedUI/` 声明的类型（R18 A1）。
  *
- * 扫的是文本，不是语法树。已知盲区写在 `declaredTypes` 与 `firstUser` 的注释里：
- * 不认 `typealias`；缩进的嵌套声明也会被扫到（宁可误报）；注释或字符串里出现同名标识符
- * 也算引用（同样是误报方向）。误报会有人来看一眼，漏报不会。
+ * 扫的是文本，不是语法树。已知盲区：
+ * - 不认 `typealias`（漏报方向）；
+ * - 方向检查只取**顶层**类型名（内层同名会互相误报；跨层引用嵌套类型必须写出外层名字，
+ *   所以不漏）；嵌套声明在界面检查里仍会被扫到（宁可误报）；
+ * - 只跳过整行注释，行内注释与字符串里出现同名标识符也算引用（误报方向）；
+ * - 中文字面量检查认不了三引号多行串与转义引号（误报方向）。
+ *
+ * 误报会有人来看一眼，漏报不会 —— 所以宁可多报。
  *
  * 跑法：`xcodebuild test -only-testing:DshMobileTests/LayeringTests`。
  */
@@ -29,6 +38,26 @@ final class LayeringTests: XCTestCase {
             .deletingLastPathComponent()   // ios/
             .appendingPathComponent("Sources")
             .appendingPathComponent("Features")
+    }
+
+    private var sourcesRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+    }
+
+    private var contractDirectory: URL {
+        sourcesRoot.appendingPathComponent("Core/Gateway/Contract")
+    }
+
+    private var sharedUIDirectory: URL {
+        sourcesRoot.appendingPathComponent("SharedUI")
+    }
+
+    /// R18 期1：合约不许认识的三层。
+    private var gatewayImplementationDirectories: [URL] {
+        ["Client", "Stream", "State"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
 
     /// 界面目录 = `Features/` 的直接子目录。
@@ -176,6 +205,78 @@ final class LayeringTests: XCTestCase {
         }
     }
 
+    // MARK: - 断言 5–7：Core 与合约的方向（R18 期1）
+
+    /// 合约目录里不出现 `Client/`、`Stream/`、`State/` 声明的类型。
+    ///
+    /// 只查**代码行**：注释里提到实现层不算违反（spec A1 的边界；结构审查时正是注释让计数虚高，
+    /// 5 处里 4 处是注释）。盲区：字符串里出现同名也算命中 —— 误报方向，接受。
+    func testContractDoesNotReferenceImplementationTypes() throws {
+        let forbidden = try declaredTypes(under: gatewayImplementationDirectories, topLevelOnly: true)
+        XCTAssertFalse(forbidden.isEmpty, "实现层一个类型都没扫到 —— 先怀疑路径推算")
+        let files = swiftFiles(under: contractDirectory)
+        XCTAssertFalse(files.isEmpty, "合约目录一个文件都没扫到：\(contractDirectory.path)")
+
+        var hits = 0
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for type in forbidden where contains(type, in: code) {
+                    hits += 1
+                    XCTFail("Contract/\(file.lastPathComponent):\(line) 出现 \(type)"
+                            + " —— 合约不得依赖会变的实现（R18 B2）")
+                }
+            }
+        }
+        XCTAssertEqual(hits, 0, "合约引用了实现层的类型")
+    }
+
+    /// 合约目录里的字符串字面量不含中文 —— 「用户看得见的句子」不许住在合约里。
+    ///
+    /// 盲区：三引号多行串与转义引号识别不了；行内注释里的引号对会被当成字面量（误报方向）。
+    func testContractHasNoUserFacingStrings() throws {
+        let files = swiftFiles(under: contractDirectory)
+        XCTAssertFalse(files.isEmpty, "合约目录一个文件都没扫到")
+
+        var parsed = 0
+        var hits = 0
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for literal in quotedLiterals(in: code) {
+                    parsed += 1
+                    guard containsHan(literal) else { continue }
+                    hits += 1
+                    XCTFail("Contract/\(file.lastPathComponent):\(line) 的字面量含中文：\(literal)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(parsed, 0, "一个字符串字面量都没解析出来 —— 先怀疑正则")
+        XCTAssertEqual(hits, 0, "合约里出现了面向用户的句子")
+    }
+
+    /// `Core/` 下不引用 `SharedUI/` 声明的类型（呈现层的类型只许被呈现层与更外层看见）。
+    func testCoreDoesNotReferenceSharedUITypes() throws {
+        let forbidden = try declaredTypes(under: [sharedUIDirectory], topLevelOnly: true)
+        XCTAssertFalse(forbidden.isEmpty, "SharedUI 一个类型都没扫到 —— 先怀疑路径推算")
+        let files = swiftFiles(under: sourcesRoot.appendingPathComponent("Core"))
+        XCTAssertFalse(files.isEmpty, "Core 一个文件都没扫到")
+
+        var hits = 0
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for type in forbidden where contains(type, in: code) {
+                    hits += 1
+                    let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                    XCTFail("\(relative):\(line) 出现 \(type)"
+                            + " —— 通信层不得认识呈现层（R18 A1）")
+                }
+            }
+        }
+        XCTAssertEqual(hits, 0, "Core 引用了 SharedUI 的类型")
+    }
+
     // MARK: - 扫描工具
 
     /// 声明名。跳过 `private` / `fileprivate` —— 它们按定义出不了本文件。
@@ -218,5 +319,75 @@ final class LayeringTests: XCTestCase {
             return "\(owner)/\(file)"
         }
         return nil
+    }
+
+    // MARK: - 方向检查用的扫描工具（R18 期1）
+
+    /// 递归收集若干目录下声明的类型名。
+    ///
+    /// `topLevelOnly` 用于方向检查：内层同名类型（`TailnetNode.MeshPath` 与
+    /// `ConnectionBadge.MeshPath`）会互相误报；而跨层引用一个嵌套类型必须写出它的外层名字，
+    /// 外层名字本身就在集合里 —— 所以只取顶层不会漏。
+    private func declaredTypes(under directories: [URL], topLevelOnly: Bool = false) throws -> [String] {
+        var names: [String] = []
+        for directory in directories {
+            for file in swiftFiles(under: directory) {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                names.append(contentsOf: topLevelOnly
+                             ? Self.topLevelTypes(in: text)
+                             : Self.declaredTypes(in: text))
+            }
+        }
+        return names
+    }
+
+    /// 顶格声明的类型名（嵌套类型有前导空白，被排除）。
+    private static func topLevelTypes(in text: String) -> [String] {
+        var names: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard let first = line.first, first != " ", first != "\t" else { continue }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") { continue }
+            let range = NSRange(trimmed.startIndex..., in: trimmed)
+            guard let match = declaration.firstMatch(in: trimmed, options: [], range: range),
+                  let nameRange = Range(match.range(at: 1), in: trimmed)
+            else { continue }
+            names.append(String(trimmed[nameRange]))
+        }
+        return names
+    }
+
+    /// 代码行：跳过整行注释，返回 (行号, 原文)。
+    ///
+    /// 行内注释不剥 —— 要正确剥掉得先认出字符串里的 `//`，那是词法器的活；
+    /// 宁可多报（会有人来看一眼），不可漏报。
+    private func codeLines(in text: String) -> [(Int, String)] {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+            .compactMap { index, line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") {
+                    return nil
+                }
+                return (index + 1, String(line))
+            }
+    }
+
+    private func contains(_ name: String, in text: String) -> Bool {
+        let pattern = "\\b" + NSRegularExpression.escapedPattern(for: name) + "\\b"
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// 单行双引号字面量。盲区：三引号多行串、转义引号。
+    private static let stringLiteral = try! NSRegularExpression(pattern: #""([^"\\]|\\.)*""#)
+
+    private func quotedLiterals(in line: String) -> [String] {
+        let range = NSRange(line.startIndex..., in: line)
+        return Self.stringLiteral.matches(in: line, options: [], range: range)
+            .compactMap { Range($0.range, in: line).map { range in String(line[range]) } }
+    }
+
+    private func containsHan(_ text: String) -> Bool {
+        text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
     }
 }
