@@ -17,7 +17,6 @@
  * 两向都要红：规则改坏（正则退化成永不命中）时样本先红；仓库回潮时 offenders 非空。
  * 只守住前者会漏掉真实的回潮，只守住后者会在扫描器瞎掉时全绿。
  *
- * 跑法：`xcodebuild test -only-testing:DshMobileTests/CommentDisciplineTests`。
  */
 import Foundation
 import XCTest
@@ -215,6 +214,59 @@ final class CommentDisciplineTests: XCTestCase {
     /// 组三：变更史与一次性现场。前者描述已不存在的对象，后者是举证不是判据。
     func testCommentsDescribeThePresentOnly() throws {
         try assertNoOffenders(ruleIds: ["history", "scene-date", "scene-evidence"])
+    }
+
+    /// 组五：不回答「这段为什么这样写」的元信息 —— 测试怎么跑、为什么没放进另一个目录。
+    func testCommentsCarryNoMetaNoise() throws {
+        try assertNoOffenders(ruleIds: ["meta-test-run", "meta-defence"])
+    }
+
+    // MARK: - 头注释的分层
+
+    /// 文件头注释的**首段**不超过 6 行。
+    ///
+    /// 首段回答「这个文件管什么」，读者看它决定要不要往下读；推导与陷阱放后面的段。
+    /// 上个版本的几处头注释把 15 条判据清单、命名口径表、op 对照表全塞在首段，
+    /// 结果谁都没读 —— 这里只钉住「先说什么」这一件事。
+    func testHeadCommentsLeadWithOneShortParagraph() {
+        var offenders: [String] = []
+        for file in swiftFiles() {
+            guard let first = headParagraph(of: file) else { continue }
+            guard first.count > 6 else { continue }
+            let relative = file.path.replacingOccurrences(of: iosRoot.path + "/", with: "")
+            offenders.append("\(relative)  首段 \(first.count) 行")
+        }
+        XCTAssertTrue(offenders.isEmpty, """
+            这些文件头注释的首段太长，读者看不出它管什么：
+            \(offenders.joined(separator: "\n"))
+            """)
+    }
+
+    /// 文件头注释的首段：第一行注释起到第一个空注释行为止的正文。
+    private func headParagraph(of file: URL) -> [String]? {
+        let lines = scannedLines(in: file).map { $0.1 }
+        var started = false
+        var paragraph: [String] = []
+        for line in lines {
+            let stripped = line.trimmingCharacters(in: .whitespaces)
+            let isComment = stripped.hasPrefix("//") || stripped.hasPrefix("/*")
+                || stripped.hasPrefix("*")
+            if !started {
+                guard isComment else { continue }
+                started = true
+            }
+            guard isComment else { break }
+            let body = stripped
+                .replacingOccurrences(of: "/**", with: "")
+                .replacingOccurrences(of: "///", with: "")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "*/ \t"))
+            if body.isEmpty {
+                if !paragraph.isEmpty { break }
+                continue
+            }
+            paragraph.append(body)
+        }
+        return paragraph
     }
 
     // MARK: - 同一条判据只展开一处

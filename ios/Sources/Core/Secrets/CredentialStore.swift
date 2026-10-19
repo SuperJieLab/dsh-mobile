@@ -3,13 +3,12 @@ import Foundation
 /**
  * 三张票在手机侧的家。
  *
- * 设备凭证是关系的本体，要经得起杀 App / 重启（进 App 沙盒）；访问凭证只是 15 分钟的
- * 时间片，丢了就换（只进内存）—— 与「客户端不落盘位置」同一条纪律：时间片不是资产。
+ * 设备凭证是关系的本体，要经得起杀 App / 重启（进 App 沙盒）；访问凭证只是 15 分钟的时间片，
+ * 丢了就换（只进内存）—— 时间片不是资产。
  *
- * 存储位置：`SecretFile`，Application Support/secrets/ 下自管文件，complete 文件保护。
- * 不用 Keychain：跨卸载存活且无法随卸载清除，与「卸载即失效」冲突；不用 UserDefaults：
- * 语义是偏好设置、存凭证名不正言顺。个人设备场景下文件内明文可接受 —— 攻击者能读这个
- * 文件时，同机的 Keychain 也护不住什么。
+ * 存储：`SecretFile`，Application Support/secrets/ 下的自管文件，complete 文件保护。不用
+ * Keychain 是因为它跨卸载存活、与「卸载即失效」冲突；不用 UserDefaults 是因为语义是偏好设置。
+ * 个人设备上文件内明文可接受 —— 攻击者能读这个文件时，同机的 Keychain 也护不住什么。
  *
  * 单例：全 App 只有一个身份。`GatewayClient` 签发与续期，`FollowClient` 升级时读。
  */

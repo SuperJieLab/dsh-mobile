@@ -10,7 +10,6 @@
  *
  * 最后一条是结构检查（规则没有第二份）：两处调用方都只许出现规则调用，不许把判据抄回来。
  *
- * 跑法：`xcodebuild test -only-testing:DshMobileTests/PairingRulesTests`。
  */
 import Foundation
 import XCTest

@@ -1,20 +1,16 @@
 /**
  * 会话详情屏的**说法** —— 状态行那一句、底部告知那一句、重置理由的三种说法。
  *
- * 与 `State/SessionSync.swift` 分家的理由：句子随产品决定变，而「同步到哪一步、失败在哪一步」
- * 随协议与协议交互变。编排只产出 `Status.failed(step:cause:)`，说话归这里。
+ * 与 `State/SessionSync.swift` 分家：句子随产品决定变，「同步到哪一步、失败在哪一步」随
+ * 协议变。编排只产出 `Status.failed(step:cause:)`，说话归这里。
  *
- * 三种来源的句子都在这一个文件里，是因为它们同属一个变化原因（本屏的措辞），
- * 且互相引用（告知的两句都要重置理由的三种说法）。
+ * 三种句子同住一个文件，是因为它们同一个变化原因（本屏的措辞）且互相引用 —— 告知的两句
+ * 都要重置理由的三种说法。
  *
- * 消费者：`SessionDetailView`（状态行与底栏告知）。判定层不引用这里 ——
- * `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 守着方向。
- *
- * ⚠️ **有几组「步 + 原因」目前到不了**：`sending` / `selecting` / `streaming` 上的
- * `transport` 与 `refusal`，以及 `opening` / `paging` / `syncing` 上的 `thrown` ——
- * 那几条路径捕获到的错误一律包成 `.thrown`，协议拒绝走 `.refusal`，镜像只说「没成」走
- * `.transport`。它们仍要写全（switch 得穷尽），但**不构成用户可见的说法**；
- * 将来哪条路径改了，这几支就是现成的。
+ * ⚠️ 有几组「步 + 原因」目前到不了：`sending` / `selecting` / `streaming` 上的 `transport`
+ * 与 `refusal`，以及 `opening` / `paging` / `syncing` 上的 `thrown` —— 那几条路径捕获到的
+ * 错误一律包成 `.thrown`，协议拒绝走 `.refusal`，镜像只说「没成」走 `.transport`。它们仍要
+ * 写全（switch 得穷尽），但不构成用户可见的说法；哪条路径改了，这几支就是现成的。
  */
 import Foundation
 

@@ -1,7 +1,6 @@
 /**
  * SessionMirror 的契约测试（SM1–SM19）与「对不上」告知状态机的测试（SM20–SM22）：
  * 状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
- * 跑法 = `xcodebuild test`（unit test target）。
  */
 import Foundation
 import XCTest

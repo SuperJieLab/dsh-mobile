@@ -4,18 +4,16 @@ import Foundation
  * 订阅流的连接编排 —— `URLSessionWebSocketTask` 上的三件事：
  *
  * 1. **代次**：本地单调计数；每次（重）连接都是新代次，旧代次回调一律丢弃 ——
- * 迟到的旧帧不能污染新代次视图。
- * 2. **退避重连**：base 500ms × 2^n、抖动 50–100%、封顶 10s、
- * 就绪硬超时 45s（取值来由见 `readyTimeout`：网关承诺的打开帧上界 ÷ 实测最慢吞吐）；
- * **重连即重新 open**，新 opening 重建窗口、
- * 不做水位续传。
+ *    迟到的旧帧不能污染新代次视图。
+ * 2. **退避重连**：base 500ms × 2^n、抖动 50–100%、封顶 10s，就绪硬超时 45s（取值来由见
+ *    `readyTimeout`）；**重连即重新 open**，新 opening 重建窗口、不做水位续传。
  * 3. **心跳**：2s ping 一次，但**只在已成流的连接上判死** —— 还没拿到 opening 的那一段归
- * 就绪硬超时管，理由见 `livenessTick`；URLSession 自动回服务端的 ping，这里只管
- * 「对面还活着吗」。
- * 不解释任何帧：解析成 JSON 原样递回调，形状与语义都在 `SessionSync`；协议名与端口全从
+ *    就绪硬超时管，理由见 `livenessTick`；URLSession 自动回服务端的 ping，这里只管
+ *    「对面还活着吗」。
+ *
+ * 不解释任何帧：解析成 JSON 原样递回调，形状与语义在 `SessionSync`。协议名与端口全从
  * `GatewayClient.baseURL` 推导 —— 全 App 只有一个要改的地址。
- */
-@MainActor
+ */@MainActor
 final class FollowClient: NSObject {
 
     /// 连接阶段。`waiting` 携带下一次重连前的毫秒数，界面可以如实显示。

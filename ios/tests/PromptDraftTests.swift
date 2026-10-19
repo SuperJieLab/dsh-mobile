@@ -7,7 +7,6 @@
  * 现在两处读同一个 `PromptDraft.normalized`，且它返回**要发的文本**而不是布尔 ——
  * 「判空」与「取值」因此不可能分家。
  *
- * 跑法：`xcodebuild test -only-testing:DshMobileTests/PromptDraftTests`。
  */
 import Foundation
 import XCTest

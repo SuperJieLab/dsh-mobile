@@ -1,19 +1,16 @@
 /**
  * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
- * 职责边界：这里只做「上游调用 + 结果归类成状态机事件」，不含任何判断逻辑之外的行为；
- * 迁移决策全部在纯状态机 `TailnetNodeState`（断言在
- * tests/MeshNodeStateTests.swift）。注册成功的副产物
- * 是一只走 SOCKS5 回环的 `gatewaySession`，`GatewayClient` 注入它之后流量
- * 全部进 tailnet。
+ * 只做「上游调用 + 结果归类成状态机事件」，迁移决策全部在纯状态机 `TailnetNodeState`。
+ * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession`，`GatewayClient` 注入它之后
+ * 流量全部进 tailnet。
  *
- * 上游形状（libtailscale@59d4bb8，TailscaleNode.swift 实读）：
+ * 上游形状（libtailscale，`TailscaleNode.swift` 实读）：
  * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
  * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册；
- * - `TailscaleError` 没有结构化的 key 错误分支，badKey/unreachable 只能按错误消息归类
- * —— 这里是薄翻译层。
- */
-import Foundation
+ * - `TailscaleError` 没有结构化的 key 错误分支，badKey / unreachable 只能按错误消息归类
+ *   —— 这里是薄翻译层。
+ */import Foundation
 import TailscaleKit
 
 @MainActor

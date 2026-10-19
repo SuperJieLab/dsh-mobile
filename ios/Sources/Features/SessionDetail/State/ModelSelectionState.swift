@@ -1,24 +1,19 @@
 /**
- * 会话内「当前模型」的订阅更新状态机 —— 一台纯状态机。
+ * 会话内「当前模型」的订阅更新状态机 —— 纯值类型，不碰网络、不 import SwiftUI。
  *
- * 不 import SwiftUI / UIKit、不碰网络：输入是 opening 基线、流事件与 select 回包，
- * 输出是当前显示的选择。更新规则是上游投影（`model-selection-projection.js` 的
- * `applyModelSelectionProjection`）的**窗口内简化版**：
+ * 输入是 opening 基线、流事件与 select 回包，输出是当前显示的选择。规则是上游投影的
+ * **窗口内简化版**：
  *
  * - `model/selection` 事件 → 显示该选择（有人换了选择）
  * - `request/header` 事件 → 显示 `data.header.config` 里的模型（本轮实际用的）
  * - 两类事件**后到覆盖先到**：选择没被兑现时如实显示落地值，不装作总成立
  * - 水位纪律与 `UsageState` 同款：**严格高 seq 胜，相等也丢** —— 重放不倒退
  *
- * 简化掉的是上游的 `{lastUsed, pending}` 对账：窗口起点由 opening 基线封口
- * （服务端从全会话投影算好），窗口内的增量客户端有全部输入，无需补全量状态。
- * 上游若给投影加第三种事件，这里不会自动跟上 —— 这个代价已登记在案。
+ * 省掉上游的 `{lastUsed, pending}` 对账：窗口起点由 opening 基线封口（服务端从全会话投影
+ * 算好），窗口内的增量客户端有全部输入。代价是上游若给投影加第三种事件，这里不会自动跟上。
  *
- * generation 守卫照上游客户端的同款纪律（「最后发起的那次选择获胜」）：每次发起
- * `model-select` 递增代号，回包时代号不匹配即丢弃 —— 迟到的旧响应绝不覆盖更新的选择。
- *
- * 与 `SessionMirror` 同一形态：纯值类型，断言在 `tests/ModelProtocolTests.swift`
- * （unit test target，`xcodebuild test`）。
+ * generation 守卫照上游客户端：每次发起 `model-select` 递增代号，回包时代号不匹配即丢弃 ——
+ * 迟到的旧响应绝不覆盖更新的选择。断言在 `tests/ModelProtocolTests.swift`。
  */
 import Foundation
 

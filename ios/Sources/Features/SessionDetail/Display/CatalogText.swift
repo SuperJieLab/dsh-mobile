@@ -1,7 +1,7 @@
 /**
  * 模型目录那三面里的说法 —— 失败那两句、空目录那一句。
  *
- * 与 `State/ModelCatalogState.swift` 分家的理由：句子随产品决定变，三面的映射随协议变。
+ * 变化原因与 `State/ModelCatalogState.swift` 不同：句子随产品决定变，三面的映射随协议变。
  * 判定不引用这里的句子 —— 编排文件里出现用户可见的中文字面量时
  * `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
  */

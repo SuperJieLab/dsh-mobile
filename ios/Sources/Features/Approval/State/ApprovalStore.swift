@@ -1,19 +1,15 @@
 /**
  * 待批审批的宿主：持门面，把判定的输出镜像成可观察属性，并把一次应答的三种结局翻成卡片状态。
  *
- * 判定在 `ApprovalInbox`（纯值类型，不认识客户端）。这里只剩三件事：
+ * 判定在 `ApprovalInbox`，这里只剩三件事：
  * 1) 把 `rebuild` / `receive` 转给判定，再把结果发布出去；
  * 2) 把「去答一个」发出去（幂等判重 + 可应答性检查）；
  * 3) 按结局改卡集合与状态 —— 成功与 `unknown-approval` 都撤卡（后者带说明），传输失败只标
- * 「已发出，结果未知」：断线的写操作是「未知」不是「失败」。
+ *    「已发出，结果未知」：断线的写操作是「未知」不是「失败」。
  *
  * 每次都带客户端生成的 `answerId`（幂等键）：回包丢了重试，服务端回放第一次的结果，
  * 绝不二次投递。
- *
- * 消费者：`SessionSync`（持它，订阅 `objectWillChange` 把刷新冒泡给视图）、`SessionDetailView`
- * （读 `pending` / `states` / `notice`，调 `answer`）、`ApprovalCard`（读 `AnswerState` 类型）。
- */
-import Combine
+ */import Combine
 import Foundation
 
 @MainActor

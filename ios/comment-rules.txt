@@ -44,6 +44,13 @@ rule;history;此前|原为|原先是|旧版|上一版|搬家|搬走|搬进|搬�
 rule;scene-date;真机\s*20\d\d;一次性观测的日期不是判据
 rule;scene-evidence;真机抓到|真机复验|真机产物|第三次真机|收口审查|实施期修正;举证不是判据
 
+# ── 组五：注释里的元信息 ────────────────────────────────────────────────
+# 这两类不回答「这段为什么这样写」，只回答「它在哪、当初怎么决定的」。
+# 跑法在全仓是一条命令，不必每个文件写一遍；分层理由若真要保留，写「变化原因是什么」，
+# 不写「为什么没放进另一个目录」—— 后者是审查时的论证，读者要的是结论。
+rule;meta-test-run;xcodebuild test|only-testing:;测试怎么跑是全仓一条命令，不写进每个文件
+rule;meta-defence;为什么住|分家的理由|住在[^。]*的代价;注释写变化原因，不写「为什么没放进另一个目录」
+
 # ── 组四：同一判据只展开一处 ────────────────────────────────────────────
 # 每组的短语加起来在 `Sources/` 里只允许出现一次。只认原句：换个说法重写抓不到，
 # 那部分靠评审（已知盲区，不假装覆盖）。
@@ -66,6 +73,10 @@ expect-hit;workspace-criterion;七条断言（Q1–Q7）
 expect-hit;workspace-milestone;快照与页面共用（M1）
 expect-hit;workspace-register;代价登记在 ISSUES C26
 expect-hit;workspace-phase-word;期2 用它估两端 offset
+expect-hit;meta-test-run;跑法：xcodebuild test -only-testing:DshMobileTests/LayeringTests
+expect-hit;meta-defence;为什么住 Core/Text/ 而不是某屏的 State/
+expect-pass;meta-test-run;测试在 tests/MarkdownParserTests.swift
+expect-pass;meta-defence;它的变化原因是载体标准
 expect-hit;upstream-line;上游形状（catalog.js:20-27）是对象数组
 expect-hit;history;判定规则与搬家前逐字相同
 expect-hit;scene-date;真机 2026-10-10 二次 launch 会重启 tsnet

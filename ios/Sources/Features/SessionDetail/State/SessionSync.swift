@@ -1,25 +1,20 @@
 import Combine
 import Foundation
 
-/// 一个会话的同步编排：把「取窗口 / 追新增 / 往回翻」三件事接到状态机上。状态机
+/// 一个会话的同步编排：把「取窗口 / 追新增 / 往回翻」接到状态机上。状态机
 /// （`SessionMirror`）只管判定，这里管调用顺序与失败收场，界面只管显示。三处纪律：
 /// - **单飞**：同一会话同时只有一个同步过程（`syncInFlight`）。
 /// - **拉完为止**：追新增时一块装不下就接着要，直到服务端说没有更多。
-/// - **先窗口后增量**：先向服务端要一个最新的窗口，再往后追 —— 这样**不需要跨会话记住任何
-/// 位置**，冷启动、重启、跑了一夜回来行为都一样。
+/// - **先窗口后增量**：先要一个最新窗口，再往后追 —— 于是**不需要跨会话记住任何位置**，
+///   冷启动、重启、跑了一夜回来行为都一样。
 ///
-/// 镜像只在内存里（见 `SessionMirror`）：没有任何位置或内容落盘。用 `ObservableObject`
-/// 而非 `@Observable` 宏 —— 后者要跑进程外的宏插件，本项目的验证环境不允许（**能被本地
-/// 编译验证，比写法新更重要**）。
+/// 镜像只在内存里：没有任何位置或内容落盘。用 `ObservableObject` 而非 `@Observable` 宏 ——
+/// 后者要跑进程外的宏插件，本项目的验证环境不允许（**能被本地编译验证，比写法新更重要**）。
 ///
 /// 它只装两件事：编排本身，以及「把线上形状送成状态机的输入」（`parseBaseline(_:)`、
-/// `refreshView` 的三条投影）—— 后者与调用顺序同源，不构成第二个变化原因。
-/// 窗口与快照不需要转换：状态机直接吃协议类型。
-/// 告知的置位与清除住 `ResyncNoticeState`（同目录），用户看得见的句子住
-/// `Display/SyncText.swift` —— 句子若写回本文件，
-/// `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
-///
-/// 消费者：`SessionDetailView`（整屏与底栏）、`ModelPickerView`（读显示值与发起换模型）。
+/// `refreshView` 的三条投影）—— 后者与调用顺序同源，不构成第二个变化原因。告知的置位与
+/// 清除住 `ResyncNoticeState`，用户看得见的句子住 `Display/SyncText.swift`：句子若写回
+/// 本文件，`LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
 @MainActor
 final class SessionSync: ObservableObject {
 

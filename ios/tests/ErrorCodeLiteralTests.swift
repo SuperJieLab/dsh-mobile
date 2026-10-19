@@ -1,22 +1,20 @@
 /**
  * 协议错误码的取值只许出现在枚举定义处 —— 别处一律取 `.rawValue`。
  *
- * 取值的集合是**闭集**：`GatewayErrorCode` 自己就是导出表，所以这条判据
- * 遍历 `allCases`，不去解析源码猜「协议里有哪些码」。这类判据在本项目有过教训 ——
- * 按语法枚举声明会被写法绕过，问「谁交出了全部取值」才是闭集。
+ * 取值的集合是**闭集**：`GatewayErrorCode` 自己就是导出表，所以这条判据遍历 `allCases`，
+ * 不去解析源码猜「协议里有哪些码」—— 按语法枚举声明会被写法绕过。
  *
- * 扫描面与放行规则：
- * - 扫**整个 `Sources/`**（含 `Contract/`）：取值重写不挑目录，`Contract/` 里同样出现过
- *   `GatewayFailure(code: "internal-error", …)` 这样的兜底拷贝。
- * - 唯一放行的是**枚举的定义行**（`case internalError = "internal-error"`）—— 那是取值的出处，
- *   本来就该出现一次。放行按行的形状判（`case 名字 = "取值"`），不按目录判。
+ * 扫描面与放行：
+ * - 扫**整个 `Sources/`**（含 `Contract/`）：取值重写不挑目录，合约里也出现过
+ *   `code: "internal-error"` 这样的兜底拷贝。
+ * - 唯一放行的是**枚举定义行**（`case internalError = "internal-error"`）—— 那是取值的出处。
+ *   放行按行的形状判，不按目录判。
  * - **不扫 `tests/`**：假件按上游原样写取值，让它引用我们的枚举反而会掩盖上游改动。
- * - 认的是双引号字面量整串相等（`"resync-required"`），不是子串匹配 —— 否则
- *   `"resync-required: …"` 这类拼接文案会被误报成取值重复。
+ * - 认双引号字面量整串相等，不是子串匹配 —— 否则 `"resync-required: …"` 这类拼接文案会被
+ *   误报成取值重复。
+ *
  * 盲区（漏报方向）：三引号多行串、`"resync-" + "required"` 这类拼接认不出；行内注释里出现
  * 整串会误报（把注释挪到上一行即可）。
- *
- * 跑法：`xcodebuild test -only-testing:DshMobileTests/ErrorCodeLiteralTests`。
  */
 import Foundation
 import XCTest

@@ -1,23 +1,22 @@
 /**
- * 会话详情组装器 —— 事件窗口 → 显示节点。
+ * 会话详情组装器 —— 事件窗口 → 显示节点：输入一段事件，输出「这一屏要画什么」。
+ * 不碰网络、UI 与磁盘。
  *
- * 它不碰网络、不碰 UI、不碰磁盘：输入一段事件，输出「这一屏要画什么」。单独拿出来是因为**配对与
- * 分组最容易错**（工具调用跨两条事件、轮次边界要收口悬挂的调用、窗口边界切出半截形态），缠进视图
- * 就没法单独验；分开后断言进 unit test target（`tests/TranscriptAssemblerTests.swift`）。
+ * 单独拿出来是因为**配对与分组最容易错**（工具调用跨两条事件、轮次边界要收口悬挂的调用、
+ * 窗口边界切出半截形态），缠进视图就没法单独验。
  *
- * 事件窗口进来，出去的是**有序**的节点：用户消息、一轮的过程、一轮的最终答案，顺序恒等于
- * 事件顺序 —— 中间的思考块与工具调用不按类型分组，否则交替场景（思考 → 工具 → 思考）会串位。
+ * 出去的是**有序**节点：用户消息、一轮的过程、一轮的最终答案，顺序恒等于事件顺序 ——
+ * 思考块与工具调用不按类型分组，否则交替场景（思考 → 工具 → 思考）会串位。
  *
- * 配对与状态判定照**运行时产物**（`@deepseek-ai/dsh-client-ui-chat`，
- * 经 `~/.npm/_npx/<hash>/node_modules/` 实读），不是照仓库源码 —— 两者在 `isError`
- * 的读法上并不一致，照源码写会判错成败。四条判定：
- * 配对键 `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`；
- * 成败看 `tool/result.data.message.isError`（在 `message` 上，不在 `content[0]`）；
- * 中断 = 所在 step / turn 已关闭而这条 call
- * 一直没有结果；「最终答案」= 该轮最后一个 step 的助手消息，且含真正的回复内容、不含工具调用块。
+ * 四条判定照**运行时产物**实读（`@deepseek-ai/dsh-client-ui-chat` 的 `node_modules` 副本），
+ * 不照仓库源码 —— 两者在 `isError` 的读法上并不一致，照源码写会判错成败：
+ * 配对键 `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`；成败看
+ * `tool/result.data.message.isError`（在 `message` 上，不在 `content[0]`）；中断 = 所在
+ * step / turn 已关闭而这条 call 一直没有结果；「最终答案」= 该轮最后一个 step 的助手消息，
+ * 且含真正的回复内容、不含工具调用块。
  *
- * 上游那套「事件 → 节点」的注册表不复用、也不照搬（它是给可插拔前端的扩展面），只需要它的
- * 语义 —— 那四条判定就是全部。
+ * 上游那套「事件 → 节点」的注册表不复用也不照搬（它是给可插拔前端的扩展面），
+ * 只需要这四条语义。断言在 `tests/TranscriptAssemblerTests.swift`。
  */
 
 import Foundation

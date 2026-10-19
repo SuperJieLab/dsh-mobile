@@ -1,22 +1,22 @@
 import Foundation
 
-/// 与 Mac 侧网关的 **op 门面 + 身份状态机**：每个 op 一个方法，内部经
-/// `GatewayTransport` 发送；身份是这里的状态 —— 401 时用设备凭证**静默续期一次再重试**，
-/// 续期单飞保证并发撞 401 的请求共享同一张新票。
+/// 与 Mac 侧网关的 **op 门面 + 身份状态机**：每个 op 一个方法，内部经 `GatewayTransport`
+/// 发送；身份是这里的状态 —— 401 时用设备凭证**静默续期一次再重试**，续期单飞让并发撞
+/// 401 的请求共享同一张新票。
 ///
-/// 协议的类型与语义都在 `GatewayProtocol.swift`，传输机制在 `GatewayTransport.swift`，
-/// SwiftUI 在这里没有位置。`struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享
-/// 状态**，值语义会在视图间复制出各自为政的凭证；仍 `@MainActor`，因为所有调用方本就在主线程。
+/// 协议类型与语义在 `GatewayProtocol.swift`，传输机制在 `GatewayTransport.swift`。
+/// `struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享状态** —— 值语义会在视图间
+/// 复制出各自为政的凭证；仍 `@MainActor`，因为调用方本就在主线程。
 ///
-/// **命名口径（按副作用分）**：有副作用的写操作读作祈使动词短语（`pair` /
-/// `refreshAccess` / `answerApproval` / `sendPrompt` / `selectModel`）；
-/// 无副作用的读操作读作名词短语、
-/// 与协议 op 同名（`snapshot` / `page` / `modelCatalog`）。**已知例外**：`listSessions` 是读操作
-/// 却用了动词短语 —— 改成 `sessions()` 会与属性读起来相混，故保留并在此登记。
+/// **命名按副作用分**：写操作读作祈使动词短语（`pair` / `refreshAccess` /
+/// `answerApproval` / `sendPrompt` / `selectModel`），读操作读作名词短语、与协议 op 同名
+/// （`snapshot` / `page` / `modelCatalog`）。**已知例外**：`listSessions` 是读操作却用了
+/// 动词短语 —— 改成 `sessions()` 会与属性读起来相混，故保留并在此登记。
 ///
-/// 与 op 的对应：`pair`→`pair` · `refreshAccess`→`refresh` · `listSessions`→`list-sessions` ·
+/// op 对应：`pair`→`pair` · `refreshAccess`→`refresh` · `listSessions`→`list-sessions` ·
 /// `snapshot`→`snapshot` · `page`→`page` · `answerApproval`→`approval-answer` ·
-/// `sendPrompt`→`session-prompt` · `modelCatalog`→`model-catalog` · `selectModel`→`model-select`。
+/// `sendPrompt`→`session-prompt` · `modelCatalog`→`model-catalog` ·
+/// `selectModel`→`model-select`。
 @MainActor
 final class GatewayClient: ObservableObject {
     /// 网关端点 —— **激活前不存在**：App 在节点验证 Running 之前不持有

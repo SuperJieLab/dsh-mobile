@@ -1,24 +1,21 @@
 /**
  * 待批审批的判定：给一串会话事件、三种转发帧与一份对账名单，算出「还挂着哪些」。
  *
- * 纯值类型，不 import SwiftUI、**不认识客户端** —— 构造它不需要网关、不需要界面
- * （`tests/ApprovalReconcileTests.swift` 直接 `ApprovalInbox()`）。事实来源与会话内容同一条：
- * 会话日志 —— `approval/asked` 挂起一个问题，`approval/decided`（无论谁答的、什么结局）收口它。
+ * 纯值类型，不认识客户端：构造它不需要网关、也不需要界面，事实来源与会话内容同一条 ——
+ * `approval/asked` 挂起一个问题，`approval/decided`（无论谁答的、什么结局）收口它。
  * 重建就是「asked 减去 decided」，输入永远是窗口事件，不自持一份真相。
  *
- * **三个入口，一个派生**：`rebuild(from:)` 收整份窗口事件，`absorb(_:)` 收转发帧与对账名单，
+ * **三个入口，一个派生**：`rebuild(from:)` 收窗口事件，`absorb(_:)` 收转发帧与对账名单，
  * `remove(id:)` 记下「这张卡已经有结局」。三者都只改输入，最后由 `reconcile()` 重算 ——
- * `pending` 只在 `reconcile()` 里被赋值。**卡上的寻址键是算出来的，不是补上去的**：只要它还能
- * 被补写，下一次刷新就会把它抹掉 —— `refreshView` 每 16ms 就跑一次 `rebuild`。
+ * `pending` 只在那里被赋值。卡上的寻址键是**算出来的，不是补上去的**：只要它还能被补写，
+ * 下一次刷新就会把它抹掉，而 `refreshView` 每 16ms 就跑一次 `rebuild`。
  *
- * `remove(id:)` 的调用者是宿主：它按应答的结局决定何时移除。本类型不知道「为什么删」，
- * 也不认识应答与结局这些概念 —— 那是编排侧的事。
+ * `remove(id:)` 的调用者是宿主，本类型不知道「为什么删」。七条判定在
+ * `tests/ApprovalReconcileTests.swift` 逐条断言：残骸不建卡、绑定活过重建、收口不复活、
+ * 配对两档、可应答性、名单与帧的先后、已答掉的不抢帧。
  *
- * 七条判定都在 `tests/ApprovalReconcileTests.swift` 逐条断言：崩溃残骸不建卡、绑定活过重建、
- * 收口不复活、配对的两档、可应答性、名单与帧的先后、已答掉的不抢帧。
- *
- * 消费者：`ApprovalStore`（持它、把 `pending` 发布成可观察属性）、`ApprovalCard`（读
- * `PendingApproval` 与它的 `canAnswer`）。
+ * 消费者：`ApprovalStore`（持它、把 `pending` 发布成可观察属性）、`ApprovalCard`
+ * （读 `PendingApproval` 与它的 `canAnswer`）。
  */
 struct ApprovalInbox {
 

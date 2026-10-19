@@ -4,7 +4,6 @@
  * 这四条是「哪些会话该出现在列表里」的唯一常驻判据 —— 规则住在
  * `SessionVisibility`，状态类型与视图都不再自己拼条件。
  *
- * 跑法：`xcodebuild test -only-testing:DshMobileTests/SessionVisibilityTests`。
  */
 import Foundation
 import XCTest

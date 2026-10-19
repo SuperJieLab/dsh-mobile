@@ -5,9 +5,9 @@ import SwiftUI
 ///
 /// ## 流式：解析结果随源文增量演进
 ///
-/// 正文在未定稿通道上逐 chunk 增长（流式输出）。解析结果放在 `@State` 里，**只在视图第一次
-/// 出现时全量解析**（`State(initialValue:)` 在身份不变的重建里被忽略，故父视图重算 body 不会
-/// 重解析）；源文变化走 `MarkdownParser.parse(_:extending:)` —— **冻结块原样搬运、只重解析尾部**。
+/// 正文在未定稿通道上逐 chunk 增长。解析结果放在 `@State` 里，**只在视图第一次出现时全量
+/// 解析**（`State(initialValue:)` 在身份不变的重建里被忽略，父视图重算 body 不会重解析）；
+/// 源文变化走 `MarkdownParser.parse(_:extending:)` —— **冻结块原样搬运、只重解析尾部**。
 /// 块的 `id` 是源偏移，冻结块 id 不变 ⇒ SwiftUI 不重挂载、界面不闪。
 ///
 /// ## 行内交给系统，块级自己画
