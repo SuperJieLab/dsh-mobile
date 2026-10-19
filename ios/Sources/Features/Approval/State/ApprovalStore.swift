@@ -50,9 +50,9 @@ final class ApprovalStore: ObservableObject {
 
     /// 网关审批推送：交给判定吸收，再把卡集合发布出去。
     ///
-    /// 清状态行的时机是照旧码抄的，**不是统一收口**：`cancel` 只清「按 `eventId` 记的那一行」
-    /// （审计卡的状态行要留到下次重算才过滤 —— 重新建出来的卡仍显示「结果未知」；
-    /// 提前清掉会让它退回两个按钮）；`sync` 之后才做整体过滤；`request` 不清理。
+    /// 清状态行的时机照旧：`cancel` 只清「按 `eventId` 记的那一行」（独立帧卡的那一行）；
+    /// 审计卡的行留到下一次重算，由 `pruneStates` 过滤 —— 那时卡已经不在集合里了。
+    /// `sync` 之后才做整体过滤；`request` 不清理。
     func receive(_ payload: JSONValue) {
         inbox.absorb(payload)
         pending = inbox.pending
@@ -66,12 +66,17 @@ final class ApprovalStore: ObservableObject {
         }
     }
 
+    /// 不能应答时给用户的一句话。卡上显示它、应答的兜底也读它 —— 同一件事只写一处。
+    static let notForwardedNote = "这条审批还没有经由网关转发到手机 —— "
+        + "请在 Mac 上处理，或稍候重进会话。"
+
     /// 应答一条待批审批。寻址键 = 绑定到的 waterfall `eventId`；还没绑上的卡片
     /// （重建出的、转发帧未到）不能应答 —— 而不是把审计 id 冒充线上键。
     func answer(_ approval: ApprovalInbox.PendingApproval, allow: Bool) async {
         guard states[approval.id] == nil || states[approval.id] == .idle else { return }
-        guard let eventId = approval.eventId else {
-            notice = "这条审批还没有经由网关转发到手机 —— 请在 Mac 上处理，或稍候重进会话。"
+        // `canAnswer` 是卡与宿主共用的唯一规则；这里仍留守卫，兜住「渲染后、点击前」帧被撤的竞态。
+        guard approval.canAnswer, let eventId = approval.eventId else {
+            notice = Self.notForwardedNote
             return
         }
         do {
