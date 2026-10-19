@@ -18,8 +18,6 @@ enum GatewayErrorCode: String {
     case invalidRequest = "invalid-request"
     case sessionModelUnavailable = "session/model-unavailable"
     case windowTooLarge = "window-too-large"
-
-
 }
 
 /// 失败信封里的 `error` 对象。
@@ -437,4 +435,3 @@ struct SessionPage {
     let hasOlder: Bool
     let events: [SessionEvent]
 }
-

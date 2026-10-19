@@ -1,7 +1,7 @@
 import Foundation
 
 /// 对 Mac 网关的**纯传输层**：拼请求、发一次 `POST /rpc`、按 HTTP 状态与信封判成败、
-/// 把 URLError 翻成人话。
+/// 把 URLError 原样带在错误里（翻成人话在 `Display/FailureText.swift`）。
 ///
 /// 切分判据 = 「改了要不要升协议版本」：这里的代码不碰协议语义 ——
 /// 消息结构在 `GatewayProtocol.swift`，身份状态机（pair / 续期单飞 / `isPaired`）留在

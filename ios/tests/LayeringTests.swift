@@ -1,25 +1,27 @@
 /**
  * 分层形状与依赖方向的常驻断言。
  *
- * 出处：`RULES.md` §八 结构 5（依赖方向单向）、结构 6（同类界面分层同构）与 §八.1 的
- * 「目录名只给一个承诺」。视图层与目录边界都没有单测，形状本身只能靠这几条守 ——
+ * 出处：`RULES.md` §八 结构 5（依赖方向单向）、结构 6（同类界面分层同构）与结构 9 的
+ * 「目录名不能同时给出两个承诺」。视图层与目录边界都没有单测，形状本身只能靠这几条守 ——
  * 它们替代「收口时人工过一遍」。
  *
- * 七条：
+ * 九条：
  * 1. 每个界面目录同时有 `State/` 与 `Views/`，且 `State/` 下至少一个 `.swift`；
  * 2. `State/` 下的文件不 import SwiftUI / UIKit；
  * 3. 界面 `Views/` 下声明的类型不得被别的界面当零件用（界面根视图与登记例外除外）；
  * 4. 例外清单本身是真的（仍在某处声明、仍被别的界面引用），免得豁免悄悄扩大。
  * 5. 合约目录不出现 `Client/`、`Stream/`、`State/` 声明的类型（R18 B2）；
- * 6. 合约目录的字符串字面量不含中文（R18 B1）；
- * 7. `Core/` 不出现 `SharedUI/` 声明的类型（R18 A1）。
+ * 6. 合约目录里含中文的行必须是注释行（R18 B1）；
+ * 7. 合约目录的代码行不出现显示口径的符号名（R18 B1）；
+ * 8. `Display/` 不出现 `Client/`、`Stream/`、`State/` 声明的类型；
+ * 9. `Core/` 不出现 `SharedUI/` 声明的类型（R18 A1）。
  *
  * 扫的是文本，不是语法树。已知盲区：
  * - 不认 `typealias`（漏报方向）；
  * - 方向检查只取**顶层**类型名（内层同名会互相误报；跨层引用嵌套类型必须写出外层名字，
  *   所以不漏）；嵌套声明在界面检查里仍会被扫到（宁可误报）；
  * - 只跳过整行注释，行内注释与字符串里出现同名标识符也算引用（误报方向）；
- * - 中文字面量检查认不了三引号多行串与转义引号（误报方向）。
+ * - 中文检查按行判：代码行尾的行内注释会被误报；显示口径的符号名单是手维护的。
  *
  * 误报会有人来看一眼，漏报不会 —— 所以宁可多报。
  *
@@ -231,28 +233,78 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, 0, "合约引用了实现层的类型")
     }
 
-    /// 合约目录里的字符串字面量不含中文 —— 「用户看得见的句子」不许住在合约里。
+    /// 合约里的中文只能出现在注释里 —— 「用户看得见的句子」不许住在合约里。
     ///
-    /// 盲区：三引号多行串与转义引号识别不了；行内注释里的引号对会被当成字面量（误报方向）。
+    /// 判据形态是「含中文的行必须是注释行」，不是「字面量里不许有中文」：后者要认出三引号
+    /// 多行串，而搬走的三段最长文案正是 `"""` 包着的 —— 单行引号正则对它们假绿（复审实测：
+    /// 把 `explain` 原样搬回合约，旧判据仍然 parsed 2 / hits 0）。
+    /// 盲区：代码行尾的行内注释会被误报 —— 遇到就把注释挪到上一行。
     func testContractHasNoUserFacingStrings() throws {
         let files = swiftFiles(under: contractDirectory)
         XCTAssertFalse(files.isEmpty, "合约目录一个文件都没扫到")
 
-        var parsed = 0
+        var commentLines = 0
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, source) in allLines(in: text) where containsHan(source) {
+                let trimmed = source.trimmingCharacters(in: .whitespaces)
+                let isComment = trimmed.hasPrefix("//") || trimmed.hasPrefix("*")
+                    || trimmed.hasPrefix("/*")
+                if isComment {
+                    commentLines += 1
+                    continue
+                }
+                XCTFail("Contract/\(file.lastPathComponent):\(line) 的中文不在注释里：\(trimmed)")
+            }
+        }
+        XCTAssertGreaterThan(commentLines, 0, "合约里连中文注释都没有 —— 先怀疑路径或读取")
+    }
+
+    /// 合约的代码行里不出现显示口径的符号名 —— 「中文只在注释里」挡不住没有中文字面的规则
+    /// （`displayMessage` 的 `"text"`、`relativeTime` 的 `zh_Hans_CN`）。
+    ///
+    /// 名单是手维护的：新增显示口径的符号时加一行；或者干脆放在 `Display/` —— 那样天然不会被拦。
+    private static let displayVocabulary = [
+        "explanation", "readableDescription", "displayMessage", "relativeTime", "DisplayMessage",
+    ]
+
+    func testContractHasNoDisplayVocabulary() throws {
+        let files = swiftFiles(under: contractDirectory)
+        XCTAssertFalse(files.isEmpty, "合约目录一个文件都没扫到")
+
         var hits = 0
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
             for (line, code) in codeLines(in: text) {
-                for literal in quotedLiterals(in: code) {
-                    parsed += 1
-                    guard containsHan(literal) else { continue }
+                for name in Self.displayVocabulary where contains(name, in: code) {
                     hits += 1
-                    XCTFail("Contract/\(file.lastPathComponent):\(line) 的字面量含中文：\(literal)")
+                    XCTFail("Contract/\(file.lastPathComponent):\(line) 出现 \(name)"
+                            + " —— 显示口径应住 Display/（R18 B1）")
                 }
             }
         }
-        XCTAssertGreaterThan(parsed, 0, "一个字符串字面量都没解析出来 —— 先怀疑正则")
-        XCTAssertEqual(hits, 0, "合约里出现了面向用户的句子")
+        XCTAssertEqual(hits, 0, "合约里出现了显示口径的符号")
+    }
+
+    /// `Display/` 不引用实现层的类型 —— 它要能被状态层与视图复用的前提。
+    func testDisplayDoesNotReferenceImplementationTypes() throws {
+        let forbidden = try declaredTypes(under: gatewayImplementationDirectories, topLevelOnly: true)
+        XCTAssertFalse(forbidden.isEmpty, "实现层一个类型都没扫到")
+        let files = swiftFiles(under: sourcesRoot.appendingPathComponent("Core/Gateway/Display"))
+        XCTAssertFalse(files.isEmpty, "Display 一个文件都没扫到")
+
+        var hits = 0
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for type in forbidden where contains(type, in: code) {
+                    hits += 1
+                    XCTFail("Display/\(file.lastPathComponent):\(line) 出现 \(type)"
+                            + " —— 显示层不得反向依赖通信细节（R18 期1 决定 2）")
+                }
+            }
+        }
+        XCTAssertEqual(hits, 0, "Display 引用了实现层的类型")
     }
 
     /// `Core/` 下不引用 `SharedUI/` 声明的类型（呈现层的类型只许被呈现层与更外层看见）。
@@ -355,6 +407,13 @@ final class LayeringTests: XCTestCase {
             names.append(String(trimmed[nameRange]))
         }
         return names
+    }
+
+    /// 全部行（含注释），返回 (行号, 原文)。
+    private func allLines(in text: String) -> [(Int, String)] {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+            .map { ($0.offset + 1, String($0.element)) }
     }
 
     /// 代码行：跳过整行注释，返回 (行号, 原文)。
