@@ -35,7 +35,7 @@ final class TailnetNode: ObservableObject {
 
     /// 当前到网关对端的路径：Running 期间轮询刷新，其余状态为 nil。
     /// 展示层的唯一数据源 —— `ConnectionBadge` 只吃这个值，不感知本类型。
-    @Published private(set) var meshPath: MeshPath?
+    @Published private(set) var meshPath: CarrierPath?
 
     /// 节点验证 Running、tailnet session 建成的那一刻（App 据此把传输切进虚拟网）。
     /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调。
@@ -47,14 +47,6 @@ final class TailnetNode: ObservableObject {
 
     private var node: TailscaleNode?
     private var pathPollTask: Task<Void, Never>?
-
-    /// 到对端的连接方式。
-    enum MeshPath: Equatable {
-        /// 打洞成功，点对点直达。
-        case direct
-        /// 打洞失败，密文经 DERP 中继接力。
-        case relay
-    }
 
     // MARK: - 接入 key（App 沙盒而非 Keychain：Keychain 跨卸载存活且无法随卸载清除，
     // 与「卸载即失效」冲突；沙盒随卸载蒸发）
@@ -166,14 +158,14 @@ final class TailnetNode: ObservableObject {
 
     /// 读 tsnet status 的对端路径：对端带 `CurAddr` 即直连，只落在 `Relay` 上即中继。
     /// 读不出（挂起中、status 暂不可用）返回 nil —— 展示层对 nil 就不显示。
-    private func pathKind() async -> MeshPath? {
+    private func pathKind() async -> CarrierPath? {
         guard let node else { return nil }
         let data: Data
         do { data = try await node.statusJSON() } catch { return nil }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         // 字段名跟 tailscale status --json 走（Peer / CurAddr / Relay）；两代键名都认。
         let peers = (root["Peer"] as? [String: Any]) ?? (root["Peers"] as? [String: Any]) ?? [:]
-        var relayed: MeshPath?
+        var relayed: CarrierPath?
         for case let peer as [String: Any] in peers.values {
             let curAddr = peer["CurAddr"] as? String ?? ""
             if !curAddr.isEmpty { return .direct }

@@ -412,8 +412,9 @@ struct ModelSelectResponse: GatewayResponse {
 
 // MARK: - 快照结果
 
-/// 一次快照的结果。
-struct SessionSnapshot {
+/// 一次快照的结果。`Equatable` 是状态机的需要（`Outcome` 要能比较）—— 它此前是为了让
+/// 状态机自己那份同形类型可比较而加到那份上的（R19 把这个需求挪到了这里）。
+struct SessionSnapshot: Equatable {
     /// 本次覆盖到的位置（不含）—— 回传它就能拿到「空增量」，是水位不变式的用法。
     let asOfSeq: Int
     /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限。
@@ -429,7 +430,7 @@ struct SessionSnapshot {
 /// 一段往回读的窗口。与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口
 /// 从某个位置往回走。打开会话用后者取最近一段，之后用前者追新增 —— 客户端**不需要跨会话记住
 /// 任何位置**，冷启动永远从「现在的最新一段」开始。
-struct SessionPage {
+struct SessionPage: Equatable {
     /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
     let pageStart: Int
     /// 窗口末尾（不含）。与 `SessionSnapshot.asOfSeq` 同义。

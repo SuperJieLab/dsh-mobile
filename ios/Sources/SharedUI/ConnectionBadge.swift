@@ -20,18 +20,16 @@ struct ConnectionBadge: View {
     }
 
     /// 到网关对端的连接方式：running 时显示一行「直连 / 经中继」。
-    /// 值由调用方从节点层取好传入 —— 本组件不感知 `TailnetNode` 类型（保持零耦合，
-    /// 与状态机同理由：测试面同样只到协议层）。
-    enum MeshPath {
-        case direct
-        case relay
-    }
-
+    ///
+    /// 取值类型用连接域的 `CarrierPath`，不在这里另声明一份 —— 同值同义的两个枚举只能靠
+    /// 手写映射相连，而那类映射（`x == .direct ? .direct : .relay`）加第三个取值时会静默
+    /// 归到 else（R19）。本组件本来就在认识 Core 的类型（下面的 `Status.init(followPhase:)`
+    /// 吃 `FollowClient.Phase`），所以这里不是新增耦合。
     let state: Status
-    var meshPath: MeshPath? = nil
+    var meshPath: CarrierPath? = nil
 
     /// 合成的逐成员初始化器会带上私有的 `@State` 而不可见，显式给一个。
-    init(state: Status, meshPath: MeshPath? = nil) {
+    init(state: Status, meshPath: CarrierPath? = nil) {
         self.state = state
         self.meshPath = meshPath
     }
@@ -49,10 +47,10 @@ struct ConnectionBadge: View {
             // 组网路径一行：独立于断连指示器 —— 已入网时它常在，
             // 断连语义仍由上面的防闪烁窗口管。
             if let meshPath {
-                Label(meshPath == .direct ? "直连" : "经中继",
-                      systemImage: meshPath == .direct ? "arrow.left.arrow.right" : "personalhotspot")
+                let look = Self.look(of: meshPath)
+                Label(look.text, systemImage: look.icon)
                     .font(.caption2)
-                    .foregroundStyle(meshPath == .relay ? Color.orange : Color.secondary)
+                    .foregroundStyle(look.tint)
             }
             Group {
                 if let shown {
@@ -131,14 +129,20 @@ extension ConnectionBadge.Status {
     }
 }
 
-// MARK: - 从连接域取值
+// MARK: - 组网路径那一行的显示
 
-extension ConnectionBadge.MeshPath {
-    /// 从连接域的路径取连接方式。
+extension ConnectionBadge {
+
+    /// 连接方式的三件套：文案、图标、颜色。
     ///
-    /// 适配写在**呈现层**：方向只向下（呈现 → 通信）。反过来（通信为呈现写 init）会让
-    /// 通信层认识呈现层 —— `LayeringTests` 的 `testCoreDoesNotReferenceSharedUITypes` 会红。
-    init(_ path: CarrierPath) {
-        self = path == .direct ? .direct : .relay
+    /// `switch` 逐个列举，**不用 `default`**：`CarrierPath` 加第三个取值时这里编译失败，
+    /// 而不是静默落到 else（三元写法正是那样吞掉新取值的）。
+    static func look(of path: CarrierPath) -> (text: String, icon: String, tint: Color) {
+        switch path {
+        case .direct:
+            return ("直连", "arrow.left.arrow.right", Color.secondary)
+        case .relay:
+            return ("经中继", "personalhotspot", Color.orange)
+        }
     }
 }

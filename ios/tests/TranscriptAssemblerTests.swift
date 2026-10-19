@@ -328,9 +328,10 @@ final class TranscriptAssemblerTests: XCTestCase {
 
     /// 一页：末尾接在 `endSeq` 上 —— 服务端的响应形状（`pageStart` 本页首条、
     /// `asOfSeq` 本页末尾之后）。
-    private func page(_ events: [SessionEvent], from startSeq: Int, to endSeq: Int, hasOlder: Bool) -> Window {
+    private func page(_ events: [SessionEvent], from startSeq: Int, to endSeq: Int,
+                      hasOlder: Bool) -> SessionPage {
         let slice = events.filter { $0.seq >= startSeq && $0.seq < endSeq }
-        return Window(
+        return SessionPage(
             pageStart: slice.first?.seq ?? 0,
             asOfSeq: endSeq,
             hasOlder: hasOlder,

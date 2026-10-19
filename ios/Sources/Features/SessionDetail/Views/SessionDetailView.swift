@@ -197,7 +197,7 @@ struct SessionDetailView: View {
 
                     // 连接态指示器：订阅流断开时如实说「已断开」，旧内容照常可读。
                     ConnectionBadge(state: ConnectionBadge.Status(followPhase: sync.connectionPhase),
-                                    meshPath: store.meshPath.map(ConnectionBadge.MeshPath.init))
+                                    meshPath: store.meshPath)
                         .padding(.vertical, 4)
                 }
                 .background(.bar)

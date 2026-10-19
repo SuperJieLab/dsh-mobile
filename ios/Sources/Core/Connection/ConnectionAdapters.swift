@@ -10,11 +10,9 @@ extension GatewayClient: GatewayActivating {}
 extension TailnetNode: MeshNodeControlling {
     var nodeState: TailnetNodeState { state }
 
-    /// 节点层的 `MeshPath` 适配到域内类型。徽章那一侧的对应关系写在它自己的文件里
-    /// （呈现层为通信层的类型写适配）；两份枚举的合一是 R19 的范围。
-    var carrierPath: CarrierPath? {
-        meshPath.map { $0 == .direct ? .direct : .relay }
-    }
+    /// 节点层的连接方式原样交给连接域 —— 两边用的是同一个类型（R19：取值只声明一次，
+    /// 住被依赖的一方 `CarrierPath`），这里没有映射可做。
+    var carrierPath: CarrierPath? { meshPath }
 
     func launchNode(config: MeshConfig) async {
         await launch(config: config)

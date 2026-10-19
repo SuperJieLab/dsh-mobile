@@ -20,13 +20,15 @@ final class SessionMirrorTests: XCTestCase {
     )
   }
 
-  /** 一段往回读的窗口。 */
-  private func window(_ pageStart: Int, _ asOfSeq: Int, _ events: [SessionEvent], hasOlder: Bool = false) -> Window {
-    Window(pageStart: pageStart, asOfSeq: asOfSeq, hasOlder: hasOlder, events: events)
+  /** 一段往回读的窗口 —— 协议形状，状态机直接吃它（R19 A1）。 */
+  private func window(_ pageStart: Int, _ asOfSeq: Int, _ events: [SessionEvent],
+                      hasOlder: Bool = false) -> SessionPage {
+    SessionPage(pageStart: pageStart, asOfSeq: asOfSeq, hasOlder: hasOlder, events: events)
   }
 
-  private func snapshot(_ asOfSeq: Int, _ events: [SessionEvent], hasMore: Bool = false) -> Outcome {
-    .received(Snapshot(asOfSeq: asOfSeq, hasMore: hasMore, events: events))
+  private func snapshot(_ asOfSeq: Int, _ events: [SessionEvent],
+                        hasMore: Bool = false) -> Outcome {
+    .received(SessionSnapshot(asOfSeq: asOfSeq, hasMore: hasMore, events: events))
   }
 
   func testContract() {

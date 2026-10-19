@@ -5,7 +5,7 @@
  * 「目录名不能同时给出两个承诺」。视图层与目录边界都没有单测，形状本身只能靠这几条守 ——
  * 它们替代「收口时人工过一遍」。
  *
- * 十二条：
+ * 十五条：
  * 1. 每个界面目录同时有 `State/` 与 `Views/`，且 `State/` 下至少一个 `.swift`；
  * 2. `State/` 下的文件不 import SwiftUI / UIKit；
  * 3. 界面 `Views/` 下声明的类型不得被别的界面当零件用（界面根视图与登记例外除外）；
@@ -17,7 +17,10 @@
  * 9. `Core/` 不出现 `SharedUI/` 声明的类型（R18 A1）；
  * 10. 界面 `Views/` 里不把 `await` 的结果赋给自己（R18 期2 C1：取数归判定层）；
  * 11. 会话详情的编排文件里不出现中文字符串字面量（R18 期2 D1：句子归 `Display/`）；
- * 12. 任何 `Display/` 都不 import SwiftUI / UIKit（R18 期2：说法不漂成第二个 Views）。
+ * 12. 任何 `Display/` 都不 import SwiftUI / UIKit（R18 期2：说法不漂成第二个 Views）；
+ * 13. 「直连 / 中继」的取值只在连接域声明一次（R19 A1：共用形状住被依赖的一方）；
+ * 14. 状态机不另声明窗口 / 快照的形状，直接用协议类型（R19 A1）；
+ * 15. 编排里不再逐字段构造窗口（R19 A2）。
  *
  * 扫的是文本，不是语法树。已知盲区：
  * - 不认 `typealias`（漏报方向）；
@@ -466,6 +469,73 @@ final class LayeringTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(checked, 0, "一个 Display 文件都没扫到")
+    }
+
+    // MARK: - 断言 13–15：共用形状只有一份（R19）
+
+    /// 「直连 / 中继」的**声明**只在连接域出现一次。
+    ///
+    /// 认的是声明行（`case direct` / `case .direct` 不算 —— 后者是使用）。三份枚举并存时
+    /// 全仓 3 处，合并后 1 处（`CarrierPath`）。
+    ///
+    /// 盲区（漏报方向）：`case direct, relay` 这种一行两个取值的写法只算一次命中 ——
+    /// 那仍然是「一处声明」，判据的语义不因此失效。
+    func testConnectionPathIsDeclaredOnce() throws {
+        let files = swiftFiles(under: sourcesRoot)
+        XCTAssertGreaterThan(files.count, 40, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
+
+        var declarations: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) where contains("direct", in: code) {
+                let trimmed = code.trimmingCharacters(in: .whitespaces)
+                // 只认声明行：`case direct` 是声明，`case .direct` 是使用。
+                guard trimmed.hasPrefix("case "), !trimmed.hasPrefix("case .") else { continue }
+                let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                declarations.append("\(relative):\(line)")
+            }
+        }
+        XCTAssertEqual(declarations.count, 1,
+                       "「直连 / 中继」应只声明一次，实际：\(declarations)")
+    }
+
+    /// 状态机不另声明窗口 / 快照的形状 —— 它引用 `SessionPage` / `SessionSnapshot`。
+    ///
+    /// 判据两头都要查：既不许自己声明（重复的源头），又必须真的在用协议类型
+    /// （否则「声明删了但也没接上」会假绿）。
+    func testMirrorUsesProtocolShapes() throws {
+        let mirror = sourcesRoot.appendingPathComponent("Core/Gateway/State/SessionMirror.swift")
+        let text = try String(contentsOf: mirror, encoding: .utf8)
+        XCTAssertTrue(text.contains("struct SessionMirror"), "读到的不是状态机 —— 先怀疑路径推算")
+
+        for shape in ["Snapshot", "Window"] {
+            for (line, code) in codeLines(in: text)
+            where code.contains("\(shape):") || code.contains("\(shape) {") {
+                let trimmed = code.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("struct \(shape)") || trimmed.hasPrefix("enum \(shape)") {
+                    XCTFail("SessionMirror.swift:\(line) 又声明了 \(shape)"
+                            + " —— 用协议里的同名类型（R19 A1）")
+                }
+            }
+        }
+        XCTAssertTrue(text.contains("SessionPage") && text.contains("SessionSnapshot"),
+                      "状态机没有引用协议类型 —— 形状可能只是被删了，没有接上")
+    }
+
+    /// 编排里不再逐字段构造窗口 —— 那次构造本身就是「同一形状两份」的症状。
+    func testNoFieldByFieldWindowCopy() throws {
+        let files = swiftFiles(under: sourcesRoot)
+        var hits = 0
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) where contains("Window", in: code) {
+                guard code.contains("Window(") else { continue }
+                hits += 1
+                let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                XCTFail("\(relative):\(line) 还在构造 Window —— 直接用 SessionPage（R19 A2）")
+            }
+        }
+        XCTAssertEqual(hits, 0, "还有逐字段搬运的窗口构造")
     }
 
     // MARK: - 扫描工具

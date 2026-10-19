@@ -2,8 +2,8 @@
  * 订阅流下的镜像重放（C3）与退避曲线（C1 可测部分）。
  *
  * ## C3（M2 §5.2）
- * 订阅流的形状：opening 即 `page` 的窗口（`Window`），一条事件帧即一次覆盖到
- * `seq + 1` 的快照（`Snapshot`）。不碰 `SessionSync`、不碰网络，按投喂顺序重放 ——
+ * 订阅流的形状：opening 即 `page` 的窗口（`SessionPage`），一条事件帧即一次覆盖到
+ * `seq + 1` 的快照（`SessionSnapshot`）。不碰 `SessionSync`、不碰网络，按投喂顺序重放 ——
  * M1 那台状态机若为 WebSocket 改任何一行，这里先红。
  *
  * ## C1 的可测部分
@@ -34,7 +34,7 @@ final class FollowReplayTests: XCTestCase {
 
         // ① opening：50 条的尾窗（此处缩成 3 条示意），就是一次 `page` 的形状。
         let openingEvents = [event(2), event(3), event(4)]
-        let opening = Window(pageStart: 2, asOfSeq: 5, hasOlder: true, events: openingEvents)
+        let opening = SessionPage(pageStart: 2, asOfSeq: 5, hasOlder: true, events: openingEvents)
         XCTAssertTrue({
             if case .merged = mirror.open(with: opening) { return true }
             return false
@@ -42,15 +42,15 @@ final class FollowReplayTests: XCTestCase {
         XCTAssertTrue(mirror.cursor == 5 && mirror.pageStart == 2 && mirror.hasOlder, "C3-2 水位与窗口起点由 opening 钉住")
 
         // ② 事件帧：一条 = 一次覆盖到 seq+1 的快照。重复投递也被幂等吸收。
-        let first = mirror.apply(.received(Snapshot(asOfSeq: 6, hasMore: false, events: [event(5)])))
+        let first = mirror.apply(.received(SessionSnapshot(asOfSeq: 6, hasMore: false, events: [event(5)])))
         XCTAssertTrue({
             if case .merged(let added) = first { return added == 1 }
             return false
         }(), "C3-3 事件帧按快照语义追加")
         XCTAssertTrue(mirror.cursor == 6, "C3-4 游标推进到 seq+1")
 
-        _ = mirror.apply(.received(Snapshot(asOfSeq: 7, hasMore: false, events: [event(6)])))
-        let replayed = mirror.apply(.received(Snapshot(asOfSeq: 7, hasMore: false, events: [event(6)])))
+        _ = mirror.apply(.received(SessionSnapshot(asOfSeq: 7, hasMore: false, events: [event(6)])))
+        let replayed = mirror.apply(.received(SessionSnapshot(asOfSeq: 7, hasMore: false, events: [event(6)])))
         XCTAssertTrue({
             if case .caughtUp = replayed { return true }
             return false
@@ -59,7 +59,7 @@ final class FollowReplayTests: XCTestCase {
         // ③ 断线 → 重新 open：新 opening **替换**窗口（不做水位续传）；
         // 断线期间服务端发生了 7..10 的事件，新 opening 覆盖 4..11。
         let rebuildEvents = [event(4), event(5), event(6), event(7), event(8), event(9), event(10)]
-        let rebuilt = Window(pageStart: 4, asOfSeq: 11, hasOlder: true, events: rebuildEvents)
+        let rebuilt = SessionPage(pageStart: 4, asOfSeq: 11, hasOlder: true, events: rebuildEvents)
         XCTAssertTrue({
             if case .merged = mirror.open(with: rebuilt) { return true }
             return false

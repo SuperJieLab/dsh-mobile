@@ -17,34 +17,17 @@
  * 换来的是**不存在**「磁盘那份已过期却看起来和完整的一样」的
  * 状态 —— 这类状态客户端自己识破不了，比多取一次窗口危险。
  * 事件类型直接用协议层的 `SessionEvent`，不自造「镜像事件」：要判的只是 `seq`，渲染的是同一批事件，
- * 隔一层映射就得
- * 在两个方向上各写一次转换。上游等价语义（`RemoteJournalStream` 的丢重复、拒缺口、
- * 钉 cut）是 TypeScript，代码用
+ * 隔一层映射就得在两个方向上各写一次转换。**窗口与快照同理**（R19）：它们直接用
+ * `SessionPage` / `SessionSnapshot`，不再各声明一份 —— 那两份曾靠三处逐字段搬运连接，
+ * 给协议加一个字段要在三处各改一遍，而漏改的信号是零。状态机因此看得见 `hasMore` 与 `model`
+ * 这两个它不读的字段：**看得见但不进判定**，比再拆一份「刚好够用」的类型便宜。
+ *
+ * 上游等价语义（`RemoteJournalStream` 的丢重复、拒缺口、钉 cut）是 TypeScript，代码用
  * 不了 —— 照语义重写最小的一段；文件能被 iOS target 编译，
  * 断言在 `tests/SessionMirrorTests.swift`（unit test target）。
  * 出处：M1 §3.3.2 决定 2 / 决定 9；
  * 契约见 dev/contract/protocol.md。
  */
-
-/// 一次 `snapshot` 成功响应的内容。
-struct Snapshot: Equatable {
-  /// 本次回应覆盖到的位置（不含）—— 即回传它作下一次的 `since`。
-  let asOfSeq: Int
-  /// 服务端是否还有没给完的事件。
-  let hasMore: Bool
-  let events: [SessionEvent]
-}
-
-/// 一段往回读的窗口。
-struct Window: Equatable {
-  /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
-  let pageStart: Int
-  /// 窗口末尾（不含）。
-  let asOfSeq: Int
-  /// 窗口之前还有事件吗。
-  let hasOlder: Bool
-  let events: [SessionEvent]
-}
 
 /// 一次被拒绝的响应。
 struct Refusal: Equatable {
@@ -55,7 +38,7 @@ struct Refusal: Equatable {
 /// 一次请求的三种结局。做成枚举而不是可选值，是因为「没有响应」和「被拒绝」
 /// 对视图的影响不同：前者什么都不能改，后者可能要重置。
 enum Outcome: Equatable {
-  case received(Snapshot)
+  case received(SessionSnapshot)
   case refused(Refusal)
   /// 传输层失败：连接断了、超时、进程被杀 —— 没有任何服务端结论。
   case transportFailed
@@ -131,7 +114,7 @@ struct SessionMirror {
   /// 都以服务端此刻给的窗口为准，所以共用一条路径。
   /// - Parameter window: `page` 的响应，不带 `beforeSeq` 的那一种。
   /// - Returns: 本次的判定。
-  mutating func open(with window: Window) -> Verdict {
+  mutating func open(with window: SessionPage) -> Verdict {
     inFlight = false
 
     if let first = window.events.first, first.seq != window.pageStart {
@@ -164,7 +147,7 @@ struct SessionMirror {
   ///
   /// - Parameter window: opening 帧给出的窗口（与 `page` 回包同形）。
   /// - Returns: 本次的判定。`merged(added:)` 的 `added` 是**净增**条数，不是窗口长度。
-  mutating func realign(with window: Window) -> Verdict {
+  mutating func realign(with window: SessionPage) -> Verdict {
     inFlight = false
 
     // 新窗口自己的边界要与内容自洽 —— 与 `open` 同一条校验，合并前先过。
@@ -200,7 +183,7 @@ struct SessionMirror {
   /// 往回翻：把更早的一段**前插**。`cursor` 不动 —— 往回翻改的是视图起点，不是末尾。
   /// - Parameter window: `page` 的响应，带 `beforeSeq` 的那一种。
   /// - Returns: 本次的判定。
-  mutating func prepend(_ window: Window) -> Verdict {
+  mutating func prepend(_ window: SessionPage) -> Verdict {
     inFlight = false
 
     // 只接受**紧邻**的一段：它的末尾必须正好接在当前窗口的起点上。松了会让
@@ -250,7 +233,7 @@ struct SessionMirror {
 
   /// 把一次成功响应并进视图。判定顺序是**幂等 → 水位单调 → 缺口**，不能换：重复投递时首批
   /// 事件的 `seq` 同样小于游标，先判缺口就会把一次正常的重发误判成需要重置。
-  private mutating func merge(_ snapshot: Snapshot) -> Verdict {
+  private mutating func merge(_ snapshot: SessionSnapshot) -> Verdict {
     if snapshot.asOfSeq < cursor {
       return .resetRequired(.waterMarkWentBack)
     }

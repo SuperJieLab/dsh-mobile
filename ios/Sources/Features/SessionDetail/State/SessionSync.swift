@@ -267,7 +267,7 @@ final class SessionSync: ObservableObject {
         let verdict: Verdict
         do {
             let page = try await client.page(sessionId: sessionId, beforeSeq: mirror.pageStart)
-            verdict = mirror.prepend(window(page))
+            verdict = mirror.prepend(page)
         } catch let error as GatewayClientError {
             if case .refused(let failure) = error {
                 verdict = .refused(code: failure.code)
@@ -304,7 +304,7 @@ final class SessionSync: ObservableObject {
     /// 里 —— 与 HTTP 路径共用同一台 `SessionMirror`：
     /// - opening → `mirror.realign(with:)`（**重对齐**：本地更早的部分保留、只换尾部；
     ///   手里空着时等价于打开。重连因此不再把翻出来的历史还回去，R10 期1）
-    /// - 事件帧 → `mirror.apply(.received(Snapshot(asOfSeq: seq + 1, …)))` —— 一条事件就是
+    /// - 事件帧 → `mirror.apply(.received(SessionSnapshot(asOfSeq: seq + 1, …)))` —— 一条事件就是
     ///   一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
     func startFollowing() {
         follow.start(sessionId: sessionId)
@@ -328,12 +328,7 @@ final class SessionSync: ObservableObject {
         // 「打开」（整段取窗口）；重连时本地可能已有翻出来的历史，那时走「重对齐」——
         // 本地更早的部分原样保留，只换尾部。
         let wasEmpty = mirror.isEmpty
-        let verdict = mirror.realign(with: Window(
-            pageStart: opening.pageStart,
-            asOfSeq: opening.cursor,
-            hasOlder: opening.hasOlder,
-            events: opening.events
-        ))
+        let verdict = mirror.realign(with: opening.page)
 
         // 未定稿基线：opening 里带了进行中的 attempt 就恢复流式输出，没有就清场。
         if let baseline = opening.assistantStream {
@@ -391,7 +386,11 @@ final class SessionSync: ObservableObject {
 
     private func applyLiveEvent(_ event: SessionEvent) {
         // 一条事件 = 一次覆盖到 seq+1 的快照；上游 gap-free 是契约（网关另有目击），幂等照旧生效。
-        let verdict = mirror.apply(.received(Snapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])))
+        // 这是**合成**一份新快照（把单条事件包成「覆盖到 seq+1 的回应」），不是把同形数据
+        // 从一种类型搬到另一种 —— 所以保留构造（R19 决定 A3）。
+        let verdict = mirror.apply(.received(
+            SessionSnapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])
+        ))
         // 「未接上」之后事件进不来（中间有洞）。这个判定**不再被丢掉** —— 它让告知跟上现状，
         // 界面就不会一边静止、一边看起来正常（R10 期2 链路 C）。
         if case .resetRequired = verdict { observeNotice(verdict) }
@@ -461,7 +460,7 @@ final class SessionSync: ObservableObject {
         guard mirror.beginRequest() else { return .caughtUp }
         do {
             let page = try await client.page(sessionId: sessionId)
-            return mirror.open(with: window(page))
+            return mirror.open(with: page)
         } catch let error as GatewayClientError {
             if case .refused(let failure) = error { return .refused(code: failure.code) }
             return .failed
@@ -478,11 +477,8 @@ final class SessionSync: ObservableObject {
             // 进会话前的选择客户端窗口里没有，只有这一路能补上。
             modelState.absorb(baseline: snapshot.model)
             displayedModel = modelState.displayed
-            return .received(Snapshot(
-                asOfSeq: snapshot.asOfSeq,
-                hasMore: snapshot.hasMore,
-                events: snapshot.events
-            ))
+            // 协议回应就是状态机的输入形状（R19 A1），不再逐字段搬一份。
+            return .received(snapshot)
         } catch let error as GatewayClientError {
             if case .refused(let failure) = error {
                 return .refused(Refusal(code: failure.code, message: failure.message))
@@ -496,16 +492,6 @@ final class SessionSync: ObservableObject {
     private func hasMore(in outcome: Outcome) -> Bool {
         if case .received(let snapshot) = outcome { return snapshot.hasMore }
         return false
-    }
-
-    /// 网络层的窗口 → 状态机的窗口（两者形状相同，各自跟着自己的层走）。
-    private func window(_ page: SessionPage) -> Window {
-        Window(
-            pageStart: page.pageStart,
-            asOfSeq: page.asOfSeq,
-            hasOlder: page.hasOlder,
-            events: page.events
-        )
     }
 
     /// 刷新界面可见的部分。状态机是唯一的事实来源。组装每次都从**整段事件**重算，不做

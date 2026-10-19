@@ -96,7 +96,7 @@ struct SessionListView: View {
             ToolbarItem(placement: .topBarLeading) {
                 ConnectionBadge(state: ConnectionBadge.Status(isLoading: state.isLoading,
                                                              lastFailure: state.failureText),
-                                meshPath: store.meshPath.map(ConnectionBadge.MeshPath.init))
+                                meshPath: store.meshPath)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
