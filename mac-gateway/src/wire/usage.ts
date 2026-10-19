@@ -1,6 +1,6 @@
 /**
  * 两端共守的占用量形状。手机端有一份对应定义
- * （`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift`）—— 改字段那边必须同改。
+ * （`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift`）—— 改字段那边必须同改。
  *
  * 这里**只有形状**：怎么从两个投影值折出一个比值是服务端的算术 —— 读投影键是
  * `upstream/usage.ts` 的事，判断「值变了没有」是 `protocol/usage.ts` 的事。

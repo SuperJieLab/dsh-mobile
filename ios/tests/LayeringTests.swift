@@ -1,8 +1,9 @@
 /**
- * 分层形状与依赖方向的常驻断言 —— 十五条，逐条见各 `test` 的文档注释。
+ * 分层形状与依赖方向的常驻断言，逐条见各 `test` 的文档注释。
  *
  * 守三件事：依赖方向单向、同类界面分层同构、目录名不能同时给出两个承诺。
  * 视图层与目录边界都没有单测，形状本身只能靠这几条守，它们替代「收口时人工过一遍」。
+ * 条数不写在这里：每加一条都要回改的数字迟早会漂。
  *
  * 扫的是文本，不是语法树。已知盲区：
  * - 不认 `typealias`（漏报方向）；
@@ -133,17 +134,23 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0, "一个 State 文件都没扫到 —— 先怀疑路径推算")
     }
 
-    // MARK: - 断言 2b：Core 侧的 State/ 只装纯值类型
+    // MARK: - 断言 2b：Core 侧的 State/ 只装值类型
 
-    /// `Core/**/State/` 只装无状态的值类型判定 —— 有状态持有者归 `Features/*/State/`。
+    /// `Core/**/State/` 只装 `struct` 与 `enum` —— 有状态持有者归 `Features/*/State/`。
     ///
-    /// 两处同名不同义是刻意的：通信域的 `State/` 是「协议语义的纯判定」（`Equatable`、
-    /// 不认识 Combine），界面域的 `State/` 是「持有并发布」。这条断言把差别钉成可判的事实，
-    /// 免得有人在通信域塞一个 `ObservableObject`，让两级重新混成一件事。
+    /// 两处同名不同义是刻意的：通信域的 `State/` 是纯判定（值语义、可比较、不认识界面框架），
+    /// 界面域的 `State/` 是「持有并发布」。这条断言把差别钉成可判的事实。
     ///
-    /// 盲区：`ObservableObject` 的别名（`@Observable` 宏、自定义协议）认不出。前者要宏插件，
-    /// 本项目的验证环境不用；后者目前不存在。
-    func testCoreStateHasNoObservableObject() throws {
+    /// 认三类标志，覆盖同一种失败的不同写法（只查协议名会漏掉最常见的那个）：
+    /// - `class` / `actor` —— 引用型，可能有可变状态。这是最根本的一条：一个不遵任何协议的
+    ///   `final class Cache` 也能装可变状态，只查 `ObservableObject` 会放它过去。
+    /// - `ObservableObject` / `@Published` —— 发布型持有者。
+    /// - `import SwiftUI` / `UIKit` / `Combine` —— 值类型判定不需要它们；出现即说明这一层
+    ///   开始认识界面或响应式框架。
+    ///
+    /// 盲区：`@Observable` 宏展开后的形态认不出（它要宏插件，本项目的验证环境不用）；
+    /// 行内注释里出现上述词会误报 —— 误报方向，接受。
+    func testCoreStateHoldsOnlyValueTypes() throws {
         let root = sourcesRoot.appendingPathComponent("Core")
         var directories: [URL] = []
         guard let walker = FileManager.default.enumerator(
@@ -157,16 +164,19 @@ final class LayeringTests: XCTestCase {
         // 身份正控：Core 侧至少有一个 State/ —— 目录被改名时这一条先红。
         XCTAssertFalse(directories.isEmpty, "Core 下一个 State/ 都没扫到：\(root.path)")
 
+        let banned = ["class ", "actor ", "ObservableObject", "@Published",
+                      "import SwiftUI", "import UIKit", "import Combine"]
         var checked = 0
         for directory in directories {
             for file in swiftFiles(under: directory) {
                 checked += 1
                 let text = try String(contentsOf: file, encoding: .utf8)
-                for (line, code) in codeLines(in: text) where code.contains("ObservableObject") {
+                for (line, code) in codeLines(in: text) {
+                    guard let hit = banned.first(where: { code.contains($0) }) else { continue }
                     let relative = file.path
                         .replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-                    XCTFail("\(relative):\(line) 出现 ObservableObject"
-                            + " —— Core 侧的 State/ 只装纯值类型判定，有状态持有者归 Features/")
+                    XCTFail("\(relative):\(line) 出现「\(hit.trimmingCharacters(in: .whitespaces))」"
+                            + " —— Core 侧的 State/ 只装 struct 与 enum，有状态持有者归 Features/")
                 }
             }
         }

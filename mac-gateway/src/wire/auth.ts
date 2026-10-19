@@ -1,6 +1,6 @@
 /**
  * 两端共守的凭据类 op 形状。手机端有一份对应定义
- * （`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift` 的 `PairRequest` /
+ * （`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift` 的 `PairRequest` /
  * `RefreshRequest` / `PairResponse` / `RefreshResponse`）—— 改字段那边必须同改。
  *
  * 这两条 op 走同一个 `POST /rpc`，但它们的凭据在**体内**而不是头部：配对时还没有

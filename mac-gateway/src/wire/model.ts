@@ -1,6 +1,6 @@
 /**
  * 两端共守的模型形状与它的编解码。手机端有一份对应定义
- * （`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift`）—— 改字段那边必须同改。
+ * （`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift`）—— 改字段那边必须同改。
  *
  * 这里**只有形状与 `model-select` 的解析**。目录怎么从宿主读住在 `upstream/model.ts`，
  * 选择怎么安装、上游的拒绝怎么翻成协议码住在 `protocol/rpc.ts` 的 `modelSelect` ——

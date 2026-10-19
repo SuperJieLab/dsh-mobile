@@ -1,6 +1,6 @@
 /**
  * 两端共守的写载荷形状与它的编解码。手机端有一份对应定义
- * （`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift`）—— 改字段那边必须同改。
+ * （`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift`）—— 改字段那边必须同改。
  *
  * 写载荷从严校验，与读路径不同：畸形决定被静默执行，等于凭猜测运行一条远程
  * 命令，因此每条畸形写都以 `invalid-request` 拒绝。

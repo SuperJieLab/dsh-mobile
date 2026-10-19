@@ -1,7 +1,7 @@
 /**
  * 两端共守的协议形状：一条线上消息进，一条线上消息出。
  *
- * 手机端有一份对应的 Swift 定义（`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift`）——
+ * 手机端有一份对应的 Swift 定义（`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift`）——
  * **改这个文件的任何字段，那边必须同改**。这正是 `wire/` 存在的理由：把它与
  * 服务端算法放在一起时，读者无法从目录名判断「改它要不要动手机端」。
  *

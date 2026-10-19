@@ -1,6 +1,6 @@
 /**
  * 两端共守的 mux 成帧形状与它的编解码。手机端有一份对应定义
- * （`ios/Sources/Core/Gateway/Contract/GatewayProtocol.swift` 与流通道的解码器）——
+ * （`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift` 与流通道的解码器）——
  * 改字段那边必须同改。
  *
  * 管辖一切非协议消息之物：帧信封（只有 `streamId`，别无其他）、follow 请求的
