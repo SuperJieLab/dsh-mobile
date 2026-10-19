@@ -318,4 +318,26 @@ final class ApprovalReconcileTests: XCTestCase {
         XCTAssertEqual(inbox.pending.first?.id, "audit-2", "已答掉的不再出现")
         XCTAssertEqual(inbox.pending.first?.eventId, "wf-2", "帧给了还挂着的那条")
     }
+
+    /// R17 回归（复审 M1）：帧先被取消、审计事件后进窗口 —— 不能复活一张按不动的卡。
+    func testCancelBeforeTheAuditEventDoesNotResurrect() {
+        var inbox = ApprovalInbox()
+        inbox.absorb(sync([], callIds: []))
+        inbox.absorb(request("wf-1", callId: "call_A"))
+        inbox.absorb(cancel("wf-1"))
+        inbox.rebuild(from: [asked(300, id: "audit-1", callId: "call_A")])
+        XCTAssertTrue(inbox.pending.isEmpty, "已取消的提问随后入窗口也不出现")
+    }
+
+    /// R17 回归（复审 M2）：被名单藏起来的提问不许挑帧 —— 帧要留给真正会出卡的那条。
+    func testConcealedAskDoesNotTakeTheFrame() {
+        var inbox = ApprovalInbox()
+        inbox.absorb(sync([], callIds: []))
+        inbox.rebuild(from: [asked(300, id: "audit-1", callId: "call_A"),  // 名单里没有 ⇒ 藏起来
+                             asked(301, id: "audit-2")])                    // 无 callId，不受名单管
+        inbox.absorb(request("wf-1"))                                       // 帧也不带 callId
+        XCTAssertEqual(inbox.pending.count, 1, "只出一张卡")
+        XCTAssertEqual(inbox.pending.first?.id, "audit-2", "留下的是会出卡的那条")
+        XCTAssertEqual(inbox.pending.first?.eventId, "wf-1", "帧没有被藏起来的提问吃掉")
+    }
 }

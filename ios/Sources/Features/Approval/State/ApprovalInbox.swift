@@ -47,14 +47,17 @@ struct ApprovalInbox {
     private var lastEvents: [SessionEvent] = []
     /// 转发而来的帧，按到达顺序（配对时按序取最早未配对的）。
     private var forwarded: [PendingApproval] = []
-    /// 最近一次 sync 对账里上游仍挂着的 callId —— 重建时据此过滤悬空审计卡：收口后
-    /// cancel 只发给在线者，dsh 重启更让 asked 永无 decided。
+    /// 上游仍挂着的 callId —— sync 名单，加上从转发帧学到的（帧是「此刻还挂着」的证据）。
+    /// 重建时据此过滤悬空审计卡：收口后 cancel 只发给在线者，dsh 重启更让 asked 永无 decided。
     private var standingCallIds: Set<String> = []
     /// 名单是否权威。只有收到过非 stale 的 sync 才敢按名单滤卡 —— relay 未就绪时服务端发 stale 帧。
     private var hasSync = false
     /// 已经有结局的审计 id（`cancel` 或本地应答成功）。它不来自日志：本地应答成功时
     /// `decided` 还没落盘，所以只能单独记。
     private var settledIds: Set<String> = []
+    /// 已经有结局的 callId。审计事件还没进窗口时（`cancel` 先到），只能靠它记住「这问已收」——
+    /// 否则那份帧学到的 `standingCallIds` 会让卡随日志到达复活，而且按不动。
+    private var settledCallIds: Set<String> = []
 
     /// 用全部窗口事件重建（asked − decided）。窗口连续 —— asked 之后落下的 decided 必在同一
     /// 窗口里，故差集在窗口边界上不产生假阳性。
@@ -87,6 +90,8 @@ struct ApprovalInbox {
         case "cancel":
             guard let eventId = frame["eventId"]?.string else { return }
             // 先问「这帧配的是哪条提问」，再删帧 —— 提问若在日志里，它的结局要留住。
+            if let card = forwarded.first(where: { $0.id == eventId }),
+               let callId = card.callId { settledCallIds.insert(callId) }
             if let auditId = askId(of: eventId) { settledIds.insert(auditId) }
             forwarded.removeAll { $0.id == eventId }
             reconcile()
@@ -121,6 +126,8 @@ struct ApprovalInbox {
         if let eventId = card.eventId {
             // 独立帧卡（`id == eventId`）不带审计 id；把它的提问也记上，免得随后进窗口的
             // 审计卡又复活一张按不动的。
+            if let live = forwarded.first(where: { $0.id == eventId }),
+               let callId = live.callId { settledCallIds.insert(callId) }
             if let auditId = askId(of: eventId) { settledIds.insert(auditId) }
             forwarded.removeAll { $0.id == eventId }
         }
@@ -222,23 +229,24 @@ struct ApprovalInbox {
     /// （真机抓到：残骸卡一直挂在屏上）。
     private mutating func reconcile() {
         let asks = Self.asks(in: lastEvents, settled: settledIds)
-        let pairs = Self.pairs(asks: asks, forwarded: forwarded)
-        var cards: [PendingApproval] = []
-        var concealed: Set<String> = []
-        for ask in asks {
-            if ask.closed { continue }
+        var visible: [Ask] = []
+        for ask in asks where !ask.closed {
+            // 这问已经有结局（`cancel` / 本地应答），只是审计事件还没进窗口。
+            if let callId = ask.callId, settledCallIds.contains(callId) { continue }
             // 对账（修正 12）：名单权威时，带 callId 而上游没有的 asked 是悬空审计
             // （收口即有 decided；没有 decided 说明收口方早已不在），不建卡 —— 不然每次刷新都复活。
-            if let callId = ask.callId, hasSync, !standingCallIds.contains(callId) {
-                concealed.insert(ask.id)
-                continue
-            }
-            cards.append(PendingApproval(id: ask.id, toolName: ask.toolName, reason: ask.reason,
-                                         callId: ask.callId, eventId: pairs[ask.id]))
+            // 它也不参与配对：帧是「此刻还挂着」的独立证据，名单只是连接那一刻的快照。
+            if let callId = ask.callId, hasSync, !standingCallIds.contains(callId) { continue }
+            visible.append(ask)
+        }
+        // 已收口的提问留在配对里：它们要「吃掉」自己的帧，免得帧以独立卡复活。
+        let pairs = Self.pairs(asks: visible + asks.filter { $0.closed }, forwarded: forwarded)
+        var cards = visible.map { ask in
+            PendingApproval(id: ask.id, toolName: ask.toolName, reason: ask.reason,
+                            callId: ask.callId, eventId: pairs[ask.id])
         }
         // 配到提问的帧已经成了那张卡的寻址键；没配上的帧自成一张卡（它可能是窗口外的提问）。
-        // 被名单藏起来的提问不吃帧 —— 名单只是连接那一刻的快照，帧才是「此刻还挂着」的证据。
-        let consumed = Set(pairs.filter { !concealed.contains($0.key) }.values)
+        let consumed = Set(pairs.values)
         for frame in forwarded where !consumed.contains(frame.id) { cards.append(frame) }
         pending = cards.sorted { $0.id < $1.id }
     }
