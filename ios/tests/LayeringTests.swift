@@ -475,58 +475,116 @@ final class LayeringTests: XCTestCase {
 
     /// 「直连 / 中继」的**声明**只在连接域出现一次。
     ///
-    /// 认的是声明行（`case direct` / `case .direct` 不算 —— 后者是使用）。三份枚举并存时
-    /// 全仓 3 处，合并后 1 处（`CarrierPath`）。
+    /// 认的是「枚举 case 里的**裸**标识符」：`direct` 前面紧挨着的不是 `.`（`.direct` 是使用）。
+    /// 这样三种写法都对：
+    /// - `case direct` / `case relay`（分两行）
+    /// - `case direct, relay`（一行两个）—— 两者都算命中，但它仍然是「一处声明」，
+    ///   所以判据按**文件 + 行**去重，不按命中次数；
+    /// - `case let .direct(value)` / `case CarrierPath.direct:`（模式匹配与使用）—— 前面有 `.`，
+    ///   不算声明。
     ///
-    /// 盲区（漏报方向）：`case direct, relay` 这种一行两个取值的写法只算一次命中 ——
-    /// 那仍然是「一处声明」，判据的语义不因此失效。
+    /// 盲区（漏报方向）：把取值写成别的名字再映射过来（`case p2p`）认不出；用 `static let`
+    /// 而不是 `case` 的常量也认不出。这两类都会在评审里被看见，不会静默。
     func testConnectionPathIsDeclaredOnce() throws {
         let files = swiftFiles(under: sourcesRoot)
         XCTAssertGreaterThan(files.count, 40, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
+        var sawCarrierPath = false
 
-        var declarations: [String] = []
+        // 按「文件 + 所属 enum」去重：一个枚举把 direct 与 relay 分两行写，仍是一处声明。
+        var declarations: Set<String> = []
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
-            for (line, code) in codeLines(in: text) where contains("direct", in: code) {
+            if text.contains("enum CarrierPath") { sawCarrierPath = true }
+
+            var owner: String?
+            for (line, code) in codeLines(in: text) {
                 let trimmed = code.trimmingCharacters(in: .whitespaces)
-                // 只认声明行：`case direct` 是声明，`case .direct` 是使用。
-                guard trimmed.hasPrefix("case "), !trimmed.hasPrefix("case .") else { continue }
+                if let name = Self.enumName(in: trimmed) { owner = name }
+
+                guard trimmed.hasPrefix("case "), !trimmed.hasPrefix("case ."),
+                      !trimmed.hasPrefix("case let "), !trimmed.hasPrefix("case is ")
+                else { continue }
+                guard Self.declaresBareCase(code, names: ["direct", "relay"]) else { continue }
                 let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-                declarations.append("\(relative):\(line)")
+                let home = owner.map { "\(relative) 的 enum \($0)" } ?? "\(relative):\(line)"
+                declarations.insert(home)
             }
         }
+        XCTAssertTrue(sawCarrierPath, "没扫到 CarrierPath 的声明 —— 先怀疑路径推算")
         XCTAssertEqual(declarations.count, 1,
-                       "「直连 / 中继」应只声明一次，实际：\(declarations)")
+                       "「直连 / 中继」应只声明一次，实际：\(declarations.sorted())")
     }
 
-    /// 状态机不另声明窗口 / 快照的形状 —— 它引用 `SessionPage` / `SessionSnapshot`。
+    /// 这一行若是 `enum 名字 {`（可带修饰与协议），返回名字。
+    private static let enumDeclaration = try! NSRegularExpression(
+        pattern: #"^(?:@[A-Za-z0-9_]+\s+)*(?:public |internal |private |fileprivate )?"#
+            + #"enum\s+([A-Za-z_][A-Za-z0-9_]*)"#
+    )
+
+    private static func enumName(in trimmed: String) -> String? {
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        guard let match = enumDeclaration.firstMatch(in: trimmed, options: [], range: range),
+              let found = Range(match.range(at: 1), in: trimmed)
+        else { return nil }
+        return String(trimmed[found])
+    }
+
+    /// 这一行是否把 `names` 里的某个名字当成**裸**标识符写在 `case` 里（前面不是 `.`）。
+    private static func declaresBareCase(_ line: String, names: [String]) -> Bool {
+        for name in names {
+            var search = line.startIndex
+            while let range = line.range(of: name, range: search..<line.endIndex) {
+                let precededByDot = range.lowerBound > line.startIndex
+                    && line[line.index(before: range.lowerBound)] == "."
+                let followedByWord = range.upperBound < line.endIndex
+                    && (line[range.upperBound].isLetter || line[range.upperBound].isNumber
+                        || line[range.upperBound] == "_")
+                if !precededByDot && !followedByWord { return true }
+                search = range.upperBound
+            }
+        }
+        return false
+    }
+
+    /// 状态机不另声明窗口 / 快照的形状 —— 它引用协议里的 `SessionPage` / `SessionSnapshot`。
     ///
-    /// 判据两头都要查：既不许自己声明（重复的源头），又必须真的在用协议类型
-    /// （否则「声明删了但也没接上」会假绿）。
+    /// **只查「不许声明」，不查「有没有用上」。** 后者看着更严，实际是弱检查：入口签名里
+    /// 写着 `SessionPage` 就够让「出现过」为真，而被替换成本地同形类型时（真正的失败模式）
+    /// 那三个签名往往还在 —— 于是它既抓不到失败模式，又会把注释里的名字算成证据。
+    /// 曾写过一个用 `text.contains` 的版本，被文件头注释满足（R18 期3 同一个洞的复发）；
+    /// 改成逐代码行后读数会真，但结论仍是「注定为真」—— 所以整段删掉。
+    ///
+    /// 那「声明删了、改用本地同形类型」这个失败模式靠什么？靠编译器与本条的前半：本地类型
+    /// 若叫 `Snapshot` / `Window`（前身），前半红；若换个名字，它就是一个**新造的同形类型**，
+    /// 而那正是评审要看的东西 —— 这类判断写不成文本判据，写进注释比写成假绿好。
     func testMirrorUsesProtocolShapes() throws {
         let mirror = sourcesRoot.appendingPathComponent("Core/Gateway/State/SessionMirror.swift")
         let text = try String(contentsOf: mirror, encoding: .utf8)
         XCTAssertTrue(text.contains("struct SessionMirror"), "读到的不是状态机 —— 先怀疑路径推算")
 
-        for shape in ["Snapshot", "Window"] {
-            for (line, code) in codeLines(in: text)
-            where code.contains("\(shape):") || code.contains("\(shape) {") {
-                let trimmed = code.trimmingCharacters(in: .whitespaces)
+        var scanned = 0
+        for (line, code) in codeLines(in: text) {
+            scanned += 1
+            let trimmed = code.trimmingCharacters(in: .whitespaces)
+            for shape in ["Snapshot", "Window"] {
                 if trimmed.hasPrefix("struct \(shape)") || trimmed.hasPrefix("enum \(shape)") {
                     XCTFail("SessionMirror.swift:\(line) 又声明了 \(shape)"
                             + " —— 用协议里的同名类型（R19 A1）")
                 }
             }
         }
-        XCTAssertTrue(text.contains("SessionPage") && text.contains("SessionSnapshot"),
-                      "状态机没有引用协议类型 —— 形状可能只是被删了，没有接上")
+        XCTAssertGreaterThan(scanned, 20, "状态机只扫到 \(scanned) 行 —— 先怀疑路径或读取")
     }
 
     /// 编排里不再逐字段构造窗口 —— 那次构造本身就是「同一形状两份」的症状。
+    ///
+    /// 两半都要查（只查前一半会假绿：类型删掉之后，把四个字段的构造搬回来编译仍然通过）：
+    /// - 没有 `Window(` 构造；
+    /// - 编排文件里不出现「`pageStart` / `asOfSeq` / `hasOlder` 三个实参挤在同一段构造里」——
+    ///   认的是这三个名字在同一行，或同一行起的连续三行内相继出现（那种搬运一定是竖着写的）。
     func testNoFieldByFieldWindowCopy() throws {
-        let files = swiftFiles(under: sourcesRoot)
         var hits = 0
-        for file in files {
+        for file in swiftFiles(under: sourcesRoot) {
             let text = try String(contentsOf: file, encoding: .utf8)
             for (line, code) in codeLines(in: text) where contains("Window", in: code) {
                 guard code.contains("Window(") else { continue }
@@ -536,6 +594,23 @@ final class LayeringTests: XCTestCase {
             }
         }
         XCTAssertEqual(hits, 0, "还有逐字段搬运的窗口构造")
+
+        let sync = sourcesRoot
+            .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
+        let lines = try String(contentsOf: sync, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        var copies = 0
+        for start in 0..<max(0, lines.count - 2) {
+            let triple = lines[start] + lines[start + 1] + lines[start + 2]
+            let looksLikeCopy = triple.contains("pageStart:") && triple.contains("asOfSeq:")
+                && triple.contains("hasOlder:")
+            guard looksLikeCopy else { continue }
+            copies += 1
+            XCTFail("SessionSync.swift:\(start + 1) 起三行内又在逐字段构造窗口"
+                    + " —— 用 opening.page / SessionPage（R19 A2）")
+        }
+        XCTAssertEqual(copies, 0, "编排里还有三个字段的搬运")
     }
 
     // MARK: - 扫描工具

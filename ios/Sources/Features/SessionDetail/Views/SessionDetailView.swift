@@ -184,12 +184,10 @@ struct SessionDetailView: View {
                         Label {
                             Text(notice.line)
                         } icon: {
-                            Image(systemName: notice.kind == .reset
-                                  ? "arrow.counterclockwise.circle"
-                                  : "exclamationmark.triangle")
+                            Image(systemName: look(of: notice).icon)
                         }
                         .font(.footnote)
-                        .foregroundStyle(notice.kind == .reset ? Color.red : Color.orange)
+                        .foregroundStyle(look(of: notice).tint)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 4)
@@ -207,6 +205,16 @@ struct SessionDetailView: View {
 
     /// 底部滚动锚点的 id。
     private static let bottomAnchor = "session-detail-bottom"
+
+    /// 告知那一行的图标与颜色 —— 逐 case 列举，`ResyncNotice.Kind` 加取值时编译失败。
+    private func look(of notice: ResyncNotice) -> (icon: String, tint: Color) {
+        switch notice.kind {
+        case .unresolved:
+            return ("exclamationmark.triangle", .orange)
+        case .reset:
+            return ("arrow.counterclockwise.circle", .red)
+        }
+    }
 }
 
 /// 一条消息气泡。

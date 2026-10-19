@@ -47,8 +47,11 @@ import Combine
     func retry(config: MeshConfig) async
 }
 
-/// 到网关对端的连接方式（域内类型；`TailnetNode.MeshPath` 与
-/// `ConnectionBadge.MeshPath` 各自适配到它）。
+/// 到网关对端的连接方式 —— **全仓唯一一份**（R19）。
+///
+/// 节点层产出它、连接域透传它、呈现层直接读它；三处不再各有自己的枚举，也就没有
+/// 「把一种取值翻成另一种」的映射可写。加第三个取值时，呈现层的显示 switch 会编译失败
+/// （`ConnectionBadge.look(of:)`），不会静默归到某一支。
 enum CarrierPath: Equatable {
     case direct
     case relay

@@ -14,8 +14,9 @@ import Foundation
 ///
 /// **这里的第三类东西已经搬走**（R18 期2）：告知的置位与清除在 `ResyncNoticeState`（同目录），
 /// 用户看得见的句子在 `Display/SyncText.swift`。仍留在这里的是编排本身与「把线上形状搬成
-/// 状态机的输入」这两件（`window(_:)`、`parseBaseline(_:)`、`refreshView` 的三条投影）——
-/// 它们与调用顺序同源，不构成第二个变化原因。句子若写回本文件，
+/// 状态机的输入」这两件（`parseBaseline(_:)`、`refreshView` 的三条投影）——
+/// 它们与调用顺序同源，不构成第二个变化原因。窗口与快照不再需要搬运：状态机直接吃
+/// 协议类型（R19）。句子若写回本文件，
 /// `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
 ///
 /// 消费者：`SessionDetailView`（整屏与底栏）、`ModelPickerView`（读显示值与发起换模型）。

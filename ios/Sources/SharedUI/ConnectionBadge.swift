@@ -60,7 +60,7 @@ struct ConnectionBadge: View {
                     Image(systemName: icon(shown))
                 }
                 .font(.caption)
-                .foregroundStyle(shown == .offline ? Color.orange : Color.secondary)
+                .foregroundStyle(tint(shown))
             }
             }
         }
@@ -93,6 +93,16 @@ struct ConnectionBadge: View {
         case .connecting: return "arrow.triangle.2.circlepath"
         case .offline: return "wifi.slash"
         case .hidden: return ""
+        }
+    }
+
+    /// 断连用橙色提醒、连接中用次要色 —— 与 `caption` / `icon` 一样逐 case 列举，
+    /// `Status` 加取值时三处都会编译失败。
+    private func tint(_ state: Status) -> Color {
+        switch state {
+        case .connecting: return .secondary
+        case .offline: return .orange
+        case .hidden: return .secondary
         }
     }
 }
