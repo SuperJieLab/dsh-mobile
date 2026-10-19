@@ -6,20 +6,21 @@ import SwiftUI
 /// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。成功后设备凭证进沙盒存储，
 /// 之后一切请求静默带票。
 ///
-/// 组网段：headscale 地址与接入 key（沙盒存储）在此录入，
-/// 节点状态如实展示；配对仍走原三票身份（不因在虚拟网内简化）。
+/// 配对码那一段的状态在 `PairingState`（可用性、进行中、失败原文），本文件只绑。
+/// 组网段仍是「视图 → 连接域」两跳，不搬（R16 期1 决定 B3）：headscale 地址与接入 key
+/// （沙盒存储）在此录入，节点状态如实展示；配对仍走原三票身份（不因在虚拟网内简化）。
 struct PairingView: View {
-    let client: GatewayClient
+    @StateObject private var state: PairingState
     /// 组网段的数据源 —— 连接域唯一出处（R3 起读 store 的节点状态透传与动作）。
     @EnvironmentObject private var store: ConnectionStore
-
-    @State private var code = ""
-    @State private var failure: String?
-    @State private var isPairing = false
 
     @State private var controlURL = MeshConfig.load().controlURLString
     @State private var gatewayURL = MeshConfig.load().gatewayURLString
     @State private var tailnetKey = ""
+
+    init(client: GatewayClient) {
+        _state = StateObject(wrappedValue: PairingState(client: client))
+    }
 
     var body: some View {
         Form {
@@ -32,23 +33,23 @@ struct PairingView: View {
             }
 
             Section {
-                TextField("6 位配对码", text: $code)
+                TextField("6 位配对码", text: $state.code)
                     .keyboardType(.numberPad)
-                    .disabled(isPairing)
+                    .disabled(state.isPairing)
 
                 Button {
-                    Task { await pair() }
+                    Task { await state.pair() }
                 } label: {
-                    if isPairing {
+                    if state.isPairing {
                         ProgressView()
                     } else {
                         Text("配对")
                     }
                 }
-                .disabled(isPairing || code.count != 6)
+                .disabled(!state.canPair)
             }
 
-            if let failure {
+            if let failure = state.failure {
                 Section {
                     FailureBanner(text: failure)
                 }
@@ -116,20 +117,6 @@ struct PairingView: View {
                         }
                     }
                 }
-        }
-    }
-
-    private func pair() async {
-        isPairing = true
-        defer { isPairing = false }
-        failure = nil
-        do {
-            try await client.pair(code: code)
-            code = ""
-        } catch {
-            // 服务端的话原样显示（配对码不对 / 过期 / 作废）——
-            // 与「看得见为什么不行」的纪律一致。
-            failure = error.localizedDescription
         }
     }
 }

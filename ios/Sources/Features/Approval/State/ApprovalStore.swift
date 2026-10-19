@@ -1,34 +1,25 @@
+/**
+ * 待批审批的宿主：持门面，把判定的输出镜像成可观察属性，并把一次应答的三种结局翻成卡片状态。
+ *
+ * 判定在 `ApprovalInbox`（纯值类型，不认识客户端）。这里只剩三件事：
+ * 1) 把 `rebuild` / `receive` 转给判定，再把结果发布出去；
+ * 2) 把「去答一个」发出去（幂等判重 + 可应答性检查）；
+ * 3) 按结局改卡集合与状态 —— 成功与 `unknown-approval` 都撤卡（后者带说明），传输失败只标
+ *    「已发出，结果未知」：断线的写操作是「未知」不是「失败」。
+ *
+ * 三种结局与判重是 M5 以来的行为，本期只换了它们的住址，规则一字未改（R16 期2 决定 C3）。
+ * 每次都带客户端生成的 `answerId`（幂等键）：回包丢了重试，服务端回放第一次的结果，绝不二次投递。
+ *
+ * 消费者：`SessionSync`（持它，订阅 `objectWillChange` 把刷新冒泡给视图）、`SessionDetailView`
+ * （读 `pending` / `states` / `notice`，调 `answer`）、`ApprovalCard`（读 `AnswerState` 类型）。
+ */
+import Combine
 import Foundation
 
-/// 待批审批的手机侧状态机。
-///
-/// 事实来源与会话内容同一条：**会话日志**。`approval/asked` 挂起一个问题，`approval/decided`
-/// （无论谁答的、什么结局）收口它 —— 重建就是「asked 减去 decided」，输入永远是窗口事件，
-/// 不自持一份真相。应答的三种下场各自如实呈现（断线的写操作是「未知」
-/// 不是「失败」）：回包成功 → 结局已定、当场撤卡；`unknown-approval` → 卡片撤下加一句说明；
-/// 网络失败 → 转「已发出，结果未知」，`decided` 回流或重开重建时自愈。
-///
-/// 每次应答带客户端生成的 `answerId`（幂等键）：回包丢了重试，服务端回放第一次的结果，
-/// 绝不二次投递。
 @MainActor
 final class ApprovalStore: ObservableObject {
 
-    /// 屏上一张待批卡片。
-    struct PendingApproval: Identifiable, Equatable {
-        /// `approval/asked` 审计 id；纯转发而来的卡片用 waterfall `eventId` 代替。
-        let id: String
-        /// 被问的是哪个工具。
-        let toolName: String
-        /// 提问方给的人话解释，可能没有。
-        let reason: String?
-        /// 提问挂在哪一次工具调用上，可能没有 —— 转发帧与审计事件的对账键。
-        let callId: String?
-        /// 网关 `$events` waterfall 帧的 `eventId` —— 应答的线上寻址键；
-        /// 重建出的卡片在转发帧到达前为 `nil`（不可应答）。
-        var eventId: String?
-    }
-
-    /// 一张卡片的应答进展。
+    /// 一张卡片的应答进展（不在 `pending` 里就没有这一项）。
     enum AnswerState: Equatable {
         /// 还没动过。
         case idle
@@ -36,153 +27,48 @@ final class ApprovalStore: ObservableObject {
         case unknown
     }
 
-    @Published private(set) var pending: [PendingApproval] = []
+    @Published private(set) var pending: [ApprovalInbox.PendingApproval] = []
     /// 每条审批的应答进展（不在 `pending` 里的不存在）。
     @Published private(set) var states: [String: AnswerState] = [:]
     /// 与单条卡片无关的一句话说明（如「审批已被取消」）。
     @Published private(set) var notice: String?
 
     private let client: GatewayClient
-    /// 最近一次重建用的事件 —— `sync` 改了对账状态后要拿它重算，见 `reconcile()`。
-    private var lastEvents: [SessionEvent] = []
-    /// 转发而来的活卡（eventId → 卡片）；重建时跨窗口保留。
-    private var live: [String: PendingApproval] = [:]
-    /// 最近一次 sync 对账里上游仍挂着的 callId —— 重建时据此过滤悬空审计卡：收口后
-    /// cancel 只发给在线者，dsh 重启更让 asked 永无 decided。
-    private var standingCallIds: Set<String> = []
-    /// 名单是否权威。只有收到过非 stale 的 sync 才敢按名单滤卡 —— relay 未就绪时服务端发 stale 帧。
-    private var hasSync = false
+    /// 判定。宿主持有它、把结果发布出去 —— 本类型不重算任何规则。
+    private var inbox = ApprovalInbox()
 
     init(client: GatewayClient) {
         self.client = client
     }
 
-    /// 用镜像里的全部事件重建待批集合（asked − decided）。窗口连续 —— asked 之后落下的
-    /// decided 必在同一窗口里，故差集在窗口边界上不产生假阳性。
+    /// 用镜像里的全部事件重建待批集合。
     func rebuild(from events: [SessionEvent]) {
-        lastEvents = events
-        reconcile()
+        inbox.rebuild(from: events)
+        pending = inbox.pending
+        pruneStates()
     }
 
-    /// 按手头的事件与对账状态重算待批集合。
+    /// 网关审批推送：交给判定吸收，再把卡集合发布出去。
     ///
-    /// 与 `rebuild` 分开，是为了让**对账名单的变化**也立刻生效：`sync` 帧改 `hasSync` /
-    /// `standingCallIds`，而过滤只在重算时跑 —— 不重算的话结论要拖到下次事件或刷新才落地
-    /// （真机抓到：残骸卡一直挂在屏上）。
-    private func reconcile() {
-        var pendingById: [String: PendingApproval] = [:]
-        for event in lastEvents {
-            switch event.type {
-            case "approval/asked":
-                guard let id = event.data["id"]?.string,
-                      let toolName = event.data["toolName"]?.string else { continue }
-                let callId = event.data["callId"]?.string
-                // 对账（修正 12）：名单权威时，带 callId 而上游没有的 asked 是悬空审计
-                // （收口即有 decided；没有 decided 说明收口方早已不在），不建卡 ——
-                // 不然每次刷新都复活。
-                if let callId, hasSync, !standingCallIds.contains(callId) { continue }
-                pendingById[id] = PendingApproval(
-                    id: id,
-                    toolName: toolName,
-                    reason: event.data["reason"]?.string,
-                    callId: callId,
-                    eventId: nil
-                )
-            case "approval/decided":
-                if let id = event.data["id"]?.string { pendingById.removeValue(forKey: id) }
-            case "turn/end":
-                // turn 闭合 ⇒ 这一轮里还没收口的 asked 是崩溃残骸。上游
-                // `approval.request()` 在 turn 内阻塞到 outcome 落盘
-                // （`user-approval/src/index.ts:208-227`），故 turn 能结束就意味着它发起的每个
-                // 审批都有结局；只有进程在等 outcome 时被杀，才会留下「turn 已闭合、decided
-                // 永久缺席」的一对（随后那条 `tool/result` 带 `TOOL_OUTCOME_UNKNOWN`，真机产物）。
-                // 差集把它们当待批是假阳性：既不可应答、又等不到收口。
-                pendingById.removeAll()
-            default:
-                break
-            }
-        }
-        // 重建以审计差集为骨架，转发而来的活卡合并进来；同 callId（同一提问的两面）时把 eventId
-        // 绑到审计卡、只留一张 —— 不然重进会话必出两张卡。
-        var merged = Array(pendingById.values)
-        for (eventId, card) in live {
-            if let callId = card.callId,
-               let idx = merged.firstIndex(where: { $0.callId == callId && $0.eventId == nil }) {
-                merged[idx].eventId = eventId
-                continue
-            }
-            if !merged.contains(where: { $0.eventId == eventId }) {
-                merged.append(card)
-            }
-        }
-        pending = merged.sorted { $0.id < $1.id }
-        // 已不在屏上的状态行一并清掉，免得字典里积着看不见的旧值。
-        states = states.filter { key, _ in
-            pending.contains(where: { card in card.id == key || card.eventId == key })
-        }
-    }
-
-    /// 网关审批推送：转发帧到达 → 绑定或新建；取消 → 撤卡。
+    /// 清状态行的时机是照旧码抄的，**不是统一收口**：`cancel` 只清「按 `eventId` 记的那一行」
+    /// （审计卡的状态行要留到下次重算才过滤 —— 重新建出来的卡仍显示「结果未知」；
+    /// 提前清掉会让它退回两个按钮）；`sync` 之后才做整体过滤；`request` 不清理。
     func receive(_ payload: JSONValue) {
+        inbox.absorb(payload)
+        pending = inbox.pending
         switch payload["kind"]?.string {
-        case "request":
-            guard let eventId = payload["eventId"]?.string,
-                  let toolName = payload["toolName"]?.string else { return }
-            let reason = payload["reason"]?.string
-            let callId = payload["callId"]?.string
-            // 绑定：同 callId（最准），退而求其次同 toolName + reason。
-            if let idx = pending.firstIndex(where: { card in
-                card.eventId == nil
-                    && (callId != nil && card.callId == callId
-                        || (card.toolName == toolName && card.reason == reason))
-            }) {
-                pending[idx].eventId = eventId
-            } else if !pending.contains(where: { $0.eventId == eventId }) {
-                let card = PendingApproval(
-                    id: eventId, toolName: toolName,
-                    reason: reason, callId: callId, eventId: eventId)
-                pending.append(card)
-                live[eventId] = card
-            }
         case "cancel":
-            guard let eventId = payload["eventId"]?.string else { return }
-            pending.removeAll { $0.eventId == eventId }
-            live.removeValue(forKey: eventId)
-            states[eventId] = nil
+            if let eventId = payload["eventId"]?.string { states[eventId] = nil }
         case "sync":
-            // 连接即对账。三档：stale（relay 未就绪，名单证明不了任何事 ——
-            // 不撤卡、不启用 callId 过滤，对空名单过滤会把真挂着的审批也滤没）；旧服务端格式
-            // （只有 eventIds 无 callIds，eventIds 照样撤转发卡、callId 过滤保持关闭）；权威名单
-            // （撤名单之外的转发卡，并记 callIds 供 rebuild 过滤悬空审计卡）。
-            guard let ids = payload["eventIds"]?.array else { return }
-            if payload["stale"]?.bool == true {
-                hasSync = false
-                standingCallIds = []
-                reconcile()
-                return
-            }
-            let standing = Set(ids.compactMap { $0.string })
-            pending.removeAll { card in
-                guard let eventId = card.eventId else { return false } // 审计卡交给 reconcile 对账
-                if standing.contains(eventId) { return false }
-                live.removeValue(forKey: eventId)
-                states[eventId] = nil
-                return true
-            }
-            if let callIds = payload["callIds"]?.array {
-                hasSync = true
-                standingCallIds = Set(callIds.compactMap { $0.string })
-            }
-            // 名单变了就可能改变审计卡的判定 —— 当场重算，不等下一次刷新。
-            reconcile()
+            pruneStates()
         default:
             break
         }
     }
 
-    /// 应答一条待批审批。按钮点击 → 状态流转 → 服务端投递。寻址键 = 绑定到的 waterfall
-    /// `eventId`；还没绑上的卡片（重建出的、转发帧未到）不能应答 —— 而不是把审计 id 冒充线上键。
-    func answer(_ approval: PendingApproval, allow: Bool) async {
+    /// 应答一条待批审批。寻址键 = 绑定到的 waterfall `eventId`；还没绑上的卡片
+    /// （重建出的、转发帧未到）不能应答 —— 而不是把审计 id 冒充线上键。
+    func answer(_ approval: ApprovalInbox.PendingApproval, allow: Bool) async {
         guard states[approval.id] == nil || states[approval.id] == .idle else { return }
         guard let eventId = approval.eventId else {
             notice = "这条审批还没有经由网关转发到手机 —— 请在 Mac 上处理，或稍候重进会话。"
@@ -193,18 +79,30 @@ final class ApprovalStore: ObservableObject {
             // 自清（上游行为：receiveRemoteEventResult 先移除应答者自己的 delivery 再广播
             // cancel —— 自己答掉的审批，cancel 只发给别人，我们收不到收口帧）。上游语义
             // 「先答先收口」，回包成功即结局已定，与 Web UI 同样在应答当下收掉卡片。
-            pending.removeAll { $0.eventId == eventId }
-            live.removeValue(forKey: eventId)
-            states[approval.id] = nil
+            drop(approval)
             notice = "已投递：\(allow ? "允许" : "拒绝")"
-        } catch GatewayClientError.refused(let failure) where failure.code == GatewayErrorCode.unknownApproval.rawValue {
-                // 审批已不在：撤卡。真正的结局以 decided 为准，未回流时重开会话重建时可见。
+        } catch GatewayClientError.refused(let failure)
+            where failure.code == GatewayErrorCode.unknownApproval.rawValue {
+            // 审批已不在：撤卡。真正的结局以 decided 为准，未回流时重开会话重建时可见。
             notice = failure.readableDescription
-            pending.removeAll { $0.id == approval.id }
-            states[approval.id] = nil
+            drop(approval)
         } catch {
             // 传输失败 ≠ 未生效：如实转「未知」，等 decided 收口。
             states[approval.id] = .unknown
+        }
+    }
+
+    /// 撤一张卡并清掉它的状态行 —— 两个「结局已定」的分支走这里。
+    private func drop(_ approval: ApprovalInbox.PendingApproval) {
+        inbox.remove(id: approval.id)
+        pending = inbox.pending
+        states[approval.id] = nil
+    }
+
+    /// 清掉已不在屏上的状态行（免得字典里积着看不见的旧值）。
+    private func pruneStates() {
+        states = states.filter { key, _ in
+            pending.contains(where: { card in card.id == key || card.eventId == key })
         }
     }
 }

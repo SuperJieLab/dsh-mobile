@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// 会话列表。它做两件事：调 `list-sessions`、按本屏的规则决定显示哪些行。按协议
-/// **排序是服务端的承诺**（这里一行排序代码都没有），而「显示哪些」是客户端的事，故过滤在此。
+/// 会话列表。取数与「显示哪些」在 `SessionListState` 里；本文件只画，以及登记五个触发点
+/// （进屏、下拉、回前台、组网就绪、工具栏按钮）—— 触发点是平台事件与用户手势，只有视图拿得到。
+/// 按协议**排序是服务端的承诺**（这里一行排序代码都没有）。
 struct SessionListView: View {
-    /// `@ObservedObject`：`isPaired` 是可变共享状态 —— 被撤销时这一屏要立刻让位给配对屏。
+    /// 读它是为了渲染：`isPaired` 决定这一屏让位给配对屏，`baseURL` 显示在页脚。
+    /// 取数走 `state`，不经这里。
     @ObservedObject var client: GatewayClient
 
-    @State private var sessions: [SessionSummary] = []
-    @State private var failure: String?
-    /// 组网就绪前的必然失败（notActivated）：预期状态，显示中性等待而非错误（R5 修正 4②）。
-    @State private var waitingForMesh = false
-    @State private var isLoading = false
+    /// 取数与三种面。`@StateObject`：视图重建时保留，不随 body 重算重建。
+    @StateObject private var state: SessionListState
+
     /// 组网/配对入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
     /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
     @State private var showMeshSettings = false
@@ -18,6 +18,11 @@ struct SessionListView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// 连接域：连接方式一行的数据源（根部 environmentObject 注入，R3 起唯一出处）。
     @EnvironmentObject private var store: ConnectionStore
+
+    init(client: GatewayClient) {
+        self.client = client
+        _state = StateObject(wrappedValue: SessionListState(client: client))
+    }
 
     var body: some View {
         if !client.isPaired {
@@ -29,11 +34,11 @@ struct SessionListView: View {
 
     private var pairedList: some View {
         List {
-            if let failure {
+            if let failure = state.failureText {
                 Section {
                     FailureBanner(text: failure)
                 }
-            } else if waitingForMesh {
+            } else if state.outcome == .waitingForMesh {
                 Section {
                     // 组网就绪前的必然等待（R5 修正 4②）：不是错误，中性显示。
                     Label("等待组网就绪…", systemImage: "antenna.radiowaves.left.and.right")
@@ -42,7 +47,7 @@ struct SessionListView: View {
                 }
             }
 
-            ForEach(sessions) { session in
+            ForEach(state.sessions) { session in
                 NavigationLink(value: session) {
                     SessionRow(session: session)
                 }
@@ -51,7 +56,7 @@ struct SessionListView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("\(sessions.count) 个会话 · \(client.baseURL?.absoluteString ?? "未激活")")
+                Text("\(state.sessions.count) 个会话 · \(client.baseURL?.absoluteString ?? "未激活")")
             }
         }
         .navigationTitle("会话")
@@ -62,9 +67,9 @@ struct SessionListView: View {
                 .environmentObject(store)
         }
         .overlay {
-            if isLoading && sessions.isEmpty {
+            if state.isLoading && state.sessions.isEmpty {
                 ProgressView("正在读 Mac 上的会话…")
-            } else if sessions.isEmpty && failure == nil {
+            } else if state.sessions.isEmpty && state.failureText == nil {
                 ContentUnavailableView(
                     "还没有会话",
                     systemImage: "tray",
@@ -72,22 +77,25 @@ struct SessionListView: View {
                 )
             }
         }
-        .refreshable { await reload() }
-        .task { await reload() }
+        .refreshable { await state.reload() }
+        .task { await state.reload() }
         // 组网就绪即首载：启动窗口内的请求会 fail-fast（R5 fail-fast 的体验补全），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
+        // 这里的 `guard case .ready` 只是省一次必然失败的请求；「未就绪」该怎么显示由
+        // `SessionListState` 的等待面决定（与详情屏同一形状，见 SessionDetailView）。
         .onChange(of: store.phase) { _, phase in
             guard case .ready = phase else { return }
-            Task { await reload() }
+            Task { await state.reload() }
         }
         // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应。失败时旧列表照常保留。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { await reload() }
+            Task { await state.reload() }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ConnectionBadge(state: ConnectionBadge.Status(isLoading: isLoading, lastFailure: failure),
+                ConnectionBadge(state: ConnectionBadge.Status(isLoading: state.isLoading,
+                                                             lastFailure: state.failureText),
                                 meshPath: store.meshPath.map(ConnectionBadge.MeshPath.init))
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -97,41 +105,16 @@ struct SessionListView: View {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                 }
                 Button {
-                    Task { await reload() }
+                    Task { await state.reload() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .disabled(isLoading)
+                .disabled(state.isLoading)
             }
         }
         .sheet(isPresented: $showMeshSettings) {
             NavigationStack { PairingView(client: client) }
                 .environmentObject(store)
-        }
-    }
-
-    private func reload() async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            // 服务端给出事实（`blank` / `origin`），**显示哪些是客户端的事**，故过滤在此：`blank`
-            // 点进去只有策略事件；`subagent` 是别的会话的子会话，不是独立对话。（与上游可见性规则
-            // 同源；服务端另有「没有 cwd 的会话不列」，在适配器里。）
-            sessions = try await client.listSessions()
-                .filter { !$0.blank && $0.origin != "subagent" }
-            failure = nil
-            waitingForMesh = false
-        } catch {
-            // 失败时**不清空**已有列表：能显示多少显示多少，错误挂在上面。
-            // 例外：notActivated 是组网就绪前的必然阶段（R5 修正 4②），归入等待态；
-            // 其余错误（含节点 failed 期的传输错误）照常走错误横幅。
-            if let gatewayError = error as? GatewayClientError, case .notActivated = gatewayError {
-                waitingForMesh = true
-                failure = nil
-            } else {
-                waitingForMesh = false
-                failure = error.localizedDescription
-            }
         }
     }
 }
@@ -162,24 +145,6 @@ private struct SessionRow: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 2)
-    }
-}
-
-/// 把失败原因摊在屏幕上。服务端的拒绝与网络层的失败都显示成**原文** ——
-/// 它的价值有一半在「看得见为什么不行」。
-struct FailureBanner: View {
-    let text: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(text)
-                .font(.footnote)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 2)
     }
