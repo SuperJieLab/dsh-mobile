@@ -64,6 +64,13 @@ struct PairingView: View {
     @ViewBuilder
     private var meshSection: some View {
         Section("组网") {
+                // 存过但读不出来：与「从没配过」分开说，否则用户会去查证书而不是重填。
+                if store.storedConfigDamaged {
+                    Text("保存的组网配置读取失败，请重新填写下面两项再保存。")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+
                 switch store.nodeState {
                 case .noKey:
                     Text("输入组网服务地址与接入密钥（Mac 上 `headscale preauthkeys create` 生成）。")

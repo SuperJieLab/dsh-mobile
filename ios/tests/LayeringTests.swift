@@ -183,6 +183,52 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0, "一个文件都没扫到 —— 先怀疑路径推算")
     }
 
+    // MARK: - 断言 2c：Core 内部不反向依赖
+
+    /// `Core/` 内部各域只许向下依赖：编排层在 `Connection`（它编织组网与协议），
+    /// 下面三层不得认识它。
+    ///
+    /// 表只写「谁不许认识谁」，不写允许的方向 —— 允许的边比禁止的多得多，而每写一条
+    /// 允许都是一次判断；不写就默认自由，坏了由这条断言抓住。新增一个域时默认不受限，
+    /// 直到有人确认它该在哪一层。
+    ///
+    /// `Core/` 顶层的四个小值（`CarrierPath` / `Log` / `PerfRecord` / `RefreshGate`）与
+    /// `MarkdownParser` 不属于任何域，不在本表的约束内 —— 它们的存在就是为了让三方共用时
+    /// 不必互相认识。
+    private static let coreUpwardBans: [String: [String]] = [
+        "Secrets": ["MeshNetwork", "Gateway", "Connection"],
+        "MeshNetwork": ["Gateway", "Connection"],
+        "Gateway": ["Connection"],
+    ]
+
+    func testCoreDomainsDoNotDependOnUpwardDomains() throws {
+        let core = sourcesRoot.appendingPathComponent("Core")
+        var scanned = 0
+
+        for (domain, banned) in Self.coreUpwardBans.sorted(by: { $0.key < $1.key }) {
+            let forbidden = try declaredTypes(
+                under: banned.map { core.appendingPathComponent($0) }, topLevelOnly: true)
+            XCTAssertFalse(forbidden.isEmpty,
+                           "\(domain) 的禁止名单一个类型都没扫到 —— 先怀疑路径推算")
+            let files = swiftFiles(under: core.appendingPathComponent(domain))
+            XCTAssertFalse(files.isEmpty, "\(domain) 一个文件都没扫到 —— 先怀疑路径推算")
+
+            for file in files {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) {
+                    scanned += 1
+                    for type in forbidden where contains(type, in: code) {
+                        let relative = file.path
+                            .replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                        XCTFail("\(relative):\(line) 出现 \(type)"
+                                + " —— \(domain) 是下层，不得认识 \(banned.sorted().joined(separator: " / "))")
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 100, "只扫到 \(scanned) 行 —— 先怀疑路径推算")
+    }
+
     // MARK: - 断言 3：Views 下的类型不被别的界面当零件用
 
     /// 已知的跨界面复用。每一条都要有理由，且清单本身被断言（`testExceptionsAreStillReal`）——
@@ -409,44 +455,87 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 11–12：句子与说法不住在编排里
 
-    /// 会话详情的编排文件里，**含中文的行必须是注释行**（或以 `Log.` 开头）——
-    /// 用户看得见的句子归 `Display/SyncText.swift`，判定与编排只产出「哪一步 + 哪一类原因」。
+    /// `Features/*/State/` 下**含中文的行必须是注释行**（或以 `Log.` 开头）——
+    /// 用户看得见的句子归各屏的 `Display/`，判定与编排只产出「哪一步 + 哪一类原因」。
     ///
     /// 判据形态照线上形状那几条：不认字符串字面量，改按行判。理由是**三引号多行串**——
     /// 单行引号正则对它 0 命中（复审复算过：往编排里写一段 `"""` 包着的中文，旧写法的
     /// 命中数不变）。而一段多行的用户文案正是最典型的写法之一，漏它等于没守。
     ///
-    /// 只钉 `SessionSync.swift` 一个文件，不钉整个 `State/`：本屏的 `TranscriptAssembler`
-    /// （过程摘要）与 `ApprovalStore`（两句提示）的文案仍在原地 —— 那是本期范围边界里写明的
-    /// 「不做」，钉整个目录会让这条断言从第一天就红着。
-    ///
     /// 两条豁免：
     /// - **注释行**（`//` / `///` / `*` / `/*` 开头）—— 注释本来就该是中文；
-    /// - **整行以 `Log.` 开头** —— 日志文案在本项目一律写中文（`Core/Log.swift` 是唯一出口，
-    ///   `SecretFile`、`TailnetNode` 都是中文），而日志不是用户看得见的面；把用户句子写进
-    ///   `Log.` 里对用户没有意义。
-    private var sessionSyncFile: URL {
-        sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
-    }
-
-    func testSyncOrchestrationHasNoUserFacingStrings() throws {
-        let text = try String(contentsOf: sessionSyncFile, encoding: .utf8)
-        XCTAssertTrue(text.contains("func sync()"), "读到的不是编排文件 —— 先怀疑路径推算")
+    /// - **整行以 `Log.` 开头** —— 日志文案在本项目一律写中文（`Core/Log.swift` 是唯一出口），
+    ///   而日志不是用户看得见的面；把用户句子写进 `Log.` 里对用户没有意义。
+    ///
+    /// 白名单见 `stateStringExceptions`：每一条都要有理由，且过期会被
+    /// `testStateStringExceptionsAreStillReal` 抓出来删掉。
+    func testStateHasNoUserFacingStrings() throws {
+        let interfaces = try interfaceDirectories()
+        XCTAssertFalse(interfaces.isEmpty, "一个界面目录都没扫到：\(featuresRoot.path)")
 
         var commentLines = 0
         var hits = 0
-        for (line, source) in allLines(in: text) where containsHan(source) {
-            let trimmed = source.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") {
-                commentLines += 1
+        var scannedFiles = 0
+        for interface in interfaces {
+            for file in swiftFiles(under: interface.appendingPathComponent("State")) {
+                if Self.stateStringExceptions[file.lastPathComponent] != nil { continue }
+                scannedFiles += 1
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, source) in allLines(in: text) where containsHan(source) {
+                    let trimmed = source.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") {
+                        commentLines += 1
+                        continue
+                    }
+                    if trimmed.hasPrefix("Log.") { continue }
+                    hits += 1
+                    XCTFail("\(interface.lastPathComponent)/State/\(file.lastPathComponent):\(line)"
+                            + " 的中文不在注释里：\(trimmed) —— 用户可见的句子归 Display/")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scannedFiles, 0, "一个 State 文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, 0, "State/ 里还有用户可见的句子")
+        XCTAssertGreaterThan(commentLines, 0, "State/ 里连中文注释都没有 —— 先怀疑路径或读取")
+    }
+
+    /// `State/` 下允许出现中文字面量的文件。**每一条都要有理由**，过期要删。
+    ///
+    /// 键是文件名，值是一句话理由 + 重开条件。白名单本身被下一条断言守着 ——
+    /// 否则它会静默扩大豁免面（文件改名后旧条目失效、新文件悄悄多一个豁免）。
+    private static let stateStringExceptions: [String: String] = [
+        "TranscriptAssembler.swift": "过程行摘要（「3 次工具调用」「已思考」）随组装结果同处："
+            + "它由同一批事件的计数拼出，不在别的屏复用，也没有独立的变化速率。"
+            + "重开条件：下一次动过程行显示时，把它移到 `Display/`。",
+    ]
+
+    /// 白名单里的每一条都还真的需要 —— 文件没了、或里面已经没有中文字面量，就必须删掉这条。
+    func testStateStringExceptionsAreStillReal() throws {
+        for (fileName, reason) in Self.stateStringExceptions {
+            var found: URL?
+            for interface in try interfaceDirectories() {
+                for file in swiftFiles(under: interface.appendingPathComponent("State"))
+                where file.lastPathComponent == fileName {
+                    found = file
+                }
+            }
+            guard let file = found else {
+                XCTFail("白名单里的 \(fileName) 已不在任何 State/ 下 —— 删掉这条例外（原写：\(reason)）")
                 continue
             }
-            if trimmed.hasPrefix("Log.") { continue }
-            hits += 1
-            XCTFail("SessionSync.swift:\(line) 的中文不在注释里：\(trimmed)")
+            let text = try String(contentsOf: file, encoding: .utf8)
+            var hasLiteral = false
+            for (_, source) in allLines(in: text) where containsHan(source) {
+                let trimmed = source.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") {
+                    continue
+                }
+                if trimmed.hasPrefix("Log.") { continue }
+                hasLiteral = true
+            }
+            XCTAssertTrue(hasLiteral,
+                          "\(fileName) 已经没有中文字面量了 —— 删掉这条例外（原写：\(reason)）")
         }
-        XCTAssertEqual(hits, 0, "编排文件里还有用户可见的句子")
-        XCTAssertGreaterThan(commentLines, 0, "编排文件里连中文注释都没有 —— 先怀疑路径或读取")
     }
 
     /// 全部 `Display/` 目录（`Features/*/Display/` 与 `Core/**/Display/`）。

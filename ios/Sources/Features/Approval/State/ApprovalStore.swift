@@ -62,10 +62,6 @@ final class ApprovalStore: ObservableObject {
         }
     }
 
-    /// 不能应答时给用户的一句话。卡上显示它、应答的兜底也读它 —— 同一件事只写一处。
-    static let notForwardedNote = "这条审批还没有经由网关转发到手机 —— "
-        + "请在 Mac 上处理，或稍候重进会话。"
-
     /// 应答一条待批审批。寻址键 = 绑定到的 waterfall `eventId`；还没绑上的卡片
     /// （重建出的、转发帧未到）不能应答 —— 而不是把审计 id 冒充线上键。
     func answer(_ approval: ApprovalInbox.PendingApproval, allow: Bool) async {
@@ -81,7 +77,7 @@ final class ApprovalStore: ObservableObject {
             // cancel —— 自己答掉的审批，cancel 只发给别人，我们收不到收口帧）。上游语义
             // 「先答先收口」，回包成功即结局已定，与 Web UI 同样在应答当下收掉卡片。
             drop(approval)
-            notice = "已投递：\(allow ? "允许" : "拒绝")"
+            notice = Self.deliveredNote(allow: allow)
         } catch GatewayClientError.refused(let failure)
             where failure.code == GatewayErrorCode.unknownApproval.rawValue {
             // 审批已不在：撤卡。真正的结局以 decided 为准，未回流时重开会话重建时可见。

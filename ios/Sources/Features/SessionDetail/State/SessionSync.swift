@@ -14,7 +14,7 @@ import Foundation
 /// 它只装两件事：编排本身，以及「把线上形状送成状态机的输入」（`parseBaseline(_:)`、
 /// `refreshView` 的三条投影）—— 后者与调用顺序同源，不构成第二个变化原因。告知的置位与
 /// 清除住 `ResyncNoticeState`，用户看得见的句子住 `Display/SyncText.swift`：句子若写回
-/// 本文件，`LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
+/// 本文件，`LayeringTests.testStateHasNoUserFacingStrings` 会红。
 @MainActor
 final class SessionSync: ObservableObject {
 
@@ -102,7 +102,9 @@ final class SessionSync: ObservableObject {
         // 连接态指示器的唯一来源：不接的话指示器永远停在 idle、`ConnectionBadge` 恒隐藏。
         followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
         // upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
-        followClient.authorizationProvider = { CredentialStore.shared.validAccessToken() }
+        // 经 client 取而不是 `CredentialStore.shared`：HTTP 那条也走 client 注入的 store，
+        // 两条路径必须同源，否则换掉注入实例之后它们会各自为政。
+        followClient.authorizationProvider = { [weak self] in self?.client.validAccessToken() }
         // 传输与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
         followClient.sessionProvider = { [weak self] in self?.client.meshSession ?? .shared }
         followClient.baseURLProvider = { [weak self] in self?.client.baseURL }

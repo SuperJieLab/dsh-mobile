@@ -46,16 +46,6 @@ import Combine
     func retry(config: MeshConfig) async
 }
 
-/// 到网关对端的连接方式 —— **全仓唯一一份**。
-///
-/// 节点层产出它、连接域透传它、呈现层直接读它；三处不再各有自己的枚举，也就没有
-/// 「把一种取值翻成另一种」的映射可写。加第三个取值时，呈现层的显示 switch 会编译失败
-/// （`ConnectionBadge.look`），不会静默归到某一支。
-enum CarrierPath: Equatable {
-    case direct
-    case relay
-}
-
 @MainActor
 final class ConnectionStore: ObservableObject {
 
@@ -67,6 +57,9 @@ final class ConnectionStore: ObservableObject {
     /// 直连 / 中继；非 ready 期为 nil。徽章路径那一行的独立数据源 —— 它不折进
     /// `phase`，因为「连上了」与「走的是哪条路」是两个不同的变化原因。
     @Published private(set) var meshPath: CarrierPath?
+    /// 读盘时发现组网配置损坏（存过，但解不出来）。节点不会启动 —— 详情见
+    /// `reportDamagedConfiguration`。界面据此说「重新填写」，而不是「检查证书」。
+    @Published private(set) var storedConfigDamaged = false
 
     private let client: GatewayActivating
     private let node: MeshNodeControlling
@@ -119,10 +112,25 @@ final class ConnectionStore: ObservableObject {
         nodeChanged()
     }
 
+    /// 配置读坏了：不进节点层，把「要重新填」这件事如实说出来。
+    ///
+    /// 不走 `start` 的理由：`start` 会把配置交给节点，而损坏的配置只能回落成空配置 ——
+    /// 空配置过不了 `isComplete`，节点层于是报「不可达」，界面引导用户去查 VPS 与证书。
+    /// 归因从第一步就错了，而用户按那个提示查不出任何东西。
+    func reportDamagedConfiguration() {
+        guard !started else { return }
+        started = true
+        storedConfigDamaged = true
+        nodeState = .noKey
+        phase = .needsSetup
+    }
+
     // MARK: - 组网管理（设置页动作透传；判定在节点层，这里只接顺序）
 
     func submitMeshKey(_ key: String, config: MeshConfig) async {
         self.config = config
+        // 用户重填过了 —— 上一次的「读坏」到此为止。再坏会是下一次读盘的事。
+        storedConfigDamaged = false
         await node.submitKey(key, config: config)
         nodeChanged()
     }

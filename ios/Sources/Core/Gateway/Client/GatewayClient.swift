@@ -68,6 +68,15 @@ final class GatewayClient: ObservableObject {
         Log.info(Log.Module.gateway, "paired — device token stored")
     }
 
+    /// 还活着的 access 票；没有就是 `nil`。过期的票等价于没有票，调用方走续期。
+    ///
+    /// 流通道升级时要读它。**必须经这里，不许直接认 `CredentialStore.shared`** ——
+    /// 本类的 `credentials` 可注入，WS 与 HTTP 若各取各的，换掉注入实例之后两条路径
+    /// 会各自为政，而那种不一致在运行时看不出来（默认都指向 `.shared`）。
+    func validAccessToken() -> String? {
+        credentials.validAccessToken()
+    }
+
     /// 用设备凭证换一张新 access。返回 false 表示关系已被服务端掐断（401）—— 此时
     /// 清掉本机凭证，App 回到未配对状态。单飞：撞车的调用共享同一个在途任务，不叠加请求。
     func refreshAccess() async -> Bool {

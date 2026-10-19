@@ -6,6 +6,9 @@
  * CGNAT 段 IP，出了网没有意义，给默认值（沿用「硬编码一行」的先例）。
  *
  * 改动入口在设置页（PairingView 的组网段）；换 VPS/换 IP = 改这里 + 重装信任证书。
+ *
+ * 读写都不许静默失败：「存过但读不出来」与「从来没配过」是两件事，混成一件会让用户
+ * 按错误的提示去查另一样东西（配置坏了却被告知「组网服务不可达，检查 CA 证书」）。
  */
 import Foundation
 
@@ -28,19 +31,49 @@ struct MeshConfig: Equatable, Codable {
 
     // MARK: - UserDefaults 持久化（App 沙盒本地，不进仓库）
 
+    /// 读盘的结果 —— **三态，不是「配置或默认值」**。
+    ///
+    /// `damaged` 必须单独存在：把它并进 `missing` 会让「存过但坏了」表现成「干净首启」，
+    /// 于是拿到空配置去起节点，节点层报不可达，界面引导用户去查 VPS 与证书 ——
+    /// 而归因从一开始就错了。
+    enum ReadOutcome: Equatable {
+        /// 从来没配过：键不存在，干净首启。
+        case missing
+        /// 键在，但解不出来（旧格式 / 外部写入 / 迁移失败）。已留痕。
+        case damaged
+        case ok(MeshConfig)
+    }
+
     private static let defaultsKey = "mesh.config.v1"
 
-    static func load(_ defaults: UserDefaults = .standard) -> MeshConfig {
-        if let raw = defaults.string(forKey: defaultsKey),
-           let data = raw.data(using: .utf8),
-           let config = try? JSONDecoder().decode(MeshConfig.self, from: data) {
-            return config
+    static func read(_ defaults: UserDefaults = .standard) -> ReadOutcome {
+        guard let raw = defaults.string(forKey: defaultsKey) else { return .missing }
+        guard let data = raw.data(using: .utf8),
+              let config = try? JSONDecoder().decode(MeshConfig.self, from: data) else {
+            Log.error(Log.Module.mesh, "mesh config damaged — stored bytes cannot be decoded")
+            return .damaged
         }
+        return .ok(config)
+    }
+
+    /// 读到的配置，读不出就给「未配置」的形状。只适合不关心损坏与否的调用者（如设置页
+    /// 的初值填充）；要把「坏了」当一回事的地方用 `read()`。
+    static func load(_ defaults: UserDefaults = .standard) -> MeshConfig {
+        if case .ok(let config) = read(defaults) { return config }
         return MeshConfig(controlURLString: "", gatewayURLString: gatewayDefault)
     }
 
+    /// 写入。编不出来就留痕 —— 静默失败会让界面显示新值、节点用旧值。
     func save(_ defaults: UserDefaults = .standard) {
-        guard let data = try? JSONEncoder().encode(self) else { return }
-        defaults.set(String(data: data, encoding: .utf8), forKey: Self.defaultsKey)
+        do {
+            let data = try JSONEncoder().encode(self)
+            guard let text = String(data: data, encoding: .utf8) else {
+                Log.error(Log.Module.mesh, "mesh config not saved — encoding is not UTF-8")
+                return
+            }
+            defaults.set(text, forKey: Self.defaultsKey)
+        } catch {
+            Log.error(Log.Module.mesh, "mesh config not saved: \(error.localizedDescription)")
+        }
     }
 }
