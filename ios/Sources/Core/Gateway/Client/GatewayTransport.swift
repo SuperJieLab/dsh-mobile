@@ -14,7 +14,9 @@ final class GatewayTransport {
     /// 组网后注入 `TailnetNode.gatewaySession`（SOCKS5 回环 → tailnet），消息层零感知。
     private let session: URLSession
 
-    /// 协议里的唯一端点。多端点会把资源语义烧进 URL（见 `dev/contract/protocol.md` §二）。
+    /// 协议里的唯一端点 —— 所有 op 都打这一个地址，靠信封里的 `op` 分派。
+    /// 多端点会把资源语义烧进 URL：客户端就得记住哪个资源走哪个地址，
+    /// 而这件事协议已经从请求体里回答过了。
     nonisolated static let rpcPath = "/rpc"
 
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
@@ -39,7 +41,8 @@ final class GatewayTransport {
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // 身份只走传输头，不进消息体（dev/contract/protocol.md §「身份」）。
+        // 身份只走传输头，不进消息体：消息体的每一个字段都是协议的一部分，
+        // 凭证放进去会让它出现在日志、重放与错误回显里。
         if authenticated, let access = credentials.validAccessToken() {
             urlRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
         }

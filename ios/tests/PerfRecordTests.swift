@@ -1,7 +1,7 @@
 import XCTest
 @testable import DshMobile
 
-/// R8 期1 Task 4：性能记录出口 —— PerfRecord 的序列化形状（与网关 perf.ts 的
+/// 性能记录出口 —— PerfRecord 的序列化形状（与网关 perf.ts 的
 /// PerfRecord 同构）与 Log.perf 的门控、拼写。
 final class PerfRecordTests: XCTestCase {
 

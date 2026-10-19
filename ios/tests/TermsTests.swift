@@ -1,13 +1,13 @@
 import XCTest
 
-/// 术语回潮检查（R13 期2）—— 扫 `ios/Sources` 与 `ios/tests` 的注释，命中仓库根 `terms.txt`
+/// 术语回潮检查—— 扫 `ios/Sources` 与 `ios/tests` 的注释，命中仓库根 `terms.txt`
 /// 的反模式即失败。
 ///
 /// 词表与网关侧是同一份（`terms.txt` 在仓库根）⇒ 结构上不可能漂移。表里还有一组
 /// 「自查样本」（`expect-hit` / `expect-pass`）：加载后先跑一遍，**规则被改坏时这里先红**，
 /// 不必等仓库真的回潮。
 ///
-/// 只报不改：「承载」按句意分两种写法（组网 / 传输），没有唯一解，自动替换正是期1 那 60 处误伤
+/// 只报不改：「承载」按句意分两种写法（组网 / 传输），没有唯一解，自动替换正是那 60 处误伤的来由
 /// 的来源。
 ///
 /// 豁免：`terms-ok:<理由>` 行内豁免，或 `terms-ok:start` / `terms-ok:end` 块豁免。
@@ -114,7 +114,7 @@ final class TermsTests: XCTestCase {
     /// 命中详情写盘。
     ///
     /// 为什么不能只靠断言消息：XCTest 的 message 进 xcresult，命令行只显示「failed」；
-    /// 而 `xcodebuild -quiet` 会把测试进程的 stdout 也压掉（R13 期2 实测）。判据要求
+    /// 而 `xcodebuild -quiet` 会把测试进程的 stdout 也压掉。判据要求
     /// 「输出指出文件与行」，所以留一份可读的落盘报告 —— 文件名以 `.log` 结尾，已在
     /// `.gitignore` 里。
     private var reportURL: URL { repoRoot.appendingPathComponent("ios/.terms-check.log") }

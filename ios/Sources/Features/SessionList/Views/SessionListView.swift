@@ -16,7 +16,7 @@ struct SessionListView: View {
     @State private var showMeshSettings = false
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
-    /// 连接域：连接方式一行的数据源（根部 environmentObject 注入，R3 起唯一出处）。
+    /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @EnvironmentObject private var store: ConnectionStore
 
     init(client: GatewayClient) {
@@ -40,7 +40,7 @@ struct SessionListView: View {
                 }
             } else if state.outcome == .waitingForMesh {
                 Section {
-                    // 组网就绪前的必然等待（R5 修正 4②）：不是错误，中性显示。
+                    // 组网就绪前的必然等待：不是错误，中性显示。
                     Label("等待组网就绪…", systemImage: "antenna.radiowaves.left.and.right")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -62,7 +62,7 @@ struct SessionListView: View {
         .navigationTitle("会话")
         .navigationDestination(for: SessionSummary.self) { session in
             // 显式再注一次（双保险）：navigationDestination 闭包在容器懒建时求值，
-            // 根部注入被吞的场景下这里兜底（真机踩过：配对成功后进详情页崩溃）。
+            // 根部注入到不了推入的视图 —— 不补这一句，详情页读不到连接域。
             SessionDetailView(client: client, session: session)
                 .environmentObject(store)
         }
@@ -79,7 +79,7 @@ struct SessionListView: View {
         }
         .refreshable { await state.reload() }
         .task { await state.reload() }
-        // 组网就绪即首载：启动窗口内的请求会 fail-fast（R5 fail-fast 的体验补全），
+        // 组网就绪即首载：启动窗口内的请求会 fail-fast（端点还不存在），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
         // 这里的 `guard case .ready` 只是省一次必然失败的请求；「未就绪」该怎么显示由
         // `SessionListState` 的等待面决定（与详情屏同一形状，见 SessionDetailView）。

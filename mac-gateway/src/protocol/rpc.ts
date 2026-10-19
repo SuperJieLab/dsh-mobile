@@ -9,8 +9,7 @@
  * 用于打开的窗口。
  *
  * 应答上限：单条应答 ≤ `maxDeltaEvents` 条事件，软性再受 `maxDeltaBytes`
- * 约束；提前截停用 `hasMore` 说明。上限约束单条应答，从不是序列的累计
- * （M1 §3.3.2 决定 4）。
+ * 约束；提前截停用 `hasMore` 说明。上限约束的是单条应答，从不是序列的累计。
  */
 
 import { readErrorOf } from './error-codes.ts'

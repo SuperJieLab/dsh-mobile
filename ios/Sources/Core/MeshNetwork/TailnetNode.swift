@@ -2,7 +2,8 @@
  * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
  * 职责边界：这里只做「上游调用 + 结果归类成状态机事件」，不含任何判断逻辑之外的行为；
- * 迁移决策全部在纯状态机 `TailnetNodeState`（断言在 tests/MeshNodeStateTests.swift）。注册成功的副产物
+ * 迁移决策全部在纯状态机 `TailnetNodeState`（断言在
+ * tests/MeshNodeStateTests.swift）。注册成功的副产物
  * 是一只走 SOCKS5 回环的 `gatewaySession`，`GatewayClient` 注入它之后流量
  * 全部进 tailnet。
  *
@@ -10,7 +11,7 @@
  * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
  * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册；
  * - `TailscaleError` 没有结构化的 key 错误分支，badKey/unreachable 只能按错误消息归类
- *   —— 这里是薄翻译层。
+ * —— 这里是薄翻译层。
  */
 import Foundation
 import TailscaleKit
@@ -41,8 +42,8 @@ final class TailnetNode: ObservableObject {
     /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调。
     var onVerifiedRunning: ((URLSession) -> Void)?
 
-    /// 对外可见事实变化的推送通道（R3 起 ConnectionStore 消费）：状态迁移与
-    /// 路径刷新处调用。通知本身零成本，重复通知由接收方投影吸收。
+    /// 对外可见事实变化的推送通道（连接域唯一消费者）：状态迁移与路径刷新处调用。
+    /// 通知本身零成本，重复通知由接收方的投影吸收。
     var onNodeChanged: (() -> Void)?
 
     private var node: TailscaleNode?
@@ -78,9 +79,9 @@ final class TailnetNode: ObservableObject {
         case .registering:
             await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
         case .running:
-            // 幂等（真机 2026-10-10：同一进程内二次 launch——旧 socket 全被杀，
-            // socks5/localapi 报 use of closed network connection，徽章掉路径标签）：
-            // 节点已验证 Running 且组网 session 还活着时不再 re-up，只把激活
+            // 幂等：同一进程内二次 launch 会把旧 socket 全杀掉 —— socks5 / localapi
+            // 随即报 use of closed network connection，徽章上的路径标签也一起掉。
+            // 所以节点已验证 Running 且组网 session 还活着时不再 re-up，只把激活
             // 回调补到位。冷启动（新进程、gatewaySession 必为 nil）不受影响。
             if let session = gatewaySession {
                 Log.info(Log.Module.mesh, "launch: node already running with live session — skip re-up")

@@ -1,8 +1,8 @@
 /**
  * UsageState 的吸收测试（O1–O2）：纯值类型，不碰网络 / UI / 持久化。
  *
- * 判据与出处：M6 §五。吸收规则照上游
- * `api/session-controller/src/client/sessions/projection-store.ts:136` ——
+ * 吸收规则照上游
+ * 客户端只回答「这条帧该不该覆盖手里那份」：**严格高 seq 胜，相等也丢** ——
  * **严格高 seq 胜，相等也丢**。
  */
 import Foundation

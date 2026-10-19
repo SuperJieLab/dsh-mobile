@@ -4,7 +4,7 @@
  * 只改说法（locale、unitsStyle）时不需要动合约；协议里的时刻表示（epoch 毫秒）仍在
  * `Contract/GatewayProtocol.swift` 的 `epochMilliseconds`。
  *
- * 消费者：`SessionListView` 的会话行。
+ * 只有会话列表的会话行读它：详情屏不显示时间。
  */
 import Foundation
 

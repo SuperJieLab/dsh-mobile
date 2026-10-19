@@ -4,7 +4,7 @@
  * 取数入口是注入的闭包：不碰网关、不碰界面，也不依赖模拟器的网络栈。三条断言只回答两件事：
  * 一次取数的结果落成哪一面、失败的原因带的是什么（原文有没有丢）。
  *
- * 这三条守的是 R18 期2 的 C2：目录失败时屏幕上给的是服务端原文并可重试，不是一句「不可用」。
+ * 这三条守的是同一件事：目录失败时屏幕上给的是服务端原文并可重试，不是一句「不可用」。
  */
 import Foundation
 import XCTest
@@ -46,7 +46,7 @@ final class ModelCatalogStateTests: XCTestCase {
         )
     }
 
-    /// R18 期2 V6：成功面不丢字段 —— 默认值原样带过来。
+    /// 成功面不丢字段 —— 默认值原样带过来。
     func testReadyKeepsDefaults() async {
         let state = ModelCatalogState(fetch: { self.makeCatalog(default: "m") })
         XCTAssertEqual(state.outcome, .waiting, "还没取过：等待面，不是空目录")
@@ -59,7 +59,7 @@ final class ModelCatalogStateTests: XCTestCase {
         XCTAssertEqual(list.groups?.first?.models.first?.id, "m", "分组与条目原样带过来")
     }
 
-    /// R18 期2 V4：协议拒绝原样带，认不出的码要显示服务端原文。
+    /// 协议拒绝原样带，认不出的码要显示服务端原文。
     func testRefusedKeepsServerText() async {
         let failure = GatewayFailure(code: "catalog-unavailable", message: "模型目录服务没起来")
         let state = ModelCatalogState(fetch: { throw GatewayClientError.refused(failure) })
@@ -72,7 +72,7 @@ final class ModelCatalogStateTests: XCTestCase {
                       "认不出的协议码要回落服务端原文，不能只剩一句「目录没取到」")
     }
 
-    /// R18 期2 V5：传输失败落在传输面；重试期间是等待面，成功之后回到内容面。
+    /// 传输失败落在传输面；重试期间是等待面，成功之后回到内容面。
     func testOfflineThenRetry() async {
         let script = Script([
             .failure(GatewayClientError.notActivated),

@@ -8,8 +8,9 @@ import Foundation
 /// SwiftUI 在这里没有位置。`struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享
 /// 状态**，值语义会在视图间复制出各自为政的凭证；仍 `@MainActor`，因为所有调用方本就在主线程。
 ///
-/// **命名口径（R13 定，按副作用分）**：有副作用的写操作读作祈使动词短语（`pair` /
-/// `refreshAccess` / `answerApproval` / `sendPrompt` / `selectModel`）；无副作用的读操作读作名词短语、
+/// **命名口径（按副作用分）**：有副作用的写操作读作祈使动词短语（`pair` /
+/// `refreshAccess` / `answerApproval` / `sendPrompt` / `selectModel`）；
+/// 无副作用的读操作读作名词短语、
 /// 与协议 op 同名（`snapshot` / `page` / `modelCatalog`）。**已知例外**：`listSessions` 是读操作
 /// 却用了动词短语 —— 改成 `sessions()` 会与属性读起来相混，故保留并在此登记。
 ///
@@ -18,7 +19,7 @@ import Foundation
 /// `sendPrompt`→`session-prompt` · `modelCatalog`→`model-catalog` · `selectModel`→`model-select`。
 @MainActor
 final class GatewayClient: ObservableObject {
-    /// 网关端点 —— **激活前不存在**（R5 契约）：App 在节点验证 Running 之前不持有
+    /// 网关端点 —— **激活前不存在**：App 在节点验证 Running 之前不持有
     /// 任何网关地址，`activate` 是它从无到有的唯一时刻。
     private(set) var baseURL: URL?
 
@@ -44,7 +45,7 @@ final class GatewayClient: ObservableObject {
         self.isPaired = self.credentials.hasDeviceToken
     }
 
-    /// 组网激活：节点验证 Running 后由 store 调用（R5：唯一激活点）——
+    /// 组网激活：节点验证 Running 后由 store 调用，这是端点从无到有的唯一时刻 ——
     /// HTTP 换 transport、WebSocket 换建连源，整体切到 tailnet。消息层零感知：
     /// 协议、凭证、身份状态机都不动，只换传输与地址。
     func activate(session: URLSession, baseURL: URL) {
@@ -104,8 +105,8 @@ final class GatewayClient: ObservableObject {
     /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
     func listSessions() async throws -> [SessionSummary] {
         let response: ListSessionsResponse = try await send(ListSessionsRequest())
-        // R8 期1 链路 A：clock 采样 —— 服务端时钟与本地收到时刻的一对，
-        // 期2 用它估两端 offset，修正跨机的 t3 段与端到端（决定 3：不裸减）。
+        // clock 采样：服务端时钟与本地收到时刻的一对。两端 offset 由这一对估出来，
+        // 才能修正跨机的 t3 段与端到端 —— 直接相减会把这个 offset 算进延迟里。
         if let serverTime = response.serverTime {
             Log.perf(Log.Module.gateway, PerfRecord(
                 seg: .clock, t: PerfRecord.nowMs(),
@@ -139,9 +140,9 @@ final class GatewayClient: ObservableObject {
 
     /// 拉一段回溯窗口 —— 打开会话与往回翻都用它。
     /// - Parameters:
-    ///   - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」（打开会话）；
-    ///   往回翻时传上一次的 `pageStart`。
-    ///   - maxMessages: 最多取多少条消息。不传就用服务端的默认值。
+    /// - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」（打开会话）；
+    /// 往回翻时传上一次的 `pageStart`。
+    /// - maxMessages: 最多取多少条消息。不传就用服务端的默认值。
     func page(sessionId: String, beforeSeq: Int? = nil, maxMessages: Int? = nil) async throws -> SessionPage {
         let response: PageResponse = try await send(
             PageRequest(sessionId: sessionId, beforeSeq: beforeSeq, maxMessages: maxMessages)
@@ -215,7 +216,7 @@ final class GatewayClient: ObservableObject {
         _ request: Request,
         authenticated: Bool = true
     ) async throws -> Response {
-        // 未激活 = 没有地址可打：fail-fast，不猜地址（R5 决定 1）。
+        // 未激活 = 没有地址可打：fail-fast，不猜地址。
         guard let transport else { throw GatewayClientError.notActivated }
         if let answer = try await transport.sendOnce(request, authenticated: authenticated, type: Response.self) {
             return answer

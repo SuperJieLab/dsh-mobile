@@ -1,7 +1,7 @@
 /**
  * 可见性规则的四条断言：`blank` 与 `subagent` 不显示；`origin` 缺省、以及其它取值都显示。
  *
- * 出处：R16 期1 决定 A3。这四条是「哪些会话该出现在列表里」的唯一常驻判据 —— 规则住在
+ * 这四条是「哪些会话该出现在列表里」的唯一常驻判据 —— 规则住在
  * `SessionVisibility`，状态类型与视图都不再自己拼条件。
  *
  * 跑法：`xcodebuild test -only-testing:DshMobileTests/SessionVisibilityTests`。

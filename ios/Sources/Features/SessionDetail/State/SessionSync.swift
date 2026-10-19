@@ -6,17 +6,17 @@ import Foundation
 /// - **单飞**：同一会话同时只有一个同步过程（`syncInFlight`）。
 /// - **拉完为止**：追新增时一块装不下就接着要，直到服务端说没有更多。
 /// - **先窗口后增量**：先向服务端要一个最新的窗口，再往后追 —— 这样**不需要跨会话记住任何
-///   位置**，冷启动、重启、跑了一夜回来行为都一样。
+/// 位置**，冷启动、重启、跑了一夜回来行为都一样。
 ///
 /// 镜像只在内存里（见 `SessionMirror`）：没有任何位置或内容落盘。用 `ObservableObject`
 /// 而非 `@Observable` 宏 —— 后者要跑进程外的宏插件，本项目的验证环境不允许（**能被本地
 /// 编译验证，比写法新更重要**）。
 ///
-/// **这里的第三类东西已经搬走**（R18 期2）：告知的置位与清除在 `ResyncNoticeState`（同目录），
-/// 用户看得见的句子在 `Display/SyncText.swift`。仍留在这里的是编排本身与「把线上形状搬成
-/// 状态机的输入」这两件（`parseBaseline(_:)`、`refreshView` 的三条投影）——
-/// 它们与调用顺序同源，不构成第二个变化原因。窗口与快照不再需要搬运：状态机直接吃
-/// 协议类型（R19）。句子若写回本文件，
+/// 它只装两件事：编排本身，以及「把线上形状送成状态机的输入」（`parseBaseline(_:)`、
+/// `refreshView` 的三条投影）—— 后者与调用顺序同源，不构成第二个变化原因。
+/// 窗口与快照不需要转换：状态机直接吃协议类型。
+/// 告知的置位与清除住 `ResyncNoticeState`（同目录），用户看得见的句子住
+/// `Display/SyncText.swift` —— 句子若写回本文件，
 /// `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
 ///
 /// 消费者：`SessionDetailView`（整屏与底栏）、`ModelPickerView`（读显示值与发起换模型）。
@@ -26,7 +26,7 @@ final class SessionSync: ObservableObject {
     /// 状态行要说的事。**重置与失败必须说得出来** —— 那是用户唯一能察觉异常的地方。
     ///
     /// 失败只说「哪一步 + 哪一类原因」，不说句子：句子随产品决定变，住 `Display/SyncText.swift`
-    /// （R18 期2）。因此这个类型**不再可比较**（原因里带着抛出来的错误对象）；视图要问
+    ///。因此这个类型**不再可比较**（原因里带着抛出来的错误对象）；视图要问
     /// 「在不在同步」时读 `isSyncing` / `isIdle` 这两个形状查询。
     enum Status {
         case idle
@@ -68,11 +68,11 @@ final class SessionSync: ObservableObject {
     /// 还能往回翻吗。为真时界面给出入口。
     @Published private(set) var hasOlder = false
     @Published private(set) var status: Status = .idle
-    /// 「对不上」的告知 —— 底部**固定面**的数据源（R10 期2 链路 C）。判定全在值类型里。
+    /// 「对不上」的告知 —— 底部**固定面**的数据源。判定全在值类型里。
     ///
-    /// 与 `status` 的分工：`status` 说「同步到哪了」，只在**取窗口时**更新（重连不跳它，spec 2.3.1）；
-    /// 本项说的是「有内容没能接上、或已被清空重来」—— 它要出现在**不随内容滚动**的面上，
-    /// 否则用户往回翻时看不见（那正是 spec 2.4.3 要防的「看起来正常但少了内容」）。
+    /// 与 `status` 的分工：`status` 说「同步到哪了」，只在**取窗口时**更新 —— 重连是传输层
+    /// 事件，不该跳它；本项说的是「有内容没能接上、或已被清空重来」—— 它要出现在**不随内容
+    /// 滚动**的面上，否则用户往回翻时看不见，屏上看起来一切正常、只是少了一段。
     @Published private(set) var notice: ResyncNotice?
     /// 正在生成的回复（流式输出）；没有进行中的 attempt 就是空串。
     @Published private(set) var transientText = ""
@@ -124,9 +124,9 @@ final class SessionSync: ObservableObject {
     /// 当前模型的订阅更新。判定全在值类型里，这里只持有并转发结果。
     private var modelState = ModelSelectionState()
     /// 把嵌套状态机的变化冒泡成自己的 objectWillChange ——
-    /// 不转发的话审批卡的增删不触发视图重算（真机踩实）。
+    /// 不转发的话审批卡的增删不触发视图重算。
     private var approvalsObservation: AnyCancellable?
-    /// 刷新合并闸（R4 决定 2）：事件帧批处理，判定在值类型 `RefreshGate`。
+    /// 刷新合并闸：事件帧批处理，判定在值类型 `RefreshGate`。
     private var refreshGate = RefreshGate()
     /// flush 是否已有一次调度在途（防重复调度）。
     private var flushScheduled = false
@@ -144,7 +144,7 @@ final class SessionSync: ObservableObject {
     /// 下发一条指令：回包 ok = 已受理，回答本身从订阅流里来；失败如实进状态行，
     /// 输入的字还在框里。
     func sendPrompt(_ text: String) async {
-        // 与发送按钮的置灰读同一份判定 —— 「判空」与「取值」同源（R18 期3 决定 B1）。
+        // 与发送按钮的置灰读同一份判定 —— 「判空」与「取值」同源。
         guard let trimmed = PromptDraft.normalized(text) else { return }
         do {
             try await client.sendPrompt(sessionId: sessionId, text: trimmed, promptId: UUID().uuidString)
@@ -227,7 +227,8 @@ final class SessionSync: ObservableObject {
                 recovered = true
                 mirror.reset()
                 // 这是**编排自己**执行的重置：`sync()` 是用户显式要求的「重新同步」，撞上缺口时
-                // 保留无法收敛（下一次拉到的增量仍接不上），所以它一律重置 —— 告知如实记「已重置」。
+                // 保留无法收敛（下一次拉到的增量仍接不上），所以它一律重置 ——
+                // 告知如实记「已重置」。
                 noteReset(reason)
                 // 位置已作废，没有内容可续。下一次同步会以「取窗口」的形态重来。
                 status = .done(added: added, recovered: true)
@@ -249,7 +250,7 @@ final class SessionSync: ObservableObject {
             if !more { break }
         }
 
-        // 一次干净走完的同步 = 重新建立：本地与服务端已经对齐，此前的「未接上」到此为止 ——
+        // 一次干净走完的同步 = 重新建立：本地与服务端已经对齐，「未接上」这件事到此为止 ——
         // 这是告知的清除点之一（另一处是离开再进入会话，视图销毁时一并消失）。
         clearNotice()
         status = .done(added: added, recovered: recovered)
@@ -285,7 +286,7 @@ final class SessionSync: ObservableObject {
         case .caughtUp:
             status = .done(added: 0, recovered: false)
         case .resetRequired(let reason):
-            // 分档（R10 期2 决定 1 / 决定 2）：取回的是一段**更早**的历史，它接不上**不影响**当前
+            // 分档：取回的是一段**更早**的历史，它接不上**不影响**当前
             // 视图的真实性 —— 当前视图仍然完整、仍然是真的。所以 `.gap` 一律保留（清空它 = 用
             // 「你多点了一下」换掉用户已经读到的全部内容）；只有服务端否定了本地位置时才清空重来。
             if reason.invalidatesLocalContent { mirror.reset() }
@@ -304,7 +305,7 @@ final class SessionSync: ObservableObject {
     /// 打开详情页即订阅：服务端推 opening（首屏窗口）与后续事件，不再轮询。判定全在状态机
     /// 里 —— 与 HTTP 路径共用同一台 `SessionMirror`：
     /// - opening → `mirror.realign(with:)`（**重对齐**：本地更早的部分保留、只换尾部；
-    ///   手里空着时等价于打开。重连因此不再把翻出来的历史还回去，R10 期1）
+    ///   手里空着时等价于打开。重连因此不会把已经翻出来的历史还回去）
     /// - 事件帧 → `mirror.apply(.received(SessionSnapshot(asOfSeq: seq + 1, …)))` —— 一条事件就是
     ///   一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
     func startFollowing() {
@@ -325,7 +326,7 @@ final class SessionSync: ObservableObject {
     }
 
     private func applyOpening(_ opening: OpeningFrame) {
-        // 首次建立窗口与重连重建共用这一个入口，但语义不同（R10 期1）：手里空着时等价于
+        // 首次建立窗口与重连重建共用这一个入口，但语义不同：手里空着时等价于
         // 「打开」（整段取窗口）；重连时本地可能已有翻出来的历史，那时走「重对齐」——
         // 本地更早的部分原样保留，只换尾部。
         let wasEmpty = mirror.isEmpty
@@ -347,14 +348,12 @@ final class SessionSync: ObservableObject {
         }
 
         // 状态行只在**首次建立窗口**时更新：重连是传输层事件，用户没做任何事，不该看到
-        // 一行变化（spec 2.3.1）；`added` 取净增，于是它不再等于整个窗口的长度。
+        // 一行变化；`added` 取净增，于是它不再等于整个窗口的长度。
         if wasEmpty {
             status = .done(added: addedCount(verdict), recovered: false)
         } else if case .resetRequired(let reason) = verdict {
-            // 接不上：本地与新版之间有洞、或位置被否定。分档（R10 期2 决定 1）—— 洞（`.gap`）
-            // 保留本地（内容是旧的，但不是错的）；位置被否定则清空重来（留下的内容可能不是真的）。
-            // 两种处置都交给告知，由它出现在**不随滚动离开**的面上（链路 C）—— 期1 那行只写进
-            // footer 的状态行，用户往回翻时在屏幕外，等于没说。
+            // 接不上：本地与新版之间有洞、或位置被否定。怎么分档、为什么这样分，
+            // 判在 `ResetReason.invalidatesLocalContent` 上；这里只按它的结论执行。
             if reason.invalidatesLocalContent { mirror.reset() }
             observeNotice(verdict)
         }
@@ -367,7 +366,8 @@ final class SessionSync: ObservableObject {
         return 0
     }
 
-    /// 订阅路径（opening / 往回翻）收下一条判定 —— 置位规则在值类型里（`.gap` 保留、「位置被否定」重置）。
+    /// 订阅路径（opening / 往回翻）收下一条判定 —— 置位规则在值类型里
+    /// （`.gap` 保留、「位置被否定」重置）。
     private func observeNotice(_ verdict: Verdict) {
         noticeState.observe(verdict)
         notice = noticeState.notice
@@ -388,17 +388,17 @@ final class SessionSync: ObservableObject {
     private func applyLiveEvent(_ event: SessionEvent) {
         // 一条事件 = 一次覆盖到 seq+1 的快照；上游 gap-free 是契约（网关另有目击），幂等照旧生效。
         // 这是**合成**一份新快照（把单条事件包成「覆盖到 seq+1 的回应」），不是把同形数据
-        // 从一种类型搬到另一种 —— 所以保留构造（R19 决定 A3）。
+        // 从一种类型搬到另一种 —— 所以保留构造。
         let verdict = mirror.apply(.received(
             SessionSnapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])
         ))
-        // 「未接上」之后事件进不来（中间有洞）。这个判定**不再被丢掉** —— 它让告知跟上现状，
-        // 界面就不会一边静止、一边看起来正常（R10 期2 链路 C）。
+        // 「未接上」之后事件进不来（中间有洞）。这个判定不能丢 —— 它让告知跟上现状，
+        // 界面就不会一边静止、一边看起来正常。
         if case .resetRequired = verdict { observeNotice(verdict) }
         // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
         modelState.absorb(event: event)
         displayedModel = modelState.displayed
-        // R4 决定 2：事件帧只标脏，批到点一次全量重算（opening / HTTP 同步路径不经闸）。
+        // 事件帧只标脏，批到点一次全量重算（opening / HTTP 同步路径不经闸）。
         if refreshGate.eventArrived() == .openWindow { scheduleFlush() }
     }
 
@@ -429,8 +429,8 @@ final class SessionSync: ObservableObject {
     }
 
     private func handleStreamRefusal(_ failure: GatewayFailure) {
-        // 它天然是一个「抛出来的错误」：包一层比多一个 `Cause` 档便宜，而显示层那句
-        // 「订阅流被拒绝：」正好等于搬家前的说法（`localizedDescription` 走 `.refused` 的解释）。
+        // 它天然是一个「抛出来的错误」：包一层比多一个 `Cause` 档便宜 —— 显示层把
+        // `localizedDescription` 解释成「订阅流被拒绝：…」，与用户已知的说法一致。
         status = .failed(step: .streaming, cause: .thrown(GatewayClientError.refused(failure)))
         refreshView()
     }
@@ -478,7 +478,7 @@ final class SessionSync: ObservableObject {
             // 进会话前的选择客户端窗口里没有，只有这一路能补上。
             modelState.absorb(baseline: snapshot.model)
             displayedModel = modelState.displayed
-            // 协议回应就是状态机的输入形状（R19 A1），不再逐字段搬一份。
+            // 协议回应就是状态机的输入形状 —— 同形的东西只有一份，不在此逐字段搬。
             return .received(snapshot)
         } catch let error as GatewayClientError {
             if case .refused(let failure) = error {
@@ -496,7 +496,8 @@ final class SessionSync: ObservableObject {
     }
 
     /// 刷新界面可见的部分。状态机是唯一的事实来源。组装每次都从**整段事件**重算，不做
-    /// 增量 —— 重算代价远低于「增量组装写错一处就静默少一行」的风险；真机上手感有变化时再谈。
+    /// 增量 —— 重算代价远低于「增量组装写错一处就静默少一行」的风险。手感真有问题时
+    /// 再谈增量，那时要先有一条能证明「少了一行」的判据。
     private func refreshView() {
         messages = mirror.events.compactMap(\.displayMessage)
         nodes = assembler.assemble(mirror.events)

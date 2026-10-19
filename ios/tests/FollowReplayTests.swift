@@ -1,16 +1,16 @@
 /**
  * 订阅流下的镜像重放（C3）与退避曲线（C1 可测部分）。
  *
- * ## C3（M2 §5.2）
+ * ## C3
  * 订阅流的形状：opening 即 `page` 的窗口（`SessionPage`），一条事件帧即一次覆盖到
  * `seq + 1` 的快照（`SessionSnapshot`）。不碰 `SessionSync`、不碰网络，按投喂顺序重放 ——
- * M1 那台状态机若为 WebSocket 改任何一行，这里先红。
+ * 镜像那台状态机若为 WebSocket 改任何一行，这里先红。
  *
  * ## C1 的可测部分
- * `FollowClient` 的重连编排需真网络，完整行为由真机判据 R3/R4 覆盖；这里测它的
+ * `FollowClient` 的重连编排需真网络，完整行为由真机判据覆盖；这里测它的
  * **退避曲线**（纯函数）：指数爬升、抖动边界、封顶。
  *
- * ## R9 T4
+ * ## 打开帧的尺寸纪律
  * 打开帧的两端配套：客户端接收上限与网关承诺的上界的关系，以及 `window-too-large`
  * 归入终态而非重试。行为链（真收到拒绝帧后停在 idle）由真机判据覆盖。
  */
@@ -85,7 +85,7 @@ final class FollowReplayTests: XCTestCase {
         XCTAssertTrue(FollowClient.backoffDelayMs(attempt: 0, random: 1) == 500, "C1-7 attempt 0 按 1 处理")
         XCTAssertTrue(FollowClient.backoffDelayMs(attempt: 3, random: 99) == 2_000, "C1-8 random 越界被钳到 1")
 
-        // MARK: R4 G1/G2 —— 帧层 typed 解码（对账 + 容错，Plan R4 §3.4 决定 1）
+        // MARK: 帧层 typed 解码 —— 对账与容错
 
         let openingText = """
         {"type":"item","streamId":1,"payload":{"sessionId":"s1","cursor":3,"pageStart":0,"hasOlder":true,
@@ -97,7 +97,7 @@ final class FollowReplayTests: XCTestCase {
         """
         let openingData = Data(openingText.utf8)
 
-        // 对账基准：旧的 JSONValue 往返路径（R4 之后代码里不再存在，判定在这里留档）。
+        // 对账基准：旧的 JSONValue 往返路径 —— 代码里已经没有它了，判定在这里留档。
         let routed = try! JSONDecoder().decode(JSONValue.self, from: openingData)
         let legacyEvents: [SessionEvent] = ((routed["payload"]?["events"]?.array) ?? []).compactMap {
             try? JSONDecoder().decode(SessionEvent.self, from: JSONEncoder().encode($0))
@@ -117,7 +117,7 @@ final class FollowReplayTests: XCTestCase {
         let notOpening = Data(#"{"type":"item","streamId":1,"payload":{"type":"user/message","seq":9,"time":1,"data":{}}}"#.utf8)
         XCTAssertTrue(OpeningFrame.decode(notOpening) == nil, "G2c 非 opening 载荷不误判")
 
-        // MARK: R4 G3 —— 合并闸（Plan R4 §3.4 决定 2）：批内累计，到点收批
+        // MARK: 合并闸：批内累计，到点收批
 
         var gate = RefreshGate()
         XCTAssertTrue(gate.eventArrived() == .openWindow, "G3a 批未开：首个事件开批并调度 flush")
@@ -128,7 +128,7 @@ final class FollowReplayTests: XCTestCase {
         XCTAssertTrue(!gate.flushDue(), "G3d 收批之后再 flush 是无事发生（无消费者的重算被挡掉）")
         XCTAssertTrue(gate.eventArrived() == .openWindow, "G3e 关批后新事件重新开批")
 
-        // MARK: R5 K1–K3 —— 端点生命周期（Plan R5 契约：不存在 → activate 一次 → 存在）
+        // MARK: 端点生命周期 —— 不存在 → activate 一次 → 存在
 
         // K1：未激活的 client 不持有端点，op 立抛 .notActivated（transport 尚不存在，零网络）。
         let bare = GatewayClient()
@@ -137,7 +137,8 @@ final class FollowReplayTests: XCTestCase {
         XCTAssertTrue(k1Hit, "K1 未激活 op 立抛 notActivated（不猜地址、不发网络）")
         XCTAssertTrue(bare.baseURL == nil, "K1b 未激活端点为 nil")
 
-        // K2：activate 是端点唯一来源——激活后同 op 的失败是传输层（ refusal），不再是 notActivated。
+        // K2：activate 是端点唯一来源 —— 激活后同 op 的失败是传输层（refusal），
+        // 不再是 notActivated。
         let activated = GatewayClient()
         let endpoint = URL(string: "http://127.0.0.1:1")!
         activated.activate(session: .shared, baseURL: endpoint)
@@ -158,7 +159,7 @@ final class FollowReplayTests: XCTestCase {
         }(), "K3 无端点建连请求 → 不产连接任务，进入退避等待（激活后自愈）")
     }
 
-    /// R9 T4 —— 打开帧上限与拒绝的归属（Plan R9 期1 决定 1 / 决定 3）。
+    /// 打开帧上限与拒绝的归属。
     ///
     /// 契约的另一半在网关侧：那边承诺打开帧不超过 4 MiB（`DEFAULT_LIMITS.maxOpeningBytes`），
     /// 这边把接收上限取它的两倍，两端因此配套。`window-too-large` 与「不存在 / 读不出来」
@@ -181,15 +182,15 @@ final class FollowReplayTests: XCTestCase {
                        "O2e 未知码按可重试处理 —— 新码不该让会话卡死")
     }
 
-    /// R9 T8 / T11 —— 心跳判据与迟到回调的代次隔离（Plan R9 期1 的 T8 / T11，判据 O5 / O7）。
+    /// 心跳判据与迟到回调的代次隔离。
     ///
-    /// T7 真机复验把「打不开」换成了新症状：连接每 **2.02 秒**一转（= 一个 `pingInterval`），
+    /// 把「打不开」修好之后露出的新症状：连接每 **2.02 秒**一转（= 一个 `pingInterval`），
     /// `reconnect` 的 attempt 爬到 9 且编号跳着走 —— 成因在「状态没按代次隔离」上。第三次复验
     /// （两端日志第一次同时到齐）逼出第二个成因：心跳的**证据**取得太弱。两处都与尺寸无关，
-    /// 但同样让会话进不去，所以同属 spec 2.1 的「不出现连接反复断开」。
+    /// 但同样让会话进不去 —— 两者都属于「不出现连接反复断开」这条要求。
     func testConnectionLivenessScope() {
         // ① 心跳只在**已建成的流**上判死。升级后网关**先**发一条 approval 对账帧
-        //（`index.ts:142`），它比 opening 早到；上一版规则（「收到过任何一帧就够格计数」）于是
+        // （网关升级后先发对账帧），它比 opening 早到；「收到过任何一帧就够格计数」这条规则于是
         // 被它当场激活 —— 而 opening 的 1.25 MB 正堵着这条 TCP，网关的 pong 排在那一大帧
         // **后面**，一拍也到不了 ⇒ 每代连接恰好活 6 秒（3 拍）就被自己判死
         //（真机：`g2 heartbeat: no pong in 3 rounds — closing`，connect 后 6.15 秒）。

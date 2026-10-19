@@ -3,7 +3,7 @@
  *
  * 未定稿帧（`assistant-stream`）没有 `seq`，只有 attemptId / revision / index，不进水位体系：
  * 推进游标等于把「没落盘的东西」当成「已读到的位置」。所以它有自己的通道与校验，与
- * `SessionMirror` 平行互不触碰（M2 §3.4）。
+ * `SessionMirror` 平行互不触碰。
  *
  * `revision` 来自 agent 级全局单调计数器（`() => ++assistantStreamRevision`）：start / chunk /
  * end 每帧 +1、跨 attempt 连续，是断号校验的对象；`index` 是 attempt 内 chunk 的位置。校验即
@@ -13,15 +13,15 @@
  * 任一不满足 ⇒ `broken`：后续 chunk 是**增量**，基线已丢，唯一正确动作是**重开流取新基线**
  * （新 opening 的 `assistantStream` 带已累积内容），与上游「断号即重连」同构。
  *
- * chunk 是上游模型流的 JSON（`StreamChunk`，`llm/src/types.ts:424`）：只拼
- * `type == "text-delta"` 的 `.text`，其余原样跳过 ——
- * 与 `SessionEvent.displayMessage` 同一条显示规则。
+ * chunk 是上游模型流的 JSON（`StreamChunk`）：只拼 `type == "text-delta"` 的 `.text`，
+ * 其余原样跳过 —— 与 `SessionEvent.displayMessage` 同一条显示规则。
  *
- * 不碰网络与 UI：能被 iOS target 编译，断言在 `tests/TransientChannelTests.swift`（unit test target）。
+ * 不碰网络与 UI：能被 iOS target 编译，断言在
+ * `tests/TransientChannelTests.swift`（unit test target）。
  */
 
-/// opening 里带的未定稿基线（上游 `SessionAssistantStreamBaseline`，形状见
-/// `session-controller/src/types.ts:457-471` —— 本文件只声明用到的字段）。
+/// opening 里带的未定稿基线（上游 `SessionAssistantStreamBaseline`）：revision 与
+/// 进行中 attempt 的已累积内容 —— 本文件只声明用到的字段。
 struct TransientBaseline {
     /// 该基线**已用掉**的最后 revision —— 下一帧期望它 + 1。
     let revision: Int

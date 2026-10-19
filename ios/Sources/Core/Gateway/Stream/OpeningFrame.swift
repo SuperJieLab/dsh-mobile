@@ -1,11 +1,11 @@
 /**
- * opening 帧的 typed 形状（R4 决定 1）：帧原文**就地解码一次**，
- * 不再经 `JSONValue → Data → typed` 往返（对账判据 G1：与旧往返路径产出逐字一致）。
+ * opening 帧的 typed 形状：帧原文**就地解码一次**，
+ * 不经 `JSONValue → Data → typed` 的往返 —— 那条路上每一步都可能悄悄改掉一次取值。
  *
  * 字段语义（与既有 JSONValue 判读逐字对齐）：
  * - `events` 走 `FailableDecodable`——坏事件单条跳过，其余照常显示；
  * - `model` / `occupancy` 用「Optional 包 FailableDecodable」区分
- *   「字段不在 = 服务端读不出，不猜」与「字段在 = 落地或丢弃」两件事；
+ * 「字段不在 = 服务端读不出，不猜」与「字段在 = 落地或丢弃」两件事；
  * - `assistantStream` 保持 `JSONValue` 原样——`parseBaseline` 只认声明字段，量小。
  */
 import Foundation
@@ -24,7 +24,7 @@ struct OpeningFrame {
     ///
     /// 这次改名（`cursor` → `asOfSeq`）在这里做，而不是让编排替它翻译：`cursor` 是订阅流的
     /// 说法（「已读到的位置」），`asOfSeq` 是 `page` 的说法（「窗口末尾，不含」）—— 它们是同一个
-    /// 量的两个名字，改名应该由持有字段的那一侧负责（R19 决定 A2）。
+    /// 量的两个名字，改名应该由持有字段的那一侧负责。
     var page: SessionPage {
         SessionPage(pageStart: pageStart, asOfSeq: cursor, hasOlder: hasOlder, events: events)
     }

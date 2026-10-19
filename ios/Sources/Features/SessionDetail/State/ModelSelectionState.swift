@@ -14,9 +14,8 @@
  * （服务端从全会话投影算好），窗口内的增量客户端有全部输入，无需补全量状态。
  * 上游若给投影加第三种事件，这里不会自动跟上 —— 这个代价已登记在案。
  *
- * generation 守卫照上游客户端同款纪律（`ui-model-selection/lib/client.js:210-243`
- * 「Latest selection operation wins」）：每次发起 `model-select` 递增代号，
- * 回包时代号不匹配即丢弃 —— 迟到的旧响应绝不覆盖更新的选择。
+ * generation 守卫照上游客户端的同款纪律（「最后发起的那次选择获胜」）：每次发起
+ * `model-select` 递增代号，回包时代号不匹配即丢弃 —— 迟到的旧响应绝不覆盖更新的选择。
  *
  * 与 `SessionMirror` 同一形态：纯值类型，断言在 `tests/ModelProtocolTests.swift`
  * （unit test target，`xcodebuild test`）。
@@ -66,13 +65,13 @@ struct ModelSelectionState: Equatable {
         return true
     }
 
-    // MARK: - 事件形状（逐字核实：model-selection-projection.js:31-44）
+    // MARK: - 事件形状（照上游投影的形状逐字核实过）
 
     /// 从两类事件里取出模型选择；两类之外是 `nil`。
     private func selection(in event: SessionEvent) -> ModelSelection? {
         switch event.type {
         case "model/selection":
-            // data 就是选择本身（agent.js:350 append 的载荷）。
+            // data 就是选择本身 —— 上游 append 这条事件时把选择平铺在载荷上。
             return ModelSelection(
                 provider: event.data["provider"]?.string ?? "",
                 model: event.data["model"]?.string ?? "",

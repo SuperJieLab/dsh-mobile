@@ -4,15 +4,13 @@
  * 与 `State/ModelCatalogState.swift` 分家的理由：句子随产品决定变，三面的映射随协议变。
  * 判定不引用这里的句子 —— 编排文件里出现用户可见的中文字面量时
  * `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
- *
- * 消费者：`ModelPickerView`。
  */
 import Foundation
 
 extension ModelCatalogState.Cause {
 
     /// 菜单里那一句。**服务端原文优先**：协议码不认识时 `readableDescription` 原样给 message；
-    /// 认识的码给中文解释（期1 定的口径，与状态行、审批卡共用同一份）。
+    /// 认识的码给中文解释 —— 与状态行、审批卡共用同一份解释，三处不会各说一套。
     var line: String {
         switch self {
         case .refused(let failure):

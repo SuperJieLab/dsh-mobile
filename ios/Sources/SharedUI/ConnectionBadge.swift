@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// 连接态指示器 —— 上游 `connecting` / `disconnected` 指示器的复现
-/// （`ui-settings-general/src/client/SettingsRoot.tsx:203-228`）。
+/// 连接态指示器 —— 上游 `connecting` / `disconnected` 指示器的复现。
 ///
 /// 两半语义照抄上游：断连要诚实（如实标注、旧内容照常展示、不清屏不弹错误页）；短尝试要
 /// 防闪烁（一旦显示至少停留 `minDisplaySeconds`，期间恢复也不一闪而过）。
@@ -23,7 +22,7 @@ struct ConnectionBadge: View {
     ///
     /// 取值类型用连接域的 `CarrierPath`，不在这里另声明一份 —— 同值同义的两个枚举只能靠
     /// 手写映射相连，而那类映射（`x == .direct ? .direct : .relay`）加第三个取值时会静默
-    /// 归到 else（R19）。本组件本来就在认识 Core 的类型（下面的 `Status.init(followPhase:)`
+    /// 归到 else。本组件本来就在认识 Core 的类型（下面的 `Status.init(followPhase:)`
     /// 吃 `FollowClient.Phase`），所以这里不是新增耦合。
     let state: Status
     var meshPath: CarrierPath? = nil
@@ -112,7 +111,7 @@ struct ConnectionBadge: View {
 extension ConnectionBadge.Status {
     /// 列表域：刷新在途 = 连接中；上次刷新失败 = 已断开（旧列表照常可读）。
     ///
-    /// **为什么不与详情域的入口合一（R13 判定）**：两屏能拿到的信号本来就不同 —— 列表只有
+    /// **为什么不与详情域的入口合一**：两屏能拿到的信号本来就不同 —— 列表只有
     /// 一元刷新的 `isLoading` / `lastFailure`，详情才有订阅流的相位（`idle` / `connecting` /
     /// `ready` / `waiting`）。合成一个入口只能让调用方给另一半传 `nil`，那等于把「这一屏没有这个
     /// 信号」伪装成「这个信号现在是空值」。

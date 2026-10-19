@@ -3,7 +3,7 @@
  * revision 语义照上游 `agent.ts` 的 `() => ++assistantStreamRevision`：**每帧全局 +1**，
  * start/chunk/end 都占号；
  * `index` 是 attempt 内 chunk 位置，start 后从 0 起。
- * 出处：M2 §5.2（C2 对应 TC3/TC4/TC5）。
+ * 断号即 broken，重开流取新基线。
  */
 import Foundation
 import XCTest

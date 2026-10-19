@@ -7,11 +7,11 @@ import Foundation
  * 迟到的旧帧不能污染新代次视图。
  * 2. **退避重连**：base 500ms × 2^n、抖动 50–100%、封顶 10s、
  * 就绪硬超时 45s（取值来由见 `readyTimeout`：网关承诺的打开帧上界 ÷ 实测最慢吞吐）；
- *    **重连即重新 open**，新 opening 重建窗口、
- *    不做水位续传（M2 §3.4）。
+ * **重连即重新 open**，新 opening 重建窗口、
+ * 不做水位续传。
  * 3. **心跳**：2s ping 一次，但**只在已成流的连接上判死** —— 还没拿到 opening 的那一段归
- *    就绪硬超时管，理由见 `livenessTick`；URLSession 自动回服务端的 ping，这里只管
- *    「对面还活着吗」。
+ * 就绪硬超时管，理由见 `livenessTick`；URLSession 自动回服务端的 ping，这里只管
+ * 「对面还活着吗」。
  * 不解释任何帧：解析成 JSON 原样递回调，形状与语义都在 `SessionSync`；协议名与端口全从
  * `GatewayClient.baseURL` 推导 —— 全 App 只有一个要改的地址。
  */
@@ -27,7 +27,7 @@ final class FollowClient: NSObject {
     }
     // MARK: - 回调（由编排层注入；全部在主线程）
 
-    /// opening 帧：typed 直解（R4 决定 1），外壳与事件数组一次解码齐备。
+    /// opening 帧：typed 直解，外壳与事件数组一次解码齐备。
     var onOpening: ((OpeningFrame) -> Void)?
     /// 一条持久事件（DSH 事件对象原样）。
     var onEvent: ((SessionEvent) -> Void)?
@@ -71,7 +71,8 @@ final class FollowClient: NSObject {
     /// 本代连接连续未回的 pong 数 —— 随代次清零，见 `connect`。**唯一写者是心跳那一拍**
     ///（`livenessTick` 算出来的结果），别处不直接改它。
     private var missedPongs = 0
-    /// 本拍内是否收到过对端的东西（一帧，或我们 ping 的 pong）。心跳每拍**消费一次**（读过即清零），
+    /// 本拍内是否收到过对端的东西（一帧，或我们 ping 的 pong）。
+    /// 心跳每拍**消费一次**（读过即清零），
     /// 理由见 `livenessTick`。
     private var heardFromPeer = false
     /// 重连定时器 —— teardown 时要能取消；同一时刻至多一个，见 `scheduleReconnect`。
@@ -81,12 +82,12 @@ final class FollowClient: NSObject {
     /// opening 就当这次尝试没成。
     ///
     /// 取值 45s **不是**照抄上游的 15s（那是给快链路的）。我们的 opening 是这条流里**最大的
-    /// 一帧**，而链路的实测吞吐可以低到 ~125 KB/s（真机：0.51 MiB 的打开帧用了约 4.2 秒）。
+    /// 一帧**，而链路的吞吐可以低到 ~125 KB/s（0.51 MiB 的打开帧要传约 4.2 秒）。
     /// 网关承诺的打开帧上界是 4 MiB（`DEFAULT_LIMITS.maxOpeningBytes`），于是在最慢链路上
-    /// 4 MiB ÷ 125 KB/s ≈ 34 秒，再加建连（实测 2.1–2.3 秒）⇒ 45 秒。
+    /// 4 MiB ÷ 125 KB/s ≈ 34 秒，再加建连（约 2 秒）⇒ 45 秒。
     ///
-    /// **这个数由「上界的尺寸」与「实测最慢吞吐」共同决定，不是拍的**；R8 期2 的曲线应当回来
-    /// 校它（`ISSUES.md` A9）。它管的是「没建起来」，与心跳（管「建起来之后死了」）不重叠。
+    /// **这个数由「上界的尺寸」与「实测最慢吞吐」共同决定，不是拍的** —— 两端任一侧改了
+    /// 上界，这个数都要跟着重算。它管的是「没建起来」，与心跳（管「建起来之后死了」）不重叠。
     static let readyTimeout: TimeInterval = 45
     private let pingInterval: TimeInterval = 2
     private let maxMissedPongs = 2
@@ -96,12 +97,12 @@ final class FollowClient: NSObject {
     private static let baseBackoffMs = 500
     private static let maxBackoffMs = 10_000
 
-    /// 单帧接收上限（R9 期1 决定 1）—— 网关承诺打开帧不超过 4 MiB（网关侧
+    /// 单帧接收上限 —— 网关承诺打开帧不超过 4 MiB（网关侧
     /// `DEFAULT_LIMITS.maxOpeningBytes`），这里取它的两倍：覆盖任何非窗口帧，并留出
     /// 两端读数差异的余量。**这个属性默认只有 1 MiB**，那正是「某个会话打不开」的
     /// 成因；它必须显著大于网关的上界，否则同一个断连只是换个地方发生。
     ///
-    /// 不设为 `private`：它是两端配套契约的一半，测试要能断言它（见 O1）。
+    /// 不设为 `private`：它是两端配套契约的一半，测试要能断言它。
     static let maximumMessageSize = 8 * 1024 * 1024
 
     /// 是否仍在订阅（`stop()` 之后一切重连都停）。
@@ -151,23 +152,23 @@ final class FollowClient: NSObject {
 
     private func connect() {
         guard following, sessionId != nil else { return }
-        // 无端点（未激活，R5 决定 3）：不猜地址，也不动代次与 phase 的连接语义，
+        // 无端点（组网未激活）：不猜地址，也不动代次与 phase 的连接语义，
         // 直接进既有退避循环 —— 激活后下一轮自动连上。
         guard let endpoint = baseURLProvider() else {
             scheduleReconnect()
             return
         }
         // 注意：不在这里清零 reconnectAttempt —— 退避档位必须随失败次数爬升，
-        // 否则握手持续失败时会退化成每秒一次的疯狂循环（真机抓到过）。
+        // 否则握手持续失败时会退化成每秒一次的疯狂循环。
         generation += 1
         let current = generation
-        // 心跳的判据随代次清零：连失数与「活过」的证据都不继承。上一代的欠账算到这一代头上会
-        // 自锁 —— 一次没建成的连接把连失数攒到上限之后，此后每一代都在第一个心跳节拍就被判死，
-        // 2 秒一转、永不恢复（真机抓到过）。
+        // 心跳的判据随代次清零：连失数与「活过」的证据都不继承。上一代的欠账算到这一代
+        // 头上会自锁 —— 一次没建成的连接把连失数攒到上限之后，此后每一代都在第一个心跳
+        // 节拍就被判死，2 秒一转、永不恢复。
         missedPongs = 0
         heardFromPeer = false
         phase = .connecting
-        // R8 期1 链路 A：连接发起时刻 —— 期2 用它配对 opening 记录算追平延迟（按 gen 对齐）。
+        // 连接发起时刻：与 opening 记录配对后可以算追平延迟（按代次对齐）。
         Log.perf(Log.Module.session, PerfRecord(
             seg: .dev, t: PerfRecord.nowMs(), sessionId: sessionId,
             fields: ["kind": .text("connect-init"), "gen": .number(Double(current))]
@@ -197,7 +198,8 @@ final class FollowClient: NSObject {
         // 而系统默认只给 1 MiB —— 一个 1.25 MB 的打开帧就足以把会话永远关在门外。
         webSocketTask.maximumMessageSize = Self.maximumMessageSize
         task = webSocketTask
-        // 带上会话 id：`g2` 在两个实例（进出详情各一个）里会重号，只有会话 id 能区分「谁的第 2 代」。
+        // 带上会话 id：`g2` 在两个实例（进出详情各一个）里会重号，
+        // 只有会话 id 能区分「谁的第 2 代」。
         Log.info(Log.Module.session, "connect g\(current) [\(sessionId ?? "-")] → \(components.url!)")
         webSocketTask.resume()
 
@@ -234,8 +236,9 @@ final class FollowClient: NSObject {
 
     /// 就绪硬超时：从**这次开流尝试**起算，多久没等到 opening 就当它没成。
     ///
-    /// ⚠️ 括号必须显式：`?? 15 * 1e9` 会把「15」当纳秒传进去（真机抓到过 —— 每次连接立即超时，
-    /// open 帧被 cancel 成 -999，永远收不到 opening）。
+    /// ⚠️ `budget` 是**秒**，必须乘 10⁹ 转成纳秒。把秒数直接当纳秒传进去，超时会在
+    /// 微秒级就到点 —— 每次连接都立即被判失败，open 帧被 cancel 成 -999，
+    /// 于是永远收不到 opening，而日志里只看到无穷无尽的「重连」。
     private func armReadyTimeout() {
         guard let webSocketTask = task else { return }
         let current = generation
@@ -245,7 +248,8 @@ final class FollowClient: NSObject {
             try? await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000))
             guard let self, self.generation == current, self.task === webSocketTask, self.phase != .ready else { return }
             // 这一行是「这次连接为什么没成」的第一现场：45 秒还没等到 opening，通常意味着
-            // 慢链路正传一大帧（真机 1.25 MB 约 10 秒），或者对面根本没在服务这个会话。
+            // 慢链路正传一大帧（1.25 MB 在 125 KB/s 上要传约 10 秒），或者对面根本没在
+            // 服务这个会话。
             Log.warn(Log.Module.session, "g\(current) [\(sessionIdForLog)] ready timeout (\(Int(budget))s) — closing and retrying")
             self.closeTask()
             self.scheduleReconnect()
@@ -286,7 +290,8 @@ final class FollowClient: NSObject {
     private func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
         // 收到任何一帧都是「对端还活着」的证据 —— 由心跳那一拍消费（见 `livenessTick`）。
         // ⚠️ 它**不**等于「这条流已建成」：升级后先到的 approval 对账帧也算「收到过东西」，
-        // 而那时 opening 的一大帧可能还在路上 —— 真机就是这么把心跳激活、再被它判死的。
+        // 而那时 opening 的一大帧可能还在路上 —— 把它当成就绪，心跳会立刻激活、
+        // 再在几拍之后把一条正在正常传输的连接判死。
         heardFromPeer = true
         guard case .string(let text) = message else {
             Log.debug(Log.Module.session, "g\(current) non-text frame ignored")
@@ -303,7 +308,7 @@ final class FollowClient: NSObject {
         case "item":
             guard let payload = frame.payload else { return }
             if payload["sessionId"] != nil && payload["cursor"] != nil && payload["events"] != nil {
-                // opening：就绪的标志。typed 直解一次（R4 决定 1）——坏事件由
+                // opening：就绪的标志。typed 直解一次 —— 坏事件由
                 // FailableDecodable 单条跳过，其余照常显示。
                 reconnectAttempt = 0
                 missedPongs = 0
@@ -312,8 +317,8 @@ final class FollowClient: NSObject {
                     return
                 }
                 phase = .ready
-                // R8 期1 链路 A：opening 的到达 → 应用跨度（onOpening 包裹 applyOpening，
-                // 同步返回即 fold 完成）。seq 取 cursor（asOfSeq），kind 标明子类。
+                // opening 的到达时刻即「应用完成」时刻：`onOpening` 同步跑完整段折叠，
+                // 批出的全量重算属渲染路径，不计入这一段。
                 let openingRecv = PerfRecord.nowMs()
                 onOpening?(opening)
                 Log.perf(Log.Module.session, PerfRecord(
@@ -332,13 +337,12 @@ final class FollowClient: NSObject {
             } else if payload["type"]?.string == "assistant-stream" {
                 onTransient?(payload["frame"] ?? .null)
             } else if payload["type"]?.string != nil, payload["seq"] != nil {
-                // 事件帧：payload 本体就是 SessionEvent —— 直解一次；解不出如实丢弃
-                //（与旧往返路径的静默丢弃同语义）。
+                // 事件帧：payload 本体就是 SessionEvent —— 直解一次；解不出如实丢弃，
+                // 不重试、不猜。
                 guard let envelope = try? JSONDecoder().decode(FrameWithEvent.self, from: rawData),
                       let event = envelope.payload?.value else { return }
-                // R8 期1 链路 A：帧到达 → 应用跨度。onEvent 包裹 applyLiveEvent
-                //（mirror.apply + 状态机吸收 + 刷新闸标记），同步返回即 fold 完成；
-                // 批出的全量重算属渲染路径，按设计不进端点。
+                // 帧的到达即「应用完成」：`onEvent` 同步跑完镜像合并、状态机吸收与
+                // 刷新闸标记；批出的全量重算属渲染路径，不计入这一段。
                 let devRecv = PerfRecord.nowMs()
                 onEvent?(event)
                 Log.perf(Log.Module.session, PerfRecord(
@@ -396,7 +400,7 @@ final class FollowClient: NSObject {
               let text = String(data: data, encoding: .utf8) else { return }
         // 发起时的代次与传输要捕捉下来：回调回来时它们可能已经过时。被取代的 send 以取消
         // （-999）告终，而那个回调若还算数，就会把**刚建立的新连接**关掉、再排一次重连 ——
-        // 新连接的重连又把它掐回来。真机抓到过这条自锁（每代 2 秒一转、永不恢复）。
+        // 新连接又被下一次重连掐回来，每 2 秒一转、永不恢复。
         let sentGeneration = generation
         let sentTask = task
         task?.send(.string(text)) { [weak self] error in
@@ -465,10 +469,10 @@ final class FollowClient: NSObject {
 
      规则两句话：**没成流的连接不判死；本拍收到过对端的东西就归零。**
 
-     第一条是第三次真机复验（2026-10-14）逼出来的。上一版的前置项是「收到过任何一帧」，它太弱：
-     升级之后网关**先**发一条 approval 对账帧（`index.ts:142`，它在 opening 之前），心跳当场被它
-     激活；紧接着 opening 的 1.25 MB 占住整条 TCP（中继链路上要好几秒），网关的 pong 排在那一大帧
-     **后面**，一拍也到不了 ⇒ 每代连接恰好活 6 秒（3 拍，`maxMissedPongs + 1`）就被自己判死。
+     第一条的来由是「收到过任何一帧」这个前置项太弱：升级之后网关**先**发一条 approval
+     对账帧（它在 opening 之前），心跳会被它当场激活；紧接着 opening 的 1.25 MB 占住整条
+     TCP（中继链路上要好几秒），网关的 pong 排在那一大帧**后面**，一拍也到不了 ⇒ 每代连接
+     恰好活 6 秒（3 拍，`maxMissedPongs + 1`）就被自己判死。
      **「收到过东西」不等于「这条流已经建成」**，而心跳要判的是后者。
 
      第二条与网关侧同一条规则（`startHeartbeat`）：对端给我们发东西 ⇒ 它就是活的。一条正在收流的
@@ -477,7 +481,9 @@ final class FollowClient: NSObject {
      没成流的那一段不是没人管：它归**就绪硬超时**（45s）—— 「没建起来」与「建起来又死了」是两件事。
 
      ⚠️ 已知未尽：**已成流之后**若单帧传输超过 6 秒（例如一条很大的工具结果），这条规则仍会判死 ——
-     客户端拿不到「对面在忙」这个信息（`ISSUES.md` A9；根治要分片，A8）。
+     客户端拿不到「对面在忙」这个信息。根治要分片（把一帧拆成多帧，让控制帧能插进分片之间），
+     代价是新增一套「窗口未到齐」的状态。现在不做：客户端可请求的会话里触发条件不可达，
+     而分片会把一帧的语义拆成多帧、两头都要改。
 
      - Parameters:
        - established: 本代连接是否已成流（opening 已应用）。
@@ -495,7 +501,7 @@ final class FollowClient: NSObject {
      迟到的回调该不该起作用 —— 代次与传输**双重相等**才算「本代当前的那条连接」。
 
      单独一个代次判据不够：同一代之内传输也可能已被替换（`connect` 里的先关后建）。判据松一格，
-     一个被取代的 `send` 回调就会把新连接掐掉，而它自己又会再排一次重连（真机抓到过）。
+     一个被取代的 `send` 回调就会把新连接掐掉，而它自己又会再排一次重连。
      */
     static func callbackApplies(generation: Int, current: Int, sameTask: Bool) -> Bool {
         generation == current && sameTask
@@ -504,7 +510,7 @@ final class FollowClient: NSObject {
     /**
      * 重连有没有意义 —— `true` 表示这是会话级终态：重连只会得到同一个结果。
      *
-     * `window-too-large` 属于这一类（R9 期1 决定 3）：那个窗口不会因为重连而变小，
+     * `window-too-large` 属于这一类：那个窗口不会因为重连而变小，
      * 反复重连只会把一次确定的拒绝变成一串无用的尝试。**未知码按可重试处理** ——
      * 白名单之外的码不该让会话卡死。
      */
@@ -519,8 +525,8 @@ final class FollowClient: NSObject {
      * socket 就能验证。完整的「断线 → 退避 → 重连 → 代次递增」需要真网络，由真机测试覆盖。
      *
      * - Parameters:
-     *   - attempt: 第几次重连（从 1 起）。
-     *   - random: 抖动采样，`0..<1`。
+     * - attempt: 第几次重连（从 1 起）。
+     * - random: 抖动采样，`0..<1`。
      */
     static func backoffDelayMs(attempt: Int, random: Double) -> Int {
         // attempt 1 是第一次重连，指数从 2^0 起。
@@ -533,8 +539,7 @@ final class FollowClient: NSObject {
     private func scheduleReconnect() {
         guard following, sessionId != nil else { return }
         // 单飞：本拍取代尚未触发的那一拍。不取代的话两个定时器各起一条连接，后起的那条把先起
-        // 的掐死、先起的失败回调再排一次 —— 真机抓到过（两条 `connect` 相隔 550ms，attempt 编号
-        // 跳着走）。
+        // 的掐死、先起的失败回调再排一次，于是 attempt 编号跳着走、退避永远爬不到上限。
         reconnectWorkItem?.cancel()
         reconnectAttempt += 1
 
@@ -566,12 +571,12 @@ private struct MuxFrame: Decodable {
     private enum CodingKeys: String, CodingKey { case type, streamId, payload }
 }
 
-/// 事件帧的 typed 信封：payload 本体就是 SessionEvent（R4 决定 1）。
+/// 事件帧的 typed 信封：payload 本体就是 SessionEvent。
 private struct FrameWithEvent: Decodable {
     let payload: FailableDecodable<SessionEvent>?
 }
 
-/// usage 帧的 typed 信封：payload 本体就是 UsageSnapshot（R4 决定 1）。
+/// usage 帧的 typed 信封：payload 本体就是 UsageSnapshot。
 private struct FrameWithUsage: Decodable {
     let payload: FailableDecodable<UsageSnapshot>?
 }

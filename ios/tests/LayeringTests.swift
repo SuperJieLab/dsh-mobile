@@ -1,26 +1,25 @@
 /**
  * 分层形状与依赖方向的常驻断言。
  *
- * 出处：`RULES.md` §八 结构 5（依赖方向单向）、结构 6（同类界面分层同构）与结构 9 的
- * 「目录名不能同时给出两个承诺」。视图层与目录边界都没有单测，形状本身只能靠这几条守 ——
- * 它们替代「收口时人工过一遍」。
+ * 守三件事：依赖方向单向、同类界面分层同构、目录名不能同时给出两个承诺。
+ * 视图层与目录边界都没有单测，形状本身只能靠这几条守 —— 它们替代「收口时人工过一遍」。
  *
  * 十五条：
  * 1. 每个界面目录同时有 `State/` 与 `Views/`，且 `State/` 下至少一个 `.swift`；
  * 2. `State/` 下的文件不 import SwiftUI / UIKit；
  * 3. 界面 `Views/` 下声明的类型不得被别的界面当零件用（界面根视图与登记例外除外）；
  * 4. 例外清单本身是真的（仍在某处声明、仍被别的界面引用），免得豁免悄悄扩大。
- * 5. 合约目录不出现 `Client/`、`Stream/`、`State/` 声明的类型（R18 B2）；
- * 6. 合约目录里含中文的行必须是注释行（R18 B1）；
- * 7. 合约目录的代码行不出现显示口径的符号名（R18 B1）；
+ * 5. 合约目录不出现 `Client/`、`Stream/`、`State/` 声明的类型；
+ * 6. 合约目录里含中文的行必须是注释行；
+ * 7. 合约目录的代码行不出现显示口径的符号名；
  * 8. `Display/` 不出现 `Client/`、`Stream/`、`State/` 声明的类型；
- * 9. `Core/` 不出现 `SharedUI/` 声明的类型（R18 A1）；
- * 10. 界面 `Views/` 里不把 `await` 的结果赋给自己（R18 期2 C1：取数归判定层）；
- * 11. 会话详情的编排文件里不出现中文字符串字面量（R18 期2 D1：句子归 `Display/`）；
- * 12. 任何 `Display/` 都不 import SwiftUI / UIKit（R18 期2：说法不漂成第二个 Views）；
- * 13. 「直连 / 中继」的取值只在连接域声明一次（R19 A1：共用形状住被依赖的一方）；
- * 14. 状态机不另声明窗口 / 快照的形状，直接用协议类型（R19 A1）；
- * 15. 编排里不再逐字段构造窗口（R19 A2）。
+ * 9. `Core/` 不出现 `SharedUI/` 声明的类型；
+ * 10. 界面 `Views/` 里不把 `await` 的结果赋给自己 —— 取数归判定层；
+ * 11. 会话详情的编排文件里不出现中文字符串字面量 —— 句子归 `Display/`；
+ * 12. 任何 `Display/` 都不 import SwiftUI / UIKit —— 说法不漂成第二个 Views；
+ * 13. 「直连 / 中继」的取值只在连接域声明一次 —— 共用形状住被依赖的一方；
+ * 14. 状态机不另声明窗口 / 快照的形状，直接用协议类型；
+ * 15. 编排里不再逐字段构造窗口。
  *
  * 扫的是文本，不是语法树。已知盲区：
  * - 不认 `typealias`（漏报方向）；
@@ -63,7 +62,7 @@ final class LayeringTests: XCTestCase {
         sourcesRoot.appendingPathComponent("SharedUI")
     }
 
-    /// R18 期1：合约不许认识的三层。
+    /// 合约不许认识的三层：客户端、流、状态。
     private var gatewayImplementationDirectories: [URL] {
         ["Client", "Stream", "State"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
@@ -123,11 +122,11 @@ final class LayeringTests: XCTestCase {
                 var isDirectory: ObjCBool = false
                 let exists = FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDirectory)
                 XCTAssertTrue(exists && isDirectory.boolValue,
-                              "\(name) 缺少 \(sub)/ —— 同类界面必须同构（RULES §八 结构 6）")
+                              "\(name) 缺少 \(sub)/ —— 同类界面必须同构")
             }
             // 空目录不算分层：文件还在旧位置上，形状是假的。
             let stateFiles = swiftFiles(under: interface.appendingPathComponent("State"))
-            XCTAssertFalse(stateFiles.isEmpty, "\(name)/State/ 是空的 —— 判定与编排还没搬进来")
+            XCTAssertFalse(stateFiles.isEmpty, "\(name)/State/ 是空的 —— 判定与编排不在这里")
         }
     }
 
@@ -160,7 +159,7 @@ final class LayeringTests: XCTestCase {
     private static let crossInterfaceExceptions: [String: String] = [
         "ApprovalCard": "审批面板物理上挂在会话详情的 composer 槽位（上游原生位置，"
             + "SessionDetailView 的底栏）；移走它会让 Approval/Views/ 变空。"
-            + "重开条件：R16 期2 重划审批边界时一并决定它住哪。",
+            + "重开条件：下次重划审批边界时一并决定它住哪。",
     ]
 
     func testViewsDeclarationsAreNotSharedAcrossInterfaces() throws {
@@ -213,7 +212,7 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    // MARK: - 断言 5–7：Core 与合约的方向（R18 期1）
+    // MARK: - 断言 5–7：Core 与合约的方向
 
     /// 合约目录里不出现 `Client/`、`Stream/`、`State/` 声明的类型。
     ///
@@ -232,7 +231,7 @@ final class LayeringTests: XCTestCase {
                 for type in forbidden where contains(type, in: code) {
                     hits += 1
                     XCTFail("Contract/\(file.lastPathComponent):\(line) 出现 \(type)"
-                            + " —— 合约不得依赖会变的实现（R18 B2）")
+                            + " —— 合约不得依赖会变的实现")
                 }
             }
         }
@@ -242,8 +241,8 @@ final class LayeringTests: XCTestCase {
     /// 合约里的中文只能出现在注释里 —— 「用户看得见的句子」不许住在合约里。
     ///
     /// 判据形态是「含中文的行必须是注释行」，不是「字面量里不许有中文」：后者要认出三引号
-    /// 多行串，而搬走的三段最长文案正是 `"""` 包着的 —— 单行引号正则对它们假绿（复审实测：
-    /// 把 `explain` 原样搬回合约，旧判据仍然 parsed 2 / hits 0）。
+    /// 多行串，而三段最长的文案正是 `"""` 包着的 —— 单行引号正则对它们假绿：
+    /// 把 `explain` 原样放回合约，按字符串判的版本仍然 parsed 2 / hits 0。
     /// 盲区：代码行尾的行内注释会被误报 —— 遇到就把注释挪到上一行。
     func testContractHasNoUserFacingStrings() throws {
         let files = swiftFiles(under: contractDirectory)
@@ -285,7 +284,7 @@ final class LayeringTests: XCTestCase {
                 for name in Self.displayVocabulary where contains(name, in: code) {
                     hits += 1
                     XCTFail("Contract/\(file.lastPathComponent):\(line) 出现 \(name)"
-                            + " —— 显示口径应住 Display/（R18 B1）")
+                            + " —— 显示口径应住 Display/")
                 }
             }
         }
@@ -306,7 +305,7 @@ final class LayeringTests: XCTestCase {
                 for type in forbidden where contains(type, in: code) {
                     hits += 1
                     XCTFail("Display/\(file.lastPathComponent):\(line) 出现 \(type)"
-                            + " —— 显示层不得反向依赖通信细节（R18 期1 决定 2）")
+                            + " —— 显示层不得反向依赖通信细节")
                 }
             }
         }
@@ -328,14 +327,14 @@ final class LayeringTests: XCTestCase {
                     hits += 1
                     let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
                     XCTFail("\(relative):\(line) 出现 \(type)"
-                            + " —— 通信层不得认识呈现层（R18 A1）")
+                            + " —— 通信层不得认识呈现层")
                 }
             }
         }
         XCTAssertEqual(hits, 0, "Core 引用了 SharedUI 的类型")
     }
 
-    // MARK: - 断言 10：视图不把取数结果接进自己（R18 期2）
+    // MARK: - 断言 10：视图不把取数结果接进自己
 
     /// 赋值右侧是 `await` —— 取数结果要落到视图上，必然先赋给属性或局部量。
     ///
@@ -369,7 +368,7 @@ final class LayeringTests: XCTestCase {
                     else { continue }
                     hits += 1
                     XCTFail("\(interface.lastPathComponent)/Views/\(file.lastPathComponent):\(line)"
-                            + " 把 await 的结果赋给了自己 —— 取数归 State/（R18 期2 C1）")
+                            + " 把 await 的结果赋给了自己 —— 取数归 State/")
                 }
             }
         }
@@ -377,12 +376,12 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, 0, "视图里还有取数赋值")
     }
 
-    // MARK: - 断言 11–12：句子与说法不住在编排里（R18 期2）
+    // MARK: - 断言 11–12：句子与说法不住在编排里
 
     /// 会话详情的编排文件里，**含中文的行必须是注释行**（或以 `Log.` 开头）——
     /// 用户看得见的句子归 `Display/SyncText.swift`，判定与编排只产出「哪一步 + 哪一类原因」。
     ///
-    /// 判据形态照期1 的合约判据：不认字符串字面量，改按行判。理由是**三引号多行串**——
+    /// 判据形态照合约那几条：不认字符串字面量，改按行判。理由是**三引号多行串**——
     /// 单行引号正则对它 0 命中（复审复算过：往编排里写一段 `"""` 包着的中文，旧写法的
     /// 命中数不变）。而一段多行的用户文案正是最典型的写法之一，漏它等于没守。
     ///
@@ -464,14 +463,14 @@ final class LayeringTests: XCTestCase {
                     else { continue }
                     XCTFail("\(directory.lastPathComponent)/\(file.lastPathComponent):\(line) "
                             + "出现「\(code[found].trimmingCharacters(in: .whitespaces))」"
-                            + " —— 说法与换算不得认识 SwiftUI（R18 期2）")
+                            + " —— 说法与换算不得认识 SwiftUI")
                 }
             }
         }
         XCTAssertGreaterThan(checked, 0, "一个 Display 文件都没扫到")
     }
 
-    // MARK: - 断言 13–15：共用形状只有一份（R19）
+    // MARK: - 断言 13–15：共用形状只有一份
 
     /// 「直连 / 中继」的**声明**只在连接域出现一次。
     ///
@@ -551,7 +550,7 @@ final class LayeringTests: XCTestCase {
     /// **只查「不许声明」，不查「有没有用上」。** 后者看着更严，实际是弱检查：入口签名里
     /// 写着 `SessionPage` 就够让「出现过」为真，而被替换成本地同形类型时（真正的失败模式）
     /// 那三个签名往往还在 —— 于是它既抓不到失败模式，又会把注释里的名字算成证据。
-    /// 曾写过一个用 `text.contains` 的版本，被文件头注释满足（R18 期3 同一个洞的复发）；
+    /// 曾写过一个用 `text.contains` 的版本，被文件头注释满足 —— 同一个洞复发过两次；
     /// 改成逐代码行后读数会真，但结论仍是「注定为真」—— 所以整段删掉。
     ///
     /// 那「声明删了、改用本地同形类型」这个失败模式靠什么？靠编译器与本条的前半：本地类型
@@ -569,7 +568,7 @@ final class LayeringTests: XCTestCase {
             for shape in ["Snapshot", "Window"] {
                 if trimmed.hasPrefix("struct \(shape)") || trimmed.hasPrefix("enum \(shape)") {
                     XCTFail("SessionMirror.swift:\(line) 又声明了 \(shape)"
-                            + " —— 用协议里的同名类型（R19 A1）")
+                            + " —— 用协议里的同名类型")
                 }
             }
         }
@@ -578,7 +577,7 @@ final class LayeringTests: XCTestCase {
 
     /// 编排里不再逐字段构造窗口 —— 那次构造本身就是「同一形状两份」的症状。
     ///
-    /// 两半都要查（只查前一半会假绿：类型删掉之后，把四个字段的构造搬回来编译仍然通过）：
+    /// 两半都要查（只查前一半会假绿：类型删掉之后，逐字段构造那两个同名字段仍然编译通过）：
     /// - 没有 `Window(` 构造；
     /// - 编排文件里不出现「`pageStart` / `asOfSeq` / `hasOlder` 三个实参挤在同一段构造里」——
     ///   认的是这三个名字在同一行，或同一行起的连续三行内相继出现（那种搬运一定是竖着写的）。
@@ -590,7 +589,7 @@ final class LayeringTests: XCTestCase {
                 guard code.contains("Window(") else { continue }
                 hits += 1
                 let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-                XCTFail("\(relative):\(line) 还在构造 Window —— 直接用 SessionPage（R19 A2）")
+                XCTFail("\(relative):\(line) 还在构造 Window —— 直接用 SessionPage")
             }
         }
         XCTAssertEqual(hits, 0, "还有逐字段搬运的窗口构造")
@@ -608,7 +607,7 @@ final class LayeringTests: XCTestCase {
             guard looksLikeCopy else { continue }
             copies += 1
             XCTFail("SessionSync.swift:\(start + 1) 起三行内又在逐字段构造窗口"
-                    + " —— 用 opening.page / SessionPage（R19 A2）")
+                    + " —— 用 opening.page / SessionPage")
         }
         XCTAssertEqual(copies, 0, "编排里还有三个字段的搬运")
     }
@@ -657,7 +656,7 @@ final class LayeringTests: XCTestCase {
         return nil
     }
 
-    // MARK: - 方向检查用的扫描工具（R18 期1）
+    // MARK: - 方向检查用的扫描工具
 
     /// 递归收集若干目录下声明的类型名。
     ///

@@ -1,10 +1,10 @@
 /**
- * 待批审批的判定断言：Q1–Q7（事实来源与残骸），加转发帧与 R17 的断言（绑定活过重建 /
+ * 待批审批的判定断言：事实来源与残骸，加转发帧的六条（绑定活过重建 /
  * 收口不复活 / 四种到达顺序与同文两问 / 可应答性 / 名单与帧的先后 / 已答掉的不抢帧）。
  * 判定不碰网络、不碰界面，喂事件序列、转发帧与对账名单，看建出几张卡、带不带寻址键。
  *
- * 判据与出处：M5 §3.3 表 + 实施期修正 14；R16 期2 把判定从 `ApprovalStore` 移到 `ApprovalInbox`
- * 之后，这里**不再构造任何客户端** —— 这一条本身就是「待批集合不依赖客户端」的证据（判据 L10）。
+ * 判定住 `ApprovalInbox`，所以这里**不构造任何客户端** —— 这一条本身就是
+ * 「待批集合不依赖客户端」的证据。
  *
  * 事实来源（`approval/asked` − `approval/decided`）不足以判定「还挂着」：真机上两条
  * `asked` 无 `decided`，其同一 turn 里 `turn/end` 已落、紧随的 `tool/result` 写着
@@ -72,12 +72,12 @@ final class ApprovalReconcileTests: XCTestCase {
     }
 
     func testRebuild() {
-        // Q1：崩溃残骸不建卡 —— 会话日志里 asked 没有 decided，但 turn 已闭合。
+        // 崩溃残骸不建卡 —— 会话日志里 asked 没有 decided，但 turn 已闭合。
         var wrecked = ApprovalInbox()
         wrecked.rebuild(from: wreck(244, id: "b2dd61b1", callId: "call_00_ET_FiVdc"))
-        XCTAssertTrue(wrecked.pending.isEmpty, "Q1 turn 已闭合的 asked（残骸）不建卡")
+        XCTAssertTrue(wrecked.pending.isEmpty, "turn 已闭合的 asked（残骸）不建卡")
 
-        // Q2：turn 未闭合的 asked 照常建卡 —— 那才是真的还挂着，不许误杀。
+        // turn 未闭合的 asked 照常建卡 —— 那才是真的还挂着，不许误杀。
         var live = ApprovalInbox()
         live.rebuild(from: [
             ev(283, "assistant/message"),
@@ -86,18 +86,18 @@ final class ApprovalReconcileTests: XCTestCase {
         ])
         XCTAssertTrue(
             live.pending.count == 1 && live.pending.first?.id == "c186c564",
-            "Q2 turn 未闭合的 asked 照常建卡"
+            "turn 未闭合的 asked 照常建卡"
         )
 
-        // Q3：正常收口（asked + decided）不建卡 —— 既有行为，回归保护。
+        // 正常收口（asked + decided）不建卡 —— 既有行为，回归保护。
         var settled = ApprovalInbox()
         settled.rebuild(from: [
             asked(284, id: "c186c564", callId: "call_00_ET_Baq0u"),
             decided(285, id: "c186c564"),
         ])
-        XCTAssertTrue(settled.pending.isEmpty, "Q3 asked 后 decided 收口，不建卡")
+        XCTAssertTrue(settled.pending.isEmpty, "asked 后 decided 收口，不建卡")
 
-        // Q4：残骸与活审批共存 —— 只留活的那张（同一次重建里两种判定都要对）。
+        // 残骸与活审批共存 —— 只留活的那张（同一次重建里两种判定都要对）。
         var mixed = ApprovalInbox()
         mixed.rebuild(from:
             wreck(244, id: "b2dd61b1", callId: "call_00_ET_FiVdc")
@@ -108,32 +108,32 @@ final class ApprovalReconcileTests: XCTestCase {
         )
         XCTAssertTrue(
             mixed.pending.count == 1 && mixed.pending.first?.id == "cdf80c37",
-            "Q4 残骸与活审批共存时只留活的"
+            "残骸与活审批共存时只留活的"
         )
 
-        // Q5：窗口从 turn 中间截断（没有 turn/end）→ 保守建卡，宁可多问不可漏。
+        // 窗口从 turn 中间截断（没有 turn/end）→ 保守建卡，宁可多问不可漏。
         var truncated = ApprovalInbox()
         truncated.rebuild(from: [
             asked(247, id: "b2dd61b1", callId: "call_00_ET_FiVdc"),
             ev(248, "tool/result"),
         ])
-        XCTAssertTrue(truncated.pending.count == 1, "Q5 窗口截断（无 turn/end）时保守建卡")
+        XCTAssertTrue(truncated.pending.count == 1, "窗口截断（无 turn/end）时保守建卡")
 
-        // Q6：权威名单到达 → 对账结论在同一次调用里生效，不必等下一次刷新。
+        // 权威名单到达 → 对账结论在同一次调用里生效，不必等下一次刷新。
         var reconciled = ApprovalInbox()
         reconciled.rebuild(from: [asked(247, id: "b2dd61b1", callId: "call_00_ET_FiVdc")])
         XCTAssertTrue(reconciled.pending.count == 1, "Q6a 收到名单前，未闭合的 asked 先建卡")
         reconciled.absorb(sync([], callIds: []))
         XCTAssertTrue(reconciled.pending.isEmpty, "Q6b 权威名单到达后，对账立即生效")
 
-        // Q7：stale 名单不清卡 —— relay 未就绪时名单证明不了任何事。
+        // stale 名单不清卡 —— relay 未就绪时名单证明不了任何事。
         var stale = ApprovalInbox()
         stale.rebuild(from: [asked(247, id: "b2dd61b1", callId: "call_00_ET_FiVdc")])
         stale.absorb(sync([], callIds: [], stale: true))
-        XCTAssertTrue(stale.pending.count == 1, "Q7 stale 名单不清卡")
+        XCTAssertTrue(stale.pending.count == 1, "stale 名单不清卡")
     }
 
-    /// 转发帧这一侧：`request` 绑定审计卡、`cancel` 撤卡。搬家后同样不需要客户端。
+    /// 转发帧这一侧：`request` 绑定审计卡、`cancel` 撤卡。同样不需要客户端。
     func testForwardFrames() {
         var inbox = ApprovalInbox()
         inbox.rebuild(from: [asked(300, id: "audit-1", callId: "call_A")])
@@ -153,7 +153,7 @@ final class ApprovalReconcileTests: XCTestCase {
         XCTAssertTrue(inbox.pending.isEmpty, "cancel 按 eventId 撤卡")
     }
 
-    /// R17 V1：绑定是派生的 —— 转发帧到达后，无论再重建多少次，寻址键都不变。
+    /// 绑定是派生的 —— 转发帧到达后，无论再重建多少次，寻址键都不变。
     ///
     /// `refreshView` 每次都调 `rebuild`（事件帧按 16ms 窗口合批），所以「活过一次重算」不够。
     func testBindingSurvivesRebuild() {
@@ -171,7 +171,7 @@ final class ApprovalReconcileTests: XCTestCase {
         }
     }
 
-    /// R17 V2：已收口的提问不复活 —— `decided` / `cancel` / 本地应答三条路径各自之后，
+    /// 已收口的提问不复活 —— `decided` / `cancel` / 本地应答三条路径各自之后，
     /// 重建都不再出卡，也不留下以转发帧为身份的独立卡。
     func testSettledCardsDoNotComeBack() {
         let events = [asked(300, id: "audit-1", callId: "call_A")]
@@ -206,7 +206,7 @@ final class ApprovalReconcileTests: XCTestCase {
         XCTAssertTrue(byTurnEnd.pending.isEmpty, "turn/end 之后，残骸与它的帧都不出现")
     }
 
-    /// R17 V3–V5：配对只有一处 —— 四种到达顺序都只出一张卡；同文的两次提问仍是两张卡。
+    /// 配对只有一处 —— 四种到达顺序都只出一张卡；同文的两次提问仍是两张卡。
     func testForwardFramePairing() {
         let events = [asked(300, id: "audit-1", callId: "call_A")]
 
@@ -278,7 +278,7 @@ final class ApprovalReconcileTests: XCTestCase {
                        file: file, line: line)
     }
 
-    /// R17 V6：可应答性与寻址键同源 —— 卡上出不出现按钮，读的是同一个 `canAnswer`。
+    /// 可应答性与寻址键同源 —— 卡上出不出现按钮，读的是同一个 `canAnswer`。
     ///
     /// 视图那一半没有单测（`ApprovalCard` 的条件分支），由真机判据兜；这里咬住规则本身。
     func testCanAnswerFollowsAddressingKey() {
@@ -289,9 +289,9 @@ final class ApprovalReconcileTests: XCTestCase {
         XCTAssertEqual(inbox.pending.first?.canAnswer, true, "配上帧之后可以应答")
     }
 
-    /// R17 回归（审查 C1）：连接时对账说「上游此刻没有审批」，之后新产生的审批仍要出现。
+    /// 连接时对账说「上游此刻没有审批」，之后新产生的审批仍要出现。
     ///
-    /// 名单只是连接那一刻的快照；帧才是「这一问此刻还挂着」的证据。
+    /// 帧到达时要把新增的审批并进名单 —— 名单会过期，帧不会。
     func testApprovalAskedAfterSyncStillShowsUp() {
         var inbox = ApprovalInbox()
         inbox.absorb(sync([], callIds: []))
@@ -302,7 +302,7 @@ final class ApprovalReconcileTests: XCTestCase {
         XCTAssertEqual(inbox.pending.first?.eventId, "wf-1", "并且可以应答")
     }
 
-    /// R17 回归（审查 M1）：已答掉的提问不抢后来者的帧 —— 同文、缺 `callId` 时最明显。
+    /// 已答掉的提问不抢后来者的帧 —— 同文、缺 `callId` 时最明显。
     func testSettledAskDoesNotStealTheNextFrame() {
         var inbox = ApprovalInbox()
         let first = asked(300, id: "audit-1", reason: "跑测试")
@@ -319,7 +319,7 @@ final class ApprovalReconcileTests: XCTestCase {
         XCTAssertEqual(inbox.pending.first?.eventId, "wf-2", "帧给了还挂着的那条")
     }
 
-    /// R17 回归（复审 M1）：帧先被取消、审计事件后进窗口 —— 不能复活一张按不动的卡。
+    /// 帧先被取消、审计事件后进窗口 —— 不能复活一张按不动的卡。
     func testCancelBeforeTheAuditEventDoesNotResurrect() {
         var inbox = ApprovalInbox()
         inbox.absorb(sync([], callIds: []))
@@ -329,7 +329,7 @@ final class ApprovalReconcileTests: XCTestCase {
         XCTAssertTrue(inbox.pending.isEmpty, "已取消的提问随后入窗口也不出现")
     }
 
-    /// R17 回归（复审 M2）：被名单藏起来的提问不许挑帧 —— 帧要留给真正会出卡的那条。
+    /// 被名单藏起来的提问不许挑帧 —— 帧要留给真正会出卡的那条。
     func testConcealedAskDoesNotTakeTheFrame() {
         var inbox = ApprovalInbox()
         inbox.absorb(sync([], callIds: []))

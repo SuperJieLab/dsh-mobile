@@ -9,14 +9,13 @@
  * **三个入口，一个派生**：`rebuild(from:)` 收整份窗口事件，`absorb(_:)` 收转发帧与对账名单，
  * `remove(id:)` 记下「这张卡已经有结局」。三者都只改输入，最后由 `reconcile()` 重算 ——
  * `pending` 只在 `reconcile()` 里被赋值。**卡上的寻址键是算出来的，不是补上去的**：只要它还能
- * 被补写，下一次刷新就会把它抹掉（R17：`refreshView` 每次刷新都调 `rebuild`）。
+ * 被补写，下一次刷新就会把它抹掉 —— `refreshView` 每 16ms 就跑一次 `rebuild`。
  *
  * `remove(id:)` 的调用者是宿主：它按应答的结局决定何时移除。本类型不知道「为什么删」，
- * 也不认识应答与结局这些概念 —— 那是编排侧的事（R16 期2 决定 C1）。
+ * 也不认识应答与结局这些概念 —— 那是编排侧的事。
  *
- * 判定规则与搬家前逐字相同（M5 §3.3 表 + 实施期修正 14）：Q1–Q7 七条断言，外加转发帧与 R17 的
- * 断言（绑定活过重建 / 收口不复活 / 配对 / 可应答性 / 名单与帧的先后 / 已答掉的不抢帧），都在
- * `tests/ApprovalReconcileTests.swift`。
+ * 七条判定都在 `tests/ApprovalReconcileTests.swift` 逐条断言：崩溃残骸不建卡、绑定活过重建、
+ * 收口不复活、配对的两档、可应答性、名单与帧的先后、已答掉的不抢帧。
  *
  * 消费者：`ApprovalStore`（持它、把 `pending` 发布成可观察属性）、`ApprovalCard`（读
  * `PendingApproval` 与它的 `canAnswer`）。
@@ -47,8 +46,13 @@ struct ApprovalInbox {
     private var lastEvents: [SessionEvent] = []
     /// 转发而来的帧，按到达顺序（配对时按序取最早未配对的）。
     private var forwarded: [PendingApproval] = []
-    /// 上游仍挂着的 callId —— sync 名单，加上从转发帧学到的（帧是「此刻还挂着」的证据）。
-    /// 重建时据此过滤悬空审计卡：收口后 cancel 只发给在线者，dsh 重启更让 asked 永无 decided。
+    /// 上游此刻仍挂着的 callId。两个来源：`sync` 名单，以及从转发帧学到的。
+    ///
+    /// **名单只是连接那一刻的快照；帧才是「这一刻还挂着」的持续证据。** 名单之后新增的
+    /// 审批不在里面，所以帧到达时要并进来 —— 否则下一次重算会把它当悬空审计滤掉，连帧一起消失。
+    /// 反过来，名单权威时（收到过非 stale 的 `sync`）它又能判出悬空审计：收口即有 `decided`，
+    /// 没有 `decided` 说明收口方早已不在：`cancel` 只发给在线者，
+    /// dsh 重启更让 asked 永无 decided。
     private var standingCallIds: Set<String> = []
     /// 名单是否权威。只有收到过非 stale 的 sync 才敢按名单滤卡 —— relay 未就绪时服务端发 stale 帧。
     private var hasSync = false
@@ -83,8 +87,7 @@ struct ApprovalInbox {
             } else {
                 forwarded.append(card)
             }
-            // 帧是「这次提问此刻还挂在网关上」的证据。名单只是连接那一刻的快照，之后新增的
-            // 审批不在里面 —— 不并进来，下一次重算会把它当成悬空审计滤掉，连帧一起消失。
+            // 这一帧就是「这问此刻还挂着」的证据，并进名单（理由见 `standingCallIds`）。
             if let callId = card.callId { standingCallIds.insert(callId) }
             reconcile()
         case "cancel":
@@ -169,11 +172,10 @@ struct ApprovalInbox {
                 guard let id = event.data["id"]?.string else { continue }
                 for index in asks.indices where asks[index].id == id { asks[index].closed = true }
             case "turn/end":
-                // turn 闭合 ⇒ 这一轮里还没收口的 asked 是崩溃残骸。上游
-                // `approval.request()` 在 turn 内阻塞到 outcome 落盘
-                // （`user-approval/src/index.ts:215-233`），故 turn 能结束就意味着它发起的每个
-                // 审批都有结局；只有进程在等 outcome 时被杀，才会留下「turn 已闭合、decided
-                // 永久缺席」的一对（随后那条 `tool/result` 带 `TOOL_OUTCOME_UNKNOWN`，真机产物）。
+                // turn 闭合 ⇒ 这一轮里还没收口的 asked 是崩溃残骸。上游的 `approval.request()`
+                // 在 turn 内阻塞到 outcome 落盘，所以 turn 能结束就意味着它发起的每个审批
+                // 都有结局；只有进程在等 outcome 时被杀，才会留下「turn 已闭合、decided
+                // 永久缺席」的一对 —— 那时随后那条 `tool/result` 会带 `TOOL_OUTCOME_UNKNOWN`。
                 for index in asks.indices { asks[index].closed = true }
             default:
                 break
@@ -225,17 +227,16 @@ struct ApprovalInbox {
     /// 从事件与转发帧重算待批集合 —— 唯一的写入口。
     ///
     /// 与 `rebuild` 分开，是为了让**对账名单的变化**也立刻生效：`sync` 帧改 `hasSync` /
-    /// `standingCallIds`，而过滤只在重算时跑 —— 不重算的话结论要拖到下次事件或刷新才落地
-    /// （真机抓到：残骸卡一直挂在屏上）。
+    /// `standingCallIds`，而过滤只在重算时跑 —— 不重算的话结论要拖到下次事件或刷新才落地，
+    /// 残骸卡会一直挂在屏上。
     private mutating func reconcile() {
         let asks = Self.asks(in: lastEvents, settled: settledIds)
         var visible: [Ask] = []
         for ask in asks where !ask.closed {
             // 这问已经有结局（`cancel` / 本地应答），只是审计事件还没进窗口。
             if let callId = ask.callId, settledCallIds.contains(callId) { continue }
-            // 对账（修正 12）：名单权威时，带 callId 而上游没有的 asked 是悬空审计
-            // （收口即有 decided；没有 decided 说明收口方早已不在），不建卡 —— 不然每次刷新都复活。
-            // 它也不参与配对：帧是「此刻还挂着」的独立证据，名单只是连接那一刻的快照。
+            // 名单权威时，带 callId 而上游没有的 asked 就是悬空审计，不建卡 ——
+            // 否则每次刷新都会复活一张按不动的卡。判定依据见 `standingCallIds`。
             if let callId = ask.callId, hasSync, !standingCallIds.contains(callId) { continue }
             visible.append(ask)
         }

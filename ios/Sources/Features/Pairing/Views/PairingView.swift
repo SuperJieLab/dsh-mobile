@@ -7,11 +7,11 @@ import SwiftUI
 /// 之后一切请求静默带票。
 ///
 /// 配对码那一段的状态在 `PairingState`（可用性、进行中、失败原文），本文件只绑。
-/// 组网段仍是「视图 → 连接域」两跳，不搬（R16 期1 决定 B3）：headscale 地址与接入 key
+/// 组网段是「视图 → 连接域」两跳，不另立一层：headscale 地址与接入 key
 /// （沙盒存储）在此录入，节点状态如实展示；配对仍走原三票身份（不因在虚拟网内简化）。
 struct PairingView: View {
     @StateObject private var state: PairingState
-    /// 组网段的数据源 —— 连接域唯一出处（R3 起读 store 的节点状态透传与动作）。
+    /// 组网段的数据源 —— 视图读连接态的唯一出口，节点状态与动作都经 store 转发。
     @EnvironmentObject private var store: ConnectionStore
 
     @State private var controlURL = MeshConfig.load().controlURLString

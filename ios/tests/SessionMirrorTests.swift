@@ -1,7 +1,7 @@
 /**
  * SessionMirror 的契约测试（SM1–SM19）与「对不上」告知状态机的测试（SM20–SM22）：
  * 状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
- * 跑法 = `xcodebuild test`（unit test target）；出处：M1 §5.1。
+ * 跑法 = `xcodebuild test`（unit test target）。
  */
 import Foundation
 import XCTest
@@ -20,7 +20,7 @@ final class SessionMirrorTests: XCTestCase {
     )
   }
 
-  /** 一段往回读的窗口 —— 协议形状，状态机直接吃它（R19 A1）。 */
+  /** 一段往回读的窗口 —— 协议形状，状态机直接吃它。 */
   private func window(_ pageStart: Int, _ asOfSeq: Int, _ events: [SessionEvent],
                       hasOlder: Bool = false) -> SessionPage {
     SessionPage(pageStart: pageStart, asOfSeq: asOfSeq, hasOlder: hasOlder, events: events)
@@ -182,7 +182,7 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertTrue(verdictBlank == .caughtUp, "SM14 空日志不是错误")
     XCTAssertTrue(blank.isEmpty && !blank.hasOlder, "SM14 空视图且没有更早的")
 
-    // MARK: SM15 重连重对齐：本地更早的部分原样保留（R10 期1 决定 1 / 决定 3）
+    // MARK: SM15 重连重对齐：本地更早的部分原样保留
 
     // 真机现场：用户往回翻到日志开头（本地因此是整份日志、hasOlder 已归假），一次传输层
     // 重连送来一个新窗口 —— 它的起点落在本地内部。旧码整段替换，于是那几页连同「读到哪」
@@ -236,7 +236,7 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertTrue(redelivered.events.map(\.seq) == afterFirst, "SM18 事件序列与第一次逐条相同")
     XCTAssertTrue(redelivered.cursor == 14 && redelivered.pageStart == 0, "SM18 位置不累积偏差")
 
-    // MARK: SM19 「对不上」分两档：本地位置有没有被服务端否定（R10 期2 决定 1）
+    // MARK: SM19 「对不上」分两档：本地位置有没有被服务端否定
 
     // 这一档决定「保留本地」还是「清空重来」：本地那段仍然是真的 ⇒ 保住它；位置被否定 ⇒ 它可能不是
     // 真的，宁可重置。
@@ -247,7 +247,7 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertTrue(ResetReason.cursorVoid.invalidatesLocalContent == true,
                   "SM19 服务端明确说这个位置不存在 ⇒ 本地位置被否定")
 
-    // MARK: SM20 「未接上」的说明不被一次接得上的重连抹掉（R10 期2 决定 3）
+    // MARK: SM20 「未接上」的说明不被一次接得上的重连抹掉
 
     var notices = ResyncNoticeState()
     notices.observe(.resetRequired(.gap))
@@ -257,7 +257,7 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertTrue(notices.notice == ResyncNotice(kind: .unresolved, reason: .gap),
                   "SM20 随后一次接得上的重连不清除它 —— 洞还在，界面不该假装没事")
 
-    // MARK: SM21 重置的说明由 clear() 清除；接得上的判定不置位（R10 期2 决定 3 / 4）
+    // MARK: SM21 重置的说明由 clear() 清除；接得上的判定不置位
 
     var resetNotices = ResyncNoticeState()
     resetNotices.observe(.merged(added: 3))
@@ -268,7 +268,7 @@ final class SessionMirrorTests: XCTestCase {
     resetNotices.clear()
     XCTAssertTrue(resetNotices.notice == nil, "SM21 重新建立是说明唯一的清除点")
 
-    // MARK: SM22 编排自己执行的重置也如实记成「已重置」（R10 期2 Task 3）
+    // MARK: SM22 编排自己执行的重置也如实记成「已重置」
 
     // `sync()`（用户显式下拉「重新同步」）撞上缺口时也走到重置 —— 那时「保留」无法收敛
     // （下一次拉到的增量仍接不上），所以它不能按 `observe(verdict)` 分档：那条规则是给

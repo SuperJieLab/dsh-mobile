@@ -113,7 +113,7 @@ interface ProjectionsLike {
    * 存活会话的提示。 */
   cachedSnapshot(session: unknown): ProjectionSnapshotLike | undefined
   /** 对已注册单元在日志当前水位的一次一致切取 —— 占用量帧用的读取，
-   * 其 `asOfSeq` 必须前进（M6 §3.1 决定 3）。 */
+   * 其 `asOfSeq` 必须前进，否则客户端会把它当重放丢掉。 */
   snapshot(session: unknown, keys?: readonly string[]): ProjectionSnapshotLike | undefined
 }
 

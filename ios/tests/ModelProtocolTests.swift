@@ -1,8 +1,8 @@
 /**
- * 模型选择的协议解码测试（M7 T5，判据：解码用例全绿）+ 订阅更新状态机（T6，V1–V4）。
+ * 模型选择的协议解码测试 + 订阅更新状态机。
  *
- * 判据与出处：M7 §五；协议 dev/contract/protocol.md §4.7
- * 与 §4.2 opening 的 `model` 字段。解码的核心是**缺省安全**：字段缺省是陈述不是故障，
+ * 覆盖两处协议形状：目录回应与 opening 的 `model` 字段。解码的核心是**缺省安全**：
+ * 字段缺省是陈述不是故障，要区分「服务端读不出」与「值就是空」。
  * 服务端「不知道」时客户端不得猜。
  */
 import Foundation
@@ -40,10 +40,10 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(withoutEffort?.reasoningEffort == nil, "D1b reasoningEffort 缺省 = nil，不是故障")
     }
 
-    // MARK: - 目录解码（§4.7）
+    // MARK: - 目录解码
 
     private func decodeCatalog() {
-        // 上游原样（catalog.js:20-44）：reasoning.efforts 是对象数组、宿主私有字段
+        // 上游原样：reasoning.efforts 是对象数组，宿主私有字段
         // routableProviders 在场 —— T8 真机教训：fixture 必须逐字复刻上游形状，
         // 自造的 `[String]` efforts 让整份目录解码失败、菜单全空。
         let json = """
@@ -73,7 +73,7 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(bare?.default == nil && bare?.groups?.isEmpty == true, "D2e default 缺省 = nil，目录其余照常")
     }
 
-    // MARK: - opening 的 model 字段（§4.2）
+    // MARK: - opening 的 model 字段
 
     private func decodeOpening() {
         let withModel = try? decoder.decode(SnapshotResponse.self, from: Data("""
@@ -130,7 +130,7 @@ final class ModelProtocolTests: XCTestCase {
         state.absorb(event: headerEvent(11, "p", "C"))
         XCTAssertTrue(state.displayed?.model == "C", "V2 选择没被兑现时显示实际落地值")
 
-        // V3：重放旧 seq / 同 seq 的事件 → 显示不变（严格高 seq 胜，M6 同纪律）。
+        // V3：重放旧 seq / 同 seq 的事件 → 显示不变（严格高 seq 胜）。
         state.absorb(event: selectionEvent(10, "p", "OLD"))
         XCTAssertTrue(state.displayed?.model == "C", "V3a 旧 seq 重放不倒退")
         state.absorb(event: headerEvent(11, "p", "DUP"))
@@ -149,7 +149,7 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(!settledOld && state.displayed?.model == "NEW", "V4c 迟到的旧响应被守卫丢弃，显示不倒退")
     }
 
-    // MARK: - 请求编码（§4.7）
+    // MARK: - 请求编码
 
     private func encodeRequests() {
         let catalog = try? encoder.encode(ModelCatalogRequest())

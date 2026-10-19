@@ -1,7 +1,7 @@
 /**
  * 配对屏两条提交规则的断言 —— 它们在没有界面、没有网关、不构造状态对象的条件下跑。
  *
- * 出处：`R18-3` 的 E1 / E2（纯规则必须有断言、同一屏的同类规则住同一种地方）。基准是
+ * 守两条：纯规则必须有断言、同一屏的同类规则住同一种地方。基准是
  * `SessionVisibility` 的四条：规则住一个纯类型，断言只喂入参。
  *
  * 这一屏原先有两种住法并存：「配对码能不能提交」是 `PairingState` 上的属性（零断言），
@@ -84,7 +84,8 @@ final class PairingRulesTests: XCTestCase {
     /// - 只查「提到 `PairingRules`」—— 那一行可能只是文档注释（复审实测：`PairingState`
     ///   的注释里就有这个词，`text.contains` 是注释检测器，不是代码检测器）。
     ///
-    /// 盲区（漏报方向，靠评审）：换个写法的等价判据（`code.count >= 6`、`(code as NSString).length`）
+    /// 盲区（漏报方向，靠评审）：换个写法的等价判据
+    /// （`code.count >= 6`、`(code as NSString).length`）
     /// 认不出；只扫这两个文件 —— 将来第三个地方拼一遍判据，要靠新加的屏自己守住。
     func testRuleHasNoSecondCopy() throws {
         let state = sourcesRoot.appendingPathComponent("Features/Pairing/State/PairingState.swift")

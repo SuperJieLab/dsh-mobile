@@ -4,7 +4,7 @@
  * 两段：**A 类**喂定死的事件；
  * **切片**（`sliceChecks`）编进镜像让窗口动起来（打开 / 往回翻 / 冷启动重取）。
  *
- * 判据与出处：M6 §五。配对与状态判定照**运行时产物**
+ * 配对与状态判定照**运行时产物**
  * （`@deepseek-ai/dsh-client-ui-chat`）：
  * - 配对 id = `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`
  * - 失败标记 = `tool/result.data.message.isError`（**不是** `content[0].isError` —— clone 仓库版本
@@ -200,7 +200,7 @@ final class TranscriptAssemblerTests: XCTestCase {
         XCTAssertTrue(processes(in: headless.nodes).first?.hasHeader == false, "A7c turn/start 在窗口外 → 无头")
         XCTAssertTrue(processes(in: headless.nodes).first?.turn == 12, "A7d 轮次号仍如实标出")
 
-        // A9：一轮里「最终答案」与「中间过程」的划界（决定 10 的折叠范围建立其上），规则照上游
+        // 一轮里「最终答案」与「中间过程」的划界 —— 折叠的范围建立在这条判定上，规则照上游
         //     `latestAnswer`：取该轮**最后一个 step** 的助手消息，须含真正的回复内容、
         //     且不含工具调用块。
 
@@ -438,7 +438,7 @@ final class TranscriptAssemblerTests: XCTestCase {
         _ = coldMirror.open(with: page(stream, from: 313, to: 9_999, hasOlder: true))
         let cold = assemble(coldMirror.events)
         XCTAssertTrue(cold.nodes == opened.nodes, "S4a 冷启动重取同一窗口 → 组装结果逐条相同（不因重取而漂）")
-        XCTAssertTrue(toolRows(in: cold.nodes).count == 1, "S4b 冷启动后工具行重新出现（R5 的静态形态）")
+        XCTAssertTrue(toolRows(in: cold.nodes).count == 1, "S4b 冷启动后工具行重新出现（静态形态）")
 
         // S5：边界切在 `tool/call` 与它的结果之间 ——
         // 真机日志里这类窗口确实存在（会话 a 的窗口 44/58/72/93/184 都挑出「只有结果」的行）。

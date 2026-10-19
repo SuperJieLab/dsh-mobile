@@ -21,7 +21,7 @@ struct SessionDetailView: View {
     @State private var draft = ""
     /// 回前台立即重连：App 生命周期与详情域的连接点。
     @Environment(\.scenePhase) private var scenePhase
-    /// 连接域：连接方式一行的数据源（根部 environmentObject 注入，R3 起唯一出处）。
+    /// 根部注入的连接域：连接方式那一行与「就绪即重连」都读它。
     @EnvironmentObject private var store: ConnectionStore
 
     init(client: GatewayClient, session: SessionSummary) {
@@ -117,8 +117,8 @@ struct SessionDetailView: View {
             // 离屏即停。`sync()`（HTTP 全量对齐）保留给下拉刷新作兜底。
             .task { sync.startFollowing() }
             .onDisappear { sync.stopFollowing() }
-            // 组网就绪即重连（R5 修正 4①，与列表「就绪即首载」对称）：connecting 期间
-            // 进页时 WS 在退避循环里空转（端点不存在），就绪此刻不等下一轮退避。
+            // 组网就绪即重连（与列表「就绪即首载」对称）：connecting 期间
+            // 进页时 WS 在退避循环里空转（端点不存在），就绪此刻不必再等下一轮退避。
             .onChange(of: store.phase) { _, phase in
                 guard case .ready = phase else { return }
                 sync.reconnectNow()
@@ -158,7 +158,7 @@ struct SessionDetailView: View {
 
                     HStack(spacing: 8) {
                         // 当前模型：选择器住在发送区旁（上游 composer 槽位），不占消息流。
-                        // 目录的三面由它自己的状态对象持有（R18 期2），这里只给门面。
+                        // 目录的三面由它自己的状态对象持有，这里只给门面。
                         ModelPickerView(client: client, sync: sync)
                         TextField("发一条指令给 DSH…", text: $draft, axis: .vertical)
                             .lineLimit(1...4)
@@ -176,7 +176,7 @@ struct SessionDetailView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
 
-                    // 「内容没能接上 / 已被清空重来」的告知（R10 期2 链路 C）。它挂在**不随内容
+                    // 「内容没能接上 / 已被清空重来」的告知。它挂在**不随内容
                     // 滚动**的底栏里 —— 同步状态行那句在 List 的 footer（跟着内容一起滚），用户
                     // 往回翻时正好看不见，而那正是最需要看见的时候。非模态、不需用户点掉，
                     // 一直显示到重新建立（判定在 `SessionSync`，这里只画）。

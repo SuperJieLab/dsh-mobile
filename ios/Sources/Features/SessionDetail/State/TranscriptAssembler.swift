@@ -9,15 +9,15 @@
  * 事件顺序 —— 中间的思考块与工具调用不按类型分组，否则交替场景（思考 → 工具 → 思考）会串位。
  *
  * 配对与状态判定照**运行时产物**（`@deepseek-ai/dsh-client-ui-chat`，
- * 经 `~/.npm/_npx/<hash>/node_modules/` 实读），不是照仓库源码
- * —— 两者在 `isError` 的读法上已经不一致过一次。四条判定：
+ * 经 `~/.npm/_npx/<hash>/node_modules/` 实读），不是照仓库源码 —— 两者在 `isError`
+ * 的读法上并不一致，照源码写会判错成败。四条判定：
  * 配对键 `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`；
  * 成败看 `tool/result.data.message.isError`（在 `message` 上，不在 `content[0]`）；
  * 中断 = 所在 step / turn 已关闭而这条 call
  * 一直没有结果；「最终答案」= 该轮最后一个 step 的助手消息，且含真正的回复内容、不含工具调用块。
  *
  * 上游那套「事件 → 节点」的注册表不复用、也不照搬（它是给可插拔前端的扩展面），只需要它的
- * 语义。出处见 `M6` §3.2 决定 8–14。
+ * 语义 —— 那四条判定就是全部。
  */
 
 import Foundation
@@ -36,7 +36,7 @@ extension TranscriptNode: Identifiable {
     /// 列表里的身份。取**这一组首个过程**的身份，不取节点数组里的序号 —— 往回翻是往前面插
     /// 内容，序号会整体错位，屏上的行就会被全部重挂载。
     ///
-    /// ⚠️ **适用范围**（真机日志切片实跑核过）：前插只落在窗口头部那一组 —— 其余各组的
+    /// ⚠️ **适用范围**：前插只落在窗口头部那一组 —— 其余各组的
     /// `turn/start` 都在窗口里，前插排在它们之前，碰不到，身份逐条不变。头部那一组本身会被
     /// 前插改（见 `ProcessEntry`），但它由「无头」变「有头」时形态本就变了、重挂载没有状态
     /// 可丢 —— 无头组不可展开（`TurnProcessRow` 的 `hasHeader` 分支）。
@@ -170,9 +170,9 @@ struct TranscriptAssembler {
         /// 收口：把攒下的过程行变成节点（空的不产生节点）。
         ///
         /// - Parameter endingTurn: 这一轮是不是就此结束。**用户消息夹在 `turn/start` 与助手
-        ///   首个输出之间是常态**，那时过程要收口（否则用户那句会排到过程后面），但这一轮
-        ///   并未结束 —— 「有头」这身份得留着（一起清掉会让窗口里 13 个
-        ///   `turn/start` 全被判成无头）。
+        /// 首个输出之间是常态**，那时过程要收口（否则用户那句会排到过程后面），但这一轮
+        /// 并未结束 —— 「有头」这身份得留着（一起清掉会让窗口里 13 个
+        /// `turn/start` 全被判成无头）。
         func flush(endingTurn: Bool = false) {
             if let current = draft, !current.entries.isEmpty {
                 nodes.append(.process(NodeProcess(turn: current.turn, hasHeader: current.hasHeader, entries: current.entries)))
@@ -304,7 +304,7 @@ private extension TranscriptAssembler {
 
     /// 每个 `turn` 的「最终答案」事件 seq。照上游 `latestAnswer`，两步：
     /// 1. 先定这一轮的**最后一个 step**（由 `step/start` 与助手消息共同界定 —— 一个 step
-    ///    存不存在不取决于它有没有产出一条消息）；
+    /// 存不存在不取决于它有没有产出一条消息）；
     /// 2. 再在那个 step 里找助手消息，它必须（a）含真正的回复内容、（b）不含工具调用块。
     ///
     /// 两步缺一不可：只做第 2 步的话，「最后一步开了头就出事」的轮次会拿前面 step 说过的

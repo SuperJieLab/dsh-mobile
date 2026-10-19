@@ -1,7 +1,7 @@
 /**
  * 发送规则的断言：「什么算有内容」与「发出去的文本长什么样」。
  *
- * 出处：`R18-3` 的 E1 / E2。这一条原先在视图的 `disabled` 表达式与 `SessionSync.sendPrompt`
+ * 这一条原先在视图的 `disabled` 表达式与 `SessionSync.sendPrompt`
  * 的 guard 里各写一遍（两处都 trim），漂移后的症状是「按钮亮了但点了没反应」。
  *
  * 现在两处读同一个 `PromptDraft.normalized`，且它返回**要发的文本**而不是布尔 ——

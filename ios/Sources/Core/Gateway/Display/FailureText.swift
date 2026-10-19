@@ -2,9 +2,9 @@
  * 失败怎么说给用户听 —— 错误码解释、可读描述、错误渲染。
  *
  * 与 `Contract/GatewayError.swift` 的分工：那边是词汇（有哪些失败），这边是句子与取舍
- * （怎么说）。改一句话不需要动合约（R18 B1）。
+ * （怎么说）。改一句话不需要动合约。
  *
- * 这一层在通信层之上，所以**不读传输层的常量** —— 超时那句因此不打印秒数（R18 期1 决定 2）。
+ * 这一层在通信层之上，所以**不读传输层的常量** —— 超时那句因此不打印秒数。
  *
  * 消费者：`SessionSync`、`ApprovalStore`（读 `readableDescription`）；
  * 各处 `error.localizedDescription`（走本文件的 `LocalizedError`）。

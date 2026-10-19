@@ -1,7 +1,7 @@
 /**
- * TailnetNodeState 迁移表逐格断言（M8 O1）。状态与事件定义见
- * Sources/Core/MeshNetwork/TailnetNodeState.swift；迁移表以 Plan M8 §3.2 决定 6
- * 与 §3.3 状态图为唯一源。
+ * TailnetNodeState 迁移表逐格断言。状态与事件定义见
+ * Sources/Core/MeshNetwork/TailnetNodeState.swift；迁移表以该文件里的 `switch` 为唯一源
+ * 与状态图都以它为准 —— 加一个状态时编译器会点出所有要看它的地方。
  */
 import Foundation
 import XCTest
@@ -45,7 +45,7 @@ final class MeshNodeStateTests: XCTestCase {
 
         // —— running 的稳态 ——
         XCTAssertTrue(TailnetNodeState.handle(.appBackgrounded, from: .running) == .running,
-                      "MS13 进后台不迁移：挂起停摆由 tsnet 复活 + M3 重连接力，不进状态机")
+                      "进后台不迁移：挂起停摆由 tsnet 复活 + 回前台重连接力，不进状态机")
         XCTAssertTrue(TailnetNodeState.handle(.nodeUnreachable, from: .running) == .failed(.unreachable),
                       "MS14 running 中节点失联 → failed(unreachable)（如实显示，不自动重试风暴）")
         XCTAssertTrue(TailnetNodeState.handle(.registrationSucceeded, from: .running) == .running,

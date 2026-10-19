@@ -1,8 +1,8 @@
 /**
  * 哪些事件能变成一条消息、取哪个文本块 —— 显示取舍，不是协议规则。
  *
- * 原注释里就写着「两条显示规则（都是显示决策，不是协议规则）」，R18 期1 把它搬到与那句话
- * 相符的目录。`DisplayMessage` 与 `Role` 是显示投影，不是线上形状，一并搬来。
+ * `DisplayMessage` 与 `Role` 也是显示投影，不是线上形状：协议给的是事件体，
+ * 这两个类型是为了「画一条气泡」而折叠出来的，所以与这里同住。
  *
  * 消费者：`SessionSync`（`mirror.events.compactMap(\.displayMessage)`）、
  * `TranscriptAssembler`（逐条事件取值）。
@@ -33,9 +33,9 @@ extension SessionEvent {
     ///
     /// 当成对称处理，症状是**用户消息被静默吞掉**。两条显示规则（都是显示决策，不是协议规则）：
     /// - 只取 `text` 块（`reasoning` 与 `tool-call` 属于过程，不属于对话内容）；`user/message` 只认
-    ///   `source.kind == "user"` —— 插件注入的运行时上下文也走这个事件类型
-    ///   （`kind == "plugin"`，整段
-    ///   沙箱与审批策略），不是人打的字，不该进对话流。
+    /// `source.kind == "user"` —— 插件注入的运行时上下文也走这个事件类型
+    /// （`kind == "plugin"`，整段
+    /// 沙箱与审批策略），不是人打的字，不该进对话流。
     var displayMessage: DisplayMessage? {
         switch type {
         case "user/message":

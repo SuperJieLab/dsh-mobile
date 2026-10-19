@@ -1,8 +1,8 @@
 /**
- * Markdown 解析器的测试（M1–M4）：纯状态机，不 import SwiftUI / UIKit、不碰网络与磁盘，
+ * Markdown 解析器的测试：纯状态机，不 import SwiftUI / UIKit、不碰网络与磁盘，
  * 喂源文、断言块数组，覆盖块级识别 / 行内接入 / 尾部冻结 / 未闭合围栏。
  *
- * 判据与出处：M6 §五。解析器住 `Sources/Core/Text/`（R18 期2：变化原因是载体标准，
+ * 解析器住 `Sources/Core/Text/`（变化原因是载体标准，
  * 不是某一屏的状态），这些断言因此也不依赖任何界面。
  * 流式语义照上游运行时产物 `@deepseek-ai/dsh-client-ui-primitives` 的 `markdown/incremental.ts`：
  * 除尾部外全部冻结，冻结块的键是源偏移。
@@ -30,7 +30,7 @@ final class MarkdownParserTests: XCTestCase {
         openFence()
     }
 
-    // MARK: - M1 六种子集
+    // MARK: - 六种子集
 
     private func blockSubsets() {
         // 标题：1–6 级各自识别，级别取 `#` 的个数
@@ -83,7 +83,7 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertTrue(MarkdownParser.parse("# 题\n\n正文").blocks.map(\.offset) == [0, 5], "M1i 第二块的 offset 跳过空行")
     }
 
-    // MARK: - M2 行内交给系统
+    // MARK: - 行内交给系统
 
     private func inline() {
         let rich = MarkdownParser.attributed("**粗** 与 *斜* 与 `码` 与 [链](https://example.com)")
@@ -112,7 +112,7 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertTrue(String(MarkdownParser.attributed("就是一句话").characters) == "就是一句话", "M2f 纯文本原样")
     }
 
-    // MARK: - M3 尾部冻结
+    // MARK: - 尾部冻结
 
     private func tailFreezing() {
         let source = "# 标题\n\n第一段\n\n```swift\nlet a = 1"
@@ -162,7 +162,7 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertTrue(MarkdownParser.parse("", extending: MarkdownParser.parse("")).blocks == [], "M3k 空源文续接")
     }
 
-    // MARK: - M4 未闭合围栏
+    // MARK: - 未闭合围栏
 
     private func openFence() {
         let justOpened = MarkdownParser.parse("```swift")

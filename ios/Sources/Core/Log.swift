@@ -42,14 +42,14 @@ enum Log {
         FileHandle.standardError.write(Data(line.utf8))
     }
 
-    // MARK: - 性能记录（R8 期1）
+    // MARK: - 性能记录
 
     /// perf 行的去向。默认 stderr；只有测试会替换它 —— 与网关 perf.ts 的
     /// `setPerfSink` 同构（同一出口纪律下的同一后门）。
     static var perfSink: (String) -> Void = { line in writeRaw(line) }
 
     /// 记一条性能记录：与文本行同拼写（`ISO8601 [dsh][perf][模块] {json}`）、同门控，
-    /// 载荷是 JSON，供期2 扫参脚本消费。门控关时什么都不写。
+    /// 载荷是 JSON，供分析脚本消费。门控关时什么都不写。
     static func perf(_ module: String, _ record: PerfRecord) {
         guard debugEnabled, let json = record.jsonString else { return }
         perfSink("\(formatter.string(from: Date())) [dsh][perf][\(module)] \(json)\n")

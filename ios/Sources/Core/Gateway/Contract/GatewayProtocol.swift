@@ -1,6 +1,6 @@
 import Foundation
 
-/// 协议版本，请求与响应都必须带它 —— 版本协商的位置（`dev/contract/protocol.md` §三）。
+/// 协议版本，请求与响应都必须带它 —— 版本协商的位置。
 let gatewayProtocolVersion = 2
 
 /// 失败信封里的错误码（协议 v2 六个 + `unauthenticated` + `unknown-approval` /
@@ -31,7 +31,7 @@ struct GatewayFailure: Decodable, Equatable {
 // MARK: - 会话
 
 /// 列表里的一行（协议 v2）。字段全来自会话 header 或 host 已维护的投影，没有一个读日志算出来
-/// —— 列表因而零 I/O（`dev/contract/protocol.md` §4.1）。
+/// —— 列表因而零 I/O。
 struct SessionSummary: Decodable, Identifiable, Hashable {
     let id: String
     /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——
@@ -141,7 +141,7 @@ enum JSONValue: Decodable, Encodable, Equatable {
 // MARK: - 上下文占用
 
 /// 占用组成的三项。**不是** `usedTokens` 的分解 —— 估算器对中文与 JSON schema
-/// 定价偏低，三项加起来不等于那个数（`M6` §3.1 决定 6）。
+/// 定价偏低，三项加起来不等于那个数。
 struct UsageBreakdown: Decodable, Equatable {
     let systemTokens: Int
     let toolsTokens: Int
@@ -161,7 +161,7 @@ struct UsagePayload: Decodable, Equatable {
 }
 
 /// 一个水位上的一份占用读数。`usage` 缺失是一个**陈述**而不是故障：这个 cut 上没有可显示的
-/// 东西，正在显示的旧值应当被清掉（`M6` §3.1 决定 4）。
+/// 东西，正在显示的旧值应当被清掉。
 struct UsageSnapshot: Decodable, Equatable {
     /// 这份读数取自日志的哪个水位。⚠️ 与窗口的 `cursor` 是两条轴，**不要相减** —— 窗口按消息数切，
     /// 可能落后或领先投影折叠到的位置。
@@ -201,7 +201,7 @@ struct ModelCatalogEntry: Decodable, Equatable {
     let name: String
     var reasoning: Reasoning? = nil
 
-    /// 上游形状（catalog.js:20-27）：`efforts` 是**对象数组**，不是 id 串 ——
+    /// 上游形状：`efforts` 是**对象数组**（每项有 `id` 与 `name`），不是 id 串 ——
     /// 按 `[String]` 解会让整份目录解码失败、菜单全空。
     struct Reasoning: Decodable, Equatable {
         let efforts: [Effort]
@@ -333,7 +333,7 @@ struct ListSessionsResponse: GatewayResponse {
     let ok: Bool
     let error: GatewayFailure?
     let sessions: [SessionSummary]?
-    /// 服务端时钟（epoch ms）—— 协议承诺在；clock 采样读它估两端 offset（R8 期1 决定 3）。
+    /// 服务端时钟（epoch ms）—— 协议承诺在；clock 采样读它估两端 offset。
     /// 缺席按「服务端没给」处理，不猜。
     let serverTime: Double?
 }
@@ -356,7 +356,8 @@ struct RefreshResponse: GatewayResponse {
 }
 
 /// 快照回包：opening 的 `model` 字段是协议面，
-/// 解码行为要能被 `tests/ModelProtocolTests.swift` 直接断言 —— `@testable import` 下 internal 即可测。
+/// 解码行为要能被 `tests/ModelProtocolTests.swift` 直接断言 ——
+/// `@testable import` 下 internal 即可测。
 struct SnapshotResponse: GatewayResponse {
     let v: Int
     let ok: Bool
@@ -412,8 +413,8 @@ struct ModelSelectResponse: GatewayResponse {
 
 // MARK: - 快照结果
 
-/// 一次快照的结果。`Equatable` 是状态机的需要（`Outcome` 要能比较）—— 它此前是为了让
-/// 状态机自己那份同形类型可比较而加到那份上的（R19 把这个需求挪到了这里）。
+/// 一次快照的结果。`Equatable` 是状态机的需要：`Outcome` 要能比较，
+/// 而它装着这个类型。
 struct SessionSnapshot: Equatable {
     /// 本次覆盖到的位置（不含）—— 回传它就能拿到「空增量」，是水位不变式的用法。
     let asOfSeq: Int
