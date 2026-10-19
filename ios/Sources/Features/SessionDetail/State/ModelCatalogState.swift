@@ -37,7 +37,15 @@ final class ModelCatalogState: ObservableObject {
 
     @Published private(set) var outcome: Outcome = .waiting
 
+    /// 上一次成功拿到的目录默认值。**只为按钮标题**：重拉期间 `outcome` 回到 `.waiting`，
+    /// 而按钮不该因为「重新取一次」把模型名闪成「未知」。
+    private(set) var lastKnownDefault: ModelSelection?
+
     private let fetch: @MainActor () async throws -> ModelCatalog
+
+    /// 本机发起过的最新一次取数代号 —— `.task` 与「重试」可能前后脚触发两次，
+    /// 迟到的旧回包不许覆盖新结果（与 `ModelSelectionState` 的代号纪律同源）。
+    private var generation = 0
 
     init(fetch: @escaping @MainActor () async throws -> ModelCatalog) {
         self.fetch = fetch
@@ -45,16 +53,23 @@ final class ModelCatalogState: ObservableObject {
 
     /// 取一次。重试也走这里：先把面置回等待，避免「旧目录还挂着，看不出在重拉」。
     func reload() async {
+        generation += 1
+        let mine = generation
         outcome = .waiting
         do {
-            outcome = .ready(try await fetch())
+            let list = try await fetch()
+            guard mine == generation else { return }
+            lastKnownDefault = list.default
+            outcome = .ready(list)
         } catch let error as GatewayClientError {
+            guard mine == generation else { return }
             if case .refused(let failure) = error {
                 outcome = .failed(.refused(failure))
             } else {
                 outcome = .failed(.offline)
             }
         } catch {
+            guard mine == generation else { return }
             outcome = .failed(.offline)
         }
     }

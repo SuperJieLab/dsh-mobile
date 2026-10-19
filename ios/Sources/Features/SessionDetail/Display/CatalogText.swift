@@ -2,7 +2,8 @@
  * 模型目录那三面里的说法 —— 失败那两句、空目录那一句。
  *
  * 与 `State/ModelCatalogState.swift` 分家的理由：句子随产品决定变，三面的映射随协议变。
- * 判定不引用这里（`LayeringTests.testStateDoesNotReferenceItsDisplay` 守着方向）。
+ * 判定不引用这里的句子 —— 编排文件里出现用户可见的中文字面量时
+ * `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
  *
  * 消费者：`ModelPickerView`。
  */
@@ -25,7 +26,6 @@ extension ModelCatalogState.Cause {
 extension ModelCatalog {
 
     /// 目录拉回来了，但一个模型都没有 —— 空菜单与「没加载出来」在屏幕上会看起来一样。
-    var emptyNote: String {
-        "网关没有可用的模型。"
-    }
+    /// 与这一份目录的内容无关，所以是 `static`：写成实例属性会让人以为它读 `groups`。
+    static let emptyNote = "网关没有可用的模型。"
 }

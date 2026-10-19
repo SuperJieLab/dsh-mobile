@@ -339,12 +339,18 @@ final class LayeringTests: XCTestCase {
     /// 守的是「取数结果、加载态与失败三面归判定层，视图只发起取数、只读三面」。改造前
     /// `ModelPickerView` 一处命中（`catalog = await sync.loadModelCatalog()`），改造后应为 0。
     ///
-    /// 盲区（都是漏报方向，写在这儿免得重修）：
+    /// 认三种落点：`x = await …`、`x += await …`（其余复合赋值同理）、`x = (await …)`。
+    ///
+    /// 盲区（都是漏报方向，写在这儿免得重修 —— 复审逐条列过）：
+    /// - **结果不经过赋值**：`items.append(await f())`、`messages += await g()` 里的
+    ///   `+=` 已被覆盖，但 `append(...)` / 构造器实参 / `return await f()` 认不出；
     /// - 赋值拆成两行（等号在上一行、`await` 在下一行）认不出；
-    /// - 取数封装在一个返回 `Void` 的函数里认不出 —— 那恰好是本期的正当写法（状态对象自己取数）；
-    /// - `for await` 与 `if case … = someValue` 不含「等号接 await」，不受影响。
+    /// - 取数封装在一个返回 `Void` 的函数里认不出 —— 那恰好是本期的正当写法（状态对象自己取数）。
+    ///
+    /// 为什么不把「任何位置出现 `await`」都算命中：视图中正当的**发起**也是 `await`
+    /// （`Task { await sync.sync() }`），那会把整条判据变成「视图不许 await」，与契约不符。
     private static let awaitedAssignment = try! NSRegularExpression(
-        pattern: #"(?<![=!<>+\-*/%&|^])=(?!=)\s*(try[?!]?\s+)?await"#
+        pattern: #"(?<!=)(?:[+\-*/%&|^]=|=)(?!=)\s*(?:try[?!]\s+)?\(?\s*await"#
     )
 
     func testViewsDoNotTakeFetchResults() throws {
@@ -370,19 +376,22 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 11–12：句子与说法不住在编排里（R18 期2）
 
-    /// 会话详情的编排文件里，代码行不含中文字符串字面量 —— 用户看得见的句子归
-    /// `Display/SyncText.swift`，判定与编排只产出「哪一步 + 哪一类原因」。
+    /// 会话详情的编排文件里，**含中文的行必须是注释行**（或以 `Log.` 开头）——
+    /// 用户看得见的句子归 `Display/SyncText.swift`，判定与编排只产出「哪一步 + 哪一类原因」。
     ///
-    /// 判据只钉 `SessionSync.swift` 一个文件，不钉整个 `State/`：本屏的
-    /// `TranscriptAssembler`（过程摘要）与 `ApprovalStore`（两句提示）的文案仍在原地 ——
-    /// 那是本期范围边界里写明的「不做」，钉整个目录会让这条断言从第一天就红着。
+    /// 判据形态照期1 的合约判据：不认字符串字面量，改按行判。理由是**三引号多行串**——
+    /// 单行引号正则对它 0 命中（复审复算过：往编排里写一段 `"""` 包着的中文，旧写法的
+    /// 命中数不变）。而一段多行的用户文案正是最典型的写法之一，漏它等于没守。
     ///
-    /// 认的是**单行双引号字面量**：三引号多行串认不出（漏报方向）。本文件的句子都是单行的，
-    /// 真出现多行串时，注释行判定会把它当代码行 —— 那一行含中文就红，所以仍然抓得住。
+    /// 只钉 `SessionSync.swift` 一个文件，不钉整个 `State/`：本屏的 `TranscriptAssembler`
+    /// （过程摘要）与 `ApprovalStore`（两句提示）的文案仍在原地 —— 那是本期范围边界里写明的
+    /// 「不做」，钉整个目录会让这条断言从第一天就红着。
     ///
-    /// **豁免整行以 `Log.` 开头的那一行**：日志文案在本项目一律写中文（`Core/Log.swift` 是唯一
-    /// 出口，`SecretFile`、`TailnetNode` 都是中文），而日志不是用户看得见的面。把用户句子写进
-    /// `Log.` 里没有意义 —— 用户看不到。
+    /// 两条豁免：
+    /// - **注释行**（`//` / `///` / `*` / `/*` 开头）—— 注释本来就该是中文；
+    /// - **整行以 `Log.` 开头** —— 日志文案在本项目一律写中文（`Core/Log.swift` 是唯一出口，
+    ///   `SecretFile`、`TailnetNode` 都是中文），而日志不是用户看得见的面；把用户句子写进
+    ///   `Log.` 里对用户没有意义。
     private var sessionSyncFile: URL {
         sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
     }
@@ -391,16 +400,20 @@ final class LayeringTests: XCTestCase {
         let text = try String(contentsOf: sessionSyncFile, encoding: .utf8)
         XCTAssertTrue(text.contains("func sync()"), "读到的不是编排文件 —— 先怀疑路径推算")
 
+        var commentLines = 0
         var hits = 0
-        for (line, code) in codeLines(in: text) {
-            if code.trimmingCharacters(in: .whitespaces).hasPrefix("Log.") { continue }
-            for literal in quotedLiterals(in: code) where containsHan(literal) {
-                hits += 1
-                XCTFail("SessionSync.swift:\(line) 的中文字面量 \(literal) —— "
-                        + "句子应住 Display/SyncText.swift（R18 期2 D1）")
+        for (line, source) in allLines(in: text) where containsHan(source) {
+            let trimmed = source.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") {
+                commentLines += 1
+                continue
             }
+            if trimmed.hasPrefix("Log.") { continue }
+            hits += 1
+            XCTFail("SessionSync.swift:\(line) 的中文不在注释里：\(trimmed)")
         }
         XCTAssertEqual(hits, 0, "编排文件里还有用户可见的句子")
+        XCTAssertGreaterThan(commentLines, 0, "编排文件里连中文注释都没有 —— 先怀疑路径或读取")
     }
 
     /// 全部 `Display/` 目录（`Features/*/Display/` 与 `Core/**/Display/`）。
@@ -419,23 +432,36 @@ final class LayeringTests: XCTestCase {
     }
 
     /// `Display/` 不 import SwiftUI / UIKit —— 它是「说法与换算」的家，不是第二个 Views。
+    ///
+    /// 认的是「`import` 之后的模块名」，不是「以 `import SwiftUI` 开头」：后者漏掉
+    /// `@_exported import SwiftUI`、`@preconcurrency import`、`import struct SwiftUI.Color`
+    /// 这些写法（复审点名的三种）。
+    private static let swiftUIImport = try! NSRegularExpression(
+        pattern: #"^\s*(?:@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?\s+)*import\s+(?:(?:struct|class|enum|protocol|typealias|func|var|let)\s+)?"#
+            + #"(?:SwiftUI|UIKit)\b"#
+    )
+
     func testDisplayDoesNotImportSwiftUI() throws {
         let directories = displayDirectories()
-        XCTAssertGreaterThanOrEqual(directories.count, 2,
-                                    "只扫到 \(directories.count) 个 Display/ —— 先怀疑路径推算")
+        // 身份正控：不光数个数，还要这两个目录各在。目录被改名时这一条先红，而不是静默通过。
+        let names = Set(directories.map { $0.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "") })
+        XCTAssertTrue(names.contains("Core/Gateway/Display"), "没扫到 Core/Gateway/Display：\(names)")
+        XCTAssertTrue(names.contains("Features/SessionDetail/Display"),
+                      "没扫到 Features/SessionDetail/Display：\(names)")
 
         var checked = 0
-        let banned = ["import SwiftUI", "import UIKit"]
         for directory in directories {
             for file in swiftFiles(under: directory) {
                 checked += 1
                 let text = try String(contentsOf: file, encoding: .utf8)
                 for (line, code) in codeLines(in: text) {
-                    let trimmed = code.trimmingCharacters(in: .whitespaces)
-                    if let hit = banned.first(where: { trimmed.hasPrefix($0) }) {
-                        XCTFail("\(directory.lastPathComponent)/\(file.lastPathComponent):\(line) "
-                                + "出现「\(hit)」—— 说法与换算不得认识 SwiftUI（R18 期2）")
-                    }
+                    let range = NSRange(code.startIndex..., in: code)
+                    guard let match = Self.swiftUIImport.firstMatch(in: code, options: [], range: range),
+                          let found = Range(match.range, in: code)
+                    else { continue }
+                    XCTFail("\(directory.lastPathComponent)/\(file.lastPathComponent):\(line) "
+                            + "出现「\(code[found].trimmingCharacters(in: .whitespaces))」"
+                            + " —— 说法与换算不得认识 SwiftUI（R18 期2）")
                 }
             }
         }

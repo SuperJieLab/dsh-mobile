@@ -40,14 +40,11 @@ struct ModelPickerView: View {
     }
 
     /// 按钮只显示模型名：「这是模型」由图标说了，省横向空间。
+    ///
+    /// 退到「上一次成功的目录默认值」而不是「当前这份结果」：重拉期间结果是 `.waiting`，
+    /// 若读它会闪成「未知」。状态机里那个字段就是为这一件事留的。
     private var currentName: String {
-        (sync.displayedModel ?? catalogDefault).map { $0.model } ?? "未知"
-    }
-
-    /// 目录的默认值 —— 只有拿到目录时才有；没拿到就不猜。
-    private var catalogDefault: ModelSelection? {
-        if case .ready(let list) = catalog.outcome { return list.default }
-        return nil
+        (sync.displayedModel ?? catalog.lastKnownDefault).map { $0.model } ?? "未知"
     }
 
     @ViewBuilder
@@ -74,7 +71,7 @@ struct ModelPickerView: View {
         let failures = list.failures ?? []
         // 空目录也是成功面 —— 空菜单与「没加载出来」在屏幕上会看起来一样。
         if groups.isEmpty && failures.isEmpty {
-            Text(list.emptyNote)
+            Text(ModelCatalog.emptyNote)
         }
         ForEach(groups, id: \.id) { group in
             Section(group.name) {

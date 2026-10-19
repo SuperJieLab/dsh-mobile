@@ -3,7 +3,7 @@ import Foundation
 
 /// 一个会话的同步编排：把「取窗口 / 追新增 / 往回翻」三件事接到状态机上。状态机
 /// （`SessionMirror`）只管判定，这里管调用顺序与失败收场，界面只管显示。三处纪律：
-/// - **单飞**：同一会话同时只有一个同步过程（`isSyncing`）。
+/// - **单飞**：同一会话同时只有一个同步过程（`syncInFlight`）。
 /// - **拉完为止**：追新增时一块装不下就接着要，直到服务端说没有更多。
 /// - **先窗口后增量**：先向服务端要一个最新的窗口，再往后追 —— 这样**不需要跨会话记住任何
 ///   位置**，冷启动、重启、跑了一夜回来行为都一样。
@@ -12,9 +12,11 @@ import Foundation
 /// 而非 `@Observable` 宏 —— 后者要跑进程外的宏插件，本项目的验证环境不允许（**能被本地
 /// 编译验证，比写法新更重要**）。
 ///
-/// **这里只剩编排与「事实」**（R18 期2）：告知的置位与清除在 `ResyncNoticeState`（同目录），
-/// 用户看得见的句子在 `Display/SyncText.swift`，两者都不该写回本文件 ——
-/// `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 守着后半句。
+/// **这里的第三类东西已经搬走**（R18 期2）：告知的置位与清除在 `ResyncNoticeState`（同目录），
+/// 用户看得见的句子在 `Display/SyncText.swift`。仍留在这里的是编排本身与「把线上形状搬成
+/// 状态机的输入」这两件（`window(_:)`、`parseBaseline(_:)`、`refreshView` 的三条投影）——
+/// 它们与调用顺序同源，不构成第二个变化原因。句子若写回本文件，
+/// `LayeringTests.testSyncOrchestrationHasNoUserFacingStrings` 会红。
 ///
 /// 消费者：`SessionDetailView`（整屏与底栏）、`ModelPickerView`（读显示值与发起换模型）。
 @MainActor
@@ -88,7 +90,7 @@ final class SessionSync: ObservableObject {
     /// 内存里的镜像。视图重建会新建一个 `SessionSync`、窗口重取一次 ——
     /// 服务端此刻给的比本地残留可信。
     private var mirror = SessionMirror()
-    private var isSyncing = false
+    private var syncInFlight = false
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
 
@@ -170,9 +172,9 @@ final class SessionSync: ObservableObject {
     /// 同步一次：镜像空着就先取一个窗口，然后从末尾追新增到最新。幂等 —— 已经是最新时
     /// 它退化成一次空增量请求。
     func sync() async {
-        guard !isSyncing else { return }
-        isSyncing = true
-        defer { isSyncing = false }
+        guard !syncInFlight else { return }
+        syncInFlight = true
+        defer { syncInFlight = false }
         status = .syncing
 
         var added = 0
@@ -255,9 +257,9 @@ final class SessionSync: ObservableObject {
 
     /// 往回翻一段更早的历史。已经翻到日志开头时什么也不做。
     func loadOlder() async {
-        guard !isSyncing, mirror.hasOlder else { return }
-        isSyncing = true
-        defer { isSyncing = false }
+        guard !syncInFlight, mirror.hasOlder else { return }
+        syncInFlight = true
+        defer { syncInFlight = false }
         status = .syncing
 
         guard mirror.beginRequest() else { return }
@@ -514,5 +516,21 @@ final class SessionSync: ObservableObject {
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
         approvals.rebuild(from: mirror.events)
+    }
+}
+
+extension SessionSync.Status {
+
+    /// 「现在是不是在同步」—— 形状查询，不是句子：视图拿它做分支（要不要转圈、要不要禁用）。
+    /// 它随 `Status` 的形状变，所以住在类型这边，不住 `Display/`。
+    var isSyncing: Bool {
+        if case .syncing = self { return true }
+        return false
+    }
+
+    /// 「还没开始」—— 同上。
+    var isIdle: Bool {
+        if case .idle = self { return true }
+        return false
     }
 }

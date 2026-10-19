@@ -54,7 +54,10 @@ extension SessionSync.Step {
 
 extension SessionSync.Cause {
 
-    /// 一句失败 —— 「哪一步 + 哪一类原因」拼成一句。能拼的十一句与搬家前**逐字相同**。
+    /// 一句失败 —— 「哪一步 + 哪一类原因」拼成一句。
+    ///
+    /// 搬家前散在 `SessionSync` 里的 10 句（打开 2、追新增 3、往回翻 2、发送 1、换模型 1、
+    /// 订阅 1）在这里**逐字相同**，只多了 5 句到不了的组合（见文件头）。
     func line(step: SessionSync.Step) -> String {
         switch self {
         case .transport:
@@ -85,21 +88,6 @@ extension SessionSync.Cause {
             case .opening, .paging, .syncing: return "\(step.name)失败：\(detail)"
             }
         }
-    }
-}
-
-extension SessionSync.Status {
-
-    /// 「现在是不是在同步」—— 形状查询，不是句子（视图拿它做分支，别拿它显示）。
-    var isSyncing: Bool {
-        if case .syncing = self { return true }
-        return false
-    }
-
-    /// 「还没开始」—— 同上。
-    var isIdle: Bool {
-        if case .idle = self { return true }
-        return false
     }
 }
 
