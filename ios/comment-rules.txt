@@ -74,7 +74,7 @@ expect-hit;workspace-milestone;快照与页面共用（M1）
 expect-hit;workspace-register;代价登记在 ISSUES C26
 expect-hit;workspace-phase-word;期2 用它估两端 offset
 expect-hit;meta-test-run;跑法：xcodebuild test -only-testing:DshMobileTests/LayeringTests
-expect-hit;meta-defence;为什么住 Core/Text/ 而不是某屏的 State/
+expect-hit;meta-defence;为什么住 Core 而不是某屏的 State/
 expect-pass;meta-test-run;测试在 tests/MarkdownParserTests.swift
 expect-pass;meta-defence;它的变化原因是载体标准
 expect-hit;upstream-line;上游形状（catalog.js:20-27）是对象数组

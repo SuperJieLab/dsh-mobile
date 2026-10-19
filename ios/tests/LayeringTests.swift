@@ -35,15 +35,15 @@ final class LayeringTests: XCTestCase {
             .appendingPathComponent("Sources")
     }
 
-    private var contractDirectory: URL {
-        sourcesRoot.appendingPathComponent("Core/Gateway/Contract")
+    private var wireDirectory: URL {
+        sourcesRoot.appendingPathComponent("Core/Gateway/Wire")
     }
 
     private var sharedUIDirectory: URL {
         sourcesRoot.appendingPathComponent("SharedUI")
     }
 
-    /// 合约不许认识的三层：客户端、流、状态。
+    /// 线上形状不许认识的三层：客户端、流、状态。
     private var gatewayImplementationDirectories: [URL] {
         ["Client", "Stream", "State"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
@@ -133,6 +133,46 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0, "一个 State 文件都没扫到 —— 先怀疑路径推算")
     }
 
+    // MARK: - 断言 2b：Core 侧的 State/ 只装纯值类型
+
+    /// `Core/**/State/` 只装无状态的值类型判定 —— 有状态持有者归 `Features/*/State/`。
+    ///
+    /// 两处同名不同义是刻意的：通信域的 `State/` 是「协议语义的纯判定」（`Equatable`、
+    /// 不认识 Combine），界面域的 `State/` 是「持有并发布」。这条断言把差别钉成可判的事实，
+    /// 免得有人在通信域塞一个 `ObservableObject`，让两级重新混成一件事。
+    ///
+    /// 盲区：`ObservableObject` 的别名（`@Observable` 宏、自定义协议）认不出。前者要宏插件，
+    /// 本项目的验证环境不用；后者目前不存在。
+    func testCoreStateHasNoObservableObject() throws {
+        let root = sourcesRoot.appendingPathComponent("Core")
+        var directories: [URL] = []
+        guard let walker = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+        else { return XCTFail("Core 目录没扫到：\(root.path)") }
+        for case let url as URL in walker where url.lastPathComponent == "State" {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                directories.append(url)
+            }
+        }
+        // 身份正控：Core 侧至少有一个 State/ —— 目录被改名时这一条先红。
+        XCTAssertFalse(directories.isEmpty, "Core 下一个 State/ 都没扫到：\(root.path)")
+
+        var checked = 0
+        for directory in directories {
+            for file in swiftFiles(under: directory) {
+                checked += 1
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) where code.contains("ObservableObject") {
+                    let relative = file.path
+                        .replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                    XCTFail("\(relative):\(line) 出现 ObservableObject"
+                            + " —— Core 侧的 State/ 只装纯值类型判定，有状态持有者归 Features/")
+                }
+            }
+        }
+        XCTAssertGreaterThan(checked, 0, "一个文件都没扫到 —— 先怀疑路径推算")
+    }
+
     // MARK: - 断言 3：Views 下的类型不被别的界面当零件用
 
     /// 已知的跨界面复用。每一条都要有理由，且清单本身被断言（`testExceptionsAreStillReal`）——
@@ -193,17 +233,16 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    // MARK: - 断言 5–7：Core 与合约的方向
+    // MARK: - 断言 5–7：Core 与线上形状的方向
 
-    /// 合约目录里不出现 `Client/`、`Stream/`、`State/` 声明的类型。
+    /// 线上形状目录里不出现 `Client/`、`Stream/`、`State/` 声明的类型。
     ///
-    /// 只查**代码行**：注释里提到实现层不算违反（spec A1 的边界；结构审查时正是注释让计数虚高，
-    /// 5 处里 4 处是注释）。盲区：字符串里出现同名也算命中 —— 误报方向，接受。
-    func testContractDoesNotReferenceImplementationTypes() throws {
+    /// 只查**代码行**：注释里提到实现层不算违反；字符串里出现同名算命中（误报方向，接受）。
+    func testWireDoesNotReferenceImplementationTypes() throws {
         let forbidden = try declaredTypes(under: gatewayImplementationDirectories, topLevelOnly: true)
         XCTAssertFalse(forbidden.isEmpty, "实现层一个类型都没扫到 —— 先怀疑路径推算")
-        let files = swiftFiles(under: contractDirectory)
-        XCTAssertFalse(files.isEmpty, "合约目录一个文件都没扫到：\(contractDirectory.path)")
+        let files = swiftFiles(under: wireDirectory)
+        XCTAssertFalse(files.isEmpty, "线上形状目录一个文件都没扫到：\(wireDirectory.path)")
 
         var hits = 0
         for file in files {
@@ -211,23 +250,22 @@ final class LayeringTests: XCTestCase {
             for (line, code) in codeLines(in: text) {
                 for type in forbidden where contains(type, in: code) {
                     hits += 1
-                    XCTFail("Contract/\(file.lastPathComponent):\(line) 出现 \(type)"
-                            + " —— 合约不得依赖会变的实现")
+                    XCTFail("Wire/\(file.lastPathComponent):\(line) 出现 \(type)"
+                            + " —— 线上形状不得依赖会变的实现")
                 }
             }
         }
-        XCTAssertEqual(hits, 0, "合约引用了实现层的类型")
+        XCTAssertEqual(hits, 0, "线上形状引用了实现层的类型")
     }
 
-    /// 合约里的中文只能出现在注释里 —— 「用户看得见的句子」不许住在合约里。
+    /// 线上形状里的中文只能出现在注释里 —— 「用户看得见的句子」不许住在这里。
     ///
     /// 判据形态是「含中文的行必须是注释行」，不是「字面量里不许有中文」：后者要认出三引号
-    /// 多行串，而三段最长的文案正是 `"""` 包着的 —— 单行引号正则对它们假绿：
-    /// 把 `explain` 原样放回合约，按字符串判的版本仍然 parsed 2 / hits 0。
+    /// 多行串，而最长的几段文案正是 `"""` 包着的 —— 单行引号正则对它们假绿。
     /// 盲区：代码行尾的行内注释会被误报 —— 遇到就把注释挪到上一行。
-    func testContractHasNoUserFacingStrings() throws {
-        let files = swiftFiles(under: contractDirectory)
-        XCTAssertFalse(files.isEmpty, "合约目录一个文件都没扫到")
+    func testWireHasNoUserFacingStrings() throws {
+        let files = swiftFiles(under: wireDirectory)
+        XCTAssertFalse(files.isEmpty, "线上形状目录一个文件都没扫到")
 
         var commentLines = 0
         for file in files {
@@ -240,23 +278,25 @@ final class LayeringTests: XCTestCase {
                     commentLines += 1
                     continue
                 }
-                XCTFail("Contract/\(file.lastPathComponent):\(line) 的中文不在注释里：\(trimmed)")
+                XCTFail("Wire/\(file.lastPathComponent):\(line) 的中文不在注释里：\(trimmed)")
             }
         }
-        XCTAssertGreaterThan(commentLines, 0, "合约里连中文注释都没有 —— 先怀疑路径或读取")
+        XCTAssertGreaterThan(commentLines, 0, "线上形状里连中文注释都没有 —— 先怀疑路径或读取")
     }
 
-    /// 合约的代码行里不出现显示口径的符号名 —— 「中文只在注释里」挡不住没有中文字面的规则
+    /// 线上形状的代码行里不出现显示口径的符号名 —— 「中文只在注释里」挡不住没有中文字面的规则
     /// （`displayMessage` 的 `"text"`、`relativeTime` 的 `zh_Hans_CN`）。
     ///
     /// 名单是手维护的：新增显示口径的符号时加一行；或者干脆放在 `Display/` —— 那样天然不会被拦。
+    /// 名单的判据是「它是显示口径的符号」，与那个符号住在哪个目录无关：现在 `displayMessage`
+    /// 住 `State/`，仍要拦（改住哪里都不许被线上形状引用）。
     private static let displayVocabulary = [
         "explanation", "readableDescription", "displayMessage", "relativeTime", "DisplayMessage",
     ]
 
-    func testContractHasNoDisplayVocabulary() throws {
-        let files = swiftFiles(under: contractDirectory)
-        XCTAssertFalse(files.isEmpty, "合约目录一个文件都没扫到")
+    func testWireHasNoDisplayVocabulary() throws {
+        let files = swiftFiles(under: wireDirectory)
+        XCTAssertFalse(files.isEmpty, "线上形状目录一个文件都没扫到")
 
         var hits = 0
         for file in files {
@@ -264,12 +304,12 @@ final class LayeringTests: XCTestCase {
             for (line, code) in codeLines(in: text) {
                 for name in Self.displayVocabulary where contains(name, in: code) {
                     hits += 1
-                    XCTFail("Contract/\(file.lastPathComponent):\(line) 出现 \(name)"
+                    XCTFail("Wire/\(file.lastPathComponent):\(line) 出现 \(name)"
                             + " —— 显示口径应住 Display/")
                 }
             }
         }
-        XCTAssertEqual(hits, 0, "合约里出现了显示口径的符号")
+        XCTAssertEqual(hits, 0, "线上形状里出现了显示口径的符号")
     }
 
     /// `Display/` 不引用实现层的类型 —— 它要能被状态层与视图复用的前提。
@@ -362,7 +402,7 @@ final class LayeringTests: XCTestCase {
     /// 会话详情的编排文件里，**含中文的行必须是注释行**（或以 `Log.` 开头）——
     /// 用户看得见的句子归 `Display/SyncText.swift`，判定与编排只产出「哪一步 + 哪一类原因」。
     ///
-    /// 判据形态照合约那几条：不认字符串字面量，改按行判。理由是**三引号多行串**——
+    /// 判据形态照线上形状那几条：不认字符串字面量，改按行判。理由是**三引号多行串**——
     /// 单行引号正则对它 0 命中（复审复算过：往编排里写一段 `"""` 包着的中文，旧写法的
     /// 命中数不变）。而一段多行的用户文案正是最典型的写法之一，漏它等于没守。
     ///

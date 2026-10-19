@@ -2,7 +2,7 @@
  * Markdown 解析器的测试：纯状态机，不 import SwiftUI / UIKit、不碰网络与磁盘，
  * 喂源文、断言块数组，覆盖块级识别 / 行内接入 / 尾部冻结 / 未闭合围栏。
  *
- * 解析器住 `Sources/Core/Text/`（变化原因是载体标准，
+ * 解析器住 `Sources/Core/MarkdownParser.swift`（变化原因是载体标准，
  * 不是某一屏的状态），这些断言因此也不依赖任何界面。
  * 流式语义照上游运行时产物 `@deepseek-ai/dsh-client-ui-primitives` 的 `markdown/incremental.ts`：
  * 除尾部外全部冻结，冻结块的键是源偏移。

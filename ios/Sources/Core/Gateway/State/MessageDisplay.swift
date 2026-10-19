@@ -1,11 +1,12 @@
 /**
  * 哪些事件能变成一条消息、取哪个文本块 —— 显示取舍，不是协议规则。
  *
- * `DisplayMessage` 与 `Role` 也是显示投影，不是线上形状：协议给的是事件体，
- * 这两个类型是为了「画一条气泡」而折叠出来的，所以与这里同住。
+ * 它是判定而不是文案：读 `JSONValue`、按事件类型分支、可能给不出消息，与 `SessionMirror`
+ * 同源（都随上游事件形状变）。`DisplayMessage` 与 `Role` 是它的输出形状，不是线上形状 ——
+ * 协议给的是事件体，这两个类型是为「画一条气泡」折叠出来的，随判定同处。
  *
  * 消费者：`SessionSync`（`mirror.events.compactMap(\.displayMessage)`）、
- * `TranscriptAssembler`（逐条事件取值）。
+ * `TranscriptAssembler`（逐条事件取值）、`SessionDetailView`（拿 `DisplayMessage` 画气泡）。
  */
 import Foundation
 

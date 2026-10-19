@@ -5,7 +5,7 @@
  * 不去解析源码猜「协议里有哪些码」—— 按语法枚举声明会被写法绕过。
  *
  * 扫描面与放行：
- * - 扫**整个 `Sources/`**（含 `Contract/`）：取值重写不挑目录，合约里也出现过
+ * - 扫**整个 `Sources/`**（含 `Wire/`）：取值重写不挑目录，线上形状里也出现过
  *   `code: "internal-error"` 这样的兜底拷贝。
  * - 唯一放行的是**枚举定义行**（`case internalError = "internal-error"`）—— 那是取值的出处。
  *   放行按行的形状判，不按目录判。
@@ -29,7 +29,7 @@ final class ErrorCodeLiteralTests: XCTestCase {
         XCTAssertGreaterThan(files.count, 40, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
         // 身份正控：两个必须被扫到的目录各在。目录被改名时这一条先红，而不是静默通过。
         let names = Set(files.map { $0.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "") })
-        XCTAssertTrue(names.contains("Core/Gateway/Contract/GatewayProtocol.swift"), "没扫到合约")
+        XCTAssertTrue(names.contains("Core/Gateway/Wire/GatewayProtocol.swift"), "没扫到线上形状")
         XCTAssertTrue(names.contains("Features/Approval/State/ApprovalStore.swift"), "没扫到界面层")
 
         let codes = GatewayErrorCode.allCases.map { "\"\($0.rawValue)\"" }
