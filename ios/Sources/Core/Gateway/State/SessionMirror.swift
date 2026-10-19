@@ -115,9 +115,6 @@ struct SessionMirror {
   /// 是否有在途请求。同一会话同时只允许一个。
   private var inFlight = false
 
-  /// 服务端表示位置不可用时使用的错误码。
-  private static let resyncRequired = "resync-required"
-
   /// 还没有任何内容 —— 冷启动、或刚被重置。
   var isEmpty: Bool { events.isEmpty }
 
@@ -232,7 +229,7 @@ struct SessionMirror {
     case .refused(let refusal):
       // 只有「位置不可用」需要重置；其它拒绝（会话不存在、日志读不出来）是
       // 别的问题，界面照实显示即可。
-      return refusal.code == Self.resyncRequired
+      return refusal.code == GatewayErrorCode.resyncRequired.rawValue
         ? .resetRequired(.cursorVoid)
         : .refused(code: refusal.code)
 

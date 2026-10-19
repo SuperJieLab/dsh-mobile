@@ -171,7 +171,7 @@ struct SessionDetailView: View {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.title2)
                         }
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(PromptDraft.normalized(draft) == nil)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)

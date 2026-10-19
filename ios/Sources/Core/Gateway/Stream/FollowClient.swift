@@ -355,7 +355,7 @@ final class FollowClient: NSObject {
 
         case "error":
             let failure = GatewayFailure(
-                code: frame.payload?["code"]?.string ?? "internal-error",
+                code: frame.payload?["code"]?.string ?? GatewayErrorCode.internalError.rawValue,
                 message: frame.payload?["message"]?.string ?? ""
             )
             onRefused?(failure)

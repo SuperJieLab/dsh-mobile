@@ -109,7 +109,10 @@ struct PairingView: View {
                         tailnetKey = ""
                         Task { await store.submitMeshKey(key, config: MeshConfig.load()) }
                     }
-                    .disabled(tailnetKey.isEmpty || !MeshConfig(controlURLString: controlURL, gatewayURLString: gatewayURL).isComplete)
+                    .disabled(!PairingRules.canSubmitMesh(
+                        key: tailnetKey,
+                        config: MeshConfig(controlURLString: controlURL, gatewayURLString: gatewayURL)
+                    ))
 
                     if case .failed = store.nodeState {
                         Button("重试") {

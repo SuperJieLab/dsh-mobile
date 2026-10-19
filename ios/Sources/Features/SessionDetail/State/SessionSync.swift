@@ -143,8 +143,8 @@ final class SessionSync: ObservableObject {
     /// 下发一条指令：回包 ok = 已受理，回答本身从订阅流里来；失败如实进状态行，
     /// 输入的字还在框里。
     func sendPrompt(_ text: String) async {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        // 与发送按钮的置灰读同一份判定 —— 「判空」与「取值」同源（R18 期3 决定 B1）。
+        guard let trimmed = PromptDraft.normalized(text) else { return }
         do {
             try await client.sendPrompt(sessionId: sessionId, text: trimmed, promptId: UUID().uuidString)
         } catch {

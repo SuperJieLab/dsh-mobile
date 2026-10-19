@@ -29,9 +29,12 @@ final class PairingState: ObservableObject {
         self.client = client
     }
 
-    /// 可点吗：满 6 位且没有正在进行的提交。按钮的内容与 `disabled` 都读它。
+    /// 可点吗 —— 一行转发到 `PairingRules`。按钮的内容与 `disabled` 都读它。
+    ///
+    /// 规则不写在这里：它要能在没有界面、没有网关的条件下被断言，而本类型的构造要一个
+    /// `GatewayClient`（`final class`、没有协议）。输入仍归这里 —— `code` 与 `isPairing`。
     var canPair: Bool {
-        !isPairing && code.count == 6
+        PairingRules.canSubmitCode(code, isSubmitting: isPairing)
     }
 
     func pair() async {

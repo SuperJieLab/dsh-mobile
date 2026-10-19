@@ -13,37 +13,32 @@ import XCTest
 final class ConnectionStoreTests: XCTestCase {
 
     func testOrchestration() async {
-        // —— N1：全组合投影（5 节点态 × 2 身份 × 2 组网）——
-        // noKey 与节点态无关 → needsSetup（含 isPaired 的组合：身份轴不并入连接阶段，决定 5）
-        for paired in [true, false] {
-            for hasSession in [true, false] {
-                XCTAssertTrue(ConnectionPhase.resolve(nodeState: .noKey, isPaired: paired, hasGatewaySession: hasSession) == .needsSetup,
-                              "N1a noKey（paired=\(paired) session=\(hasSession)）→ needsSetup")
-            }
-        }
-        // registering → connecting（session 不可能建成，但组合仍断言，防漏）
-        for paired in [true, false] {
-            for hasSession in [true, false] {
-                XCTAssertTrue(ConnectionPhase.resolve(nodeState: .registering, isPaired: paired, hasGatewaySession: hasSession) == .connecting,
-                              "N1b registering（paired=\(paired) session=\(hasSession)）→ connecting")
-            }
+        // —— N1：投影的全组合（2 节点态 × 2 组网；`failed` 两半各一次）——
+        // 身份轴不并入连接阶段（决定 5）—— 这件事现在由 `resolve` 的签名表达：签名里没有
+        // 身份输入，就不存在「配对与否」这一维组合（R18 期3 决定 D1）。
+        for session in [true, false] {
+            let noKey = ConnectionPhase.resolve(
+                nodeState: .noKey, hasGatewaySession: session)
+            XCTAssertTrue(noKey == .needsSetup, "N1a noKey（session=\(session)）")
+
+            let registering = ConnectionPhase.resolve(
+                nodeState: .registering, hasGatewaySession: session)
+            XCTAssertTrue(registering == .connecting, "N1b registering（session=\(session)）")
+
+            let badKey = ConnectionPhase.resolve(
+                nodeState: .failed(.badKey), hasGatewaySession: session)
+            XCTAssertTrue(badKey == .failed(.badKey), "N1e failed(badKey)（session=\(session)）")
+
+            let unreachable = ConnectionPhase.resolve(
+                nodeState: .failed(.unreachable), hasGatewaySession: session)
+            XCTAssertTrue(unreachable == .failed(.unreachable),
+                          "N1f failed(unreachable)（session=\(session)）")
         }
         // running 的两半：session 未建成的窄窗口 = connecting；建成 = ready
-        for paired in [true, false] {
-            XCTAssertTrue(ConnectionPhase.resolve(nodeState: .running, isPaired: paired, hasGatewaySession: false) == .connecting,
-                          "N1c running 但传输未切换（paired=\(paired)）→ connecting")
-            XCTAssertTrue(ConnectionPhase.resolve(nodeState: .running, isPaired: paired, hasGatewaySession: true) == .ready,
-                          "N1d running 且传输已切换（paired=\(paired)）→ ready")
-        }
-        // failed 原因可区分（badKey ≠ unreachable）
-        for paired in [true, false] {
-            for hasSession in [true, false] {
-                XCTAssertTrue(ConnectionPhase.resolve(nodeState: .failed(.badKey), isPaired: paired, hasGatewaySession: hasSession) == .failed(.badKey),
-                              "N1e failed(badKey)（paired=\(paired) session=\(hasSession)）→ failed(badKey)")
-                XCTAssertTrue(ConnectionPhase.resolve(nodeState: .failed(.unreachable), isPaired: paired, hasGatewaySession: hasSession) == .failed(.unreachable),
-                              "N1f failed(unreachable)（paired=\(paired) session=\(hasSession)）→ failed(unreachable)")
-            }
-        }
+        let switching = ConnectionPhase.resolve(nodeState: .running, hasGatewaySession: false)
+        XCTAssertTrue(switching == .connecting, "N1c running 但传输未切换 → connecting")
+        let switched = ConnectionPhase.resolve(nodeState: .running, hasGatewaySession: true)
+        XCTAssertTrue(switched == .ready, "N1d running 且传输已切换 → ready")
 
         // —— K4：启动零激活 + VerifiedRunning 唯一激活点（R5 决定 2）——
         // 激活前 App 不持有端点；端点从无到有只发生在节点验证 Running 那一刻。
@@ -103,7 +98,6 @@ final class ConnectionStoreTests: XCTestCase {
 private final class FakeClient: GatewayActivating, @unchecked Sendable {
     /// (session, baseURL) 记录对，按激活顺序排列。
     var activations: [(URLSession, URL)] = []
-    var isPaired = true
     func activate(session: URLSession, baseURL: URL) {
         activations.append((session, baseURL))
     }

@@ -19,9 +19,10 @@ import Combine
 // TailscaleKit / GatewayClient，见 tests/ConnectionStoreTests.swift）。
 
 /// 组网激活能力：`GatewayClient.activate` 的窄面。
+///
+/// 只有 store 真正读的成员 —— 身份（`isPaired`）不在这个窄面上：连接阶段的投影不读它
+/// （两轴正交，决定 5），签名里也就没有它。
 @MainActor protocol GatewayActivating: AnyObject {
-    /// 当前身份关系是否存在（投影输入；身份轴不并入连接阶段，决定 5）。
-    var isPaired: Bool { get }
     func activate(session: URLSession, baseURL: URL)
 }
 
@@ -80,7 +81,6 @@ final class ConnectionStore: ObservableObject {
         self.node = node
         self.nodeState = node.nodeState
         self.phase = ConnectionPhase.resolve(nodeState: node.nodeState,
-                                             isPaired: client.isPaired,
                                              hasGatewaySession: false)
     }
 
@@ -137,11 +137,10 @@ final class ConnectionStore: ObservableObject {
     }
 
     private func reproject() {
-        // 身份轴从 client 读（节点不认识身份，决定 5）；isPaired 当前不被枚举消费，
-        // 是「组合门面」的预留输入。
+        // 身份轴不进连接阶段（决定 5：离线也可已配对，两轴正交）—— 这件事现在由
+        // `resolve` 的签名表达，不再靠一条注释加一层测试循环去说明。
         nodeState = node.nodeState
         phase = ConnectionPhase.resolve(nodeState: node.nodeState,
-                                        isPaired: client.isPaired,
                                         hasGatewaySession: tailnetActivated)
     }
 }
@@ -159,9 +158,9 @@ enum ConnectionPhase: Equatable {
     /// 节点失败，原因可区分（badKey 引导重输 / unreachable 如实显示）。
     case failed(TailnetNodeFailure)
 
-    /// 纯投影：三个输入定一个阶段。全组合断言见 tests/ConnectionStoreTests.swift（N1）。
+    /// 纯投影：两个输入定一个阶段（身份不进这个投影，决定 5）。断言见
+    /// `tests/ConnectionStoreTests.swift`（N1）。
     static func resolve(nodeState: TailnetNodeState,
-                        isPaired: Bool,
                         hasGatewaySession: Bool) -> ConnectionPhase {
         switch nodeState {
         case .noKey:
