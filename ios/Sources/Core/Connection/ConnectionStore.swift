@@ -2,8 +2,9 @@
  * 连接域的唯一宿主：把「组网 × 身份 × 传输」三段收敛为一个对外阶段（R3）。
  *
  * 分工：迁移判定仍在纯状态机 `TailnetNodeState`（断言在 tests/MeshNodeStateTests.swift），这里不做
- * 第二台状态机 —— `ConnectionPhase.resolve` 只是它加身份/组网两个输入后的**投影**
- * （决定 1）；启动兜底激活、VerifiedRunning 激活内化、回前台探活的编排住这里（决定 2、6）。
+ * 第二台状态机 —— `ConnectionPhase.resolve` 只是它加「组网传输是否建成」这一个输入后的
+ * **投影**（决定 1）；身份（`isPaired`）不进这个投影，两轴正交（决定 5）。
+ * 启动兜底激活、VerifiedRunning 激活内化、回前台探活的编排住这里（决定 2、6）。
  *
  * 与 `GatewayClient` 的关系（决定 3）：client 是 op 门面 + 身份状态机，由根部创建
  * 传给本 store，store 只在节点验证 Running 时调一次 `activate` —— 连接域不吞身份域，

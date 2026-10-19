@@ -321,7 +321,8 @@ extension GatewayResponse {
         }
         guard ok else {
             throw GatewayClientError.refused(
-                error ?? GatewayFailure(code: "internal-error", message: "")
+                error ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue,
+                                        message: "")
             )
         }
     }

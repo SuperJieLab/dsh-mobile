@@ -76,11 +76,16 @@ final class PairingRulesTests: XCTestCase {
 
     // MARK: - 规则没有第二份
 
-    /// 两个调用方都不许把判据抄回来：`PairingState` 与 `PairingView` 的代码行里不再出现
-    /// `count == 6` / `key.isEmpty` 这类规则碎片。
+    /// 两个调用方都不许把判据抄回来：`PairingState` 与 `PairingView` 的**代码行**里不再出现
+    /// `count == 6` / `key.isEmpty` 这类规则碎片，且**都有代码行在读规则**。
     ///
-    /// 只扫这两个文件的代码行（注释行跳过）：注释里引用判据是讲解，不是第二份实现。
-    /// 盲区：换个写法的等价判据（`code.count >= 6`）认不出 —— 漏报方向，靠评审。
+    /// 两件事都要查，缺一样就会假绿：
+    /// - 只查「碎片不存在」—— 有人把调用整行删掉、判据也没抄回来，仍然通过（功能没了）；
+    /// - 只查「提到 `PairingRules`」—— 那一行可能只是文档注释（复审实测：`PairingState`
+    ///   的注释里就有这个词，`text.contains` 是注释检测器，不是代码检测器）。
+    ///
+    /// 盲区（漏报方向，靠评审）：换个写法的等价判据（`code.count >= 6`、`(code as NSString).length`）
+    /// 认不出；只扫这两个文件 —— 将来第三个地方拼一遍判据，要靠新加的屏自己守住。
     func testRuleHasNoSecondCopy() throws {
         let state = sourcesRoot.appendingPathComponent("Features/Pairing/State/PairingState.swift")
         let view = sourcesRoot.appendingPathComponent("Features/Pairing/Views/PairingView.swift")
@@ -89,16 +94,20 @@ final class PairingRulesTests: XCTestCase {
         var scanned = 0
         for file in [state, view] {
             let text = try String(contentsOf: file, encoding: .utf8)
-            XCTAssertTrue(text.contains("PairingRules"), "\(file.lastPathComponent) 没在读规则")
+            var callsRule = 0
             for (line, code) in codeLines(in: text) {
-                scanned += 1
                 let trimmed = code.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("//") { continue }
+                if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") { continue }
+                scanned += 1
+                if code.contains("PairingRules.") { callsRule += 1 }
                 for fragment in fragments where code.contains(fragment) {
                     XCTFail("\(file.lastPathComponent):\(line) 出现「\(fragment)」"
                             + " —— 判据只许住 PairingRules（E2）")
                 }
             }
+            XCTAssertGreaterThan(callsRule, 0,
+                                 "\(file.lastPathComponent) 没有一行在代码里读规则 —— "
+                                 + "注释里提到不算")
         }
         XCTAssertGreaterThan(scanned, 0, "两个文件一行都没扫到 —— 先怀疑路径推算")
     }

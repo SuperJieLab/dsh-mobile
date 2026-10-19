@@ -5,12 +5,16 @@
  * 遍历 `allCases`，不去解析源码猜「协议里有哪些码」。这类判据在本项目有过教训 ——
  * 按语法枚举声明会被写法绕过，问「谁交出了全部取值」才是闭集。
  *
- * 扫描面与边界：
- * - 扫 `Sources/`，**排除 `Contract/`** —— 枚举的定义处就在那里，字面量本来就该出现一次。
+ * 扫描面与放行规则：
+ * - 扫**整个 `Sources/`**（含 `Contract/`）：取值重写不挑目录，`Contract/` 里同样出现过
+ *   `GatewayFailure(code: "internal-error", …)` 这样的兜底拷贝。
+ * - 唯一放行的是**枚举的定义行**（`case internalError = "internal-error"`）—— 那是取值的出处，
+ *   本来就该出现一次。放行按行的形状判（`case 名字 = "取值"`），不按目录判。
  * - **不扫 `tests/`**：假件按上游原样写取值，让它引用我们的枚举反而会掩盖上游改动（F1 的边界）。
  * - 认的是双引号字面量整串相等（`"resync-required"`），不是子串匹配 —— 否则
- *   `"resync-required: ..."` 这类拼接文案会被误报成取值重复。
- * 盲区：三引号多行串里写成一样的整串会漏（漏报方向；取值不需要多行）。
+ *   `"resync-required: …"` 这类拼接文案会被误报成取值重复。
+ * 盲区（漏报方向）：三引号多行串、`"resync-" + "required"` 这类拼接认不出；行内注释里出现
+ * 整串会误报（把注释挪到上一行即可）。
  *
  * 跑法：`xcodebuild test -only-testing:DshMobileTests/ErrorCodeLiteralTests`。
  */
@@ -21,12 +25,14 @@ import XCTest
 
 final class ErrorCodeLiteralTests: XCTestCase {
 
-    /// 一个协议错误码的取值，除了 `Contract/` 之外不许在别处再写一遍。
+    /// 一个协议错误码的取值，除了枚举的定义行之外不许在别处再写一遍。
     func testErrorCodeLiteralsStayInTheEnum() throws {
-        let root = sourcesRoot.appendingPathComponent("Core")
-        let files = swiftFiles(under: root)
-            .filter { !$0.path.contains("/Contract/") }
-        XCTAssertGreaterThan(files.count, 20, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
+        let files = swiftFiles(under: sourcesRoot)
+        XCTAssertGreaterThan(files.count, 40, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
+        // 身份正控：两个必须被扫到的目录各在。目录被改名时这一条先红，而不是静默通过。
+        let names = Set(files.map { $0.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "") })
+        XCTAssertTrue(names.contains("Core/Gateway/Contract/GatewayProtocol.swift"), "没扫到合约")
+        XCTAssertTrue(names.contains("Features/Approval/State/ApprovalStore.swift"), "没扫到界面层")
 
         let codes = GatewayErrorCode.allCases.map { "\"\($0.rawValue)\"" }
         XCTAssertGreaterThan(codes.count, 5, "枚举交出的取值太少 —— 先怀疑 CaseIterable")
@@ -36,6 +42,7 @@ final class ErrorCodeLiteralTests: XCTestCase {
             let text = try String(contentsOf: file, encoding: .utf8)
             for (line, code) in codeLines(in: text) {
                 scannedLines += 1
+                if Self.isEnumDefinitionLine(code) { continue }
                 for literal in codes where code.contains(literal) {
                     let relative = file.path
                         .replacingOccurrences(of: sourcesRoot.path + "/", with: "")
@@ -44,7 +51,17 @@ final class ErrorCodeLiteralTests: XCTestCase {
                 }
             }
         }
-        XCTAssertGreaterThan(scannedLines, 100, "扫到的代码行太少 —— 先怀疑路径推算")
+        XCTAssertGreaterThan(scannedLines, 1000, "扫到的代码行太少 —— 先怀疑路径推算")
+    }
+
+    /// 枚举的定义行：`case internalError = "internal-error"`（可带缩进，可带 `@…` 之外的修饰）。
+    private static let enumDefinition = try! NSRegularExpression(
+        pattern: #"^\s*case\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*"[^"]*"\s*$"#
+    )
+
+    private static func isEnumDefinitionLine(_ line: String) -> Bool {
+        let range = NSRange(line.startIndex..., in: line)
+        return enumDefinition.firstMatch(in: line, options: [], range: range) != nil
     }
 
     // MARK: - 路径与扫描
