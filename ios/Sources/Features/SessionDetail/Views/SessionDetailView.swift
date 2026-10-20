@@ -55,7 +55,7 @@ struct SessionDetailView: View {
             }
         }
         // 进屏即订阅：opening 给首屏，事件与未定稿实时推。
-        // 离屏即停。`sync()`（HTTP 全量对齐）保留给下拉刷新作兜底。
+        // 离屏即停。`sync()`（HTTP 全量对齐）留在「滚到底部」时作兜底。
         .task { sync.startFollowing() }
         // 目录进屏拉一次。挂在格子上的话，功能条每次因键盘收起而重建都会重拉一遍。
         .task { await catalog.reload() }
@@ -173,14 +173,28 @@ struct SessionDetailView: View {
             // 在长会话上很贵，而用户并不需要看见内容「长出来」。`eventCount` 与内容同步变，
             // 用它当 key 能覆盖「插入了不产生节点的事件」这种情形。
             .animation(nil, value: sync.eventCount)
-            // 滑到接近顶部就自动翻页 —— 列表上不再有「加载更早」的按钮。
-            // 只认**进入**边沿：前插之后内容总高变大、离顶更远，条件自然复位，用户继续往上滑
-            // 才会触发下一次。这就是分页的节奏，不会一口气把历史拉完。
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentOffset.y + geometry.contentInsets.top <= Self.olderTriggerDistance
-            } action: { wasNear, isNear in
-                guard isNear, !wasNear, sync.hasOlder, !sync.isPagingOlder else { return }
-                Task { await sync.loadOlder() }
+            // 两条边各管一件事，方向与内容方向一致：
+            //   顶部（看最早）→ 往回翻 `loadOlder`；底部（看最新）→ 对齐最新 `sync`。
+            // 只认**进入**边沿：前插 / 追加都会让离边距离变大，条件自己复位，
+            // 所以不会一口气拉完，也不会在底部反复对齐。
+            .onScrollGeometryChange(for: ScrollEdge.self) { geometry in
+                let topDistance = geometry.contentOffset.y + geometry.contentInsets.top
+                if topDistance <= Self.edgeTriggerDistance { return .top }
+                let bottomDistance = geometry.contentSize.height
+                    - (geometry.contentOffset.y + geometry.containerSize.height)
+                if bottomDistance <= Self.edgeTriggerDistance { return .bottom }
+                return .none
+            } action: { _, edge in
+                switch edge {
+                case .top:
+                    guard sync.hasOlder, !sync.isPagingOlder else { return }
+                    Task { await sync.loadOlder() }
+                case .bottom:
+                    guard !sync.status.isSyncing else { return }
+                    Task { await sync.sync() }
+                case .none:
+                    break
+                }
             }
             .onAppear {
                 // 与上面同一个目标：列表最末尾那行锚点。**无动画** —— 生效时等于原地不动，
@@ -189,7 +203,9 @@ struct SessionDetailView: View {
                 didInitialScroll = true
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
-            .refreshable { await sync.sync() }
+            // 不用 `.refreshable`：它的语义是「拉最新」，却只能挂在列表**顶部** —— 而顶部
+            // 该做的是往回翻历史，手势方向与内容方向正好相反。两头都交给上面那条
+            // `onScrollGeometryChange`（顶部翻历史、底部对齐最新）。
             // 打字时滚动列表即收键盘 —— 与配对屏同口径；这是功能条回来的唯一手势
             // （发送也会收，见 `composerRow`）。
             .scrollDismissesKeyboard(.immediately)
@@ -382,8 +398,15 @@ struct SessionDetailView: View {
     /// 底部滚动锚点的 id。
     private static let bottomAnchor = "session-detail-bottom"
 
-    /// 距内容顶部多近就开始自动翻页。取约四分之一屏 —— 太灵敏会在惯性里连翻几页。
-    private static let olderTriggerDistance: CGFloat = 240
+    /// 距顶 / 距底多近就触发。取约四分之一屏 —— 太灵敏会在惯性里连着触发好几次。
+    private static let edgeTriggerDistance: CGFloat = 240
+
+    /// 列表停在哪条边 —— 驱动两条自动动作：顶部往回翻历史，底部对齐最新。
+    private enum ScrollEdge: Equatable {
+        case none
+        case top
+        case bottom
+    }
 
     /// 告知那一行的图标与颜色 —— 逐 case 列举，`ResyncNotice.Kind` 加取值时编译失败。
     private func look(of notice: ResyncNotice) -> (icon: String, tint: Color) {
