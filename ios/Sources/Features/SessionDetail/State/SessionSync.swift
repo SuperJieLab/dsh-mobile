@@ -123,6 +123,13 @@ final class SessionSync: ObservableObject {
         return followClient
     }()
     private var transient = TransientChannel()
+
+    /// 首屏兜底：WS 迟迟不给窗口时用 HTTP 拉一次。
+    ///
+    /// 这是**网络层的事** —— 用户只该看到内容出来，不该知道背后换了条通道，所以没有按钮、
+    /// 没有提示、也没有「兜底中」这种状态行。WS 之后连上会走 `realign`（保留已翻出的头部、
+    /// 只换尾部），不会把 HTTP 拉到的内容整段冲掉。
+    private var firstScreenFallback: Task<Void, Never>?
     /// 事件 → 显示节点。它跨刷新保留 —— 状态与去重理由见 `TranscriptAssembler`。
     private var assembler = TranscriptAssembler { type in
         // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
@@ -348,10 +355,25 @@ final class SessionSync: ObservableObject {
     ///   一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
     func startFollowing() {
         follow.start(sessionId: sessionId)
+        scheduleFirstScreenFallback()
+    }
+
+    /// 2.5 秒是「明显慢了」与「还在正常握手」的分界 —— 正常情况下 opening 一秒内到。
+    /// 只在手里还是空的时候兜：已经有内容说明首屏来过，不需要第二条通道。
+    private func scheduleFirstScreenFallback() {
+        firstScreenFallback?.cancel()
+        firstScreenFallback = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled, let self, self.mirror.isEmpty else { return }
+            Log.info(Log.Module.session, "first-screen fallback: ws silent, fetching over http")
+            await self.sync()
+        }
     }
 
     /// 离开详情页：关流、清未定稿。镜像留在内存里（视图销毁时一起消失）。
     func stopFollowing() {
+        firstScreenFallback?.cancel()
+        firstScreenFallback = nil
         follow.stop()
         transient = TransientChannel()
         transientText = ""
@@ -365,6 +387,9 @@ final class SessionSync: ObservableObject {
 
     private func applyOpening(_ opening: OpeningFrame) {
         lastFrameAt = Date()
+        // WS 自己把窗口送到了，HTTP 那条兜底没有存在的理由了 —— 取消掉，
+        // 免得它在两秒后突然又拉一次、让视图多做一次无谓的重对齐。
+        firstScreenFallback?.cancel()
         // 首次建立窗口与重连重建共用这一个入口，但语义不同：手里空着时等价于
         // 「打开」（整段取窗口）；重连时本地可能已有翻出来的历史，那时走「重对齐」——
         // 本地更早的部分原样保留，只换尾部。
