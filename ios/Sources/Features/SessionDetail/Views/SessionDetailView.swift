@@ -173,28 +173,13 @@ struct SessionDetailView: View {
             // 在长会话上很贵，而用户并不需要看见内容「长出来」。`eventCount` 与内容同步变，
             // 用它当 key 能覆盖「插入了不产生节点的事件」这种情形。
             .animation(nil, value: sync.eventCount)
-            // 两条边各管一件事，方向与内容方向一致：
-            //   顶部（看最早）→ 往回翻 `loadOlder`；底部（看最新）→ 对齐最新 `sync`。
-            // 只认**进入**边沿：前插 / 追加都会让离边距离变大，条件自己复位，
-            // 所以不会一口气拉完，也不会在底部反复对齐。
-            .onScrollGeometryChange(for: ScrollEdge.self) { geometry in
-                let topDistance = geometry.contentOffset.y + geometry.contentInsets.top
-                if topDistance <= Self.edgeTriggerDistance { return .top }
-                let bottomDistance = geometry.contentSize.height
-                    - (geometry.contentOffset.y + geometry.containerSize.height)
-                if bottomDistance <= Self.edgeTriggerDistance { return .bottom }
-                return .none
-            } action: { _, edge in
-                switch edge {
-                case .top:
-                    guard sync.hasOlder, !sync.isPagingOlder else { return }
-                    Task { await sync.loadOlder() }
-                case .bottom:
-                    guard !sync.status.isSyncing else { return }
-                    Task { await sync.sync() }
-                case .none:
-                    break
-                }
+            // 滑到接近顶部就自动往回翻。只认**进入**边沿：前插之后内容总高变大、离顶更远，
+            // 条件自然复位，用户继续往上滑才会触发下一次 —— 这就是分页的节奏，不会一口气拉完。
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top <= Self.topTriggerDistance
+            } action: { wasNear, isNear in
+                guard isNear, !wasNear, sync.hasOlder, !sync.isPagingOlder else { return }
+                Task { await sync.loadOlder() }
             }
             .onAppear {
                 // 与上面同一个目标：列表最末尾那行锚点。**无动画** —— 生效时等于原地不动，
@@ -398,15 +383,8 @@ struct SessionDetailView: View {
     /// 底部滚动锚点的 id。
     private static let bottomAnchor = "session-detail-bottom"
 
-    /// 距顶 / 距底多近就触发。取约四分之一屏 —— 太灵敏会在惯性里连着触发好几次。
-    private static let edgeTriggerDistance: CGFloat = 240
-
-    /// 列表停在哪条边 —— 驱动两条自动动作：顶部往回翻历史，底部对齐最新。
-    private enum ScrollEdge: Equatable {
-        case none
-        case top
-        case bottom
-    }
+    /// 距顶多近就自动往回翻。取约四分之一屏 —— 太灵敏会在惯性里连着触发好几次。
+    private static let topTriggerDistance: CGFloat = 240
 
     /// 告知那一行的图标与颜色 —— 逐 case 列举，`ResyncNotice.Kind` 加取值时编译失败。
     private func look(of notice: ResyncNotice) -> (icon: String, tint: Color) {
