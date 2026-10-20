@@ -284,12 +284,14 @@ final class SessionSync: ObservableObject {
             let page = try await client.page(sessionId: sessionId, beforeSeq: mirror.pageStart)
             verdict = mirror.prepend(page)
         } catch let error as GatewayClientError {
+            mirror.abandonRequest()
             if case .refused(let failure) = error {
                 verdict = .refused(code: failure.code)
             } else {
                 verdict = .failed
             }
         } catch {
+            mirror.abandonRequest()
             verdict = .failed
         }
 
@@ -483,9 +485,11 @@ final class SessionSync: ObservableObject {
             let page = try await client.page(sessionId: sessionId)
             return mirror.open(with: page)
         } catch let error as GatewayClientError {
+            mirror.abandonRequest()
             if case .refused(let failure) = error { return .refused(code: failure.code) }
             return .failed
         } catch {
+            mirror.abandonRequest()
             return .failed
         }
     }
@@ -501,11 +505,13 @@ final class SessionSync: ObservableObject {
             // 协议回应就是状态机的输入形状 —— 同形的东西只有一份，不在此逐字段搬。
             return .received(snapshot)
         } catch let error as GatewayClientError {
+            mirror.abandonRequest()
             if case .refused(let failure) = error {
                 return .refused(Refusal(code: failure.code, message: failure.message))
             }
             return .transportFailed
         } catch {
+            mirror.abandonRequest()
             return .transportFailed
         }
     }

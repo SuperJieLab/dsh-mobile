@@ -103,6 +103,15 @@ struct SessionMirror {
     return true
   }
 
+  /// 请求失败：放掉在途标记，**视图与位置一律不动** —— 失败不该改变已落地的内容。
+  ///
+  /// 必须有这个出口。`beginRequest` 拿到的发起权，只有 `open` / `prepend` / `apply` 三条落地
+  /// 路径会还回来；请求抛异常时那三条都不执行，标记就一直挂着，之后每次 `beginRequest`
+  /// 都返回 false —— 「点加载更早没反应」正是这么来的。
+  mutating func abandonRequest() {
+    inFlight = false
+  }
+
   /// 打开会话：用最新的一个窗口**替换**整个视图。「什么都没拿过」与「有内容但要刷新到最新」
   /// 都以服务端此刻给的窗口为准，所以共用一条路径。
   /// - Parameter window: `page` 的响应，不带 `beforeSeq` 的那一种。

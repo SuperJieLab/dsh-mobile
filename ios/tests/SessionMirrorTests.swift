@@ -30,6 +30,19 @@ final class SessionMirrorTests: XCTestCase {
     .received(SessionSnapshot(asOfSeq: asOfSeq, hasMore: hasMore, events: events))
   }
 
+  /// 请求失败必须放掉在途标记 —— 否则这个镜像之后再也发不出请求。
+  ///
+  /// 守的是「失败路径也要还发起权」：`beginRequest` 拿到的权只由三条落地路径
+  /// （`open` / `prepend` / `apply`）还回来，抛异常时那三条都不执行。没有 `abandonRequest`，
+  /// 一次网络抖动就会让「加载更早」永久失灵，而且看起来像是点了没反应。
+  func testAbandonRequestReleasesTheGate() {
+    var mirror = SessionMirror()
+    XCTAssertTrue(mirror.beginRequest(), "首次可发起")
+    XCTAssertFalse(mirror.beginRequest(), "在途时不许并发")
+    mirror.abandonRequest()
+    XCTAssertTrue(mirror.beginRequest(), "失败后必须能再发起")
+  }
+
   func testContract() {
     // MARK: SM1 首次合并
 
