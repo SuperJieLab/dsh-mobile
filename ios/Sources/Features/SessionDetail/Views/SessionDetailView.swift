@@ -106,32 +106,16 @@ struct SessionDetailView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             List {
-                if sync.hasOlder {
-                    if sync.isPagingOlder {
-                        // 等待期间给三行占位，而不是一个转圈：用户往上拉就是在找更早的内容，
-                        // 一片空白加个小转圈会让人以为到头了。高度按一行消息估，替换时不跳。
-                        ForEach(0..<3, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: 14)
-                                .fill(Color(uiColor: .secondarySystemBackground))
-                                .frame(height: 44)
-                                .padding(.vertical, 2)
-                                .listRowSeparator(.hidden)
-                        }
-                    } else {
-                        Button {
-                            // 这里**不**做「插入后把视口锚回原来那条」。`scrollTo` 是强制拉位置，
-                            // 而系统本来就会保持一部分偏移 —— 两者叠加是一次可见的跳，比不锚更糟。
-                            // 前插造成的位移只能在「滚动已停」时才谈得上修正，而滚动状态在本机
-                            // SDK 里拿不到（`onScrollPhaseChange` 那一族不在 interface 里）。
-                            Task { await sync.loadOlder() }
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Text("加载更早的消息")
-                                Spacer()
-                            }
-                        }
-                        .listRowSeparator(.hidden)
+                // 翻页是自动的（见 List 上的 `onScrollGeometryChange`），这里只画
+                // 「正在拉」的占位。等待期间给三行骨架而不是转圈：用户往上拉就是在找更早的
+                // 内容，一片空白加个小转圈会让人以为到头了。高度按一行消息估，替换时不跳。
+                if sync.hasOlder && sync.isPagingOlder {
+                    ForEach(0..<3, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color(uiColor: .secondarySystemBackground))
+                            .frame(height: 44)
+                            .padding(.vertical, 2)
+                            .listRowSeparator(.hidden)
                     }
                 }
 
@@ -189,6 +173,15 @@ struct SessionDetailView: View {
             // 在长会话上很贵，而用户并不需要看见内容「长出来」。`eventCount` 与内容同步变，
             // 用它当 key 能覆盖「插入了不产生节点的事件」这种情形。
             .animation(nil, value: sync.eventCount)
+            // 滑到接近顶部就自动翻页 —— 列表上不再有「加载更早」的按钮。
+            // 只认**进入**边沿：前插之后内容总高变大、离顶更远，条件自然复位，用户继续往上滑
+            // 才会触发下一次。这就是分页的节奏，不会一口气把历史拉完。
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top <= Self.olderTriggerDistance
+            } action: { wasNear, isNear in
+                guard isNear, !wasNear, sync.hasOlder, !sync.isPagingOlder else { return }
+                Task { await sync.loadOlder() }
+            }
             .onAppear {
                 // 与上面同一个目标：列表最末尾那行锚点。**无动画** —— 生效时等于原地不动，
                 // 不生效时也只是瞬移，而不是用户能看见的「滚下去」。
@@ -388,6 +381,9 @@ struct SessionDetailView: View {
 
     /// 底部滚动锚点的 id。
     private static let bottomAnchor = "session-detail-bottom"
+
+    /// 距内容顶部多近就开始自动翻页。取约四分之一屏 —— 太灵敏会在惯性里连翻几页。
+    private static let olderTriggerDistance: CGFloat = 240
 
     /// 告知那一行的图标与颜色 —— 逐 case 列举，`ResyncNotice.Kind` 加取值时编译失败。
     private func look(of notice: ResyncNotice) -> (icon: String, tint: Color) {
