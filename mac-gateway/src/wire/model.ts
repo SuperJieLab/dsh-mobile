@@ -34,7 +34,28 @@ export interface ModelCatalog {
 export interface ModelGroup {
   id: string
   name: string
-  models: readonly { id: string; name: string }[]
+  models: readonly {
+    id: string
+    name: string
+    /** 该模型声明的推理等级；缺席 = 它不暴露等级选择。 */
+    reasoning?: ModelReasoning
+  }[]
+}
+
+/**
+ * 一个模型能选的推理等级。`efforts` 是对象数组（每项有 id 与显示名），不是 id 串 ——
+ * 手机端按这个形状逐字段解码。
+ */
+export interface ModelReasoning {
+  efforts: readonly ModelReasoningEffort[]
+  /** 不指定时宿主用哪一档；缺席 = 由适配器自己的默认值决定。 */
+  defaultEffort?: string
+}
+
+export interface ModelReasoningEffort {
+  id: string
+  name: string
+  description?: string
 }
 
 export interface ModelFailure {

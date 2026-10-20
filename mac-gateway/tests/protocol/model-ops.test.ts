@@ -68,6 +68,26 @@ test('model-catalog: upstream default absent means the field is absent', async (
   assert.equal('default' in reply, false)
 })
 
+test('model-catalog: a model\'s reasoning levels ride along untouched', async () => {
+  const reasoning = {
+    efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高', description: '想得久一点' }],
+    defaultEffort: 'high',
+  }
+  const withLevels = {
+    ...CATALOG,
+    groups: [{ ...CATALOG.groups[0], models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', reasoning }] }],
+  }
+  const reply = await handle({ v: 2, op: 'model-catalog' }, PORT, undefined, undefined, undefined, {
+    ...fakeModel(),
+    catalog: async () => withLevels,
+  })
+  assert.equal(reply.ok, true)
+  if (!reply.ok) return
+  const groups = reply.groups as typeof withLevels.groups
+  // 目录是宿主的：`efforts` 与 `defaultEffort` 逐字透传，网关不重排、不补齐。
+  assert.deepEqual(groups[0]?.models[0]?.reasoning, reasoning)
+})
+
 // -- model-select (决定 3 / G1 的写半边) -------------------------------------
 
 test('model-select: well-formed payload parses, reasoningEffort optional', () => {

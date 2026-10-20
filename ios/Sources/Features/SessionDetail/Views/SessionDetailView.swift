@@ -21,7 +21,7 @@ struct SessionDetailView: View {
     @State private var didInitialScroll = false
     /// 输入框里的草稿（下发指令）。
     @State private var draft = ""
-    /// 本屏四个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
+    /// 本屏五个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
     @State private var activeSheet: DetailSheet?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
@@ -77,7 +77,7 @@ struct SessionDetailView: View {
         }
         .navigationTitle(session.title ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
-        // 四个展开面共用一个 `.sheet(item:)`：两个独立的 `.sheet` 在同一事务里
+        // 五个展开面共用一个 `.sheet(item:)`：两个独立的 `.sheet` 在同一事务里
         // 「关一个、开一个」（连接详情 → 组网设置）时，第二个经常不 present。
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -97,6 +97,13 @@ struct SessionDetailView: View {
                         }
                 }
                 .environmentObject(store)
+            case .model:
+                ModelSheetView(
+                    catalog: catalog,
+                    selected: sync.displayedModel,
+                    onSelect: { selection in Task { await sync.selectModel(selection) } },
+                    onClose: { activeSheet = nil }
+                )
             }
         }
     }
@@ -215,11 +222,7 @@ struct SessionDetailView: View {
             if !isComposing {
                 ComposerStrip(
                     model: stripModel,
-                    catalog: catalog,
-                    selectedModel: sync.displayedModel,
-                    onSelectModel: { selection in
-                        Task { await sync.selectModel(selection) }
-                    },
+                    onTapModel: { activeSheet = .model },
                     onTapNetwork: { activeSheet = .network },
                     onTapUsage: { activeSheet = .usage }
                 )
@@ -237,13 +240,15 @@ struct SessionDetailView: View {
 
     /// 功能条三格的值 —— 从编排取数转成显示值的唯一一处。
     private var stripModel: ComposerStripModel {
-        ComposerStripModel.make(
+        // 兜底规则：选中值 ?? 目录默认 ?? 未知。目录默认值只为「重拉期间不闪成未知」。
+        // 等级名与模型名读同一个 `shown`：两处各取一份会出现「模型是 A、等级是 B 的」。
+        let shown = sync.displayedModel ?? catalog.lastKnownDefault
+        return ComposerStripModel.make(
             phase: sync.connectionPhase,
             carrier: store.meshPath,
             usage: sync.usage,
-            // 兜底规则：选中值 ?? 目录默认 ?? 未知。目录默认值只为「重拉期间不闪成未知」。
-            modelName: (sync.displayedModel ?? catalog.lastKnownDefault).map { $0.model }
-                ?? "未知"
+            modelName: shown.map { $0.model } ?? "未知",
+            effortName: catalog.effortLabel(for: shown)
         )
     }
 
@@ -370,12 +375,13 @@ struct SessionDetailView: View {
         .presentationDetents([.medium, .large])
     }
 
-    /// 本屏四个展开面。合成一个 `.sheet(item:)` 的 id。
+    /// 本屏五个展开面。合成一个 `.sheet(item:)` 的 id。
     private enum DetailSheet: String, Identifiable {
         case network
         case usage
         case approvals
         case mesh
+        case model
 
         var id: String { rawValue }
     }

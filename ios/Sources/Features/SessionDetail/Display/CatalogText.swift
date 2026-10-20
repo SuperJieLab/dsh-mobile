@@ -27,3 +27,15 @@ extension ModelCatalog {
     /// 与这一份目录的内容无关，所以是 `static`：写成实例属性会让人以为它读 `groups`。
     static let emptyNote = "网关没有可用的模型。"
 }
+
+extension EffortChoice.Label {
+
+    /// 档位项上的字。`unspecified` 用上游同款的 `Default`，不翻成「默认档」——
+    /// 它是「不指定」，不是这个模型某一档的名字，翻成名词会与真档混起来。
+    var text: String {
+        switch self {
+        case .declared(let name): return name
+        case .unspecified: return "Default"
+        }
+    }
+}

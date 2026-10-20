@@ -9,10 +9,8 @@ import SwiftUI
 struct ComposerStrip: View {
 
     let model: ComposerStripModel
-    /// 目录由宿主持有 —— 它也要用目录默认值算模型名，两处读的必须是同一份。
-    let catalog: ModelCatalogState
-    let selectedModel: ModelSelection?
-    let onSelectModel: (ModelSelection) -> Void
+    /// 点模型格：打开模型面（列表 + 该模型的设置）。内容由宿主的面持有。
+    let onTapModel: () -> Void
     let onTapNetwork: () -> Void
     let onTapUsage: () -> Void
 
@@ -39,10 +37,7 @@ struct ComposerStrip: View {
             Spacer(minLength: 0)
 
             // 模型格吃剩余宽度：三项里只有它是不可压缩的自由文本。
-            ModelPickerView(catalog: catalog,
-                            selected: selectedModel,
-                            name: model.modelName,
-                            onSelect: onSelectModel)
+            ModelPickerView(label: model.modelLabel, onTap: onTapModel)
                 .lineLimit(1)
                 .layoutPriority(1)
 
@@ -82,6 +77,15 @@ struct ComposerStripModel: Equatable {
     /// 模型格文案。宿主用「选中值 ?? 目录默认值 ?? 未知」算好 —— 那条兜底规则在
     /// `ModelCatalogState.lastKnownDefault` 上，宿主与格子读的必须是同一份。
     let modelName: String
+    /// 当前推理等级的名字；`nil` = 这个模型没有档位（或名字还不可知）。
+    let effortName: String?
+    /// 模型格最终显示的那一段：「模型名 · 等级名」，没有等级时就是模型名。
+    ///
+    /// 拼接放在这里而不是视图里：要不要带分隔符、带什么，是判定不是渲染；
+    /// 放在 `Text(...)` 里就会有两个地方各拼一份。
+    var modelLabel: String {
+        effortName.map { "\(modelName) · \($0)" } ?? modelName
+    }
     /// 占用格文案：有读数 `15%`，没有 `--`。
     let usageText: String
     /// 占用格是否为空 —— 空的时候灰显，点开说明原因。
@@ -107,9 +111,11 @@ extension ComposerStripModel {
     static func make(phase: FollowClient.Phase,
                      carrier: CarrierPath?,
                      usage: UsagePayload?,
-                     modelName: String) -> ComposerStripModel {
+                     modelName: String,
+                     effortName: String? = nil) -> ComposerStripModel {
         ComposerStripModel(network: network(phase: phase, carrier: carrier),
                            modelName: modelName,
+                           effortName: effortName,
                            usageText: usage.map { "\($0.percent)%" } ?? "--",
                            usageIsEmpty: usage == nil)
     }

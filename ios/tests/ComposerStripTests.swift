@@ -64,4 +64,16 @@ final class ComposerStripTests: XCTestCase {
         XCTAssertEqual(cell.usageText, "15%")
         XCTAssertFalse(cell.usageIsEmpty)
     }
+
+    /// 模型格带等级时是「模型名 · 等级名」；没有等级时只剩模型名（不带分隔符、不留空档）。
+    /// 期望值手写：从 `modelLabel` 反推期望等于没测。
+    func testModelCellShowsLevelOnlyWhenKnown() {
+        let withLevel = ComposerStripModel.make(phase: .ready, carrier: .direct,
+                                                usage: nil, modelName: "deepseek-v3.2", effortName: "高")
+        XCTAssertEqual(withLevel.modelLabel, "deepseek-v3.2 · 高")
+
+        let withoutLevel = ComposerStripModel.make(phase: .ready, carrier: .direct,
+                                                   usage: nil, modelName: "deepseek-v3.2")
+        XCTAssertEqual(withoutLevel.modelLabel, "deepseek-v3.2", "没有等级时不该留下分隔符")
+    }
 }

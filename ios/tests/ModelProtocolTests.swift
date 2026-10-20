@@ -92,12 +92,15 @@ final class ModelProtocolTests: XCTestCase {
     // MARK: - 订阅更新状态机（V1–V4）
 
     /// 造一条 `model/selection` 事件（data = 选择本身，投影源码逐字核实）。
-    private func selectionEvent(_ seq: Int, _ provider: String, _ model: String) -> SessionEvent {
-        SessionEvent(
+    /// `effort` 是可选档位：与线上一样，没指定时整个字段缺席。
+    private func selectionEvent(_ seq: Int, _ provider: String, _ model: String, effort: String? = nil) -> SessionEvent {
+        var fields: [String: JSONValue] = ["provider": .string(provider), "model": .string(model)]
+        if let effort { fields["reasoningEffort"] = .string(effort) }
+        return SessionEvent(
             type: "model/selection",
             seq: seq,
             time: Double(1_758_000_000_000 + seq),
-            data: .object(["provider": .string(provider), "model": .string(model)])
+            data: .object(fields)
         )
     }
 
@@ -123,6 +126,11 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(state.displayed?.model == "B", "V1b selection 事件覆盖基线")
         state.absorb(event: headerEvent(11, "p", "C"))
         XCTAssertTrue(state.displayed?.model == "C", "V1c header 事件再覆盖 —— 后到覆盖先到")
+
+        // O6：档位与模型同一条事件落地 —— 功能条「模型名 · 等级名」的第二段靠它。
+        state = ModelSelectionState()
+        state.absorb(event: selectionEvent(10, "p", "B", effort: "high"))
+        XCTAssertTrue(state.displayed?.reasoningEffort == "high", "O6 档位随选择一起落地")
 
         // V2：selection B 之后来一个不匹配 B 的 header C → 显示 C，不回跳。
         state = ModelSelectionState()

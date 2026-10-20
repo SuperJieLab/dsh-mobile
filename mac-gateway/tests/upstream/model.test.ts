@@ -161,6 +161,31 @@ test('catalog strips routableProviders and keeps default, groups, failures', asy
   })
 })
 
+test('catalog keeps each model\'s reasoning levels verbatim', async () => {
+  const reasoning = {
+    efforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高', description: '想得久一点' }],
+    defaultEffort: 'high',
+  }
+  const port = modelPortOver({
+    ...fakeController(),
+    async modelCatalog() {
+      return {
+        default: { provider: 'deepseek', model: 'deepseek-reasoner' },
+        routableProviders: ['deepseek'],
+        groups: [{
+          id: 'deepseek',
+          name: 'DeepSeek',
+          models: [{ id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', reasoning }],
+        }],
+        failures: [],
+      }
+    },
+  })
+  const catalog = await port.catalog()
+  // 宿主的目录原样交出：`efforts` 与 `defaultEffort` 逐字相同，网关只剥 `routableProviders`。
+  assert.deepEqual(catalog.groups[0]?.models[0]?.reasoning, reasoning)
+})
+
 test('catalog with no deployment default omits the field (决定 7: the client falls back)', async () => {
   const port = modelPortOver({
     ...fakeController(),
