@@ -267,6 +267,11 @@ final class SessionSync: ObservableObject {
     }
 
     /// 往回翻一段更早的历史。已经翻到日志开头时什么也不做。
+    ///
+    /// **可能连拉几页**：一页只带回不产生显示节点的事件时（轮次边界、审批留痕），用户点了
+    /// 等于什么都没发生 —— 那就接着往前，直到真拿到内容或到日志开头。服务端的 `hasOlder`
+    /// 按**事件下标**算（`start > 0`），它不知道哪些事件会变成屏幕上的行，于是最后一页常常
+    /// 只是一串过程事件，`hasOlder` 却还是真。
     func loadOlder() async {
         guard !syncInFlight, mirror.hasOlder else { return }
         syncInFlight = true
@@ -277,42 +282,54 @@ final class SessionSync: ObservableObject {
         }
         status = .syncing
 
-        guard mirror.beginRequest() else { return }
+        // 上限 3 页：再多说明服务端在挤牙膏，让用户看见状态行比继续闷拉更有用。
+        for _ in 0..<3 {
+            let nodesBefore = nodes.count
+            guard let verdict = await fetchOlderPage() else { return }
 
-        let verdict: Verdict
+            switch verdict {
+            case .merged(let count):
+                status = .done(added: count, recovered: false)
+            case .caughtUp:
+                status = .done(added: 0, recovered: false)
+            case .resetRequired(let reason):
+                // 分档：取回的是一段**更早**的历史，它接不上**不影响**当前视图的真实性
+                // —— 当前视图仍然完整、仍然是真的。所以 `.gap` 一律保留（清空它 = 用
+                // 「你多点了一下」换掉已读到的全部内容）；只有服务端否定本地位置时才清空重来。
+                if reason.invalidatesLocalContent { mirror.reset() }
+                observeNotice(verdict)
+                refreshView()
+                return
+            case .refused(let code):
+                status = .failed(step: .paging, cause: .refusal(code: code))
+                refreshView()
+                return
+            case .failed:
+                status = .failed(step: .paging, cause: .transport)
+                refreshView()
+                return
+            }
+
+            refreshView()
+            // 这一页真的多了可显示的东西，或者已经到日志开头 —— 收工。
+            if nodes.count > nodesBefore || !mirror.hasOlder { return }
+        }
+    }
+
+    /// 一次往回翻的请求。`nil` = 没拿到发起权（有在途请求）。
+    private func fetchOlderPage() async -> Verdict? {
+        guard mirror.beginRequest() else { return nil }
         do {
             let page = try await client.page(sessionId: sessionId, beforeSeq: mirror.pageStart)
-            verdict = mirror.prepend(page)
+            return mirror.prepend(page)
         } catch let error as GatewayClientError {
             mirror.abandonRequest()
-            if case .refused(let failure) = error {
-                verdict = .refused(code: failure.code)
-            } else {
-                verdict = .failed
-            }
+            if case .refused(let failure) = error { return .refused(code: failure.code) }
+            return .failed
         } catch {
             mirror.abandonRequest()
-            verdict = .failed
+            return .failed
         }
-
-        switch verdict {
-        case .merged(let count):
-            status = .done(added: count, recovered: false)
-        case .caughtUp:
-            status = .done(added: 0, recovered: false)
-        case .resetRequired(let reason):
-            // 分档：取回的是一段**更早**的历史，它接不上**不影响**当前
-            // 视图的真实性 —— 当前视图仍然完整、仍然是真的。所以 `.gap` 一律保留（清空它 = 用
-            // 「你多点了一下」换掉用户已经读到的全部内容）；只有服务端否定了本地位置时才清空重来。
-            if reason.invalidatesLocalContent { mirror.reset() }
-            observeNotice(verdict)
-        case .refused(let code):
-            status = .failed(step: .paging, cause: .refusal(code: code))
-        case .failed:
-            status = .failed(step: .paging, cause: .transport)
-        }
-
-        refreshView()
     }
 
     // MARK: - 订阅
