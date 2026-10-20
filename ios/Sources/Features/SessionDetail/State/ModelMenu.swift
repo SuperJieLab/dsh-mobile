@@ -1,5 +1,5 @@
 /**
- * 模型选择器的预构数据 —— 两个维度（模型、推理等级）各自的入口，加上选中态。
+ * 模型选择面的预构数据 —— 模型列表、等级列表、以及两者的选中态。
  *
  * 判定全部在这里完成：点哪一项该发什么选择，由 `selection` 随身携带 —— 视图不拼
  * `ModelSelection`，所以「换模型用新模型的默认档」这条规则只有一个地方可写。
@@ -12,7 +12,7 @@
  */
 import Foundation
 
-/// 一次预构的结果：模型子菜单的分组项、等级子菜单的档位、触发按钮上的等级名。
+/// 一次预构的结果：模型列表的分组项、当前模型的可选档位、以及选中的是哪一档。
 struct ModelMenu: Equatable {
 
     /// 一个 provider 分组 —— 与目录的分组同名，`id` 就是 provider id。
@@ -22,16 +22,14 @@ struct ModelMenu: Equatable {
         let choices: [ModelChoice]
     }
 
-    /// 按 provider 分组：根层「模型」子菜单的内容。
+    /// 按 provider 分组：模型页的内容。
     let groups: [Group]
-    /// 当前模型可选的档位：根层「推理等级」子菜单的内容。空 = 不提供这一级。
+    /// 当前模型可选的档位：设置页那一行的选项。空 = 这个模型没有等级可调。
     let levels: [EffortChoice]
-    /// 当前等级的名字（取自目录的 `name`）；`nil` = 不显示等级。
-    let effortLabel: String?
     /// 当前生效那一项的 `EffortChoice.id`；`nil` = 没有可选的项。
     ///
-    /// 与 `effortLabel` 同源（同一个解析），因为选择控件与显示必须对同一项打勾 ——
-    /// 各算一遍就会出现「行里写着高、菜单里勾在低」。
+    /// 设置页的行值、菜单里的勾、功能条上的等级名三处都从它派生 —— 各算一遍就会出现
+    /// 「行里写着高、菜单里勾在低」（显示值指向一个已撤下的档时，两处答案不同）。
     let selectedLevelID: String?
     let failures: [ModelCatalogFailure]
     /// 目录成功却一个模型都没有 —— 视图据此说「没有可用的模型」。
@@ -64,7 +62,6 @@ struct EffortChoice: Equatable, Identifiable {
     var id: String { selection.reasoningEffort ?? Self.unspecifiedID }
     let label: Label
     let selection: ModelSelection
-    let isSelected: Bool
 }
 
 extension ModelCatalogState {
@@ -92,23 +89,22 @@ extension ModelCatalogState {
         let effective = effectiveEffortID(for: current, in: catalog)
         return ModelMenu(
             groups: groups,
-            levels: levels(for: current, effective: effective, in: catalog),
-            effortLabel: levelName(effective, in: catalog, of: current),
+            levels: levels(for: current, in: catalog),
             selectedLevelID: effective,
             failures: catalog.failures ?? [],
             isEmpty: groups.allSatisfy { $0.choices.isEmpty } && (catalog.failures ?? []).isEmpty
         )
     }
 
-    /// 触发按钮上的等级名。**轻量**：每次界面重绘都会问它，不预构整份菜单。
+    /// 功能条模型格上的等级名。**轻量**：每次界面重绘都会问它，不预构整份菜单。
     func effortLabel(for selection: ModelSelection?) -> String? {
         guard case .ready(let catalog) = outcome else { return nil }
         let shown = selection ?? catalog.default
         return levelName(effectiveEffortID(for: shown, in: catalog), in: catalog, of: shown)
     }
 
-    /// 当前**实际生效**的那一档的 id —— 等级列表的勾、设置页那一行的值、Picker 的选中项
-    /// 三处共用它。
+    /// 当前**实际生效**的那一档的 id —— 等级列表的勾、设置页那一行的值、功能条上的等级名
+    /// 三处都从它派生。
     ///
     /// 兜底顺序：显示值（且这一档还在目录里）→ 该模型的默认档 → 「不指定」（仅当模型没声明
     /// 默认档）。**这一处不许各算一遍**：算两遍就会出现「行里写着高、菜单里勾在低」——
@@ -128,8 +124,11 @@ extension ModelCatalogState {
     /// 两条规则照上游：模型没声明 `defaultEffort` 时首项是「不指定」（选中它 = 让宿主
     /// 决定）；声明了就只列各档 —— 默认档本身就是其中一项，再给「不指定」会造出两个
     /// 发同样请求的选项。
+    ///
+    /// **不带选中标记**：`Picker` 按 `id` 与 `selectedLevelID` 匹配来画勾，再存一份
+    /// `isSelected` 就是同一件事的第二个答案 —— 两边不一致时屏幕听 Picker 的，那个字段
+    /// 只会在测试里绿。
     private func levels(for selection: ModelSelection?,
-                        effective: String?,
                         in catalog: ModelCatalog) -> [EffortChoice] {
         guard let selection, let reasoning = catalog.reasoning(provider: selection.provider, model: selection.model) else {
             return []
@@ -138,8 +137,7 @@ extension ModelCatalogState {
         if reasoning.defaultEffort == nil {
             choices.append(EffortChoice(
                 label: .unspecified,
-                selection: ModelSelection(provider: selection.provider, model: selection.model),
-                isSelected: effective == EffortChoice.unspecifiedID
+                selection: ModelSelection(provider: selection.provider, model: selection.model)
             ))
         }
         choices += reasoning.efforts.map { effort in
@@ -147,8 +145,7 @@ extension ModelCatalogState {
                 label: .declared(effort.name),
                 selection: ModelSelection(provider: selection.provider,
                                           model: selection.model,
-                                          reasoningEffort: effort.id),
-                isSelected: effort.id == effective
+                                          reasoningEffort: effort.id)
             )
         }
         return choices

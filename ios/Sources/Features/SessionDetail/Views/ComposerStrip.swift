@@ -74,7 +74,7 @@ struct ComposerStrip: View {
 struct ComposerStripModel: Equatable {
 
     let network: Network
-    /// 模型格文案。宿主用「选中值 ?? 目录默认值 ?? 未知」算好 —— 那条兜底规则在
+    /// 模型名，不含等级。宿主用「选中值 ?? 目录默认值 ?? 未知」算好 —— 那条兜底规则在
     /// `ModelCatalogState.lastKnownDefault` 上，宿主与格子读的必须是同一份。
     let modelName: String
     /// 当前推理等级的名字；`nil` = 这个模型没有档位（或名字还不可知）。

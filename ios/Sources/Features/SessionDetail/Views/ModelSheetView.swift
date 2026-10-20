@@ -3,7 +3,11 @@ import SwiftUI
 /// 模型选择面：第一页是模型列表，第二页（右上角齿轮进入）是当前模型的设置。
 ///
 /// 模型是用户点功能条那一格要改的东西，等级是它的属性 —— 所以模型占第一页，等级在其后。
-/// 选中模型即关闭整个面；改等级留在设置页（能立刻看到勾变，不必反复进出）。
+/// 选中模型即关闭整个面；改等级留在设置页。
+///
+/// 设置页在 `NavigationLink` 推出去的那一层：`selected` 变了要等父视图重绘才传进去，
+/// 「点完一档当场看见勾移动」**没有实测过**（计划里的 V5）。若真机上不刷新，改法是把
+/// 选中态经界面层已允许的可观察源转发，而不是让本视图直接持 `SessionSync`。
 ///
 /// 项与选中态由 `ModelMenu` 预构（`ModelCatalogState.menu(selected:)`）—— 本视图不拼
 /// `ModelSelection`、不查目录，只把点到的选择交出去。
@@ -108,8 +112,11 @@ struct ModelSheetView: View {
         }
     }
 
-    /// 第二页：当前模型的设置。现在只有推理等级一项 —— 没有档位的模型给一句说明，
-    /// 不给一个点不动的空菜单。
+    /// 第二页：当前模型的设置。现在只有推理等级一项。
+    ///
+    /// 三面分开：目录没到 / 没取到就如实说那件事，**不能**落进「这个模型没有可调的推理
+    /// 等级」—— 那句是关于模型的结论，而目录缺席时我们对模型一无所知。齿轮在上一页任何
+    /// 时候都点得动，所以这一页必须自己会说话。
     ///
     /// 这一行用 `Picker` 而不是自己拿 `Menu` 拼 label：`Menu` 会在展开时接管 label 并施加
     /// 按下态样式，手工设的 `foregroundStyle` 与它冲突，值会被画成与背景同色（看着像整行
@@ -117,17 +124,29 @@ struct ModelSheetView: View {
     private var settings: some View {
         List {
             Section {
-                if let menu = catalog.menu(selected: selected), !menu.levels.isEmpty {
-                    Picker("推理等级", selection: levelBinding(menu)) {
-                        ForEach(menu.levels) { level in
-                            Text(level.label.text).tag(level.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .disabled(menu.selectedLevelID == nil)
-                } else {
-                    Text("这个模型没有可调的推理等级")
+                switch catalog.outcome {
+                case .waiting:
+                    Text("正在加载模型目录…")
                         .foregroundStyle(.secondary)
+
+                case .failed(let cause):
+                    Text(cause.line)
+                        .foregroundStyle(.secondary)
+                    Button("重试") { Task { await catalog.reload() } }
+
+                case .ready:
+                    if let menu = catalog.menu(selected: selected), !menu.levels.isEmpty {
+                        Picker("推理等级", selection: levelBinding(menu)) {
+                            ForEach(menu.levels) { level in
+                                Text(level.label.text).tag(level.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .disabled(menu.selectedLevelID == nil)
+                    } else {
+                        Text("这个模型没有可调的推理等级")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }

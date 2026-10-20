@@ -54,6 +54,12 @@ final class ModelMenuTests: XCTestCase {
         menu.groups.flatMap(\.choices).first { $0.selection.model == model }
     }
 
+    /// 设置页那一行实际显示的字：`Picker` 渲染的是「选中项的文字」，所以从同一份预构
+    /// 数据里取 —— 断言对着屏幕上真会出现的那个字符串，而不是另一个旁挂字段。
+    private func renderedLabel(_ menu: ModelMenu) -> String? {
+        menu.levels.first { $0.id == menu.selectedLevelID }?.label.text
+    }
+
     // MARK: - O1 换模型不带旧档
 
     /// 当前显示 A/高，点 B → 发的是 B 自己的默认档「低」，不是 A 留下的「高」。
@@ -89,8 +95,8 @@ final class ModelMenuTests: XCTestCase {
         XCTAssertEqual(menu.levels.count, 3, "「不指定」+ 两个档")
         XCTAssertEqual(menu.levels.first?.label, .unspecified, "首项是「不指定」")
         XCTAssertNil(menu.levels.first?.selection.reasoningEffort, "「不指定」不带档位，交给宿主")
-        XCTAssertEqual(menu.levels.first?.isSelected, true, "当前没指定档位 → 「不指定」是选中项")
-        XCTAssertNil(menu.effortLabel, "没指定也没默认档 → 触发按钮不显示等级")
+        XCTAssertEqual(menu.selectedLevelID, EffortChoice.unspecifiedID, "当前没指定档位 → 「不指定」是选中项")
+        XCTAssertNil(state.effortLabel(for: nil), "没指定也没默认档 → 功能条不显示等级")
     }
 
     // MARK: - O3 没有档位的模型不提供这一级
@@ -104,8 +110,23 @@ final class ModelMenuTests: XCTestCase {
         ))
         guard let menu = state.menu(selected: nil) else { return XCTFail("目录就绪应有菜单") }
 
-        XCTAssertTrue(menu.levels.isEmpty, "没有 reasoning 的模型不该有等级子菜单")
-        XCTAssertNil(menu.effortLabel, "也不该在触发按钮上显示等级")
+        XCTAssertTrue(menu.levels.isEmpty, "没有 reasoning 的模型不该有等级可选")
+        XCTAssertNil(state.effortLabel(for: nil), "也不该在功能条上显示等级")
+    }
+
+    // MARK: - O3b 「不知道」与「没有」是两态
+
+    /// 目录还没到 / 没取到 → `menu(selected:)` 返回 `nil`。视图靠这个 `nil` 把「未知」与
+    /// 「这个模型确实没有档位」（`levels == []`）分开；两者落下同一个分支，屏幕就会把
+    /// 「目录没取到」说成「这个模型没有可调的推理等级」。
+    func testMenuIsAbsentBeforeTheCatalogArrives() async {
+        let waiting = ModelCatalogState(fetch: { self.catalog() })
+        XCTAssertNil(waiting.menu(selected: nil), "还没取过：菜单是「不知道」，不是空菜单")
+
+        let failing = ModelCatalogState(fetch: { throw GatewayClientError.notActivated })
+        await failing.reload()
+        XCTAssertNil(failing.menu(selected: nil), "取不到：仍是「不知道」")
+        XCTAssertNil(failing.effortLabel(for: nil), "功能条也不该凭空目录报出一个档名")
     }
 
     // MARK: - O4 等级名三级兜底
@@ -144,25 +165,29 @@ final class ModelMenuTests: XCTestCase {
 
     // MARK: - O4b 行里的值与菜单里勾的那一项必须同源
 
-    /// 显示值指向一个已撤下的档 → 行里显示默认档，菜单里勾的也必须是默认档那一项。
-    /// 两处各算一遍时，这里会出现「行里写着高、菜单里一个都没勾」。
-    func testRowValueAndCheckedLevelAgreeWhenTheShownLevelIsGone() async {
+    /// 显示值指向一个已撤下的档 → 行里显示默认档，菜单里选中的也必须是默认档那一项。
+    /// 两处各算一遍时，这里会出现「行里写着高、选择器里什么都没选」。
+    func testRowValueAndSelectionAgreeWhenTheShownLevelIsGone() async {
         let state = await ready(catalog())
         guard let menu = state.menu(selected: ModelSelection(provider: "p", model: "a", reasoningEffort: "gone")) else {
             return XCTFail("目录就绪应有菜单")
         }
-        XCTAssertEqual(menu.effortLabel, "高", "行里退到默认档")
+        // 「行里显示什么」= Picker 选中的那一项的文字，与功能条读的是同一个值。
+        XCTAssertEqual(renderedLabel(menu), "高", "行里退到默认档")
         XCTAssertEqual(menu.selectedLevelID, "high", "选择器的选中项也是默认档")
-        XCTAssertEqual(menu.levels.filter(\.isSelected).map(\.id), ["high"], "整个菜单里只有一项被勾")
+        XCTAssertEqual(state.effortLabel(for: ModelSelection(provider: "p", model: "a", reasoningEffort: "gone")),
+                       "高", "功能条与设置页对同一份显示值的答案一致")
     }
 
-    /// 模型声明了默认档时，选中项就是它；没有「不指定」这一项，也不会有两项同时被勾。
-    func testExactlyOneLevelIsCheckedWhenADefaultIsDeclared() async {
+    /// 声明了默认档 → 只列各档、不额外给「不指定」；档位 id 互不相同（`Picker` 靠 id 匹配，
+    /// 重复 id 会让它选中一个说不清的一项）。
+    func testDeclaredDefaultListsOnlyDeclaredLevels() async {
         let state = await ready(catalog())
         guard let menu = state.menu(selected: nil) else { return XCTFail("目录就绪应有菜单") }
         XCTAssertEqual(menu.levels.map(\.id), ["low", "high"], "默认档已声明 → 不额外给「不指定」")
-        XCTAssertEqual(menu.levels.filter(\.isSelected).map(\.id), ["high"], "只勾默认档")
-        XCTAssertEqual(menu.selectedLevelID, "high")
+        XCTAssertEqual(Set(menu.levels.map(\.id)).count, menu.levels.count, "档位 id 必须互不相同")
+        XCTAssertEqual(menu.selectedLevelID, "high", "选中项是模型的默认档")
+        XCTAssertEqual(renderedLabel(menu), "高")
     }
 
     // MARK: - O7 档名不由客户端内置
@@ -177,6 +202,8 @@ final class ModelMenuTests: XCTestCase {
             sources.appendingPathComponent("State/ModelMenu.swift"),
             sources.appendingPathComponent("Views/ModelPickerView.swift"),
             sources.appendingPathComponent("Views/ModelSheetView.swift"),
+            // 档名→字这件事最可能被写成映射表的地方，正是显示层 —— 它必须一起扫。
+            sources.appendingPathComponent("Display/CatalogText.swift"),
         ]
         // 只认带引号的字面量：注释里提到 low/high 不算内置。
         let baked = ["\"low\"", "\"high\"", "\"max\""]

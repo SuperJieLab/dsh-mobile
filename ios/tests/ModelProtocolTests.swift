@@ -63,7 +63,9 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(catalog?.groups?.first?.models.first?.reasoning?.defaultEffort == "high",
                       "D2b'' defaultEffort 落地")
         XCTAssertTrue(catalog?.failures?.first?.message == "no credentials", "D2c failures 失败隔离落地")
-        XCTAssertTrue(true, "D2d 宿主私有字段（routableProviders）被容忍不炸")
+        // 那条 JSON 里还带着上游私有的 `routableProviders`：上面五行全部成立即是「它被容忍」
+        // 的证据 —— 解码没炸、其余字段照常落地。不另写一条恒真的断言：`XCTAssertTrue(true)`
+        // 无论实现怎么改都绿，只会让人以为这里有判据。
 
         // 无部署默认：default 整个缺省（协议规定不送 null）。
         let bare = try? decoder.decode(
