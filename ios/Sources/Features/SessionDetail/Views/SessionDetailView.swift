@@ -119,7 +119,15 @@ struct SessionDetailView: View {
                         }
                     } else {
                         Button {
-                            Task { await sync.loadOlder() }
+                            // 插入前记下当时的**第一条**：它就是用户此刻看着的那条
+                            // （入口在列表顶部，能看到这个按钮就说明人已经在顶上了）。
+                            // 前插之后把它滚回顶部，用户看到的是「上面多了内容」，
+                            // 而不是「我正在看的这段被推下去」—— 那是翻页最刺眼的跳。
+                            let anchorID = sync.nodes.first?.id
+                            Task {
+                                await sync.loadOlder()
+                                if let anchorID { proxy.scrollTo(anchorID, anchor: .top) }
+                            }
                         } label: {
                             HStack {
                                 Spacer()
