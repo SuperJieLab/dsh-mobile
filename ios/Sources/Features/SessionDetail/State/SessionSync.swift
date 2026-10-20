@@ -71,10 +71,22 @@ final class SessionSync: ObservableObject {
     @Published private(set) var notice: ResyncNotice?
     /// 正在生成的回复（流式输出）；没有进行中的 attempt 就是空串。
     @Published private(set) var transientText = ""
-    /// 订阅流的连接阶段 —— 连接态指示器的数据源，从 `FollowClient` 转发。
+    /// 订阅流的连接阶段 —— 功能条网络格的数据源，从 `FollowClient` 转发。
     @Published private(set) var connectionPhase: FollowClient.Phase = .idle
-    /// 上下文占用。为 `nil` 时界面**隐藏整行**。
+    /// 上一次向后翻页是否还在路上。
+    ///
+    /// 与 `status` 分开：`status` 是「同步到哪一步」的总述，下拉刷新也会让它进 `.syncing`；
+    /// 而界面要区分的是「顶部正在等更早的内容」—— 那时该在列表顶上给占位，不是给一句状态。
+    @Published private(set) var isPagingOlder = false
+    /// 上下文占用。为 `nil` 时占用格显示 `--` 并保持可点 —— 不消失：三格里其余两格永远有值，
+    /// 这一格消失会让模型格横向挪一次。
     @Published private(set) var usage: UsagePayload? = nil
+    /// 最后一次收到数据帧的时刻。`nil` = 进本屏以来还没收到过。
+    ///
+    /// **刻意不发布**：它每帧都变，`@Published` 会让 `RefreshGate` 的合并刷新失效
+    /// （一次事件一次全量重算，那正是分帧批处理的相反面）。消费方是连接详情的 sheet，
+    /// 打开那一刻读一次即可 —— 它回答的是「多久没更新」的量级，不需要逐帧跳动。
+    private(set) var lastFrameAt: Date? = nil
     /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
     @Published private(set) var displayedModel: ModelSelection? = nil
 
@@ -99,7 +111,7 @@ final class SessionSync: ObservableObject {
         followClient.onApproval = { [weak self] payload in self?.approvals.receive(payload) }
         followClient.onUsage = { [weak self] snapshot in self?.applyUsage(snapshot) }
         followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
-        // 连接态指示器的唯一来源：不接的话指示器永远停在 idle、`ConnectionBadge` 恒隐藏。
+        // 网络格的唯一来源：不接的话功能条永远停在「连接中…」。
         followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
         // upgrade 时刻取一张有效的 access —— 没有就裸连，让服务端如实拒绝。
         // 经 client 取而不是 `CredentialStore.shared`：HTTP 那条也走 client 注入的 store，
@@ -258,7 +270,11 @@ final class SessionSync: ObservableObject {
     func loadOlder() async {
         guard !syncInFlight, mirror.hasOlder else { return }
         syncInFlight = true
-        defer { syncInFlight = false }
+        isPagingOlder = true
+        defer {
+            syncInFlight = false
+            isPagingOlder = false
+        }
         status = .syncing
 
         guard mirror.beginRequest() else { return }
@@ -323,6 +339,7 @@ final class SessionSync: ObservableObject {
     }
 
     private func applyOpening(_ opening: OpeningFrame) {
+        lastFrameAt = Date()
         // 首次建立窗口与重连重建共用这一个入口，但语义不同：手里空着时等价于
         // 「打开」（整段取窗口）；重连时本地可能已有翻出来的历史，那时走「重对齐」——
         // 本地更早的部分原样保留，只换尾部。
@@ -383,6 +400,7 @@ final class SessionSync: ObservableObject {
     }
 
     private func applyLiveEvent(_ event: SessionEvent) {
+        lastFrameAt = Date()
         // 一条事件 = 一次覆盖到 seq+1 的快照；上游 gap-free 是契约（网关另有目击），幂等照旧生效。
         // 这是**合成**一份新快照（把单条事件包成「覆盖到 seq+1 的回应」），不是把同形数据
         // 从一种类型搬到另一种 —— 所以保留构造。
@@ -414,6 +432,9 @@ final class SessionSync: ObservableObject {
     }
 
     private func applyTransient(_ frame: JSONValue) {
+        // 未定稿帧也算「数据到了」：一轮长输出期间可能只有它在流，不看它的话
+        // 连接详情会一边显示文字在长、一边说「最后收到数据：2 分钟前」。
+        lastFrameAt = Date()
         let before = transient
         let verdict = transient.apply(frame: frame)
         if verdict == .broken {
@@ -435,6 +456,8 @@ final class SessionSync: ObservableObject {
     /// 一份占用读数：opening 里的基线或后续 `usage` 帧 —— 同一处理。被丢弃的帧**不动视图**
     /// （`UsageState` 判定），故乱序与重放不会让百分比跳一下再回来。
     private func applyUsage(_ snapshot: UsageSnapshot) {
+        // 「收到」与「采纳」是两件事：被丢弃的帧也证明链路活着，故置位在判之前。
+        lastFrameAt = Date()
         guard usageState.apply(snapshot) == .accepted else { return }
         usage = usageState.usage
     }

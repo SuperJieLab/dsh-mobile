@@ -732,6 +732,48 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(copies, 0, "编排里还有三个字段的搬运")
     }
 
+    // MARK: - 断言 16：界面 Views/ 不直接认识编排
+
+    /// 界面 `Views/` 下除宿主之外不出现 `SessionSync` —— 视图只吃「已经算好的值」。
+    ///
+    /// 宿主 = `<界面名>View.swift`（`SessionDetailView` / `SessionListView` / `PairingView`）：
+    /// 它是编排与渲染的唯一接线点，本来就该认识编排。别的视图若也认识，判定容易跟着取数
+    /// 一起进到视图里。
+    ///
+    /// **扫整个界面目录，排除 `State/` 与 `Display/`**：只扫 `Views/` 时，视图放在界面目录
+    /// 根部会被静默放行；而 `Display/` 的职责正是消费状态类型（把 `Status` 写成句子），
+    /// 它认识 `SessionSync` 是对的。`State/` 本来就该放编排。
+    ///
+    /// 盲区：把类型 `typealias` 成别的名字后认不出（漏报方向）；整行注释被跳过，
+    /// **行内**注释里出现算命中（误报方向，接受）。
+    func testViewsDoNotKnowOrchestrationTypes() throws {
+        let interfaces = try interfaceDirectories()
+        let hosts = Set(interfaces.map { $0.lastPathComponent + "View.swift" })
+        var scanned = 0
+        var syncHosts = 0
+
+        for interface in interfaces {
+            for file in swiftFiles(under: interface) {
+                guard !file.path.contains("/State/"),
+                      !file.path.contains("/Display/") else { continue }
+                if hosts.contains(file.lastPathComponent) {
+                    // 宿主本身要认识编排：一个都不认识说明路径推算错了，下面的 0 命中是假的。
+                    let text = try String(contentsOf: file, encoding: .utf8)
+                    if text.contains("SessionSync") { syncHosts += 1 }
+                    continue
+                }
+                scanned += 1
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) where contains("SessionSync", in: code) {
+                    XCTFail("\(interface.lastPathComponent)/\(file.lastPathComponent):\(line)"
+                            + " 出现 SessionSync —— 视图只吃算好的值，判定归 State/")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 0, "一个非 State/ 的文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertGreaterThan(syncHosts, 0, "没有任何宿主认识 SessionSync —— 先怀疑路径推算")
+    }
+
     // MARK: - 扫描工具
 
     /// 声明名。跳过 `private` / `fileprivate` —— 它们按定义出不了本文件。

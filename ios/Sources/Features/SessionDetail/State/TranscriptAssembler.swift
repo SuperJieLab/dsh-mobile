@@ -148,13 +148,21 @@ struct ToolRow: Equatable {
 
 // MARK: - 组装器
 
-    /// 把一段事件组装成显示节点。**纯状态机**：不 import SwiftUI / UIKit。唯一的状态是
-    /// 「已上报过哪些不认识的类型」—— 按类型去重，每次重放整段窗口只留一条痕。
+    /// 把一段事件组装成显示节点。**纯状态机**：不 import SwiftUI / UIKit。两处状态都是
+    /// 缓存性质的 ——「已上报过哪些不认识的类型」（按类型去重，每次重放整段窗口只留一条痕）
+    /// 与工具参数摘要（按 seq 缓存，见 `summaryCache`）；两者都不改变输出。
 struct TranscriptAssembler {
 
     /// 出现不认识的 `type` 时调一次（按类型去重）—— 会话照常显示，日志里留线索。
     private let onUnknownEventType: ((String) -> Void)?
     private var reportedUnknownTypes: Set<String> = []
+
+    /// 工具参数摘要的缓存，键是 `tool/call` 的 seq；空串表示「这一行确实没有摘要」。
+    ///
+    /// 摘要要把参数 JSON 解一遍，而**每次刷新都重放整段窗口** —— 历史里所有工具调用都在这段
+    /// 里。翻历史时窗口只增不减，不缓存就等于每翻一页把全部历史的参数重解一遍：越翻越慢，
+    /// 那正是「小卡一下」的来源。同一 seq 的事实不会变（事件是持久的），所以它永不过期。
+    private var summaryCache: [Int: String] = [:]
 
     init(onUnknownEventType: ((String) -> Void)? = nil) {
         self.onUnknownEventType = onUnknownEventType
@@ -225,7 +233,7 @@ struct TranscriptAssembler {
 
             case "tool/call":
                 open(turn: event.data["turn"]?.int)
-                draft?.entries.append(.tool(Self.toolRow(from: event)))
+                draft?.entries.append(.tool(toolRow(from: event)))
 
             case "tool/result":
                 open(turn: event.data["turn"]?.int)
@@ -233,12 +241,12 @@ struct TranscriptAssembler {
                 if let callId, let index = draft?.entries.firstIndex(where: { Self.callId(of: $0) == callId }) {
                     // 配对上了：把结果补进那一行，保留原来的参数（不假装重新知道）。
                     if case .tool(let row) = draft?.entries[index] {
-                        draft?.entries[index] = .tool(Self.toolRow(row, settledBy: event))
+                        draft?.entries[index] = .tool(toolRow(row, settledBy: event))
                     }
                 } else {
                     // `tool/call` 不在窗口里（往回翻的边界）—— 用结果自带的信息出一行，
                     // 参数与工具名留空。
-                    draft?.entries.append(.tool(Self.toolRow(fromResult: event)))
+                    draft?.entries.append(.tool(toolRow(fromResult: event)))
                 }
 
             case "assistant/message":
@@ -349,7 +357,7 @@ private extension TranscriptAssembler {
     }
 
     /// 从一个 `tool/call` 建一行（还没有结果）。
-    static func toolRow(from event: SessionEvent) -> ToolRow {
+    mutating func toolRow(from event: SessionEvent) -> ToolRow {
         let data = event.data
         return toolRow(
             callId: data["callId"]?.string ?? "",
@@ -363,7 +371,7 @@ private extension TranscriptAssembler {
     }
 
     /// 把结果补进已有的那一行 —— 参数与工具名沿用 `tool/call` 给的，不从结果里猜。
-    static func toolRow(_ row: ToolRow, settledBy result: SessionEvent) -> ToolRow {
+    mutating func toolRow(_ row: ToolRow, settledBy result: SessionEvent) -> ToolRow {
         toolRow(
             callId: row.callId,
             name: row.name,
@@ -376,7 +384,7 @@ private extension TranscriptAssembler {
     }
 
     /// 只看见结果（`tool/call` 在窗口外）：出一行，但工具名与参数都留空。
-    static func toolRow(fromResult event: SessionEvent) -> ToolRow {
+    mutating func toolRow(fromResult event: SessionEvent) -> ToolRow {
         toolRow(
             callId: event.data["message"]?["source"]?["callId"]?.string ?? "",
             name: nil,
@@ -389,7 +397,7 @@ private extension TranscriptAssembler {
     }
 
     /// 工具行的唯一构造口 —— 有结果就顺带定下成败与正文。
-    static func toolRow(
+    mutating func toolRow(
         callId: String,
         name: String?,
         argumentsRaw: String?,
@@ -418,7 +426,7 @@ private extension TranscriptAssembler {
         return ToolRow(
             callId: callId,
             name: name,
-            summary: Self.summary(name: name, argumentsRaw: argumentsRaw),
+            summary: cachedSummary(seq: seq, name: name, argumentsRaw: argumentsRaw),
             argumentsRaw: argumentsRaw,
             resultText: resultText,
             errorCode: errorCode,
@@ -463,6 +471,17 @@ private extension TranscriptAssembler {
         guard let name else { return nil }
         let fallback = normalizeDetail(name)
         return fallback.isEmpty ? nil : fallback
+    }
+
+    /// 摘要的缓存入口 —— 组装时走这条，纯计算的部分仍在 `summary` 里。
+    ///
+    /// 缓存把「没有摘要」也当结果存起来（空串）：否则那些行每次重放都要重解一遍 JSON，
+    /// 只为再得出同一个 `nil`。
+    mutating func cachedSummary(seq: Int, name: String?, argumentsRaw: String?) -> String? {
+        if let cached = summaryCache[seq] { return cached.isEmpty ? nil : cached }
+        let value = Self.summary(name: name, argumentsRaw: argumentsRaw)
+        summaryCache[seq] = value ?? ""
+        return value
     }
 
     /// `questions` 是唯一一个「值是对象数组」的候选键：取第一个问题。

@@ -5,9 +5,9 @@ import SwiftUI
 /// 两半语义照抄上游：断连要诚实（如实标注、旧内容照常展示、不清屏不弹错误页）；短尝试要
 /// 防闪烁（一旦显示至少停留 `minDisplaySeconds`，期间恢复也不一闪而过）。
 ///
-/// 状态由各屏自己映射后传入，本组件不知道列表与详情的区别：列表域看刷新请求成败
-/// （`isLoading` / `failure`），详情域看订阅流连接阶段（`SessionSync.connectionPhase`）。
-/// 消费方两处：`SessionListView`（列表域）与 `SessionDetailView`（详情域）。
+/// 状态由调用方自己映射后传入，本组件不知道领域：列表域看刷新请求成败
+/// （`isLoading` / `failure`）。消费方一处：`SessionListView` —— 详情屏那一格由
+/// `ComposerStrip` 画（`ComposerStripModel.network`）。
 struct ConnectionBadge: View {
     enum Status: Equatable {
         /// 数据源可达 —— 不显示。
@@ -22,8 +22,8 @@ struct ConnectionBadge: View {
     ///
     /// 取值类型用连接域的 `CarrierPath`，不在这里另声明一份 —— 同值同义的两个枚举只能靠
     /// 手写映射相连，而那类映射（`x == .direct ? .direct : .relay`）加第三个取值时会静默
-    /// 归到 else。本组件本来就在认识 Core 的类型（下面的 `Status.init(followPhase:)`
-    /// 吃 `FollowClient.Phase`），所以这里不是新增耦合。
+    /// 归到 else。`CarrierPath` 住在 `Core/` 顶层，是三方共用的跨域小值（组网节点产出它、
+    /// 连接域的窄面接口用它、呈现层按它选档位），所以这里不是新增耦合。
     let state: Status
     var meshPath: CarrierPath? = nil
 
@@ -111,9 +111,10 @@ struct ConnectionBadge: View {
 extension ConnectionBadge.Status {
     /// 列表域：刷新在途 = 连接中；上次刷新失败 = 已断开（旧列表照常可读）。
     ///
-    /// **为什么不与详情域的入口合一**：两屏能拿到的信号本来就不同 —— 列表只有
-    /// 一元刷新的 `isLoading` / `lastFailure`，详情才有订阅流的相位（`idle` / `connecting` /
-    /// `ready` / `waiting`）。合成一个入口只能让调用方给另一半传 `nil`，那等于把「这一屏没有这个
+    /// **详情域不吃这个组件**：它那三格（网络 / 模型 / 占用）由 `ComposerStrip` 画，
+    /// 判定在 `ComposerStripModel` 上。两屏能拿到的信号本来就不同 —— 列表只有一元刷新的
+    /// `isLoading` / `lastFailure`，详情才有订阅流的相位（`idle` / `connecting` / `ready` /
+    /// `waiting`）。合成一个入口只能让调用方给另一半传 `nil`，那等于把「这一屏没有这个
     /// 信号」伪装成「这个信号现在是空值」。
     init(isLoading: Bool, lastFailure: String?) {
         if lastFailure != nil {
@@ -125,17 +126,6 @@ extension ConnectionBadge.Status {
         }
     }
 
-    /// 详情域：订阅流的连接阶段直译。`idle` 不显示 —— 首次加载有既有的占位 UI。
-    init(followPhase: FollowClient.Phase) {
-        switch followPhase {
-        case .idle, .ready:
-            self = .hidden
-        case .connecting:
-            self = .connecting
-        case .waiting:
-            self = .offline
-        }
-    }
 }
 
 // MARK: - 组网路径那一行的显示

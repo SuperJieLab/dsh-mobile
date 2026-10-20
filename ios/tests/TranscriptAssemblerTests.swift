@@ -65,6 +65,24 @@ final class TranscriptAssemblerTests: XCTestCase {
         #"{"type":"tool/result","seq":\#(seq),"time":\#(seq * 10),"data":{"turn":1,"step":1,"message":{"role":"tool","source":{"kind":"tool","callId":"c1"},"toolCallId":"c1","content":[{"type":"text","text":"\#(text)"}],"isError":\#(isError),"id":"m1"}}}"#
     }
 
+    /// 摘要缓存不改变输出：同一个组装器连跑两次，节点逐条相等。
+    ///
+    /// 缓存是性能改动 —— 每次刷新都重放整段窗口，不缓存就要把历史里每个工具调用的参数
+    /// 重新解一遍 JSON，越翻越慢。这条守的是「它只省了重复计算，没改任何一条判定」。
+    func testAssemblyIsStableAcrossRuns() {
+        let json = [
+            #"{"type":"turn/start","seq":10,"time":100,"data":{"turn":1}}"#,
+            call,
+            result(seq: 12),
+            #"{"type":"turn/end","seq":13,"time":130,"data":{"turn":1,"reason":{"kind":"completed"}}}"#,
+        ]
+        var assembler = TranscriptAssembler()
+        let first = assembler.assemble(json.map(event))
+        let second = assembler.assemble(json.map(event))
+        XCTAssertFalse(first.isEmpty, "先确认这一批产出了节点 —— 不然「相等」是空的相等")
+        XCTAssertEqual(first, second)
+    }
+
     func testTranscript() {
         // A1：一组 call + result（同 callId、isError 假）→ 一行「成功」，
         // 摘要取参数里的 description（上游候选键里排在 command 之前）。

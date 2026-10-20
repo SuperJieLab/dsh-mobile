@@ -14,6 +14,21 @@ import XCTest
 
 final class MarkdownParserTests: XCTestCase {
 
+    /// 解析缓存不改变结果，也不把不同源文串起来。
+    ///
+    /// 它守的是「缓存是纯加速」这一半 —— 命中与不命中给出的块数组必须一模一样；
+    /// 至于「真的命中了」（省掉了那次解析），缓存不可注入，测不到，只能靠代码审查。
+    func testParseCacheIsTransparent() {
+        let first = "# 标题\n\n一段内容"
+        let second = "另一段\n\n- 列表项"
+        let a1 = MarkdownParseCache.result(for: first)
+        let a2 = MarkdownParseCache.result(for: first)
+        let b = MarkdownParseCache.result(for: second)
+        XCTAssertEqual(a1, a2, "同一段源文两次取到同一结果")
+        XCTAssertEqual(a1, MarkdownParser.parse(first), "命中与直接解析结果一致")
+        XCTAssertNotEqual(a1, b, "不同源文不串")
+    }
+
     /// 解析后各块的 kind。
     private func kinds(_ source: String) -> [Block.Kind] {
         MarkdownParser.parse(source).blocks.map(\.kind)

@@ -55,6 +55,12 @@ struct Block: Equatable {
     let kind: Kind
     /// 块的正文。代码块是代码原文（不含围栏），列表项是项文本（不含标记）。
     let text: String
+    /// 行内排版的结果（粗体 / 斜体 / 行内码 / 链接）。
+    ///
+    /// **在解析时算一次**。渲染层若在 `body` 里现调 `attributed`，每次重算都重跑一遍行内
+    /// 正则 —— 滚动时每一行都在付这笔钱，那是滚动掉帧的直接来源。代码块不做行内解析
+    /// （代码里的 `*` 是字面量），它的 `inline` 就是纯文本。
+    let inline: AttributedString
     /// 起始行偏移 —— 也是这一块的身份。
     let offset: Int
 }
@@ -184,8 +190,10 @@ enum MarkdownParser {
                     cursor += 1
                 }
                 let language = String(trimmed.dropFirst(fence.count)).trimmingCharacters(in: .whitespaces)
+                let code = content.joined(separator: "\n")
                 blocks.append(Block(kind: .code(language: language.isEmpty ? nil : language),
-                                    text: content.joined(separator: "\n"),
+                                    text: code,
+                                    inline: AttributedString(code),
                                     offset: line.offset))
                 // 没找到闭合就是「还在长」：这一块吃掉剩下的全部
                 index = cursor < lines.count ? cursor + 1 : lines.count
@@ -195,14 +203,16 @@ enum MarkdownParser {
             // 标题
             if let level = headingLevel(of: trimmed) {
                 let text = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
-                blocks.append(Block(kind: .heading(level: level), text: text, offset: line.offset))
+                blocks.append(Block(kind: .heading(level: level), text: text,
+                                    inline: attributed(text), offset: line.offset))
                 index += 1
                 continue
             }
 
             // 分隔线。**要排在列表前面**：`- - -` 也是分隔线，而按列表记号看它是三项
             if isDivider(trimmed) {
-                blocks.append(Block(kind: .divider, text: "", offset: line.offset))
+                blocks.append(Block(kind: .divider, text: "",
+                                    inline: AttributedString(""), offset: line.offset))
                 index += 1
                 continue
             }
@@ -217,7 +227,9 @@ enum MarkdownParser {
                     parts.append(quoteBody(quoted))
                     cursor += 1
                 }
-                blocks.append(Block(kind: .quote, text: parts.joined(separator: "\n"), offset: line.offset))
+                let quoteText = parts.joined(separator: "\n")
+                blocks.append(Block(kind: .quote, text: quoteText,
+                                    inline: attributed(quoteText), offset: line.offset))
                 index = cursor
                 continue
             }
@@ -232,8 +244,10 @@ enum MarkdownParser {
                     parts.append(next)      // 续行并入同一项
                     cursor += 1
                 }
+                let itemText = parts.joined(separator: " ")
                 blocks.append(Block(kind: .listItem(ordered: marker.ordered, marker: marker.token),
-                                    text: parts.joined(separator: " "),
+                                    text: itemText,
+                                    inline: attributed(itemText),
                                     offset: line.offset))
                 index = cursor
                 continue
@@ -249,7 +263,9 @@ enum MarkdownParser {
                 parts.append(next)
                 cursor += 1
             }
-            blocks.append(Block(kind: .paragraph, text: parts.joined(separator: "\n"), offset: line.offset))
+            let paragraph = parts.joined(separator: "\n")
+            blocks.append(Block(kind: .paragraph, text: paragraph,
+                                inline: attributed(paragraph), offset: line.offset))
             index = cursor
         }
 

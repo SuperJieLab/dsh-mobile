@@ -1,27 +1,25 @@
 import SwiftUI
 
-/// 模型选择按钮：composer 左侧的当前模型入口，形态照上游 —— 模型选择器住在
-/// 发送区旁（conversation.composer 槽位），不占消息流的位置。
+/// 模型选择按钮：功能条中间那一格。
 ///
-/// 显示规则照上游（`ui-model-selection` 的显示式）：当前值 = 状态机的显示 ?? 目录默认
-/// —— 服务端没说「下一轮用什么」时退到部署默认，**不猜别的**。目录打开时现拉
-/// 一次（`catalog.reload()`），不订阅刷新——它只在凭证 / 适配器变更时才会变，重开即新。
+/// 显示规则照上游（`ui-model-selection` 的显示式）：当前值 = 宿主给的显示值 ?? 目录默认
+/// —— 服务端没说「下一轮用什么」时退到部署默认，**不猜别的**。这条兜底规则要读目录，
+/// 所以它的结果由宿主算好传进来（`name`）。
+///
 /// 拉取失败的 provider 灰显并给整表重试；失败的明细不逐条重试（demo 粒度）。
 ///
-/// **取数不在这里**：「等待 / 有内容 / 失败 + 原因」三面归 `ModelCatalogState`，
-/// 这个视图只发起一次取数、只读结果 —— 视图一旦持有结果，它的存活期就由框架的重建节奏决定，
-/// 而重建比一次请求快得多。
+/// **取数不在这里**：「等待 / 有内容 / 失败 + 原因」三面归 `ModelCatalogState`，本视图只读。
+/// 目录的**拉取时机归宿主**（进屏一次）—— 挂在这里的话，功能条每次因键盘收起而重建都会
+/// 重拉一遍，把已成功的目录又打回 `.waiting`。
 struct ModelPickerView: View {
-    /// 同步编排：显示值与选择动作的来源。
-    @ObservedObject var sync: SessionSync
-
-    /// 目录的三面。取数与判定都在里面，这里只读。
-    @StateObject private var catalog: ModelCatalogState
-
-    init(client: GatewayClient, sync: SessionSync) {
-        self.sync = sync
-        _catalog = StateObject(wrappedValue: ModelCatalogState { try await client.modelCatalog() })
-    }
+    /// 目录的三面。取数与判定都在里面，这里只读 —— 由宿主持有并传进来。
+    @ObservedObject var catalog: ModelCatalogState
+    /// 宿主给的当前选择；菜单里打勾用。
+    let selected: ModelSelection?
+    /// 宿主算好的显示名（选中值 ?? 目录默认值 ?? 未知）。
+    let name: String
+    /// 选一个模型。接到哪条编排上由宿主决定。
+    let onSelect: (ModelSelection) -> Void
 
     var body: some View {
         Menu {
@@ -29,22 +27,13 @@ struct ModelPickerView: View {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "cpu")
-                Text(currentName)
+                Text(name)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.caption2)
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
         }
-        .task { await catalog.reload() }
-    }
-
-    /// 按钮只显示模型名：「这是模型」由图标说了，省横向空间。
-    ///
-    /// 退到「上一次成功的目录默认值」而不是「当前这份结果」：重拉期间结果是 `.waiting`，
-    /// 若读它会闪成「未知」。状态机里那个字段就是为这一件事留的。
-    private var currentName: String {
-        (sync.displayedModel ?? catalog.lastKnownDefault).map { $0.model } ?? "未知"
     }
 
     @ViewBuilder
@@ -77,14 +66,9 @@ struct ModelPickerView: View {
             Section(group.name) {
                 ForEach(group.models, id: \.id) { entry in
                     Button {
-                        Task {
-                            await sync.selectModel(
-                                ModelSelection(provider: group.id, model: entry.id)
-                            )
-                        }
+                        onSelect(ModelSelection(provider: group.id, model: entry.id))
                     } label: {
-                        if sync.displayedModel?.provider == group.id,
-                           sync.displayedModel?.model == entry.id {
+                        if selected?.provider == group.id, selected?.model == entry.id {
                             Label(entry.name, systemImage: "checkmark")
                         } else {
                             Text(entry.name)
