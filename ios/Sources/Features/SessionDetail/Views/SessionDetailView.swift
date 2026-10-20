@@ -119,15 +119,11 @@ struct SessionDetailView: View {
                         }
                     } else {
                         Button {
-                            // 插入前记下当时的**第一条**：它就是用户此刻看着的那条
-                            // （入口在列表顶部，能看到这个按钮就说明人已经在顶上了）。
-                            // 前插之后把它滚回顶部，用户看到的是「上面多了内容」，
-                            // 而不是「我正在看的这段被推下去」—— 那是翻页最刺眼的跳。
-                            let anchorID = sync.nodes.first?.id
-                            Task {
-                                await sync.loadOlder()
-                                if let anchorID { proxy.scrollTo(anchorID, anchor: .top) }
-                            }
+                            // 这里**不**做「插入后把视口锚回原来那条」。`scrollTo` 是强制拉位置，
+                            // 而系统本来就会保持一部分偏移 —— 两者叠加是一次可见的跳，比不锚更糟。
+                            // 前插造成的位移只能在「滚动已停」时才谈得上修正，而滚动状态在本机
+                            // SDK 里拿不到（`onScrollPhaseChange` 那一族不在 interface 里）。
+                            Task { await sync.loadOlder() }
                         } label: {
                             HStack {
                                 Spacer()
