@@ -23,10 +23,6 @@ struct SessionDetailView: View {
     @State private var draft = ""
     /// 本屏四个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
     @State private var activeSheet: DetailSheet?
-    /// 列表此刻在不在滚。翻页要等它停 —— 见 `transcript` 上的 `onScrollPhaseChange`。
-    @State private var isScrolling = false
-    /// 一次被推迟的翻页：用户点的时候列表还在滚，等它停下再发。
-    @State private var pendingOlder = false
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
     /// 回前台立即重连：App 生命周期与详情域的连接点。
@@ -123,13 +119,11 @@ struct SessionDetailView: View {
                         }
                     } else {
                         Button {
-                            // 列表还在滚就先记下，等它停下再发（见 `onScrollPhaseChange`）。
-                            // 滚动中插入时系统改不了偏移，那一下跳正是「不跟手」的来源。
-                            if isScrolling {
-                                pendingOlder = true
-                            } else {
-                                Task { await sync.loadOlder() }
-                            }
+                            // 这里**不**做「插入后把视口锚回原来那条」。`scrollTo` 是强制拉位置，
+                            // 而系统本来就会保持一部分偏移 —— 两者叠加是一次可见的跳，比不锚更糟。
+                            // 前插造成的位移只能在「滚动已停」时才谈得上修正，而滚动状态在本机
+                            // SDK 里拿不到（`onScrollPhaseChange` 那一族不在 interface 里）。
+                            Task { await sync.loadOlder() }
                         } label: {
                             HStack {
                                 Spacer()
@@ -195,14 +189,6 @@ struct SessionDetailView: View {
             // 在长会话上很贵，而用户并不需要看见内容「长出来」。`eventCount` 与内容同步变，
             // 用它当 key 能覆盖「插入了不产生节点的事件」这种情形。
             .animation(nil, value: sync.eventCount)
-            // 翻页要等列表停下。插入发生在滚动中时系统无法修正偏移（decelerating 期间
-            // 改 `contentOffset` 会被忽略），用户看到的就是一次跳 —— 所以推迟到 `.idle`。
-            .onScrollPhaseChange { _, phase in
-                isScrolling = phase.isScrolling
-                guard !phase.isScrolling, pendingOlder else { return }
-                pendingOlder = false
-                Task { await sync.loadOlder() }
-            }
             .onAppear {
                 // 与上面同一个目标：列表最末尾那行锚点。**无动画** —— 生效时等于原地不动，
                 // 不生效时也只是瞬移，而不是用户能看见的「滚下去」。
