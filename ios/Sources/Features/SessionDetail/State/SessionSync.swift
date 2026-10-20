@@ -185,6 +185,8 @@ final class SessionSync: ObservableObject {
         guard !syncInFlight else { return }
         syncInFlight = true
         defer { syncInFlight = false }
+        // 与 `loadOlder` 对照用：debug 级，`DSH_LOG_DEBUG=1` 才出来（这条可能一秒一次）。
+        Log.debug(Log.Module.session, "sync start events=\(mirror.events.count) empty=\(mirror.isEmpty)")
         status = .syncing
 
         var added = 0
@@ -274,6 +276,10 @@ final class SessionSync: ObservableObject {
     /// 只是一串过程事件，`hasOlder` 却还是真。
     func loadOlder() async {
         guard !syncInFlight, mirror.hasOlder else { return }
+        // 翻页是低频动作，打 info：真机上要能对照「我没点，它却加载了」这种情况。
+        // 日志用英文 —— State/ 层不放中文，那是用户可见句子的地盘。
+        Log.info(Log.Module.session,
+                 "loadOlder fromSeq=\(mirror.pageStart) events=\(mirror.events.count)")
         syncInFlight = true
         isPagingOlder = true
         defer {
