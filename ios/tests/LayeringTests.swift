@@ -229,6 +229,47 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(scanned, 100, "只扫到 \(scanned) 行 —— 先怀疑路径推算")
     }
 
+    // MARK: - 断言 2c：Core 不认识界面层的类型
+
+    /// `Core/` 是下层，不得出现 `Features/` 下任何类型名。
+    ///
+    /// 与上面那张 `coreUpwardBans` 分工不同：那张表管 Core **内部**四个域互相不许向上，
+    /// 本条管 Core 整体不许向上到界面层。两句都来自「依赖方向单向」这条规则，但方向不同 ——
+    /// 塞进一张表里，改错一个会静默放过另一个。
+    ///
+    /// **为什么需要它**：讨论「把票的维护上移到配对功能」时才发现，那个做法在依赖方向上是
+    /// 违规的，而**当时没有任何断言会因此变红**。判据不是给已经写对的人看的，是给下一次
+    /// 想图省事的人看的。
+    ///
+    /// 落在**代码行**上而不是文件全文：Core 里有多处注释在解释「谁消费我」（`RefreshGate`
+    /// 写 `SessionSync`、`FollowClient` 写 `SessionSync`），那些提及是必要的说明，不是依赖。
+    func testCoreDoesNotReferenceFeatureTypes() throws {
+        let core = sourcesRoot.appendingPathComponent("Core")
+        let featureTypes = try declaredTypes(under: try interfaceDirectories(), topLevelOnly: true)
+
+        // 正控 1：名单非空 —— 空名单会让内层循环一次都不执行，判据恒真。
+        XCTAssertGreaterThan(featureTypes.count, 20,
+                             "只扫到 \(featureTypes.count) 个界面层类型 —— 先怀疑路径推算")
+
+        var scanned = 0
+        var hits: [String] = []
+        for file in swiftFiles(under: core) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                scanned += 1
+                for type in featureTypes where contains(type, in: code) {
+                    let relative = file.path
+                        .replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                    hits.append("\(relative):\(line) 出现 \(type)")
+                }
+            }
+        }
+        // 正控 2：真的扫了东西。Core 现在约两千行代码，阈值取一半 —— 路径推算坏了会先红在这里。
+        XCTAssertGreaterThan(scanned, 1_500, "只扫到 \(scanned) 行 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, [],
+                       "Core 是下层，不得认识界面层的类型：" + hits.joined(separator: " / "))
+    }
+
     // MARK: - 断言 2d：票的过期判定只有一处
 
     /// 「访问票什么时候过期」全仓只有一处判断 —— 在 `TicketKeeper` 里。
