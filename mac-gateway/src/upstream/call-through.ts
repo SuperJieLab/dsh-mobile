@@ -4,7 +4,7 @@
  * Cordis 对服务成员的多行改写。
  *
  * 形参表读不出（bind、native）时回退到按位置，未知名字取它的位置槽。必需的实参有两个
- * —— `signal`（取消）与 `peer`（身份，R11）—— 它们在不同版本的槽位也不同，所以都必须
+ * —— `signal`（取消）与 `peer`（身份）—— 它们在不同版本的槽位也不同，所以都必须
  * 由调用方真给值：位置兜底只保证「按迄今见过的形参表摆放」。
  */
 
@@ -16,7 +16,7 @@
  *
  * 自 0.2 起 `peer` 也是**必需**实参（`types.d.ts` 原文：required, never defaulted），且宿主
  * 在开流时会解引用它（`assertPeerLive` 读 `peer.signal.aborted`）—— 它必须由调用方真给一个
- * Peer，`undefined` 不再是可接受的进程内载具（R11）。
+ * Peer，`undefined` 不再是可接受的进程内载具。
  */
 export function openStreamThrough(
   opener: (...args: unknown[]) => Promise<AsyncIterable<unknown>>,
@@ -59,9 +59,9 @@ export interface StreamOpening {
  *
  * `receiver` 不是可有可无的一半：宿主的成员大多是**实例方法**，取出引用就与实例脱钩，
  * `this` 在方法体里成了 `undefined`，读到自己的字段时当场抛 `Cannot read properties of
- * undefined`（`dsh-api-gateway/lib/index.js:967` 的 `this.remoteEventClients`）—— 真机
- * 2026-10-15 的现场正是如此：**手机的每一条应答都进不去上游**，而它看起来还「成功」（R11）。
- * 箭头函数字段（如 `wireStream.open`）不受影响，但没有任何理由省掉接收者。
+ * undefined`（`dsh-api-gateway` 的 `dispatchRpc` 读 `this.remoteEventClients`）—— 症状是
+ * **每一条应答都进不去上游，而调用方看起来还「成功」**。箭头函数字段（如 `wireStream.open`）
+ * 不受影响，但没有任何理由省掉接收者。
  */
 export function callThrough<T>(
   callee: (...args: unknown[]) => T,
@@ -78,7 +78,7 @@ export function callThrough<T>(
 
 /**
  * Gateway 自有端点拿到的 uplink：它一打开就交回迭代器，载具项被丢弃而非读取
- * （types.d.ts:81）。必须是真实的 AsyncIterable —— 网关在开流时会对它调用
+ * （见 `types.d.ts` 的 uplink 参数声明）。必须是真实的 AsyncIterable —— 网关在开流时会对它调用
  * `return()`。
  */
 function emptyUplink(): AsyncIterable<unknown> {
@@ -117,8 +117,7 @@ export function parameterNamesOf(opener: (...args: unknown[]) => unknown): strin
  * 为什么不能直接读 `holder[name]`：cordis 把服务成员包成一层 Proxy
  * （`createShadowMethod`），`Function.prototype.toString` 对代理只回
  * `function () { [native code] }`。直接读必然读不出，而「读不出」若被判成「变了」，
- * 这条告警就会**每次都响** —— R24 期1 的真机日志正是如此：`list` 与 `execute` 各一条，
- * 而它们一字未变，真正的漂移从此混在噪声里。
+ * 这条告警就会**每次都响**：一字未变的成员也报一条，真正的漂移从此混在噪声里。
  *
  * 原件在原型链上（那层代理不 trap `getOwnPropertyDescriptor`）：逐级探，取第一个
  * 读得出名字的。读不出就是读不出，由调用方决定怎么讲这件事。
@@ -127,7 +126,7 @@ export function memberParametersOf(holder: unknown, name: string): string[] | un
   // 成员根本不在时不归这条检查管（缺席是装配层的事，比如 `commandChannelOver` 的
   // `typeof … !== 'function'`）。把它也算成「读不出」，会让一个与此无关的缺席
   // 顶掉真正要看的那条告警。
-  if (typeof (holder as Record<string, unknown> | undefined)?.[name] !== 'function') {
+  if (!isCallableMember(holder, name)) {
     return undefined
   }
   for (let cursor: unknown = holder; cursor !== null && cursor !== undefined;
@@ -141,16 +140,28 @@ export function memberParametersOf(holder: unknown, name: string): string[] | un
 }
 
 /**
- * 一条「这个成员的形参表与构建期假定不符」的说明；相符时返回 `undefined`。
+ * `holder` 上有没有这个可调用成员。缺席与「读不出形参表」是两件事：缺席归装配层判
+ * （`typeof … !== 'function'`），读不出才是这条签名检查自己的事。
+ */
+function isCallableMember(holder: unknown, name: string): boolean {
+  return typeof (holder as Record<string, unknown> | undefined)?.[name] === 'function'
+}
+
+/**
+ * 一条「这个成员的形参表与构建期假定不符」的说明；相符、或成员根本不在时返回 `undefined`。
  *
  * 两种异常分开讲，因为它们要的处置不同：**变了**要去看上游改了什么，**读不出**说明
  * 包装换了一层、这段检查已经失效 —— 后者若说成「变了」，人就会去查一件没发生的事。
+ *
+ * 成员不在时**不说话**：那是装配层要报的缺席，把它讲成「读不出」会让一条无关的缺席
+ * 顶掉真正要看的那条告警。
  */
 export function signatureNoteOf(
   holder: unknown,
   name: string,
   expected: readonly string[],
 ): string | undefined {
+  if (!isCallableMember(holder, name)) return undefined
   const names = memberParametersOf(holder, name)
   if (names === undefined) {
     return `${name}: cannot read its parameter list through the service wrapper —`
@@ -170,8 +181,8 @@ export function signatureNoteOf(
  */
 function positionalArguments(arity: number, values: Record<string, unknown>): unknown[] {
   if (arity >= 5) return [values.endpoint, values.payload, values.uplink, values.peer, values.signal]
-  // 4 参是**应答门**（`dispatchRpc(endpoint, payload, signal, peer)`，dsh-api-gateway/lib/index.js:961）。
-  // 少了这一档，兜底会把 peer 整段丢掉 —— 而 peer 恰恰是它必需的那个实参（审查发现，R11）。
+  // 4 参是**应答门**（`dispatchRpc(endpoint, payload, signal, peer)`）。
+  // 少了这一档，兜底会把 peer 整段丢掉 —— 而 peer 恰恰是它必需的那个实参。
   if (arity === 4) return [values.endpoint, values.payload, values.signal, values.peer]
   return [values.endpoint, values.payload, values.signal]
 }

@@ -1318,3 +1318,35 @@ test('the credential ops\' shapes have one declaration and at least one consumer
   assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).functions, [],
     'no codec here — validating a pairing code is a rule, not a shape')
 })
+
+// ---------------------------------------------------------------------------
+// V12：拒绝留痕的豁免表与真实 op 对得上
+// ---------------------------------------------------------------------------
+
+/**
+ * `handle` 的 switch 认得哪些 op。闭集取自**分派本身**，不是另抄一份名单 ——
+ * 第二份名单与第一份一起漂，正是这条判据要防的东西。
+ */
+function dispatchedOps(): string[] {
+  const source = stripComments(readFileSync(join(SRC, 'protocol/rpc.ts'), 'utf8'))
+  return [...source.matchAll(/case '([a-z0-9-]+)':/g)].map(match => match[1]!)
+}
+
+test('the silent-refusal list only names ops the protocol actually dispatches', async () => {
+  // 留痕的默认方向是「失败就记」，所以豁免表是唯一需要人维护的那张。写错的形态很安静：
+  // 一个改了名或已删除的 op 留在表里，那一条 op 的失败从此既没有日志、也没人知道它本该静默。
+  const ops = dispatchedOps()
+  // 活性锚：扫描器若因为正则或路径失效而读空，下面的差集会「通过」。
+  for (const op of ['session-prompt', 'command-execute', 'command-catalog', 'model-catalog']) {
+    assert.ok(ops.includes(op), `the op scan did not even see "${op}" — it is reading nothing`)
+  }
+
+  const module = await import(pathToFileURL(join(SRC, 'remote/http.ts')).href) as {
+    SILENT_REFUSALS?: ReadonlySet<string>
+  }
+  const silent = module.SILENT_REFUSALS
+  assert.ok(silent instanceof Set, 'SILENT_REFUSALS must be an exported Set — otherwise this judge reads nothing')
+
+  assert.deepEqual([...silent].filter(op => !ops.includes(op)), [],
+    'a silent-refusal entry that names no dispatched op protects nothing and hides the next drift')
+})

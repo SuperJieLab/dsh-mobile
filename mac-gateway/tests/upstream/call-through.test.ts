@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from '../../src/upstream/call-through.ts'
+import { callThrough, openStreamThrough, parameterNamesOf, signatureNoteOf, type PeerScopeLike } from '../../src/upstream/call-through.ts'
 
 /** One Peer as the runtime hands it to a stream opener (`PeerScope`). */
 function peerScope(): PeerScopeLike {
@@ -217,4 +217,33 @@ test('call: without a receiver the host method fails exactly as it did on the re
     callThrough(host.dispatchRpc, { endpoint: '$events/result', payload: { args: {} }, signal, peer: peerScope() }),
     { message: "Cannot read properties of undefined (reading 'remoteEventClients')" },
   )
+})
+
+// -- signature notes: absence, unreadability and drift are three answers ------
+
+test('signature note: a member that is not there stays silent', () => {
+  // Absence belongs to the assembly layer (`typeof … !== 'function'`). Reporting it
+  // here would drown the warning that actually matters under an unrelated one.
+  assert.equal(signatureNoteOf({}, 'selectModel', ['request']), undefined)
+})
+
+test('signature note: an unreadable parameter list says so instead of claiming drift', () => {
+  // A bound member exposes no source, so its names cannot be read — and the note
+  // must say that, not "it declares something else".
+  const holder = { selectModel: ((request: unknown) => request).bind(null) }
+  const note = signatureNoteOf(holder, 'selectModel', ['request'])
+  assert.match(note ?? '', /cannot read its parameter list/)
+  assert.doesNotMatch(note ?? '', /declares/)
+})
+
+test('signature note: a changed parameter list names the declared and the assumed shape', () => {
+  const holder = { selectModel: (request: unknown) => request }
+  const note = signatureNoteOf(holder, 'selectModel', ['selection'])
+  assert.match(note ?? '', /selectModel declares \(request\)/)
+  assert.match(note ?? '', /calls it as \(selection\)/)
+})
+
+test('signature note: a matching parameter list says nothing', () => {
+  const holder = { selectModel: (request: unknown) => request }
+  assert.equal(signatureNoteOf(holder, 'selectModel', ['request']), undefined)
 })

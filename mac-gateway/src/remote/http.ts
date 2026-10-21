@@ -25,6 +25,18 @@ const log = createLogger(LogModule.http)
  * 耗尽的把手。1 MiB 远高于任何 v2 请求。 */
 const MAX_BODY_BYTES = 1_048_576
 
+/**
+ * 拒绝时**不**留痕的 op —— 判定方向取「默认留痕」，这张表只装例外。
+ *
+ * 三条都是纯读 op：它们的失败在手机上有明确落点（列表的失败横幅、详情的失败态），
+ * 服务端再记一条只是把噪声翻倍。方向不能反过来列一张「要留痕的 op」名单 ——
+ * 白名单漏掉一个新 op 是**静默**的（那个 op 失败之后无处归因），而黑名单漏掉只是多一条日志。
+ *
+ * 表里的名字必须是 `handle` 真的认得的 op：改名或删 op 之后留下的死条目意味着这一条
+ * 既没有日志、也没人知道它本该静默。
+ */
+export const SILENT_REFUSALS: ReadonlySet<string> = new Set(['list-sessions', 'snapshot', 'page'])
+
 /** 监听器应答一条请求所需的依赖。 */
 export interface RpcListenerDeps {
   sessionPort: SessionPort
@@ -110,9 +122,9 @@ async function respond(
   }
 
   const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort, deps.modelPort, deps.commandPort)
-  // 拒绝在服务端留证据：写 op 因为手机只显示一行状态；模型 op 因为 T8
-  // 真机跑出过一次静默为空的目录 —— 死掉的读 op 不得比失败的写 op 更安静。
-  if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer' || op === 'model-select' || op === 'model-catalog')) {
+  // 拒绝在服务端留证据：手机对一次失败的写 op 只显示一行状态，对一次失败的读 op
+  // 只在它自己那一屏留个提示 —— 归因要回到网关日志。静默的例外见 {@link SILENT_REFUSALS}。
+  if (!answer.ok && typeof op === 'string' && !SILENT_REFUSALS.has(op)) {
     log.error(`op "${op}" refused: ${JSON.stringify(answer.error)}`)
   }
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })

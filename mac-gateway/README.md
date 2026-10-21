@@ -34,11 +34,11 @@ remote/http.ts       createServer(respond) —— server 是这里创建的
   ↓
                      vault.authenticate(authorization) → 无票即 401 + 协议信封
   ↓
-protocol/rpc.ts      handle(message, ports, now, limits) —— switch 按 op 分派
+protocol/rpc.ts      handle(message, …ports) —— switch 按 op 分派
   ↓
-                     各 op 自己的处理器 → SessionPort / WritePort / ModelPort
+                     各 op 自己的处理器 → SessionPort / WritePort / ModelPort / CommandPort
   ↓
-upstream/            ports 的实现：读宿主投影、读日志、把写泵到宿主
+upstream/            ports 的实现：读宿主投影、读日志、把写泵到宿主、把命令整行交给宿主
 ```
 
 ### 流：`/rpc/stream` 升级
@@ -56,6 +56,8 @@ remote/egress.ts      send(...) —— 帧的出口：编码 + 写 + 记一行 p
 ```
 
 `egress.ts` 只服务流通道（`connection.ts` 与 `stream.ts` 都经它）；一元那条直接写响应体，不经过帧编码。**这就是为什么握手字节（101/404/401/400）与心跳 ping 不在 `egress.ts` 里** —— 它们不是 mux 帧。
+
+命令走的是同一条一元通道：`command-catalog` 列该会话此刻可用的命令，`command-execute` 把**一整行原文**交给宿主（语法只归宿主，网关不拆名字与参数 —— 拆一遍就是第二份实现，漂了不会编译失败）。它的回包只表示**已受理**：结果从流里的 `command/run` / `command/done` 到达，按 `commandId` 配对。
 
 ## 二、目录各是什么
 
