@@ -170,7 +170,9 @@ final class SessionSync: ObservableObject {
         // 与发送按钮的置灰读同一份判定 —— 「判空」与「取值」同源。
         guard let trimmed = PromptDraft.normalized(text) else { return }
         do {
-            try await client.sendPrompt(sessionId: sessionId, text: trimmed, promptId: UUID().uuidString)
+            try await promptSession(
+                client, sessionId: sessionId, text: trimmed, promptId: UUID().uuidString
+            )
         } catch {
             status = .failed(step: .sending, cause: .thrown(error))
             refreshView()
@@ -187,7 +189,7 @@ final class SessionSync: ObservableObject {
     /// 状态行上一个是「指令没能送达」、一个是「命令没能执行」。
     func executeCommand(_ line: String) async {
         do {
-            try await client.executeCommand(sessionId: sessionId, line: line)
+            try await runCommand(client, sessionId: sessionId, line: line)
         } catch {
             status = .failed(step: .executing, cause: .thrown(error))
             refreshView()
@@ -201,7 +203,9 @@ final class SessionSync: ObservableObject {
     func selectModel(_ selection: ModelSelection) async {
         let generation = modelState.beginSelect()
         do {
-            let selected = try await client.selectModel(sessionId: sessionId, selection: selection)
+            let selected = try await installModelSelection(
+                client, sessionId: sessionId, selection: selection
+            )
             if modelState.settle(generation: generation, selected: selected) {
                 displayedModel = modelState.displayed
             }
@@ -357,7 +361,7 @@ final class SessionSync: ObservableObject {
     private func fetchOlderPage() async -> Verdict? {
         guard mirror.beginRequest() else { return nil }
         do {
-            let page = try await client.page(sessionId: sessionId, beforeSeq: mirror.pageStart)
+            let page = try await readPage(client, sessionId: sessionId, beforeSeq: mirror.pageStart)
             return mirror.prepend(page)
         } catch let error as GatewayClientError {
             mirror.abandonRequest()
@@ -557,7 +561,7 @@ final class SessionSync: ObservableObject {
     private func openLatest() async -> Verdict {
         guard mirror.beginRequest() else { return .caughtUp }
         do {
-            let page = try await client.page(sessionId: sessionId)
+            let page = try await readPage(client, sessionId: sessionId)
             return mirror.open(with: page)
         } catch let error as GatewayClientError {
             mirror.abandonRequest()
@@ -572,7 +576,7 @@ final class SessionSync: ObservableObject {
     /// 从镜像的末尾往前拉一块。
     private func fetchSnapshot() async -> Outcome {
         do {
-            let snapshot = try await client.snapshot(sessionId: sessionId, since: mirror.cursor)
+            let snapshot = try await readSnapshot(client, sessionId: sessionId, since: mirror.cursor)
             // opening 基线：snapshot 回应带着「下一轮用什么」——
             // 进会话前的选择客户端窗口里没有，只有这一路能补上。
             modelState.absorb(baseline: snapshot.model)

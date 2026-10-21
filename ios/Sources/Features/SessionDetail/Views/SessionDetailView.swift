@@ -37,10 +37,10 @@ struct SessionDetailView: View {
         self.session = session
         _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id))
         _catalog = StateObject(
-            wrappedValue: ModelCatalogState { try await client.modelCatalog() }
+            wrappedValue: ModelCatalogState { try await fetchCatalog(client) }
         )
         _commands = StateObject(
-            wrappedValue: CommandDirectory { try await client.commandCatalog(sessionId: session.id) }
+            wrappedValue: CommandDirectory { try await fetchCommands(client, sessionId: session.id) }
         )
     }
 

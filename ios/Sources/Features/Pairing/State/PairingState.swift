@@ -9,7 +9,8 @@
  *
  * 失败文案是服务端原文，且**不清空** `code`：改一位再试。配对成功后由门面翻 `isPaired`，
  * 视图自己让位给列表 —— 这里不判断「配好之后显示什么」，否则会出现第二个真相来源。
- */import Combine
+ */
+import Combine
 import Foundation
 
 @MainActor
@@ -38,11 +39,26 @@ final class PairingState: ObservableObject {
         defer { isPairing = false }
         failure = nil
         do {
-            try await client.pair(code: code)
+            try await pairDevice(client, code: code)
             code = ""
         } catch {
             // 服务端的话原样显示（配对码不对 / 过期 / 作废）。
             failure = error.localizedDescription
         }
     }
+}
+
+/// 用 Mac 屏幕上的一次性配对码换设备凭证，换到就把关系落下。
+///
+/// 请求在这里拼、回包在这里读；**「关系成立」那一步不在这里** —— 它只把凭证交给
+/// `GatewayClient.adopt`，因为身份状态的唯一写者是那一层。
+@MainActor
+func pairDevice(_ client: GatewayClient, code: String) async throws {
+    let response: PairResponse = try await client.perform(
+        PairRequest(code: code), authenticated: false
+    )
+    guard let deviceToken = response.deviceToken else {
+        throw GatewayClientError.malformedResponse(detail: "deviceToken")
+    }
+    client.adopt(deviceToken: deviceToken)
 }

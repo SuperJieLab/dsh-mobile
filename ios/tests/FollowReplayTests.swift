@@ -130,7 +130,7 @@ final class FollowReplayTests: XCTestCase {
         // K1：未激活的 client 不持有端点，op 立抛 .notActivated（transport 尚不存在，零网络）。
         let bare = GatewayClient()
         var k1Hit = false
-        do { _ = try await bare.listSessions() } catch GatewayClientError.notActivated { k1Hit = true } catch {}
+        do { _ = try await fetchSessions(bare) } catch GatewayClientError.notActivated { k1Hit = true } catch {}
         XCTAssertTrue(k1Hit, "K1 未激活 op 立抛 notActivated（不猜地址、不发网络）")
         XCTAssertTrue(bare.baseURL == nil, "K1b 未激活端点为 nil")
 
@@ -141,7 +141,7 @@ final class FollowReplayTests: XCTestCase {
         activated.activate(session: .shared, baseURL: endpoint)
         XCTAssertTrue(activated.baseURL == endpoint, "K2a 激活后端点 = activate 入参")
         var k2Hit = false
-        do { _ = try await activated.listSessions() } catch GatewayClientError.notActivated { k2Hit = false } catch GatewayClientError.transport { k2Hit = true } catch {}
+        do { _ = try await fetchSessions(activated) } catch GatewayClientError.notActivated { k2Hit = false } catch GatewayClientError.transport { k2Hit = true } catch {}
         XCTAssertTrue(k2Hit, "K2b 激活后失败降为传输层错误（端点确实来自 activate）")
 
         // K3：无端点时订阅流不建连——直接进退避等待，激活后下一轮自愈。

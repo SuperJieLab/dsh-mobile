@@ -152,7 +152,7 @@ final class GatewayClientAuthTests: XCTestCase {
     /// 第一条业务请求就带票：`refresh` 排在它之前，且没有「先发一发无票的」。
     func testTheFirstBusinessRequestAlreadyCarriesATicket() async throws {
         let client = client()
-        _ = try await client.listSessions()
+        _ = try await fetchSessions(client)
 
         let calls = ScriptedURLProtocol.snapshot()
         XCTAssertEqual(calls.map(\.op), ["refresh", "list-sessions"],
@@ -164,9 +164,9 @@ final class GatewayClientAuthTests: XCTestCase {
     /// 手上有票时**一次都不换** —— 「先确认」不能变成「每次都换」。
     func testAValidTicketIsReusedWithoutRefreshing() async throws {
         let client = client()
-        _ = try await client.listSessions()
+        _ = try await fetchSessions(client)
         Self.script(ticket: Self.ticket("second"))
-        _ = try await client.listSessions()
+        _ = try await fetchSessions(client)
 
         XCTAssertEqual(ScriptedURLProtocol.snapshot().map(\.op), ["list-sessions"],
                        "票还在就不该再换一张")
@@ -176,9 +176,9 @@ final class GatewayClientAuthTests: XCTestCase {
     func testAnExpiredTicketIsRenewedBeforeSending() async throws {
         Self.script(ticket: Self.ticket("first", expiresAt: 1))
         let client = client()
-        _ = try await client.listSessions() // 换到一张早就过期的票
+        _ = try await fetchSessions(client) // 换到一张早就过期的票
         Self.script(ticket: Self.ticket("second"))
-        _ = try await client.listSessions()
+        _ = try await fetchSessions(client)
 
         let calls = ScriptedURLProtocol.snapshot()
         XCTAssertEqual(calls.map(\.op), ["refresh", "list-sessions"],

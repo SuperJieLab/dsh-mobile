@@ -1,7 +1,17 @@
 import Foundation
 
-/// 与 Mac 侧网关的 **op 门面 + 身份权威**：每个 op 一个方法，内部经 `GatewayTransport`
-/// 发送。票从哪来、还剩多久、换不到该怎么办，全部收在这里 —— 两条通道都问它要。
+/// 与 Mac 侧网关的**唯一出口**：带身份地发一次请求，外加维护身份本身。
+///
+/// 它**不认识任何 op**。每个 op 的请求怎么拼、回包怎么读，归用到它的那个功能
+/// （`Features/*/State/` 下各自的取数与下发）。这里只回答三件事：端点在哪（`activate`）、
+/// 关系还在不在（`adopt` / `sever` / `isPaired`）、这一次请求带什么票且撞上 401 之后怎么办
+/// （`perform`）。
+///
+/// **传输为什么也在这里。** 拼 `POST /rpc`、按状态码与信封判成败、把 `URLError` 原样带出 ——
+/// 这些看起来是纯网络，但它们和身份是同一件事的两面：401 到底读成「换票再来」还是「关系断了」，
+/// 取决于这是一次业务请求还是一次鉴权请求，而那正是 `perform` 的分支。分成两个文件时这个判断
+/// 要跨文件传一个含糊的布尔（`treat401AsRefusal`），语义在传递中丢掉一半。合起来的判据是
+/// **一次请求从构造到校验是一段不可分的过程**，分开后没有任何一方能单独说清 401 的含义。
 ///
 /// **要票的唯一入口是 `ticket()`**，返回三态（`AccessTicket`）而不是 Bool：拿不到的原因分成
 /// 「不会自己好」与「等一等就好」两种，其中只有后者值得重试。并发的调用共享同一个在途换票
@@ -13,30 +23,18 @@ import Foundation
 /// 撞上 401 仍然会换一次并重试（那覆盖的是「本地以为有票、服务端不认」，比如 Mac 重启）；
 /// 两条路分工，不是冗余。
 ///
-/// 协议类型与语义在 `GatewayProtocol.swift`，传输机制在 `GatewayTransport.swift`。
-/// `struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享状态** —— 值语义会在视图间
-/// 复制出各自为政的凭证；仍 `@MainActor`，因为调用方本就在主线程。
-///
-/// **命名按副作用分**：写操作读作祈使动词短语（`pair` / `renewTicket` /
-/// `answerApproval` / `sendPrompt` / `selectModel`），读操作读作名词短语、与协议 op 同名
-/// （`snapshot` / `page` / `modelCatalog`）。**已知例外**：`listSessions` 是读操作却用了
-/// 动词短语 —— 改成 `sessions()` 会与属性读起来相混，故保留并在此登记。
-///
-/// op 对应：`pair`→`pair` · `renewTicket`→`refresh` · `listSessions`→`list-sessions` ·
-/// `snapshot`→`snapshot` · `page`→`page` · `answerApproval`→`approval-answer` ·
-/// `sendPrompt`→`session-prompt` · `modelCatalog`→`model-catalog` ·
-/// `selectModel`→`model-select`。
+/// `struct` 改 `class` 是因为票与已配对状态是**可变共享状态** —— 值语义会在视图间复制出
+/// 各自为政的凭证；仍 `@MainActor`，因为调用方本就在主线程。
 @MainActor
 final class GatewayClient: ObservableObject {
+
     /// 网关端点 —— **激活前不存在**：App 在节点验证 Running 之前不持有
     /// 任何网关地址，`activate` 是它从无到有的唯一时刻。
     private(set) var baseURL: URL?
 
-    /// 组网激活后的传输：激活前 = `.shared`（但端点不存在，请求不会发出）。
-    /// 与 transport 分开存：`FollowClient` 的建连源每次现取，激活后下一轮连接即走隧道。
+    /// 组网激活后换上的传输：激活前 = `.shared`（但端点不存在，请求不会发出）。
+    /// `FollowClient` 的建连源每次现取，激活后下一轮连接即走隧道。
     private(set) var meshSession: URLSession = .shared
-
-    private var transport: GatewayTransport?
 
     /// 设备凭证在手机侧的家。默认共享单例：全 App 一个身份。
     private let credentials: CredentialStore
@@ -51,6 +49,14 @@ final class GatewayClient: ObservableObject {
     /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
     @Published private(set) var isPaired: Bool
 
+    /// 协议里的唯一端点 —— 所有 op 都打这一个地址，靠信封里的 `op` 分派。
+    /// 多端点会把资源语义烧进 URL：客户端就得记住哪个资源走哪个地址，
+    /// 而这件事协议已经从请求体里回答过了。
+    nonisolated static let rpcPath = "/rpc"
+
+    /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
+    nonisolated static let timeout: TimeInterval = 10
+
     init(credentials: CredentialStore? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
         let store = credentials ?? .shared
@@ -64,26 +70,37 @@ final class GatewayClient: ObservableObject {
     }
 
     /// 组网激活：节点验证 Running 后由 store 调用，这是端点从无到有的唯一时刻 ——
-    /// HTTP 换 transport、WebSocket 换建连源，整体切到 tailnet。消息层零感知：
+    /// HTTP 换 session、WebSocket 换建连源，整体切到 tailnet。消息层零感知：
     /// 协议、凭证、身份状态机都不动，只换传输与地址。
     func activate(session: URLSession, baseURL: URL) {
         meshSession = session
         self.baseURL = baseURL
-        transport = GatewayTransport(baseURL: baseURL, session: session)
         // 传输切换是局域网 → tailnet 的分界点状态迁移，在此留痕。
         Log.info(Log.Module.gateway, "activated: HTTP+WS switched to \(baseURL.absoluteString)")
     }
 
-    /// 配对：用 Mac 屏幕上的一次性配对码换设备凭证。成功即建立关系；失败文案来自服务端。
-    func pair(code: String) async throws {
-        let response: PairResponse = try await send(PairRequest(code: code), authenticated: false)
-        try response.validate()
-        guard let deviceToken = response.deviceToken else {
-            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 deviceToken")
-        }
+    // MARK: - 身份
+
+    /// **建立关系**：把一次配对换来的设备凭证收下，此后这台手机算已配对。
+    ///
+    /// 它只做身份的落地，不碰协议 —— 配对请求由 `Pairing` 那个功能自己发，换来的
+    /// `deviceToken` 交到这里。这样「关系什么时候成立」只有一个入口，而它与下面的
+    /// `sever()` 是同一对迁移的相反两半。
+    func adopt(deviceToken: String) {
         credentials.saveDeviceToken(deviceToken)
         isPaired = true
         Log.info(Log.Module.gateway, "paired — device token stored")
+    }
+
+    /// **掐断关系**：服务端不认这张设备凭证了（撤销或凭证被替换）。清掉本地凭证与在手的票，
+    /// App 回到未配对。
+    ///
+    /// 与 `adopt` 成对：两者是同一件事的两个方向，所以写在相邻的位置、名字对称。
+    private func sever() {
+        Log.warn(Log.Module.gateway, "relationship severed by server — device token cleared")
+        credentials.deleteDeviceToken()
+        tickets.clear()
+        isPaired = false
     }
 
     /// 还活着的 access 票；没有就是 `nil`。
@@ -114,23 +131,21 @@ final class GatewayClient: ObservableObject {
     /// App 回到未配对），传输失败只是这一次没成。
     private func renewTicket(deviceToken: String) async -> TicketKeeper.Renewal {
         do {
-            let response: RefreshResponse = try await send(
+            let response: RefreshResponse = try await perform(
                 RefreshRequest(deviceToken: deviceToken), authenticated: false
             )
-            try response.validate()
             guard let token = response.accessToken, let expiresAt = response.expiresAt else {
                 // `ok: true` 却没带票：服务端的应答有问题，下一轮还会是同一个答案。
                 Log.warn(Log.Module.gateway, "refresh answered without a ticket")
                 return .retryLater
             }
             Log.debug(Log.Module.session, "access ticket renewed")
-            return .issued(.init(token: token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000)))
+            return .issued(
+                .init(token: token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
+            )
         } catch GatewayClientError.unauthenticated {
-            // 服务端不认这段关系了：撤销或凭证被替换。掐断本机状态 —— 重试没有意义。
-            Log.warn(Log.Module.gateway, "relationship severed by server — device token cleared")
-            credentials.deleteDeviceToken()
-            tickets.clear()
-            isPaired = false
+            // 服务端不认这段关系了：撤销或凭证被替换。重试没有意义。
+            sever()
             return .unavailable
         } catch {
             // 传输失败不是关系终结：票换不到只是暂时，退避后再试。
@@ -139,181 +154,140 @@ final class GatewayClient: ObservableObject {
         }
     }
 
+    // MARK: - 发一次请求
 
-    // MARK: - 三个读 op
-
-    /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
-    func listSessions() async throws -> [SessionSummary] {
-        let response: ListSessionsResponse = try await send(ListSessionsRequest())
-        // clock 采样：服务端时钟与本地收到时刻的一对。两端 offset 由这一对估出来，
-        // 才能修正跨机的 t3 段与端到端 —— 直接相减会把这个 offset 算进延迟里。
-        if let serverTime = response.serverTime {
-            Log.perf(Log.Module.gateway, PerfRecord(
-                seg: .clock, t: PerfRecord.nowMs(),
-                fields: ["serverTime": .number(serverTime)]
-            ))
-        }
-        try response.validate()
-        return response.sessions ?? []
-    }
-
-    /// 拉某会话的快照。
-    /// - Parameter since: 客户端**下一个期望的 seq** —— 由本地镜像记着，不是每次传 0。
-    func snapshot(sessionId: String, since: Int = 0) async throws -> SessionSnapshot {
-        let response: SnapshotResponse = try await send(
-            SnapshotRequest(sessionId: sessionId, since: since)
-        )
-        try response.validate()
-        // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
-        guard let asOfSeq = response.asOfSeq, let events = response.events else {
-            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 asOfSeq / events")
-        }
-        return SessionSnapshot(
-            asOfSeq: asOfSeq,
-            // 缺省 `false`：不带这个字段的是旧服务端，它只会一次给完。
-            hasMore: response.hasMore ?? false,
-            events: events,
-            // 基线：服务端「不知道」时整个缺省 —— 客户端退到目录默认，不猜。
-            model: response.model
-        )
-    }
-
-    /// 拉一段回溯窗口 —— 打开会话与往回翻都用它。
-    /// - Parameters:
-    /// - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」（打开会话）；
-    /// 往回翻时传上一次的 `pageStart`。
-    /// - maxMessages: 最多取多少条消息。不传就用服务端的默认值。
-    func page(sessionId: String, beforeSeq: Int? = nil, maxMessages: Int? = nil) async throws -> SessionPage {
-        let response: PageResponse = try await send(
-            PageRequest(sessionId: sessionId, beforeSeq: beforeSeq, maxMessages: maxMessages)
-        )
-        try response.validate()
-        // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
-        guard let pageStart = response.pageStart,
-              let asOfSeq = response.asOfSeq,
-              let hasOlder = response.hasOlder,
-              let events = response.events else {
-            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里缺少 pageStart / asOfSeq / hasOlder / events")
-        }
-        return SessionPage(
-            pageStart: pageStart,
-            asOfSeq: asOfSeq,
-            hasOlder: hasOlder,
-            events: events
-        )
-    }
-
-    // MARK: - 两个写 op
-
-    /// 应答一条审批。`ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。
-    /// 失败如实上抛：`unknown-approval` 表示这条审批已经不在了。
-    func answerApproval(eventId: String, allow: Bool, answerId: String) async throws {
-        let response: ApprovalAnswerResponse = try await send(
-            ApprovalAnswerRequest(eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId)
-        )
-        try response.validate()
-    }
-
-    /// 下发一条指令（发消息进会话）。`ok` 意味着**已受理**——回答本身从流里来。
-    func sendPrompt(sessionId: String, text: String, promptId: String) async throws {
-        let response: SessionPromptResponse = try await send(
-            SessionPromptRequest(sessionId: sessionId, text: text, promptId: promptId)
-        )
-        try response.validate()
-    }
-
-    // MARK: - 模型选择
-
-    /// 拉模型目录：打开选择器时现拉一次，不订阅刷新 —— 重开即新。
-    func modelCatalog() async throws -> ModelCatalog {
-        let response: ModelCatalogResponse = try await send(ModelCatalogRequest())
-        try response.validate()
-        return ModelCatalog(default: response.default, groups: response.groups, failures: response.failures)
-    }
-
-    /// 安装一次会话级选择。`ok` = **已安装给下一轮**，不是「已生效」——
-    /// 生效的证据是流里的 `model/selection` 与随后的 `request/header`。
-    @discardableResult
-    func selectModel(sessionId: String, selection: ModelSelection) async throws -> ModelSelection {
-        let response: ModelSelectResponse = try await send(
-            ModelSelectRequest(
-                sessionId: sessionId,
-                provider: selection.provider,
-                model: selection.model,
-                reasoningEffort: selection.reasoningEffort
-            )
-        )
-        try response.validate()
-        guard let selected = response.selected else {
-            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 selected")
-        }
-        return selected
-    }
-
-    // MARK: - 命令
-
-    /// 列该会话此刻能用的命令。**每次打开面板都拉**：命令集是 per-agent 的，
-    /// 随插件装卸与作用域变，不缓存成常量。
-    func commandCatalog(sessionId: String) async throws -> [CommandInfo] {
-        let response: CommandCatalogResponse = try await send(CommandCatalogRequest(sessionId: sessionId))
-        try response.validate()
-        return response.commands ?? []
-    }
-
-    /// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的
-    /// `command/run` / `command/done` 来 —— 这个回包不带执行结果。
-    @discardableResult
-    func executeCommand(sessionId: String, line: String) async throws -> String {
-        let response: CommandExecuteResponse = try await send(
-            CommandExecuteRequest(sessionId: sessionId, line: line)
-        )
-        try response.validate()
-        guard let commandId = response.commandId else {
-            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 commandId")
-        }
-        return commandId
-    }
-
-    // MARK: - 发一次请求（带身份，续期恰好重试一次）
-
-    private func send<Request: Encodable, Response: Decodable>(
+    /// 唯一的出网入口：带上票，发一次；被 401 拒了就换票再试恰好一次。
+    ///
+    /// 回包已过 `validate()` —— 版本不符、`ok` 为假都在这里抛，所以调用方拿到的
+    /// 一定是一份服务端声明成功的应答。**这条校验只写在这里**：op 散到各功能之后，
+    /// 少写一次不会编译报错、也不会让任何断言变红，只会静默接受一份失败回包。
+    ///
+    /// - Parameter authenticated: 这次请求要不要票。只有 `pair` 与换票本身是 `false`。
+    ///   401 该怎么读也由它定（见 `sendOnce`）—— 两件事同源，所以只收一个参数。
+    func perform<Request: Encodable, Response: GatewayResponse>(
         _ request: Request,
         authenticated: Bool = true
     ) async throws -> Response {
         // 未激活 = 没有地址可打：fail-fast，不猜地址。
-        guard let transport else { throw GatewayClientError.notActivated }
+        guard let baseURL else { throw GatewayClientError.notActivated }
         // 手上有票才发。没有票照样发出去，换来的是一次注定被拒的往返 —— 服务端记一条
         // 「没有有效票」，客户端再换票重试，同一件事花两次。先换再发只多一次 wait，
         // 而在票还在的场景里（15 分钟内）它一次都不等。
         let ticket = authenticated ? await self.ticket() : nil
-        if let answer = try await transport.sendOnce(
-            request, authorization: ticket?.token, treat401AsRefusal: !authenticated, type: Response.self
-        ) {
-            return answer
-        }
-        // 走到这里 = 业务请求被 401 拒了（pair / refresh 的 401 在 sendOnce 里
-        // 自带语义上抛，不会返回 nil）。换一张票（单飞），恰好重试一次。
+        // 标注类型：`sendOnce` 的返回只在这里判空，编译器无从推它的泛型参数。
+        let first: Response? = try await sendOnce(
+            request, at: baseURL, authorization: ticket?.token, treat401AsRefusal: !authenticated
+        )
+        if let first { return first }
+        // 走到这里 = 业务请求被 401 拒了（鉴权请求的 401 在 `sendOnce` 里自带语义上抛，
+        // 不会返回 nil）。换一张票（单飞），恰好重试一次。
         //
         // 票换不到时按处境说不通的话：`.unavailable` 是「未配对 / 关系被撤销」，
         // 而 `.retryLater` 是「这次没连上」—— 后者说成前者，用户会去查一件没发生的事。
         guard authenticated else { throw GatewayClientError.unauthenticated }
         switch await renewTicketNow() {
         case .granted(let fresh):
-            if let answer = try await transport.sendOnce(
-                request, authorization: fresh, treat401AsRefusal: false, type: Response.self
-            ) {
-                return answer
-            }
+            let retried: Response? = try await sendOnce(
+                request, at: baseURL, authorization: fresh, treat401AsRefusal: false
+            )
+            if let retried { return retried }
             throw GatewayClientError.unauthenticated
         case .unavailable:
             throw GatewayClientError.unauthenticated
         case .retryLater:
-            throw GatewayClientError.transport(url: transport.baseURL, underlying: TicketUnavailable())
+            throw GatewayClientError.transport(url: baseURL, underlying: TicketUnavailable())
         }
+    }
+
+    /// 发一次，不解身份语义，并在解码后校验信封。
+    ///
+    /// 返回 `nil` 只表示**业务请求被 401 拒了**（换票再来一次的号）。配对与换票的 401 是
+    /// **定论**，必须读出信封里的原因上抛：配对码不对就要说配对码不对。
+    private func sendOnce<Request: Encodable, Response: GatewayResponse>(
+        _ request: Request,
+        at baseURL: URL,
+        authorization: String?,
+        treat401AsRefusal: Bool
+    ) async throws -> Response? {
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // 身份只走传输头，不进消息体：消息体的每一个字段都是协议的一部分，
+        // 凭证放进去会让它出现在日志、重放与错误回显里。
+        if let authorization {
+            urlRequest.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
+        }
+        urlRequest.timeoutInterval = Self.timeout
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+
+        let payload: Data
+        let urlResponse: URLResponse
+        do {
+            (payload, urlResponse) = try await meshSession.data(for: urlRequest)
+        } catch {
+            // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
+            Log.warn(
+                Log.Module.gateway,
+                "transport: \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
+            )
+            throw GatewayClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
+        }
+
+        if let http = urlResponse as? HTTPURLResponse {
+            guard http.statusCode != 401 else {
+                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层换票重试；鉴权请求
+                // 的 401 自带语义，必须读出信封上抛。
+                guard treat401AsRefusal else {
+                    Log.debug(Log.Module.gateway, "401 on business op — renewing ticket")
+                    return nil
+                }
+                if let failure = envelopeFailure(in: payload) {
+                    if failure.code == GatewayErrorCode.unauthenticated.rawValue {
+                        Log.info(
+                            Log.Module.gateway,
+                            "auth op refused: \(failure.code) — \(failure.message)"
+                        )
+                        throw GatewayClientError.unauthenticated
+                    }
+                    throw GatewayClientError.refused(failure)
+                }
+                throw GatewayClientError.unauthenticated
+            }
+            if http.statusCode != 200 {
+                Log.warn(Log.Module.gateway, "HTTP \(http.statusCode) from \(baseURL.host ?? "?")")
+                throw GatewayClientError.badStatus(http.statusCode)
+            }
+        }
+
+        let response: Response
+        do {
+            response = try JSONDecoder().decode(Response.self, from: payload)
+        } catch {
+            // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
+            // 比解码器的报错信息有用得多。
+            if let failure = envelopeFailure(in: payload) {
+                Log.warn(Log.Module.gateway, "op refused: \(failure.code) — \(failure.message)")
+                throw GatewayClientError.refused(failure)
+            }
+            Log.warn(Log.Module.gateway, "malformed response: \(String(describing: error))")
+            throw GatewayClientError.malformedResponse(detail: String(describing: error))
+        }
+        try response.validate()
+        return response
     }
 }
 
 /// 换票没成（网络不通 / 网关不在）—— 只用来给「这次失败不是因为身份」一个可读的说法。
 private struct TicketUnavailable: LocalizedError {
     var errorDescription: String? { "换取访问票失败 —— 网关没连上。" }
+}
+
+/// 只用来在解码失败时兜出信封里的错误。
+private struct FailureEnvelope: Decodable {
+    let error: GatewayFailure?
+}
+
+/// 信封里的 error（没有就 nil）。
+private func envelopeFailure(in payload: Data) -> GatewayFailure? {
+    (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
 }

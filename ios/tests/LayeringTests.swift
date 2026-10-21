@@ -302,6 +302,66 @@ final class LayeringTests: XCTestCase {
                        "基建里出现了具体凭证名 —— 名字属于业务包装，基建只接受一个参数")
     }
 
+    // MARK: - 断言 2e：网关出口只发请求，不认识 op
+
+    /// 请求构造点：`XxxRequest(` 这类**具名**请求的构造。
+    ///
+    /// 排除 `URLRequest(` —— 那是 Foundation 的载体，不是协议的 op。这条排除写在这里而不是
+    /// 每次判断：它是个固定的事实，散在判据里迟早会有一处漏掉。
+    private static func builtRequests(in code: String) -> [String] {
+        guard let pattern = try? NSRegularExpression(pattern: #"([A-Z][A-Za-z]*Request)\("#) else { return [] }
+        let range = NSRange(code.startIndex..., in: code)
+        return pattern.matches(in: code, range: range).compactMap { match in
+            guard let r = Range(match.range(at: 1), in: code) else { return nil }
+            let name = String(code[r])
+            // `URLRequest(` 是 Foundation 的载体；其余都是协议的 op。
+            return name == "URLRequest" ? nil : name
+        }
+    }
+
+    /// `GatewayClient` 只许构造**换票**这一个请求。
+    ///
+    /// 失败模式是「图省事把某个 op 加回出口」—— 同一个 op 于是有两个入口，而调用方不知道
+    /// 哪个才是现在用的那个。判据落在这一份文件里出现的请求构造上，白名单只有换票一条
+    /// （身份的另一半是「建立关系」，那一步不发请求，只收 `adopt` 的一个字符串）；
+    /// 正控保证正则没失灵（换票请求必须真的被扫到）。
+    func testGatewayClientConstructsOnlyTheRenewalRequest() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Client/GatewayClient.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let built = codeLines(in: text).flatMap { Self.builtRequests(in: $0.1) }
+
+        XCTAssertTrue(built.contains("RefreshRequest"), "没扫到 RefreshRequest —— 先怀疑正则：\(built)")
+
+        XCTAssertEqual(Set(built).subtracting(["RefreshRequest"]), [],
+                       "GatewayClient 里出现了业务请求 —— op 归用到它的那个功能，加回出口就有了两个入口")
+    }
+
+    /// 请求只在 `State/` 里拼：视图不直接把一条协议请求交给网关。
+    ///
+    /// `Wire/` 是形状的出处、`Client/` 收身份那两个，两处都排除；其余的构造点全仓都在
+    /// `*/State/` 下。判据同时数一遍构造点（正控），免得路径或正则坏了之后变成「零违规」。
+    func testRequestsAreBuiltInStateLayersOnly() throws {
+        var offenders: [String] = []
+        var built = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            if relative.hasPrefix("Core/Gateway/Wire/") || relative.hasPrefix("Core/Gateway/Client/") {
+                continue
+            }
+            let text = try String(contentsOf: file, encoding: .utf8)
+            var here: [String] = []
+            for (_, code) in codeLines(in: text) {
+                here += Self.builtRequests(in: code)
+            }
+            guard !here.isEmpty else { continue }
+            built += here.count
+            if !relative.contains("/State/") { offenders.append(relative) }
+        }
+        XCTAssertGreaterThan(built, 5, "全仓只扫到 \(built) 处请求构造 —— 先怀疑路径或正则")
+        XCTAssertEqual(offenders.sorted(), [],
+                       "这些文件在 State/ 之外拼请求 —— 取数与下发归状态层：\(offenders)")
+    }
+
     // MARK: - 断言 3：Views 下的类型不被别的界面当零件用
 
     /// 已知的跨界面复用。每一条都要有理由，且清单本身被断言（`testExceptionsAreStillReal`）——

@@ -73,3 +73,18 @@ final class ModelCatalogState: ObservableObject {
         }
     }
 }
+
+/// 拉模型目录：打开选择器时现拉一次，不订阅刷新 —— 重开即新。
+///
+/// 它是 `ModelCatalogState` 的取数入口（构造时作为闭包注入），所以与它同住一个文件：
+/// 「取回来什么」与「取回来落成哪三面」是同一件事的上下游。
+@MainActor
+func fetchCatalog(_ client: GatewayClient) async throws -> ModelCatalog {
+    let response: ModelCatalogResponse = try await client.perform(ModelCatalogRequest())
+    // 协议里的分组与命名原样交给上层 —— 这里不改写、不补默认。
+    return ModelCatalog(
+        default: response.default,
+        groups: response.groups,
+        failures: response.failures
+    )
+}

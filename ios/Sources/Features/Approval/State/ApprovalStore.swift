@@ -72,7 +72,9 @@ final class ApprovalStore: ObservableObject {
             return
         }
         do {
-            try await client.answerApproval(eventId: eventId, allow: allow, answerId: UUID().uuidString)
+            try await answerApproval(
+                client, eventId: eventId, allow: allow, answerId: UUID().uuidString
+            )
             // 自清（上游行为：receiveRemoteEventResult 先移除应答者自己的 delivery 再广播
             // cancel —— 自己答掉的审批，cancel 只发给别人，我们收不到收口帧）。上游语义
             // 「先答先收口」，回包成功即结局已定，与 Web UI 同样在应答当下收掉卡片。
@@ -102,4 +104,20 @@ final class ApprovalStore: ObservableObject {
             pending.contains(where: { card in card.id == key || card.eventId == key })
         }
     }
+}
+
+/// 应答一条审批。`ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。
+/// 失败如实上抛：`unknown-approval` 表示这条审批已经不在了。
+@MainActor
+func answerApproval(
+    _ client: GatewayClient,
+    eventId: String,
+    allow: Bool,
+    answerId: String
+) async throws {
+    let _: ApprovalAnswerResponse = try await client.perform(
+        ApprovalAnswerRequest(
+            eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId
+        )
+    )
 }

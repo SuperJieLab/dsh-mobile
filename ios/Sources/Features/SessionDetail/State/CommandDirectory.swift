@@ -79,3 +79,29 @@ final class CommandDirectory: ObservableObject {
         return prefix + contains
     }
 }
+
+/// 列该会话此刻能用的命令。**每次打开面板都拉**：命令集是 per-agent 的，
+/// 随插件装卸与作用域变，不缓存成常量。
+@MainActor
+func fetchCommands(_ client: GatewayClient, sessionId: String) async throws -> [CommandInfo] {
+    let response: CommandCatalogResponse = try await client.perform(
+        CommandCatalogRequest(sessionId: sessionId)
+    )
+    return response.commands ?? []
+}
+
+/// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的
+/// `command/run` / `command/done` 来 —— 这个回包不带执行结果。
+///
+/// 返回 `commandId` 只为了给调用方留一条可对账的线，不是结果。
+@MainActor
+@discardableResult
+func runCommand(_ client: GatewayClient, sessionId: String, line: String) async throws -> String {
+    let response: CommandExecuteResponse = try await client.perform(
+        CommandExecuteRequest(sessionId: sessionId, line: line)
+    )
+    guard let commandId = response.commandId else {
+        throw GatewayClientError.malformedResponse(detail: "commandId")
+    }
+    return commandId
+}

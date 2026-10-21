@@ -46,7 +46,7 @@ final class SessionListState: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            sessions = try await client.listSessions().filter(SessionVisibility.isVisible)
+            sessions = try await fetchSessions(client).filter(SessionVisibility.isVisible)
             outcome = .ready
         } catch {
             if let gatewayError = error as? GatewayClientError, case .notActivated = gatewayError {
@@ -56,4 +56,22 @@ final class SessionListState: ObservableObject {
             }
         }
     }
+}
+
+/// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
+@MainActor
+func fetchSessions(_ client: GatewayClient) async throws -> [SessionSummary] {
+    let response: ListSessionsResponse = try await client.perform(ListSessionsRequest())
+    // clock 采样：服务端时钟与本地收到时刻的一对。两端 offset 由这一对估出来，
+    // 才能修正跨机的 t3 段与端到端 —— 直接相减会把这个 offset 算进延迟里。
+    //
+    // 采样点在这里而不是更上层：`serverTime` 只出现在这个回包里，而「收到的时刻」
+    // 越贴近解码越准。挪动这个函数就等于挪动采样点。
+    if let serverTime = response.serverTime {
+        Log.perf(Log.Module.gateway, PerfRecord(
+            seg: .clock, t: PerfRecord.nowMs(),
+            fields: ["serverTime": .number(serverTime)]
+        ))
+    }
+    return response.sessions ?? []
 }
