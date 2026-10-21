@@ -61,7 +61,7 @@ struct SessionDetailView: View {
         }
         // 进屏即订阅：opening 给首屏，事件与未定稿实时推。
         // 离屏即停。`sync()`（HTTP 全量对齐）留在「滚到底部」时作兜底。
-        .task { sync.startFollowing() }
+        .task { await sync.startFollowing() }
         // 目录进屏拉一次。挂在格子上的话，功能条每次因键盘收起而重建都会重拉一遍。
         .task { await catalog.reload() }
         // 命令目录：**每次开始敲命令时重拉一次**（`onChange` 里判「刚进入 querying」）。
@@ -75,13 +75,13 @@ struct SessionDetailView: View {
         // 进页时 WS 在退避循环里空转（端点不存在），就绪此刻不必再等下一轮退避。
         .onChange(of: store.phase) { _, phase in
             guard case .ready = phase else { return }
-            sync.reconnectNow()
+            Task { await sync.reconnectNow() }
         }
         // 回前台立即重连 —— 上游「恢复立即试」在详情域的对应。
         // 已就绪 / 正在握手时 reconnectNow() 自己无事发生，不会叠加连接。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            sync.reconnectNow()
+            Task { await sync.reconnectNow() }
         }
         .safeAreaInset(edge: .bottom) {
             bottomBars
@@ -377,7 +377,7 @@ struct SessionDetailView: View {
                      lastFrameAt: sync.lastFrameAt,
                      nodeState: store.nodeState,
                      configDamaged: store.storedConfigDamaged,
-                     onRetry: { sync.reconnectNow() },
+                     onRetry: { Task { await sync.reconnectNow() } },
                      onOpenMesh: { activeSheet = .mesh })
     }
 

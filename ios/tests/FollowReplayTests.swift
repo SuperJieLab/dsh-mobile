@@ -156,6 +156,53 @@ final class FollowReplayTests: XCTestCase {
         }(), "K3 无端点建连请求 → 不产连接任务，进入退避等待（激活后自愈）")
     }
 
+    /// 手上没有票时不发起握手，而是叫一声去换票 —— 换到之后才能连上。
+    ///
+    /// 判据盯的是**有没有发生握手**：裸连那一版也会进退避等待（K3 的形态），所以只看
+    /// `phase` 分不开两种写法。这条用 `sessionProvider` 是否被调用来当「起了握手」的证据，
+    /// 并用 `onMissingTicket` 被调用来当「去换票了」的证据。
+    ///
+    /// 为什么这比「慢一次」严重：退避重连这条路上没有任何东西会换票。裸连的话，票过期后
+    /// 每一轮退避都是同一个 401，**永不收敛** —— 表现为静默断流，直到有人回前台。
+    func testNoTicketMeansNoHandshakeAndARequestForOne() async {
+        let follow = FollowClient()
+        follow.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
+        follow.authorizationProvider = { nil }  // 票过期 / 冷启动：手上一张都没有
+        var handshakes = 0
+        follow.sessionProvider = {
+            handshakes += 1
+            return .shared
+        }
+        var asked = 0
+        follow.onMissingTicket = { asked += 1 }
+
+        follow.start(sessionId: "s1")
+
+        XCTAssertEqual(handshakes, 0, "没有票就不该发握手 —— 那一发必定 401")
+        XCTAssertEqual(asked, 1, "应当叫一次去换票")
+        XCTAssertTrue({ if case .waiting = follow.phase { return true }; return false }(),
+                      "并留在退避等待里（换票失败时靠它重试，成功则由上层提速）")
+        follow.stop()
+    }
+
+    /// 有票时照常握手 —— 上一条不能靠「永远不连」通过。
+    func testWithATicketTheHandshakeHappens() async {
+        let follow = FollowClient()
+        follow.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
+        follow.authorizationProvider = { "ticket" }
+        var handshakes = 0
+        follow.sessionProvider = {
+            handshakes += 1
+            return .shared
+        }
+        follow.onMissingTicket = { XCTFail("有票却去要票") }
+
+        follow.start(sessionId: "s1")
+
+        XCTAssertEqual(handshakes, 1, "有票就该连")
+        follow.stop()
+    }
+
     /// 打开帧上限与拒绝的归属。
     ///
     /// 契约的另一半在网关侧：那边承诺打开帧不超过 4 MiB（`DEFAULT_LIMITS.maxOpeningBytes`），

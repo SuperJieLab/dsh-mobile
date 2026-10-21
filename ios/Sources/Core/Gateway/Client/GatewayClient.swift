@@ -1,8 +1,13 @@
 import Foundation
 
 /// 与 Mac 侧网关的 **op 门面 + 身份状态机**：每个 op 一个方法，内部经 `GatewayTransport`
-/// 发送；身份是这里的状态 —— 401 时用设备凭证**静默续期一次再重试**，续期单飞让并发撞
-/// 401 的请求共享同一张新票。
+/// 发送；身份是这里的状态 —— 用之前先确认手上有票（没有就换一张），真的撞上 401 再**静默续期
+/// 一次并重试**。续期单飞让并发撞 401 的请求共享同一张新票。
+///
+/// **为什么要「用之前先确认」**：访问票只活在内存里（`CredentialStore`），冷启动后、或票过期
+/// （15 分钟）后回来，手上就是没有票。纯反应式（等 401 再续）会让每一次这样的处境都先发一发
+/// 注定被拒的请求 —— 服务端记一条「没有有效票」，WS 那边还要多走一轮握手失败与退避。那串日志
+/// 与那几百毫秒的空屏都是这一步的自证，而不是网出了问题。
 ///
 /// 协议类型与语义在 `GatewayProtocol.swift`，传输机制在 `GatewayTransport.swift`。
 /// `struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享状态** —— 值语义会在视图间
@@ -75,6 +80,18 @@ final class GatewayClient: ObservableObject {
     /// 会各自为政，而那种不一致在运行时看不出来（默认都指向 `.shared`）。
     func validAccessToken() -> String? {
         credentials.validAccessToken()
+    }
+
+    /// 保证手上有一张还活着的票 —— **用之前先调它**：有票就什么都不做，没票就换一张。
+    ///
+    /// 幂等且单飞：进屏那一拍 HTTP 与 WS 两条路会同时问到它，只该发出一次 `refresh`。
+    /// 返回 false 表示换不到（未配对、或关系已被服务端掐断），调用方照常走自己的失败路径 ——
+    /// 这里不抛，因为「没有票」在 HTTP 那边本来就是可重试的一步。
+    @discardableResult
+    func ensureAccess() async -> Bool {
+        if credentials.validAccessToken() != nil { return true }
+        guard isPaired else { return false }
+        return await refreshAccess()
     }
 
     /// 用设备凭证换一张新 access。返回 false 表示关系已被服务端掐断（401）—— 此时
@@ -251,6 +268,10 @@ final class GatewayClient: ObservableObject {
     ) async throws -> Response {
         // 未激活 = 没有地址可打：fail-fast，不猜地址。
         guard let transport else { throw GatewayClientError.notActivated }
+        // 手上有票才发。没有票照样发出去，换来的是一次注定被拒的往返 —— 服务端记一条
+        // 「没有有效票」，客户端再续期重试，同一件事花两次。先换再发只多一次 wait，
+        // 而在票还在的场景里（15 分钟内）它一次都不等。
+        if authenticated { await ensureAccess() }
         if let answer = try await transport.sendOnce(request, authenticated: authenticated, type: Response.self) {
             return answer
         }

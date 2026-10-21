@@ -41,8 +41,16 @@ final class FollowClient: NSObject {
     var onRefused: ((GatewayFailure) -> Void)?
     /// 连接阶段变化（连接态指示器的数据源）。
     var onPhaseChange: ((Phase) -> Void)?
-    /// 取一张有效的访问凭证 —— upgrade 请求带上它，没有就裸连（必被 401 拒）。
+    /// 取一张有效的访问凭证 —— upgrade 请求带上它。**没有就说明现在不该连**：
+    /// 见 `connect` 里对空票的处理。
     var authorizationProvider: (() -> String?)?
+    /// 手上没有票时叫一声 —— 上层去换一张，换到了再 `reconnectNow()` 提速。
+    ///
+    /// 为什么必须有人管这件事：退避重连这条路上没有别的东西会去换票（`start` 与
+    /// `reconnectNow` 的前置都只在各自入口跑一次）。票过期后若照旧裸连，每一轮退避都是
+    /// 一次注定被拒的握手，而且**永不收敛** —— 服务端看不到票，我们也永远拿不到新的，
+    /// 直到有人回前台或重新进屏。那表现就是静默断流，不是慢一下。
+    var onMissingTicket: (() -> Void)?
     /// 建连的传输与地址每次现取：store 激活后下一轮连接即走隧道，本类零改动。
     /// 返回 nil = 端点不存在（未激活）——不猜地址，connect 据此进退避等待。
     var sessionProvider: () -> URLSession = { .shared }
@@ -186,11 +194,19 @@ final class FollowClient: NSObject {
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = Self.streamPath
 
+        // 没有票**不裸连**：这一发必定被 401 拒，而且在退避循环里票不会自己长出来 ——
+        // 一旦这样起步，此后每一轮都是同一个失败。改为「叫一声去换票 + 继续退避」：
+        // 换到之后上层调 `reconnectNow()` 跳过剩下的等待，换不到就下一轮再试。
+        guard let access = authorizationProvider?() else {
+            Log.info(Log.Module.session, "connect g\(current) skipped — no access ticket; asking for a new one")
+            onMissingTicket?()
+            scheduleReconnect()
+            return
+        }
+
         // upgrade 请求带身份：与 HTTP 同一个头、同一张票。
         var upgradeRequest = URLRequest(url: components.url!)
-        if let access = authorizationProvider?() {
-            upgradeRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
-        }
+        upgradeRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
         let webSocketTask = sessionProvider().webSocketTask(with: upgradeRequest)
         // 必须在 resume 之前设：超过上限的帧会让 receive 直接以 POSIX 40 失败，
         // 而系统默认只给 1 MiB —— 一个 1.25 MB 的打开帧就足以把会话永远关在门外。
