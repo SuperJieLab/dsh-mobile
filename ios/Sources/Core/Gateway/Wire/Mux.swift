@@ -19,11 +19,13 @@ import Foundation
 
 /// 服务端帧的外壳：`{type, streamId, payload?}`。
 ///
-/// 只声明客户端真读的两个字段：`type` 决定这一帧交给谁，`payload` 是内容本身。
-/// 外壳还带 `streamId`，本类型不声明它 —— 客户端只开编号 1 一条流，收到别的编号也不分派，
-/// 声明了没有消费者。
+/// 三个字段都声明，但**谁都不解释它们**：`type` 只被原样转发给订阅方，`streamId` 只作为
+/// 「这条流建成与否」的键，`payload` 是内容本身。
+///
+/// `streamId` 可选：连接级审批帧没有它（那条帧不属于任何一条流）。
 struct MuxServerEnvelope: Decodable {
     let type: String
+    let streamId: Int?
     let payload: JSONValue?
 }
 
@@ -53,13 +55,13 @@ struct FollowRequest: Encodable {
 /// 构造入口只有一个 —— `following(sessionId:)`。形状自己决定 `op`、流编号与外壳三层，
 /// 调用方只给会话：流编号是这条流的身份，不该由连接层决定。
 ///
-/// 请求类型也不由连接层构造：拼装点仍在连接层（本期范围边界），而 `LayeringTests` 把任何
-/// `XxxRequest(` 构造都算作「在状态层之外拼请求」—— 那确实是一次协议请求的构造，判据红得对，
-/// 所以让连接层只调工厂、不认识请求类型。
+/// 拼装点只有一处，在会话详情的状态编排里（`SessionSync.startFollowing()`）—— 请求只在状态层
+/// 里拼，连接层拿到的是**编好的文本**，它不认识请求类型，也不认识 op。
 struct MuxOpenFrame: Encodable {
 
-    /// 客户端只有一条流。编号由形状定，连接层不决定它。
-    private static let streamId = 1
+    /// 客户端只有一条流。编号由形状定，连接层不决定它 —— 但开流时要把它一并交出去（建成
+    /// 状态按编号记），所以这里不是 `private`。
+    static let streamId = 1
 
     private let request: FollowRequest
 

@@ -103,15 +103,23 @@ final class SessionSync: ObservableObject {
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
 
-    /// 订阅流：打开详情页即开启，实时收 opening / 事件 / 未定稿帧。
+    /// 订阅流：打开详情页即开启，实时收窗口 / 事件 / 未定稿帧。
+    ///
+    /// 连接层交来整帧，判读在 `SessionStreamReader`（纯函数），本层只做副作用并把
+    /// 「这条流接下来怎么办」回给它 —— 判据在这边、动作在那边，两边都不需要知道对方认识什么。
     private lazy var follow: FollowClient = {
         let followClient = FollowClient()
-        followClient.onOpening = { [weak self] opening in self?.applyOpening(opening) }
-        followClient.onEvent = { [weak self] event in self?.applyLiveEvent(event) }
-        followClient.onTransient = { [weak self] frame in self?.applyTransient(frame) }
-        followClient.onApproval = { [weak self] payload in self?.approvals.receive(payload) }
-        followClient.onUsage = { [weak self] snapshot in self?.applyUsage(snapshot) }
-        followClient.onRefused = { [weak self] failure in self?.handleStreamRefusal(failure) }
+        followClient.onFrame = { [weak self] envelope, raw in
+            guard let self else { return StreamReply() }
+            let reading = SessionStreamReader.read(envelope: envelope, raw: raw, sessionId: sessionId)
+            // 到达与应用的边界要卡在这一跳的两侧：`devRecv` 是帧到手，`devApply` 是本层
+            // 处理完（镜像合并、状态机吸收、刷新闸标记都在里面）。
+            let recv = PerfRecord.nowMs()
+            handle(reading)
+            let apply = PerfRecord.nowMs()
+            recordPerf(reading, bytes: raw.count, recv: recv, apply: apply)
+            return StreamReply(establishes: reading.establishes, next: reading.next)
+        }
         // 网络格的唯一来源：不接的话功能条永远停在「连接中…」。
         followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
         // upgrade 时刻取一张有效的 access —— 经 client 取而不是 `CredentialStore.shared`：
@@ -404,7 +412,15 @@ final class SessionSync: ObservableObject {
     /// - 事件帧 → `mirror.apply(.received(SessionSnapshot(asOfSeq: seq + 1, …)))` —— 一条事件就是
     ///   一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
     func startFollowing() {
-        follow.start(sessionId: sessionId)
+        // 开流内容在**这一层**拼（要求：请求只在状态层里拼）。编不出就不开始 ——
+        // 编不出来意味着形状自己坏了，那时开一条注定看不懂的流只会让屏幕停在「连接中…」。
+        if let open = try? MuxOpenFrame.following(sessionId: sessionId).encoded() {
+            follow.start(streamId: MuxOpenFrame.streamId, label: sessionId, open: open)
+        } else {
+            // 编不出来意味着形状自己坏了：开一条注定看不懂的流没有意义，但首屏兜底仍要跑 ——
+            // 那条 HTTP 通道是此刻唯一还能把内容送到屏幕上的路。
+            Log.error(Log.Module.session, "open frame encoding failed — not opening the stream")
+        }
         scheduleFirstScreenFallback()
     }
 
@@ -436,6 +452,56 @@ final class SessionSync: ObservableObject {
     /// 本层只提供那个能力。
     func reconnectNow() {
         follow.reconnectNow()
+    }
+
+    /// 打开帧与事件帧的到达/应用埋点（`kind=opening` / `kind=event`）。
+    ///
+    /// 只有这两类值得计时：它们各自代表「首屏窗口到手」与「一条事件落地」，延迟超标时这
+    /// 两行是判断卡在哪一段的第一现场。其余类别（占用、审批、收尾）一个渲染帧就完了，
+    /// 计时只会把日志撑大。
+    private func recordPerf(_ reading: StreamReading, bytes: Int, recv: Double, apply: Double) {
+        switch reading.content {
+        case .opening(let opening):
+            Log.perf(Log.Module.session, PerfRecord(
+                seg: .dev, t: PerfRecord.nowMs(), sessionId: opening.sessionId, seq: opening.cursor,
+                fields: ["kind": .text("opening"), "devRecv": .number(recv),
+                         "devApply": .number(apply), "bytes": .number(Double(bytes))]
+            ))
+        case .event(let event):
+            Log.perf(Log.Module.session, PerfRecord(
+                seg: .dev, t: PerfRecord.nowMs(), sessionId: sessionId, seq: event.seq,
+                fields: ["kind": .text("event"), "devRecv": .number(recv),
+                         "devApply": .number(apply), "bytes": .number(Double(bytes))]
+            ))
+        case .transient, .usage, .approval, .refused, .ended, .ignored:
+            break
+        }
+    }
+
+    /// 一帧的副作用。判读已经在 `SessionStreamReader` 做完，这里只按结论分派。
+    ///
+    /// 「这条流接下来怎么办」不在这里决定 —— 它随判读结果（`reading.next`）一起回去，
+    /// 由连接层执行；本方法只管屏幕上发生了什么。
+    private func handle(_ reading: StreamReading) {
+        switch reading.content {
+        case .opening(let opening):
+            applyOpening(opening)
+        case .event(let event):
+            applyLiveEvent(event)
+        case .transient(let frame):
+            applyTransient(frame)
+        case .usage(let snapshot):
+            applyUsage(snapshot)
+        case .approval(let payload):
+            approvals.receive(payload)
+        case .refused(let failure):
+            handleStreamRefusal(failure)
+        case .ended:
+            // 收尾帧本身没有副作用：重开是连接层照着 `next` 做的事。
+            break
+        case .ignored:
+            break
+        }
     }
 
     private func applyOpening(_ opening: OpeningFrame) {

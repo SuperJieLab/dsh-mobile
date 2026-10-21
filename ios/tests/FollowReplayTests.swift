@@ -149,11 +149,32 @@ final class FollowReplayTests: XCTestCase {
         follow.baseURLProvider = { nil }
         var lastPhase: FollowClient.Phase?
         follow.onPhaseChange = { lastPhase = $0 }
-        follow.start(sessionId: "s1")
+        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
         XCTAssertTrue({
             if case .waiting = lastPhase { return true }
             return false
         }(), "K3 无端点建连请求 → 不产连接任务，进入退避等待（激活后自愈）")
+    }
+
+    /// 「建成」由订阅方的答复驱动 —— 连接层只在收到 `establishes` 时把那条流记为建成。
+    ///
+    /// 这条测的是连接层**消费**那一半。判读器给出的 `establishes` 有它自己的断言，而这里错了
+    /// 不会编译失败：症状是心跳永不激活（半开连接不判死）或退避永不归零（一次成功之后还按
+    /// 失败节奏退避），两者都只有真机才会露出来。
+    func testEstablishmentComesFromTheSubscribersReply() {
+        let follow = FollowClient()
+        XCTAssertEqual(follow.established, [], "还没收到任何帧，不该有建成的流")
+
+        follow.noteReply(StreamReply(), streamId: 1)
+        XCTAssertEqual(follow.phase, .idle, "非建成答复不得把阶段推到就绪")
+        XCTAssertEqual(follow.established, [], "非建成答复不得把流记为建成")
+
+        follow.noteReply(StreamReply(establishes: true), streamId: 1)
+        XCTAssertEqual(follow.phase, .ready, "建成即就绪")
+        XCTAssertEqual(follow.established, [1], "建成记在流编号上")
+
+        follow.noteReply(StreamReply(establishes: true), streamId: 2)
+        XCTAssertEqual(follow.established, [1, 2], "第二条流各自记账，不覆盖第一条")
     }
 
     /// 让出若干次，让 `FollowClient` 里那些 `Task { }` 真正跑完。
@@ -190,7 +211,7 @@ final class FollowReplayTests: XCTestCase {
             return .granted("fresh")
         }
 
-        follow.start(sessionId: "s1")
+        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
         XCTAssertEqual(handshakes, 0, "没有票就不该发握手 —— 那一发必定 401")
 
         await settle()
@@ -213,7 +234,7 @@ final class FollowReplayTests: XCTestCase {
         }
         follow.ticketRenewer = { .unavailable }
 
-        follow.start(sessionId: "s1")
+        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
         await settle()
 
         XCTAssertEqual(handshakes, 0, "始终没有票 → 一次握手都不该发生")
@@ -229,7 +250,7 @@ final class FollowReplayTests: XCTestCase {
         follow.sessionProvider = { .shared }
         follow.ticketRenewer = { .retryLater }
 
-        follow.start(sessionId: "s1")
+        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
         await settle()
 
         XCTAssertEqual({ if case .waiting = follow.phase { return true }; return false }(), true,
@@ -249,7 +270,7 @@ final class FollowReplayTests: XCTestCase {
         }
         follow.ticketRenewer = { XCTFail("有票却去换票"); return .granted("x") }
 
-        follow.start(sessionId: "s1")
+        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
 
         XCTAssertEqual(handshakes, 1, "有票就该连")
         follow.stop()
@@ -266,15 +287,15 @@ final class FollowReplayTests: XCTestCase {
         XCTAssertTrue(FollowClient.maximumMessageSize > 4 * 1024 * 1024,
                       "O1b 显著大于网关承诺的 4 MiB 上界（两端配套）")
 
-        XCTAssertTrue(FollowClient.isTerminal(code: GatewayErrorCode.windowTooLarge.rawValue),
+        XCTAssertTrue(SessionStreamReader.isTerminal(code: GatewayErrorCode.windowTooLarge.rawValue),
                       "O2a window-too-large 是终态（重连只会再收到同一个超界窗口）")
-        XCTAssertTrue(FollowClient.isTerminal(code: GatewayErrorCode.unknownSession.rawValue),
+        XCTAssertTrue(SessionStreamReader.isTerminal(code: GatewayErrorCode.unknownSession.rawValue),
                       "O2b 既有终态语义不变：会话不存在")
-        XCTAssertTrue(FollowClient.isTerminal(code: GatewayErrorCode.unreadableSession.rawValue),
+        XCTAssertTrue(SessionStreamReader.isTerminal(code: GatewayErrorCode.unreadableSession.rawValue),
                       "O2c 既有终态语义不变：日志读不出来")
-        XCTAssertFalse(FollowClient.isTerminal(code: GatewayErrorCode.internalError.rawValue),
+        XCTAssertFalse(SessionStreamReader.isTerminal(code: GatewayErrorCode.internalError.rawValue),
                        "O2d 其余拒绝仍然退避重连")
-        XCTAssertFalse(FollowClient.isTerminal(code: "some-future-code"),
+        XCTAssertFalse(SessionStreamReader.isTerminal(code: "some-future-code"),
                        "O2e 未知码按可重试处理 —— 新码不该让会话卡死")
     }
 

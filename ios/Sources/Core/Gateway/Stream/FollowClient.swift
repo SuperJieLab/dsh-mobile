@@ -11,9 +11,13 @@ import Foundation
  *    就绪硬超时管，理由见 `livenessTick`；URLSession 自动回服务端的 ping，这里只管
  *    「对面还活着吗」。
  *
- * 不解释任何帧：解析成 JSON 原样递回调，形状与语义在 `SessionSync`。协议名与端口全从
- * `GatewayClient.baseURL` 推导 —— 全 App 只有一个要改的地址。
- */@MainActor
+ * 本类只回答「线还在不在」：它解帧的外壳（三个字段存在与否），把整帧原样交给订阅方，再按
+ * 对方回的 `StreamReply` 决定动作。它不认识 op 名、不知道流编号取几、也不认识帧类型的取值 ——
+ * 要发的开流内容由订阅方**编好了交进来**（`start(streamId:label:open:)`），它只负责发出去、
+ * 并在重开时重发同一段。协议名与端口全从 `GatewayClient.baseURL` 推导 —— 全 App 只有一个
+ * 要改的地址。
+ */
+@MainActor
 final class FollowClient: NSObject {
 
     /// 连接阶段。`waiting` 携带下一次重连前的毫秒数，界面可以如实显示。
@@ -23,22 +27,14 @@ final class FollowClient: NSObject {
         case ready
         case waiting(ms: Int)
     }
+
     // MARK: - 回调（由编排层注入；全部在主线程）
 
-    /// opening 帧：typed 直解，外壳与事件数组一次解码齐备。
-    var onOpening: ((OpeningFrame) -> Void)?
-    /// 一条持久事件（DSH 事件对象原样）。
-    var onEvent: ((SessionEvent) -> Void)?
-    /// 一条未定稿帧（start/chunk/end，原样）。
-    var onTransient: ((JSONValue) -> Void)?
-    /// 一条连接级审批帧（`{kind:'request'|'cancel', ...}` 原样）。
-    var onApproval: ((JSONValue) -> Void)?
-    /// 一份上下文占用读数。两个来源、同一个形状：opening 里的基线，以及随后的 `usage` 帧。
-    /// 缺席的含义与「空」不同 —— 字段**不在** = 服务端读不出（保留手里那份），字段在而 `usage` 为空
-    /// = 这个水位上确实没有可显示的东西（清空）。
-    var onUsage: ((UsageSnapshot) -> Void)?
-    /// 一条 error 帧 —— 流通道里的协议内拒绝。
-    var onRefused: ((GatewayFailure) -> Void)?
+    /// 收到一帧：外壳 + 原始字节。返回值决定这条流下一步怎么办。
+    ///
+    /// 整帧交出去、不收分门别类的回调，是这一层的边界：多一个业务帧就多一条回调的写法，
+    /// 会让它变成所有业务的交汇处。
+    var onFrame: ((MuxServerEnvelope, Data) -> StreamReply)?
     /// 连接阶段变化（连接态指示器的数据源）。
     var onPhaseChange: ((Phase) -> Void)?
     /// 取一张有效的访问凭证 —— upgrade 请求带上它。**没有就说明现在不该连**：
@@ -61,7 +57,7 @@ final class FollowClient: NSObject {
 
     /// 连接阶段 —— 对外由 `onPhaseChange` 转发（`SessionSync.connectionPhase`）。
     /// 通知挂在 setter 上：
-    /// `connect`、`openFollowStream`、收到 opening、退避等待、`stop` 五处都会改它，
+    /// `connect`、开流、收到打开帧、退避等待、`stop` 五处都会改它，
     /// 手写必定漏接一处。
     private(set) var phase: Phase = .idle {
         didSet {
@@ -72,7 +68,18 @@ final class FollowClient: NSObject {
 
     /// 连接代次 —— 每次连接递增；回调带着发起时的代次，对不上就丢。
     private var generation = 0
-    private var sessionId: String?
+    /// 这条连接的标识，只进日志（会话 id）—— 它区分的是「谁的第 2 代」：`g2` 在两个实例
+    /// （进出详情各一个）里会重号。
+    private var label: String?
+    /// 要发出去的那段开流内容。由订阅方编好交进来，`reopenStream` 时重发同一段。
+    private var openText: String?
+    /// 本连接的流编号 —— 建成状态按它记。
+    private var streamId = 0
+    /// 已建成的流编号。`phase` 说连接，这个集合说每条流；第二条流介入时不会互相覆盖。
+    ///
+    /// 对测试可读：本层「建成」的消费点（`noteReply`）不碰 socket，值得被单独断言 ——
+    /// 这段迁移错了不会编译失败，症状是心跳永不激活或退避永不归零。
+    private(set) var established: Set<Int> = []
     private var task: URLSessionWebSocketTask?
     private var reconnectAttempt = 0
     /// 本代连接连续未回的 pong 数 —— 随代次清零，见 `connect`。**唯一写者是心跳那一拍**
@@ -86,9 +93,9 @@ final class FollowClient: NSObject {
     private var reconnectWorkItem: DispatchWorkItem?
 
     /// 就绪硬超时 —— 从**每一次开流尝试**（首连与重开，见 `armReadyTimeout`）算起，多久没等到
-    /// opening 就当这次尝试没成。
+    /// 打开帧就当这次尝试没成。
     ///
-    /// 取值 45s **不是**照抄上游的 15s（那是给快链路的）。我们的 opening 是这条流里**最大的
+    /// 取值 45s **不是**照抄上游的 15s（那是给快链路的）。我们的打开帧是这条流里**最大的
     /// 一帧**，而链路的吞吐可以低到 ~125 KB/s（0.51 MiB 的打开帧要传约 4.2 秒）。
     /// 网关承诺的打开帧上界是 4 MiB（`DEFAULT_LIMITS.maxOpeningBytes`），于是在最慢链路上
     /// 4 MiB ÷ 125 KB/s ≈ 34 秒，再加建连（约 2 秒）⇒ 45 秒。
@@ -116,19 +123,30 @@ final class FollowClient: NSObject {
 
     // MARK: - 生命周期
 
-    /// 开始订阅一个会话。重复调用同一会话是幂等的；换会话会先停旧的。
-    func start(sessionId newSessionId: String) {
-        if following, sessionId == newSessionId { return }
+    /// 开始订阅一条流。
+    ///
+    /// - Parameters:
+    ///   - streamId: 这条流的编号。由订阅方给 —— 编号是流的身份，不是连接的参数。
+    ///   - label: 日志里用来区分实例的标识（会话 id）。本类不解释它。
+    ///   - open: 要发出去的开流内容，已由订阅方编好。
+    ///
+    /// 重复调用同一份内容是幂等的；换流会先停旧的。
+    func start(streamId newStreamId: Int, label newLabel: String, open: String) {
+        if following, streamId == newStreamId, openText == open { return }
         stop()
         following = true
-        sessionId = newSessionId
+        streamId = newStreamId
+        label = newLabel
+        openText = open
         connect()
     }
 
     /// 停止订阅：关连接、取消一切定时器。之后不再重连。
     func stop() {
         following = false
-        sessionId = nil
+        label = nil
+        openText = nil
+        established = []
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         closeTask()
@@ -136,17 +154,17 @@ final class FollowClient: NSObject {
         phase = .idle
     }
 
-    /// 重开当前流：用于未定稿断号 —— 现有连接还活着，但这一段的基线已经丢了。
-    /// 重新 open（同一条连接上）拿新 opening；连接本身不重建。
+    /// 重开当前流：用于未定稿断号与服务端正常收尾 —— 现有连接还活着，但这一段的基线已经丢了。
+    /// 重新发同一段开流内容（同一条连接上）拿新窗口；连接本身不重建。
     func reopenStream() {
-        guard following, let sessionId else { return }
-        openFollowStream(sessionId: sessionId)
+        guard following, openText != nil else { return }
+        sendOpen()
     }
 
     /// 回前台立即触发一次重连 —— 上游「恢复立即试」（online 事件 → 重连控制器）的复现。
     /// 退避窗口里的等待被跳过；已在握手或就绪的连接不受影响，不叠加并发连接。
     func reconnectNow() {
-        guard following, sessionId != nil else { return }
+        guard following, openText != nil else { return }
         guard phase != .ready, phase != .connecting else { return }
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
@@ -157,7 +175,7 @@ final class FollowClient: NSObject {
     // MARK: - 连接
 
     private func connect() {
-        guard following, sessionId != nil else { return }
+        guard following, openText != nil else { return }
         // 无端点（组网未激活）：不猜地址，也不动代次与 phase 的连接语义，
         // 直接进既有退避循环 —— 激活后下一轮自动连上。
         guard let endpoint = baseURLProvider() else {
@@ -173,11 +191,15 @@ final class FollowClient: NSObject {
         // 节拍就被判死，2 秒一转、永不恢复。
         missedPongs = 0
         heardFromPeer = false
+        // 这一代还没开流，建成状态不继承：上一代的「建成」属于上一代的连接。
+        established = []
         phase = .connecting
-        // 连接发起时刻：与 opening 记录配对后可以算追平延迟（按代次对齐）。
+        // 连接发起时刻：与打开帧记录配对后可以算追平延迟（按代次对齐）。归属走普通字段
+        // 而不是 perf 记录里的会话位 —— 本层不知道「会话」是什么，它只有一个不透明标签。
         Log.perf(Log.Module.session, PerfRecord(
-            seg: .dev, t: PerfRecord.nowMs(), sessionId: sessionId,
-            fields: ["kind": .text("connect-init"), "gen": .number(Double(current))]
+            seg: .dev, t: PerfRecord.nowMs(),
+            fields: ["kind": .text("connect-init"), "gen": .number(Double(current)),
+                     "who": .text(label ?? "-")]
         ))
 
         // 上一代次的连接必须先关掉：不关的话旧 socket 的 receive/heartbeat
@@ -209,70 +231,56 @@ final class FollowClient: NSObject {
         // 而系统默认只给 1 MiB —— 一个 1.25 MB 的打开帧就足以把会话永远关在门外。
         webSocketTask.maximumMessageSize = Self.maximumMessageSize
         task = webSocketTask
-        // 带上会话 id：`g2` 在两个实例（进出详情各一个）里会重号，
-        // 只有会话 id 能区分「谁的第 2 代」。
-        Log.info(Log.Module.session, "connect g\(current) [\(sessionId ?? "-")] → \(components.url!)")
+        // 带上标识：`g2` 在两个实例（进出详情各一个）里会重号，
+        // 只有它加上会话能区分「谁的第 2 代」。
+        Log.info(Log.Module.session, "connect g\(current) [\(label ?? "-")] → \(components.url!)")
         webSocketTask.resume()
 
-        // 握手由系统完成，open 帧立即发出（未就绪的连接会替我们排队）——
-        // 服务端等的就是它：没有 open，永远不会有 opening。
-        if let sessionId {
-            Log.debug(Log.Module.session, "g\(current) sending open for \(sessionId)")
-            // 连帧都没发出去：这一代已经收场（关连接 + 排了重连），再起收发与心跳只是两次空转。
-            guard openFollowStream(sessionId: sessionId) else { return }
-        }
+        // 握手由系统完成，开流内容立即发出（未就绪的连接会替我们排队）——
+        // 服务端等的就是它：没有它，永远不会有打开帧。
+        Log.debug(Log.Module.session, "g\(current) sending open for \(label ?? "-")")
+        sendOpen()
 
-        // 就绪硬超时不在这里起 —— 它挂在 `openFollowStream` 上，于是「每一次开流尝试」都带时限
+        // 就绪硬超时不在这里起 —— 它挂在 `sendOpen` 上，于是「每一次开流尝试」都带时限
         //（首连与重开同路），见 `armReadyTimeout`。
         receiveLoop(on: webSocketTask, generation: current)
         heartbeat(on: webSocketTask, generation: current)
     }
 
-    /// 在当前连接上发一条 open 帧，开始（或重建）订阅流。
+    /// 在当前连接上发出开流内容，开始（或重建）这条流。
     ///
-    /// 帧由 `MuxOpenFrame` 编出来再交给 `send` —— 本方法只决定「现在要开流」，
-    /// 内容与外壳归形状（`Wire/Mux.swift`）。
-    ///
-    /// 返回 `false` 的唯一途径是编码失败，处置与 `send` 失败相同（关连接、退避重连）。
-    /// 编码只涉及 `String` 与 `Int` 两类字段，`JSONEncoder` 对它们不会失败 —— 这条分支是
-    /// 编译器要求处理的，实机不可达；留着它是为了「编不出来就不发」这件事有代码，而不是靠
-    /// `try!` 假装它不存在。
-    @discardableResult
-    private func openFollowStream(sessionId sessionIdToFollow: String) -> Bool {
+    /// 内容与外壳都不是这里造的（`openText` 由订阅方编好），本方法只决定「现在要开流」。
+    private func sendOpen() {
+        guard let openText else { return }
         phase = .connecting
-        do {
-            send(text: try MuxOpenFrame.following(sessionId: sessionIdToFollow).encoded())
-        } catch {
-            // 编不出来就发不出去：与 send 失败同一条处置（关连接、退避重连）。
-            Log.warn(Log.Module.session, "g\(generation) open frame encoding failed: \(error)")
-            closeTask()
-            scheduleReconnect()
-            return false
-        }
-        // 每一次开流尝试都在这里带时限 —— 首连与重开（`end` 帧、`reopenStream`）走的是同一个入口。
-        // 只在 `connect` 里 arm 会漏掉重开：那时「等不到 opening」就没有任何看门人（心跳只管已成流
-        // 的连接，见 `livenessTick`）。
+        // 这一次尝试还没建成：旧编号的「建成」不成立，否则就绪超时与心跳都会照着旧账判。
+        established.remove(streamId)
+        send(text: openText)
+        // 每一次开流尝试都在这里带时限 —— 首连与重开（收尾帧、`reopenStream`）走的是同一个入口。
+        // 只在 `connect` 里 arm 会漏掉重开：那时「等不到打开帧」就没有任何看门人（心跳只管
+        // 已成流的连接，见 `livenessTick`）。
         armReadyTimeout()
-        return true
     }
 
-    /// 就绪硬超时：从**这次开流尝试**起算，多久没等到 opening 就当它没成。
+    /// 就绪硬超时：从**这次开流尝试**起算，多久没等到打开帧就当它没成。
     ///
     /// ⚠️ `budget` 是**秒**，必须乘 10⁹ 转成纳秒。把秒数直接当纳秒传进去，超时会在
-    /// 微秒级就到点 —— 每次连接都立即被判失败，open 帧被 cancel 成 -999，
-    /// 于是永远收不到 opening，而日志里只看到无穷无尽的「重连」。
+    /// 微秒级就到点 —— 每次连接都立即被判失败，开流帧被 cancel 成 -999，
+    /// 于是永远收不到打开帧，而日志里只看到无穷无尽的「重连」。
     private func armReadyTimeout() {
         guard let webSocketTask = task else { return }
         let current = generation
+        let stream = streamId
         let budget = Self.readyTimeout
-        let sessionIdForLog = sessionId ?? "-"
+        let labelForLog = label ?? "-"
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000))
-            guard let self, self.generation == current, self.task === webSocketTask, self.phase != .ready else { return }
-            // 这一行是「这次连接为什么没成」的第一现场：45 秒还没等到 opening，通常意味着
+            guard let self, self.generation == current, self.task === webSocketTask,
+                  !self.established.contains(stream) else { return }
+            // 这一行是「这次连接为什么没成」的第一现场：45 秒还没等到打开帧，通常意味着
             // 慢链路正传一大帧（1.25 MB 在 125 KB/s 上要传约 10 秒），或者对面根本没在
             // 服务这个会话。
-            Log.warn(Log.Module.session, "g\(current) [\(sessionIdForLog)] ready timeout (\(Int(budget))s) — closing and retrying")
+            Log.warn(Log.Module.session, "g\(current) [\(labelForLog)] ready timeout (\(Int(budget))s) — closing and retrying")
             self.closeTask()
             self.scheduleReconnect()
         }
@@ -309,10 +317,11 @@ final class FollowClient: NSObject {
         }
     }
 
+    /// 一帧到了：解外壳、交给订阅方、照它回的那一句话做。
     private func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
         // 收到任何一帧都是「对端还活着」的证据 —— 由心跳那一拍消费（见 `livenessTick`）。
-        // ⚠️ 它**不**等于「这条流已建成」：升级后先到的 approval 对账帧也算「收到过东西」，
-        // 而那时 opening 的一大帧可能还在路上 —— 把它当成就绪，心跳会立刻激活、
+        // ⚠️ 它**不**等于「这条流已建成」：升级后先到的审批对账帧也算「收到过东西」，
+        // 而那时打开帧的一大帧可能还在路上 —— 把它当成就绪，心跳会立刻激活、
         // 再在几拍之后把一条正在正常传输的连接判死。
         heardFromPeer = true
         guard case .string(let text) = message else {
@@ -326,93 +335,38 @@ final class FollowClient: NSObject {
         }
         Log.debug(Log.Module.session, "g\(current) frame: \(frame.type)")
 
-        switch frame.type {
-        case "item":
-            guard let payload = frame.payload else { return }
-            if payload["sessionId"] != nil && payload["cursor"] != nil && payload["events"] != nil {
-                // opening：就绪的标志。typed 直解一次 —— 坏事件由
-                // FailableDecodable 单条跳过，其余照常显示。
-                reconnectAttempt = 0
-                missedPongs = 0
-                guard let opening = OpeningFrame.decode(rawData) else {
-                    Log.warn(Log.Module.session, "g\(current) opening unparsable (first 120 chars): \(text.prefix(120))")
-                    return
-                }
-                phase = .ready
-                // opening 的到达时刻即「应用完成」时刻：`onOpening` 同步跑完整段折叠，
-                // 批出的全量重算属渲染路径，不计入这一段。
-                let openingRecv = PerfRecord.nowMs()
-                onOpening?(opening)
-                Log.perf(Log.Module.session, PerfRecord(
-                    seg: .dev, t: PerfRecord.nowMs(), sessionId: opening.sessionId, seq: opening.cursor,
-                    fields: [
-                        "kind": .text("opening"),
-                        "gen": .number(Double(current)),
-                        "devRecv": .number(openingRecv),
-                        "devApply": .number(PerfRecord.nowMs()),
-                        "bytes": .number(Double(rawData.count)),
-                    ]
-                ))
-                // 占用基线随 opening 一同到达（服务端读不出投影时不带这个字段，
-                // 那与「这个水位上没有值」是两件事，所以只在字段在时才上报）。
-                if let baseline = opening.occupancy { onUsage?(baseline) }
-            } else if payload["type"]?.string == "assistant-stream" {
-                onTransient?(payload["frame"] ?? .null)
-            } else if payload["type"]?.string != nil, payload["seq"] != nil {
-                // 事件帧：payload 本体就是 SessionEvent —— 直解一次；解不出如实丢弃，
-                // 不重试、不猜。
-                guard let envelope = try? JSONDecoder().decode(FrameWithEvent.self, from: rawData),
-                      let event = envelope.payload?.value else { return }
-                // 帧的到达即「应用完成」：`onEvent` 同步跑完镜像合并、状态机吸收与
-                // 刷新闸标记；批出的全量重算属渲染路径，不计入这一段。
-                let devRecv = PerfRecord.nowMs()
-                onEvent?(event)
-                Log.perf(Log.Module.session, PerfRecord(
-                    seg: .dev, t: PerfRecord.nowMs(), sessionId: sessionId, seq: event.seq,
-                    fields: [
-                        "kind": .text("event"),
-                        "gen": .number(Double(current)),
-                        "devRecv": .number(devRecv),
-                        "devApply": .number(PerfRecord.nowMs()),
-                        "bytes": .number(Double(rawData.count)),
-                    ]
-                ))
-            }
+        // 没有订阅方就当「什么都不做」：单测里的裸实例，以及 `stop()` 之后还在路上的帧。
+        let reply = onFrame?(frame, rawData) ?? StreamReply()
+        noteReply(reply, streamId: frame.streamId)
 
-        case "error":
-            let failure = GatewayFailure(
-                code: frame.payload?["code"]?.string ?? GatewayErrorCode.internalError.rawValue,
-                message: frame.payload?["message"]?.string ?? ""
-            )
-            onRefused?(failure)
-            // 会话级终态重连无意义；其余退避重连。
-            if Self.isTerminal(code: failure.code) {
-                stop()
-            } else {
-                closeTask()
-                scheduleReconnect()
-            }
-
-        case "end":
-            // 流被服务端正常收尾 —— 重开一个（例如服务端主动收尾的会话）。
-            if let sessionId { openFollowStream(sessionId: sessionId) }
-
-        case "approval":
-            // 连接级审批推送（无 streamId）：连接活着就有，与订阅流无关。
-            if let payload = frame.payload { onApproval?(payload) }
-
-        case "usage":
-            // 占用读数。与 `approval` 不同，它**带 `streamId`** —— 属于本流
-            // 打开的那个会话，所以核一次 `sessionId`（帧串流时不能画别人的占用）。
-            guard let payload = frame.payload, let sessionId,
-                  payload["sessionId"]?.string == sessionId else { return }
-            guard let envelope = try? JSONDecoder().decode(FrameWithUsage.self, from: rawData),
-                  let snapshot = envelope.payload?.value else { return }
-            onUsage?(snapshot)
-
-        default:
+        switch reply.next {
+        case .keep:
             break
+        case .reopen:
+            // 流还在，只是不在工作了：同一条连接上重开，不动代次、不重建连接。
+            guard following else { return }
+            sendOpen()
+        case .reconnect:
+            closeTask()
+            scheduleReconnect()
+        case .stop:
+            stop()
         }
+    }
+
+    /// 按订阅方的答复更新本层状态 —— 「建成判据由订阅方给、时机在连接层」的可执行版本。
+    ///
+    /// 建成即退避归零：不归零的话，握手持续失败之后即使终于成功，也会带着爬满的档位继续
+    /// 退避 —— 一次成功不该被上一段失败的账拖住。
+    ///
+    /// 单独成方法（而不是摊在 `handleMessage` 里）是为了它能被断言：`handleMessage` 要一条
+    /// 真 socket 才走得到，而这段迁移是心跳与退避的唯一输入。
+    func noteReply(_ reply: StreamReply, streamId replyStreamId: Int?) {
+        guard reply.establishes else { return }
+        established.insert(replyStreamId ?? streamId)
+        reconnectAttempt = 0
+        missedPongs = 0
+        phase = .ready
     }
 
     // MARK: - 发
@@ -434,7 +388,7 @@ final class FollowClient: NSObject {
                     return
                 }
                 // 握手没完成或连接已死时 send 会在这里失败 —— 这是
-                // 「发了 open 却收不到任何帧」最常见的原因，必须留痕。
+                // 「发了开流内容却收不到任何帧」最常见的原因，必须留痕。
                 Log.warn(Log.Module.session, "g\(sentGeneration) send failed: \(error)")
                 self.closeTask()
                 self.scheduleReconnect()
@@ -452,7 +406,7 @@ final class FollowClient: NSObject {
                 // 证据**每拍消费一次**：这一拍收到过就归零，下一拍从零重新记。
                 let heard = self.heardFromPeer
                 self.heardFromPeer = false
-                switch Self.livenessTick(established: self.phase == .ready,
+                switch Self.livenessTick(established: !self.established.isEmpty,
                                          heardFromPeer: heard,
                                          missed: self.missedPongs,
                                          limit: self.maxMissedPongs) {
@@ -467,7 +421,7 @@ final class FollowClient: NSObject {
                     }
                 case .dead:
                     // 半开连接：对面不再回 pong。**必须留痕** —— 这条是「谁掐的」在客户端侧的
-                    // 答案（网关侧的对应物见 `remote/ws.ts` 的心跳）。
+                    // 答案（网关侧的对应物见它自己的心跳）。
                     Log.warn(Log.Module.session, "g\(current) heartbeat: no pong in \(self.maxMissedPongs + 1) rounds — closing")
                     self.closeTask()
                     self.scheduleReconnect()
@@ -490,8 +444,8 @@ final class FollowClient: NSObject {
 
      规则两句话：**没成流的连接不判死；本拍收到过对端的东西就归零。**
 
-     第一条的来由是「收到过任何一帧」这个前置项太弱：升级之后网关**先**发一条 approval
-     对账帧（它在 opening 之前），心跳会被它当场激活；紧接着 opening 的 1.25 MB 占住整条
+     第一条的来由是「收到过任何一帧」这个前置项太弱：升级之后网关**先**发一条审批
+     对账帧（它在打开帧之前），心跳会被它当场激活；紧接着打开帧的 1.25 MB 占住整条
      TCP（中继链路上要好几秒），网关的 pong 排在那一大帧**后面**，一拍也到不了 ⇒ 每代连接
      恰好活 6 秒（3 拍，`maxMissedPongs + 1`）就被自己判死。
      **「收到过东西」不等于「这条流已经建成」**，而心跳要判的是后者。
@@ -507,7 +461,7 @@ final class FollowClient: NSObject {
      而分片会把一帧的语义拆成多帧、两头都要改。
 
      - Parameters:
-       - established: 本代连接是否已成流（opening 已应用）。
+       - established: 本代连接是否至少有一条流建成。
        - heardFromPeer: 本拍内是否收到过对端的东西（一帧，或我们 ping 的 pong）。
        - missed: 本拍之前累计的连失数。
        - limit: 允许的最大连失数。
@@ -526,19 +480,6 @@ final class FollowClient: NSObject {
      */
     static func callbackApplies(generation: Int, current: Int, sameTask: Bool) -> Bool {
         generation == current && sameTask
-    }
-
-    /**
-     * 重连有没有意义 —— `true` 表示这是会话级终态：重连只会得到同一个结果。
-     *
-     * `window-too-large` 属于这一类：那个窗口不会因为重连而变小，
-     * 反复重连只会把一次确定的拒绝变成一串无用的尝试。**未知码按可重试处理** ——
-     * 白名单之外的码不该让会话卡死。
-     */
-    static func isTerminal(code: String) -> Bool {
-        code == GatewayErrorCode.unknownSession.rawValue
-            || code == GatewayErrorCode.unreadableSession.rawValue
-            || code == GatewayErrorCode.windowTooLarge.rawValue
     }
 
     /**
@@ -593,7 +534,7 @@ final class FollowClient: NSObject {
 
     /// 退避重连 —— 延迟由 `backoffDelayMs` 决定。
     private func scheduleReconnect() {
-        guard following, sessionId != nil else { return }
+        guard following, openText != nil else { return }
         // 单飞：本拍取代尚未触发的那一拍。不取代的话两个定时器各起一条连接，后起的那条把先起
         // 的掐死、先起的失败回调再排一次，于是 attempt 编号跳着走、退避永远爬不到上限。
         reconnectWorkItem?.cancel()

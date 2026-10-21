@@ -615,8 +615,59 @@ final class LayeringTests: XCTestCase {
         }
 
         XCTAssertGreaterThan(hits, 0, "全仓一处都没扫到 —— 先怀疑名字或路径，别把空集读成合规")
-        XCTAssertEqual(homes.sorted(), ["Core/Gateway/Stream/FollowClient.swift"],
+        XCTAssertEqual(homes.sorted(), ["Features/SessionDetail/State/SessionSync.swift"],
                        "开流帧的拼装点不在清单里：\(homes.sorted())")
+    }
+
+    /// 连接层不认识业务 —— 它的代码行里数不出 op 名、帧类型取值、协议错误码、会话字段。
+    ///
+    /// 判据按**词**扫，注释行不算：注释里可以讲这些词，那是在解释别人的形状。四条一起守，
+    /// 因为它们是同一件事的四种写法 —— 少守一条，另一种写法就能把业务知识写进这一层。
+    ///
+    /// 盲区：只认字面量与裸标识符。用变量间接比较（`let kind = "it" + "em"`）抓不到，那种
+    /// 写法靠评审；也可能误判 —— 本层若真需要这些词，说明职责又长回去了。
+    func testConnectionLayerKnowsNoProtocolWords() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/FollowClient.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        let forbidden = [
+            "\"follow\"", "\"item\"", "\"end\"", "\"error\"", "\"usage\"", "\"approval\"",
+            "GatewayErrorCode", "sessionId",
+        ]
+
+        var hits: [String] = []
+        for (number, code) in lines {
+            for word in forbidden where code.contains(word) {
+                hits.append(":\(number) \(word)")
+            }
+        }
+
+        XCTAssertGreaterThan(lines.count, 100, "扫到的代码行太少 —— 先怀疑路径或切行")
+        XCTAssertEqual(hits, [], "连接层出现了业务词汇（它只该答「线还在不在」）：\(hits)")
+    }
+
+    /// 判读不需要连接 —— 判读器不引用连接层，也不碰网络。
+    ///
+    /// 这是「判读能脱离 socket 单独回答」在代码结构上的那一半：功能上它可以被单测调用，
+    /// 结构上它一旦 import 了连接层或 `URLSession`，那种单测就会开始需要一条连接。
+    ///
+    /// 正控：文件里必须仍有 `func read(`，否则说明扫错了文件（空集读成合规）。
+    func testReaderDoesNotDependOnConnection() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionStreamReader.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        let forbidden = ["FollowClient", "URLSession", "MuxOpenFrame", "GatewayClient"]
+
+        XCTAssertTrue(lines.contains { $0.1.contains("static func read(") },
+                      "没找到 `static func read(` —— 先怀疑路径或名字")
+
+        var hits: [String] = []
+        for (number, code) in lines {
+            for word in forbidden where code.contains(word) {
+                hits.append(":\(number) \(word)")
+            }
+        }
+        XCTAssertEqual(hits, [], "判读器引用了连接层或网络类型：\(hits)")
     }
 
     /// `OpeningFrame` 的类型体不认识 `SessionPage` —— 线上形状不认识状态机的输入。
