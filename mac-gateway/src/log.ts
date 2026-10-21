@@ -11,6 +11,7 @@ export const LogModule = {
   relay: "relay",
   faces: "faces",
   model: "model",
+  command: "command",
   usage: "usage",
 } as const;
 

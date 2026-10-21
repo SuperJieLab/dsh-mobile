@@ -16,6 +16,7 @@ import { readErrorOf } from './error-codes.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WritePort } from '../ports/write.ts'
+import type { CommandPort } from '../ports/command.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type {
   WireEvent,
@@ -26,6 +27,7 @@ import type {
   Response,
 } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
+import { commandExecuteRequestOf } from '../wire/command.ts'
 import { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
@@ -79,6 +81,7 @@ export async function handle(
   limits: Limits = DEFAULT_LIMITS,
   write?: WritePort,
   model?: ModelPort,
+  command?: CommandPort,
 ): Promise<Response> {
   const envelope = asRecord(message)
   if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
@@ -105,6 +108,15 @@ export async function handle(
         // 写 op，与写通道的 op 同一纪律。
         if (model === undefined) return failure('internal-error', 'model channel not wired for "model-select"')
         return await modelSelect(envelope, model)
+      case 'command-catalog':
+        // 仅只读测试装配会缺这个端口：生产装配的命令端口总在，服务缺席由那次调用抛出
+        // （折成 `internal-error`），不在这里判。
+        if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
+        return await commandCatalog(envelope, command)
+      case 'command-execute':
+        // 写 op：整行原样交给宿主，但「是不是一条命令行」在这里先判。
+        if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
+        return await commandExecute(envelope, command)
       case 'approval-answer':
       case 'session-prompt':
         // 写 op。仅只读测试装配会缺 `write`；生产必接线，
@@ -186,6 +198,39 @@ async function modelCatalog(model: ModelPort): Promise<Response> {
     groups: [...catalog.groups],
     failures: [...catalog.failures],
   }
+}
+
+/**
+ * 命令列表：该会话此刻能用的命令，名字与说明原样。
+ *
+ * 会话不在 → `unknown-session`（不是空列表）：没有 agent 就没有 per-agent 的命令集，
+ * 空列表会让客户端把「这个会话没了」误读成「这个会话没有命令」。
+ */
+async function commandCatalog(envelope: Record<string, unknown>, command: CommandPort): Promise<Response> {
+  const sessionId = envelope.sessionId
+  if (typeof sessionId !== 'string' || sessionId === '') {
+    return failure('unknown-session', 'sessionId must be a non-empty string')
+  }
+  const commands = await command.list(sessionId)
+  if (commands === undefined) return failure('unknown-session', `no live session "${sessionId}"`)
+  return { v: PROTOCOL_VERSION, ok: true, commands: [...commands] }
+}
+
+/**
+ * 执行一行命令。`ok` 意为*已受理* —— 结果从流里的 `command/run` / `command/done` 来，
+ * 回包里没有、也不该有执行结果。
+ *
+ * 两类拒绝保留自己的码：`unknown-command` 说那一行解析不出已注册的命令（客户端改字），
+ * 与「这条命令执行失败」（流里的那一行）是不同的补救。
+ */
+async function commandExecute(envelope: Record<string, unknown>, command: CommandPort): Promise<Response> {
+  const request = commandExecuteRequestOf(envelope)
+  if (request === undefined) {
+    return failure('invalid-request', 'command-execute needs sessionId and a line starting with "/"')
+  }
+  const outcome = await command.execute(request.sessionId, request.line)
+  if (!outcome.ok) return failure(outcome.code, outcome.message)
+  return { v: PROTOCOL_VERSION, ok: true, commandId: outcome.commandId }
 }
 
 /** 列表路径：廉价的每会话元数据，最新在前。 */

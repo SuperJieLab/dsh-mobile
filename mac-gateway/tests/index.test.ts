@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply } from '../src/index.ts'
+import { apply, inject } from '../src/index.ts'
 import { CredentialVault } from '../src/remote/credentials.ts'
 import { PROTOCOL_VERSION } from '../src/wire/rpc.ts'
 
@@ -37,6 +37,37 @@ const DEVICE_TOKEN = 'test-device-token-0123456789abcdef'
 interface FakeGateway {
   push(frame: { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }): void
   results: { clientId: string; eventId: string; outcome: unknown }[]
+}
+
+/**
+ * 把伪造的宿主上下文做成**会像真上下文那样拒读**的那一个。
+ *
+ * cordis 的 get 陷阱对没在 `inject` 里声明的服务属性直接抛
+ * （`cannot get property "x" without inject`，reflect.js）。普通对象只会给 `undefined`，
+ * 于是「读了没注入的服务」在测试里毫无症状、在真机上让整个插件起不来 ——
+ * 命令通道就这样死过一次（`ctx.commands`）。
+ *
+ * ⚠️ 判据的关键在**不看这个服务在不在**：`services` 里给到它，`ctx.<name>` 照样要拒绝 ——
+ * 真实上下文的分界就是 inject 那一名单，与提供者是谁无关。只有 `ctx.reflect.get(name)`
+ * 例外（那条路本来就不要求 inject）。
+ */
+function strictContext(base: Record<string, unknown>, injected: readonly string[]): unknown {
+  /** cordis 在任何上下文上都有的成员，以及代理混入的那几个助手方法。 */
+  const core = new Set([
+    'logger', 'events', 'root', 'fiber', 'scope', 'effect', 'registry',
+    'on', 'once', 'off', 'emit', 'parallel', 'serial', 'bail', 'waterfall',
+    'plugin', 'inject', 'get', 'provide',
+  ])
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver)
+      // 不经 inject 取服务的那条路：仓库里有什么给什么。
+      if (prop === 'reflect') return { get: (name: string) => target[name] }
+      if (core.has(prop)) return Reflect.get(target, prop, receiver)
+      if (injected.includes(prop)) return target[prop]
+      throw new Error(`cannot get property "${prop}" without inject`)
+    },
+  })
 }
 
 /**
@@ -62,7 +93,7 @@ function install(
     },
   }
   apply(
-    {
+    strictContext({
       effect: (fn: () => () => void) => { cleanup = fn() },
       /** The in-process Peer source the relay resolves once at assembly (R11) —
        * upstream's `connection.createPeer`, mirrored after
@@ -123,7 +154,7 @@ function install(
           return { ok: true, value: undefined }
         },
       },
-    } as never,
+    }, inject) as never,
     { host, port, credentialsPath, deviceTokenSeed: DEVICE_TOKEN, ...config },
   )
   // The credentials file lives exactly as long as the listener does.
@@ -373,6 +404,90 @@ test('model ops are answered with an envelope even when no controller is behind 
 
     assert.equal(response.status, 200)
     const body = await response.json() as { ok: boolean; error?: { code: string } }
+    assert.equal(body.ok, false)
+    assert.equal(body.error?.code, 'internal-error')
+  } finally {
+    teardown()
+  }
+})
+
+// MARK: - the command channel (R24 期1: a service the plugin never injected)
+
+/** 宿主命令服务的窄面 —— 形参名照运行时的 `commands/src/index.ts` 写，漂移会被签名检查点出来。 */
+function fakeCommands(names: string[]): { service: Record<string, unknown>; executed: string[] } {
+  const executed: string[] = []
+  return {
+    executed,
+    service: {
+      list(agent: unknown) {
+        void agent
+        return names.map(name => ({ name, description: `${name} 的说明` }))
+      },
+      async execute(agent: unknown, line: string, submittedAttachments: readonly never[], signal: AbortSignal) {
+        void [agent, submittedAttachments, signal]
+        executed.push(line)
+        return { commandId: 'cmd-1' }
+      },
+    },
+  }
+}
+
+test('the command channel picks up a service it never injected, and reaches it over real HTTP', async () => {
+  // `commands` 故意不进 `inject`（它是扩展，缺席不该让整个网关 pending），所以这条
+  // 判据盯的是「未经 inject 的那条取数路真的能取到」—— 换成 `ctx.commands` 会抛，
+  // 换成装配时取一次就会在这里拿到服务还没就绪的空洞。
+  const port = freshPort(45_800)
+  const credentialsPath = tempCredentialsPath()
+  const commands = fakeCommands(['compact', 'permission'])
+  const { teardown } = install('127.0.0.1', port, credentialsPath, {
+    commands: commands.service,
+    agents: { get: (id: string) => (id === 's1' ? { id } : undefined) },
+  })
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const send = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+        body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 200)
+      return await response.json() as Record<string, unknown>
+    }
+
+    const catalog = await send({ v: 2, op: 'command-catalog', sessionId: 's1' })
+    assert.equal(catalog.ok, true, `the lazy resolve must reach the host service: ${JSON.stringify(catalog.error)}`)
+    assert.deepEqual((catalog.commands as { name: string }[]).map(row => row.name), ['compact', 'permission'])
+
+    const executed = await send({ v: 2, op: 'command-execute', sessionId: 's1', line: '/permission read-only' })
+    assert.equal(executed.ok, true)
+    assert.deepEqual(commands.executed, ['/permission read-only'], '整行原样交给宿主，网关不拆参数')
+  } finally {
+    teardown()
+  }
+})
+
+test('command ops are refused as an envelope when the command service is absent', async () => {
+  const port = freshPort(46_400)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+      body: JSON.stringify({ v: 2, op: 'command-catalog', sessionId: 's1' }),
+    })
+
+    assert.equal(response.status, 200)
+    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    // 缺席发生在调用时，兑现成同一枚拒绝码 —— 手机不能把「本应拒答」看成死连接。
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'internal-error')
   } finally {

@@ -29,6 +29,30 @@ enum TranscriptNode: Equatable {
     case message(DisplayMessage)
     /// 一轮的过程：思考、工具调用、中间文本，按事件顺序。
     case process(NodeProcess)
+    /// 一次命令：按了什么、结果如何。它不是对话消息（不套气泡），也不是某一轮的过程
+    /// （命令不占轮次）。
+    case command(CommandRun)
+}
+
+/// 一次命令在屏幕上的那一行。
+///
+/// 身份用 `commandId` 而不是首条事件的 `seq`：配对发生在 `command/done` 到达时，
+/// 那一行本身要被**原地更新**（执行中 → 结果）。拿 seq 当身份会让结果更新变成一次
+/// 「删一行、加一行」，列表会把那一行重挂载。
+struct CommandRun: Equatable {
+    let commandId: String
+    let name: String
+    let args: String?
+    var outcome: CommandOutcome?
+    /// 首条事件的 seq —— 只用于排序与调试，不作身份。
+    let seq: Int
+    let time: Double
+
+    /// 那一行上「命令是什么」那半句：名字 + 原样参数（参数缺席就只有名字）。
+    var invocation: String {
+        guard let args, !args.isEmpty else { return "/\(name)" }
+        return "/\(name) \(args)"
+    }
 }
 
 extension TranscriptNode: Identifiable {
@@ -50,6 +74,8 @@ extension TranscriptNode: Identifiable {
             case .tool(let row): return "process-\(row.seq)"
             case nil: return "process-turn-\(process.turn ?? -1)"
             }
+        case .command(let command):
+            return "command-\(command.commandId)"
         }
     }
 }
@@ -230,6 +256,33 @@ struct TranscriptAssembler {
             case "step/start":
                 // 步骤边界不单独出节点 —— 它是轮次内部的节奏，不是给人看的内容。
                 break
+
+            case "command/run":
+                // 命令不占轮次：先把已攒的过程收口，再单独出这一行，免得命令夹在
+                // 「这一轮的工具调用」里被折叠头收进去。
+                guard case .started(let commandId, let name, let args)? = event.commandLifecycle else { break }
+                flush()
+                nodes.append(.command(CommandRun(commandId: commandId, name: name, args: args,
+                                                 outcome: nil, seq: event.seq, time: event.time)))
+
+            case "command/done":
+                guard case .settled(let commandId, let outcome)? = event.commandLifecycle else { break }
+                if let index = nodes.firstIndex(where: { node in
+                    if case .command(let run) = node { return run.commandId == commandId }
+                    return false
+                }) {
+                    // 配对上了：原地换成结局（同一行、同一身份，屏幕不重挂载）。
+                    if case .command(var run) = nodes[index] {
+                        run.outcome = outcome
+                        nodes[index] = .command(run)
+                    }
+                } else {
+                    // `command/run` 不在窗口里（往回翻的边界）：命令名与参数都取不到，
+                    // 只能用 id 出一行「结果」。**不编造名字** —— 那会是屏幕上唯一一条
+                    // 说不清按了什么的记录。
+                    nodes.append(.command(CommandRun(commandId: commandId, name: "", args: nil,
+                                                     outcome: outcome, seq: event.seq, time: event.time)))
+                }
 
             case "tool/call":
                 open(turn: event.data["turn"]?.int)
@@ -524,6 +577,7 @@ private extension TranscriptAssembler {
         "user/message", "assistant/message",
         "turn/start", "turn/end", "step/start", "step/end",
         "tool/call", "tool/result",
+        "command/run", "command/done",
     ]
 
         /// 会话日志里必然出现、但归别的链路管的事件类型前缀（审批、投影、沙箱、子代理、用量…）。

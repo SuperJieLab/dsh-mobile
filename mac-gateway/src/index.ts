@@ -25,7 +25,7 @@ import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
-import { broadcasterOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver, type HostContext } from './upstream/faces.ts'
+import { broadcasterOver, commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
 
@@ -134,11 +134,15 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // 模型通道：声明式 face 调用中继与泵所用的同一控制器；服务缺席
   // 必须在装配时说清，而不是第一次点击时。
   const modelPort = modelChannelOver(ctx)
+  // 命令通道：手机发的是一整行文本，宿主自己解析。与模型通道不同 —— 命令服务不在
+  // `inject` 里（它是扩展，缺席不该让整个网关 pending），所以端口在第一次调用时才取
+  // 那份服务；取不到就由协议层折成 `internal-error`。
+  const commandPort = commandChannelOver(ctx)
 
-  log.info('plugin loaded — auth on both channels, write + model channels on')
+  log.info('plugin loaded — auth on both channels, write + model channels on, command channel on demand')
 
   ctx.effect(() => {
-    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort })
+    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort })
 
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。

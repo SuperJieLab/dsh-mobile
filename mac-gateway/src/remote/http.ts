@@ -10,6 +10,7 @@ import { createServer } from 'node:http'
 import { DEFAULT_LIMITS, failure, handle, success, type Limits } from '../protocol/rpc.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
+import type { CommandPort } from '../ports/command.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import { CredentialVault } from './credentials.ts'
@@ -31,6 +32,7 @@ export interface RpcListenerDeps {
   vault: CredentialVault
   writePort: WritePort
   modelPort: ModelPort | undefined
+  commandPort: CommandPort | undefined
 }
 
 /**
@@ -107,7 +109,7 @@ async function respond(
     return
   }
 
-  const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort, deps.modelPort)
+  const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort, deps.modelPort, deps.commandPort)
   // 拒绝在服务端留证据：写 op 因为手机只显示一行状态；模型 op 因为 T8
   // 真机跑出过一次静默为空的目录 —— 死掉的读 op 不得比失败的写 op 更安静。
   if (!answer.ok && (op === 'session-prompt' || op === 'approval-answer' || op === 'model-select' || op === 'model-catalog')) {

@@ -239,6 +239,33 @@ struct ModelSelectRequest: Encodable {
     var reasoningEffort: String? = nil
 }
 
+// MARK: - 命令
+
+/// 宿主的一条命令。名字与说明按宿主原样显示；`inputHint` 有值时当参数占位提示。
+struct CommandInfo: Decodable, Equatable {
+    let name: String
+    let description: String
+    var inputHint: String? = nil
+}
+
+/// `command-catalog` 请求：列某个会话此刻能用的命令。
+struct CommandCatalogRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "command-catalog"
+    let sessionId: String
+}
+
+/// `command-execute` 请求。
+///
+/// **只发一整行文本**，不拆名字与参数：语法（含分隔符）由宿主定义，客户端拆一次就成了
+/// 第二份实现 —— 上游改规则时这里不会编译失败，只会在某个参数上静默错位。
+struct CommandExecuteRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "command-execute"
+    let sessionId: String
+    let line: String
+}
+
 // MARK: - 时刻
 
 /// 协议里的时刻是 **epoch 毫秒**（`1758000000000`），不是秒。
@@ -409,6 +436,23 @@ struct ModelSelectResponse: GatewayResponse {
     let ok: Bool
     let error: GatewayFailure?
     var selected: ModelSelection? = nil
+}
+
+/// 命令列表回包。
+struct CommandCatalogResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var commands: [CommandInfo]? = nil
+}
+
+/// 执行回包。**只有受理 id，没有执行结果** —— 结果从订阅流里的
+/// `command/run` / `command/done` 来；两处都带就会出现「流里说失败、回包说成功」。
+struct CommandExecuteResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var commandId: String? = nil
 }
 
 // MARK: - 快照结果

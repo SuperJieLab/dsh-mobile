@@ -37,6 +37,7 @@ final class SessionSync: ObservableObject {
         case paging
         case syncing
         case sending
+        case executing
         case selecting
         case streaming
     }
@@ -166,6 +167,23 @@ final class SessionSync: ObservableObject {
             try await client.sendPrompt(sessionId: sessionId, text: trimmed, promptId: UUID().uuidString)
         } catch {
             status = .failed(step: .sending, cause: .thrown(error))
+            refreshView()
+        }
+    }
+
+    // MARK: - 命令
+
+    /// 执行一整行命令：回包 ok = **已受理**，执行结果本身从订阅流里的
+    /// `command/run` / `command/done` 来。失败如实进状态行。
+    ///
+    /// 与 `sendPrompt` 分开而不是合并成一个「发一行字」的入口：两条路的**回包语义不同**
+    /// （prompt 的 ok 是「进了收件箱」，命令的 ok 是「宿主开始执行」），失败的说法也不同 ——
+    /// 状态行上一个是「指令没能送达」、一个是「命令没能执行」。
+    func executeCommand(_ line: String) async {
+        do {
+            try await client.executeCommand(sessionId: sessionId, line: line)
+        } catch {
+            status = .failed(step: .executing, cause: .thrown(error))
             refreshView()
         }
     }

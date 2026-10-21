@@ -627,6 +627,7 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'mux.ts', name: 'encodeServerFrame', shape: 'MuxServerFrame' },
   { file: 'mux.ts', name: 'followRequestOf', shape: 'FollowRequest' },
   { file: 'model.ts', name: 'modelSelectRequestOf', shape: 'ModelSelectMessage' },
+  { file: 'command.ts', name: 'commandExecuteRequestOf', shape: 'CommandExecuteMessage' },
   { file: 'write.ts', name: 'approvalAnswerOf', shape: 'ApprovalAnswerMessage' },
   { file: 'write.ts', name: 'sessionPromptOf', shape: 'SessionPromptMessage' },
 ]

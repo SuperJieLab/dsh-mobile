@@ -89,9 +89,16 @@ function emptyUplink(): AsyncIterable<unknown> {
  * opener 声明的形参名，读不出时为 `undefined`。源码按原样读取，而不是按书写
  * 意图：Cordis 把服务成员改写成带尾逗号的多行形参表，所以空的尾巴是正常的，
  * 不能当作名字（`async open(\n  endpoint,\n  payload,\n)`）。
+ *
+ * 空形参表 `()` 是**读得出**的零个名字（`[]`），只有真正没有源码可读时才 `undefined`
+ * （native / bound 的 `function () { [native code] }`）。两者必须分开：混成一个，
+ * 「这个成员不收参数」就会被当成「读不出」，而调用方对这两件事的处置不同。
  */
 export function parameterNamesOf(opener: (...args: unknown[]) => unknown): string[] | undefined {
   const source = Function.prototype.toString.call(opener)
+  // native / bound：没有源码，读不出名字。空形参表长得也像 `function ()`，但它后面跟着
+  // 实现而不是 `{ [native code] }` —— 这一句是两者唯一的分界。
+  if (source.includes('[native code]')) return undefined
   const open = source.indexOf('(')
   const close = source.indexOf(')', open + 1)
   if (open === -1 || close === -1) return undefined
@@ -100,8 +107,60 @@ export function parameterNamesOf(opener: (...args: unknown[]) => unknown): strin
     .split(',')
     .map((parameter) => parameter.trim().split(/[=\s]/u)[0]!)
     .filter((name) => name.length > 0)
-  const readable = names.length > 0 && names.every((name) => /^[A-Za-z_$][\w$]*$/u.test(name))
-  return readable ? names : undefined
+  return names.every((name) => /^[A-Za-z_$][\w$]*$/u.test(name)) ? names : undefined
+}
+
+/**
+ * 宿主成员本身声明的形参名，**穿过 cordis 的包装**去读。`holder` 是服务对象
+ * （如 `ctx.commands` 那一层），`name` 是成员名。
+ *
+ * 为什么不能直接读 `holder[name]`：cordis 把服务成员包成一层 Proxy
+ * （`createShadowMethod`），`Function.prototype.toString` 对代理只回
+ * `function () { [native code] }`。直接读必然读不出，而「读不出」若被判成「变了」，
+ * 这条告警就会**每次都响** —— R24 期1 的真机日志正是如此：`list` 与 `execute` 各一条，
+ * 而它们一字未变，真正的漂移从此混在噪声里。
+ *
+ * 原件在原型链上（那层代理不 trap `getOwnPropertyDescriptor`）：逐级探，取第一个
+ * 读得出名字的。读不出就是读不出，由调用方决定怎么讲这件事。
+ */
+export function memberParametersOf(holder: unknown, name: string): string[] | undefined {
+  // 成员根本不在时不归这条检查管（缺席是装配层的事，比如 `commandChannelOver` 的
+  // `typeof … !== 'function'`）。把它也算成「读不出」，会让一个与此无关的缺席
+  // 顶掉真正要看的那条告警。
+  if (typeof (holder as Record<string, unknown> | undefined)?.[name] !== 'function') {
+    return undefined
+  }
+  for (let cursor: unknown = holder; cursor !== null && cursor !== undefined;
+    cursor = Object.getPrototypeOf(cursor)) {
+    const value = Object.getOwnPropertyDescriptor(cursor, name)?.value
+    if (typeof value !== 'function') continue
+    const names = parameterNamesOf(value as (...args: unknown[]) => unknown)
+    if (names !== undefined) return names
+  }
+  return undefined
+}
+
+/**
+ * 一条「这个成员的形参表与构建期假定不符」的说明；相符时返回 `undefined`。
+ *
+ * 两种异常分开讲，因为它们要的处置不同：**变了**要去看上游改了什么，**读不出**说明
+ * 包装换了一层、这段检查已经失效 —— 后者若说成「变了」，人就会去查一件没发生的事。
+ */
+export function signatureNoteOf(
+  holder: unknown,
+  name: string,
+  expected: readonly string[],
+): string | undefined {
+  const names = memberParametersOf(holder, name)
+  if (names === undefined) {
+    return `${name}: cannot read its parameter list through the service wrapper —`
+      + ' this check no longer sees the host signature'
+  }
+  if (names.length === expected.length
+    && expected.every((parameter, index) => names[index] === parameter)) {
+    return undefined
+  }
+  return `${name} declares (${names.join(', ')}); this build calls it as (${expected.join(', ')})`
 }
 
 /**

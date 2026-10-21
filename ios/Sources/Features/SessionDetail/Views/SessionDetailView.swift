@@ -16,6 +16,8 @@ struct SessionDetailView: View {
     @StateObject private var sync: SessionSync
     /// 模型目录。宿主持有：功能条那一格要用目录默认值兜底显示名，两处读的必须是同一份。
     @StateObject private var catalog: ModelCatalogState
+    /// 命令目录。每次敲 `/` 都要一份新的 —— 命令集随插件装卸变，不缓存。
+    @StateObject private var commands: CommandDirectory
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
@@ -36,6 +38,9 @@ struct SessionDetailView: View {
         _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id))
         _catalog = StateObject(
             wrappedValue: ModelCatalogState { try await client.modelCatalog() }
+        )
+        _commands = StateObject(
+            wrappedValue: CommandDirectory { try await client.commandCatalog(sessionId: session.id) }
         )
     }
 
@@ -59,6 +64,12 @@ struct SessionDetailView: View {
         .task { sync.startFollowing() }
         // 目录进屏拉一次。挂在格子上的话，功能条每次因键盘收起而重建都会重拉一遍。
         .task { await catalog.reload() }
+        // 命令目录：**每次开始敲命令时重拉一次**（`onChange` 里判「刚进入 querying」）。
+        // 挂在面板上会让每敲一个字都拉一遍；只在打开那一刻拉，刚好够用。
+        .onChange(of: isCommandPaletteOpen) { _, open in
+            guard open else { return }
+            Task { await commands.reload() }
+        }
         .onDisappear { sync.stopFollowing() }
         // 组网就绪即重连（与列表「就绪即首载」对称）：connecting 期间
         // 进页时 WS 在退避循环里空转（端点不存在），就绪此刻不必再等下一轮退避。
@@ -74,8 +85,7 @@ struct SessionDetailView: View {
         }
         .safeAreaInset(edge: .bottom) {
             bottomBars
-        }
-        .navigationTitle(session.title ?? "会话")
+        }        .navigationTitle(session.title ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
         // 五个展开面共用一个 `.sheet(item:)`：两个独立的 `.sheet` 在同一事务里
         // 「关一个、开一个」（连接详情 → 组网设置）时，第二个经常不 present。
@@ -139,6 +149,10 @@ struct SessionDetailView: View {
                     case .process(let process):
                         // 一轮的过程：它不是「消息」，所以不套气泡 —— 视觉上要与对话区分开。
                         TurnProcessRow(process: process)
+                            .listRowSeparator(.hidden)
+                    case .command(let run):
+                        // 命令也不是消息：一次动作，一行说清按了什么、结果如何。
+                        CommandRow(run: run)
                             .listRowSeparator(.hidden)
                     }
                 }
@@ -206,17 +220,23 @@ struct SessionDetailView: View {
 
     // MARK: - 底栏
 
-    /// 底栏分三段，互不挤压 —— 输入框的位置只由键盘决定，不随连接态与待批卡上下跳。
+    /// 底栏分四段：审批卡（条件）→ 告知（有事才出现）→ 命令候选（在敲命令时）→ 功能条 → 输入行。
     ///
-    /// 上到下：审批卡（条件段）→ 告知（有事才出现）→ 功能条（打字时收起）→ 输入行。
-    /// 功能条那 32pt 是常驻占用，换来一眼可见的连接态、模型与占用；键盘弹起时整条收起，
-    /// 因为打字期间屏幕高度最紧张，而这三项读数在那时没有决策价值。
+    /// 命令候选排在功能条之上、输入框紧邻：它是「当前这一行」的补充，离输入框越近越好；
+    /// 功能条在打字时收起（原本就有），所以候选出现时那一行高度刚好让给它。
     private var bottomBars: some View {
         VStack(spacing: 0) {
             approvalSection
 
             if let notice = sync.notice {
                 noticeRow(notice)
+            }
+
+            if case .querying(let query) = SlashTrigger.of(draft: draft) {
+                CommandPalette(directory: commands, query: query) { command in
+                    // 只回填，不执行：带参数的命令要用户自己补完再按发送。
+                    draft = SlashTrigger.insert(name: command.name)
+                }
             }
 
             if !isComposing {
@@ -312,11 +332,7 @@ struct SessionDetailView: View {
                 .padding(.vertical, 8)
                 .focused($isComposing)
             Button {
-                let text = draft
-                draft = ""
-                // 发送即收键盘：功能条跟着回来，用户能看到它接下来的连接态与占用。
-                isComposing = false
-                Task { await sync.sendPrompt(text) }
+                send()
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
@@ -325,6 +341,32 @@ struct SessionDetailView: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
+    }
+
+    /// 命令面板此刻开着没有 —— 只用来取「刚打开」那个边沿，好触发一次重拉。
+    private var isCommandPaletteOpen: Bool {
+        if case .querying = SlashTrigger.of(draft: draft) { return true }
+        return false
+    }
+
+    /// 发送：以 `/` 开头的一行交给命令通道，其余照旧发给模型。
+    ///
+    /// 分流判据是「这一行以 `/` 开头」—— 与面板的判据（`SlashTrigger`：还要「第一个 `/`
+    /// 之后没有空白」）不同，因为发送时带参数是常态。名字与参数怎么切是宿主的语法，
+    /// 我们只决定走哪条路。
+    ///
+    /// **代价**：以 `/` 开头的普通消息发不出去（会被当命令）。与 Web UI 同 —— 它把整个
+    /// 斜杠前缀交给了命令系统。
+    private func send() {
+        guard let text = PromptDraft.normalized(draft) else { return }
+        draft = ""
+        // 发送即收键盘：功能条跟着回来，用户能看到它接下来的连接态与占用。
+        isComposing = false
+        if text.hasPrefix("/") {
+            Task { await sync.executeCommand(text) }
+        } else {
+            Task { await sync.sendPrompt(text) }
+        }
     }
 
     // MARK: - 详情面

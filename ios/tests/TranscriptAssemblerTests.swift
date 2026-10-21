@@ -476,4 +476,67 @@ final class TranscriptAssemblerTests: XCTestCase {
         XCTAssertTrue(healed.first?.name == "bash", "S5e 前插带回那条调用 → 同一行补上工具名")
         XCTAssertTrue(healed.first?.argumentsRaw?.isEmpty == false, "S5f 参数也补上了")
     }
+
+    // MARK: - 命令（O5）：结果从流里来，按 commandId 配对
+
+    /// 把节点里的命令行摊平出来。
+    private func commandRows(in nodes: [TranscriptNode]) -> [CommandRun] {
+        nodes.compactMap { node -> CommandRun? in
+            guard case .command(let run) = node else { return nil }
+            return run
+        }
+    }
+
+    /// 只有 `command/run` 时那一行是「执行中」；`command/done` 到达后**同一行**换成结局。
+    /// 配对的键是 `commandId` —— 按 seq 猜会在这两条事件不连续时配错。
+    func testCommandRunAndDonePairUpOnTheSameRow() {
+        let run = #"{"type":"command/run","seq":10,"time":1,"data":{"commandId":"cmd-7","name":"permission","args":" read-only","source":{"kind":"user"}}}"#
+        let done = #"{"type":"command/done","seq":12,"time":2,"data":{"commandId":"cmd-7","kind":"success","text":"preset read-only"}}"#
+
+        let started = commandRows(in: assemble([run]).nodes)
+        XCTAssertEqual(started.count, 1, "run 一到就出一行")
+        XCTAssertEqual(started.first?.invocation, "/permission  read-only", "名字 + 原样参数")
+        XCTAssertNil(started.first?.outcome, "还没结束：执行中")
+
+        let settled = commandRows(in: assemble([run, done]).nodes)
+        XCTAssertEqual(settled.count, 1, "done 不新增行 —— 它把同一行换掉")
+        XCTAssertEqual(settled.first?.outcome, .success("preset read-only"), "结局是宿主给的原文")
+        XCTAssertEqual(settled.first?.commandId, "cmd-7")
+    }
+
+    /// 失败的结局也要看得见，且不是 success。
+    func testCommandFailureIsVisible() {
+        let run = #"{"type":"command/run","seq":10,"time":1,"data":{"commandId":"cmd-8","name":"goal"}}"#
+        let done = #"{"type":"command/done","seq":11,"time":2,"data":{"commandId":"cmd-8","kind":"error","text":"boom"}}"#
+        let rows = commandRows(in: assemble([run, done]).nodes)
+        XCTAssertEqual(rows.first?.outcome, .failure("boom"), "失败原样带宿主那句")
+    }
+
+    /// `command/run` 在窗口外（往回翻的边界）→ 仍出一行，但不编造命令名。
+    func testCommandDoneWithoutItsRunDoesNotInventAName() {
+        let done = #"{"type":"command/done","seq":316,"time":2,"data":{"commandId":"cmd-9","kind":"success","text":"ok"}}"#
+        let rows = commandRows(in: assemble([done]).nodes)
+        XCTAssertEqual(rows.count, 1, "结果本身照常显示，不丢")
+        XCTAssertEqual(rows.first?.name, "", "不知道按了什么就不写名字")
+        XCTAssertEqual(rows.first?.outcome, .success("ok"))
+    }
+
+    /// 两条命令交错到达也各归各行（配对键不是「最近一条」）。
+    func testTwoInterleavedCommandsDoNotSwapOutcomes() {
+        let runA = #"{"type":"command/run","seq":10,"time":1,"data":{"commandId":"cmd-a","name":"compact"}}"#
+        let runB = #"{"type":"command/run","seq":11,"time":1,"data":{"commandId":"cmd-b","name":"export"}}"#
+        let doneB = #"{"type":"command/done","seq":12,"time":2,"data":{"commandId":"cmd-b","kind":"error","text":"no such dir"}}"#
+        let doneA = #"{"type":"command/done","seq":13,"time":2,"data":{"commandId":"cmd-a","kind":"success","text":"done"}}"#
+        let rows = commandRows(in: assemble([runA, runB, doneB, doneA]).nodes)
+        XCTAssertEqual(rows.first(where: { $0.commandId == "cmd-a" })?.outcome, .success("done"))
+        XCTAssertEqual(rows.first(where: { $0.commandId == "cmd-b" })?.outcome, .failure("no such dir"))
+    }
+
+    /// 命令事件是**已消费**的类型：不该被当成「不认识的事件类型」上报。
+    func testCommandEventsAreNotReportedAsUnknown() {
+        let run = #"{"type":"command/run","seq":10,"time":1,"data":{"commandId":"cmd-7","name":"compact"}}"#
+        let done = #"{"type":"command/done","seq":11,"time":2,"data":{"commandId":"cmd-7","kind":"success"}}"#
+        let result = assemble([run, done])
+        XCTAssertEqual(result.unknown, [], "命令事件有处理器，不该进未知类型的上报")
+    }
 }

@@ -26,6 +26,50 @@ struct DisplayMessage: Hashable {
 }
 
 extension SessionEvent {
+
+    /// 一次命令的生命周期。上游把它记成两条配对事件（`command/run` 与 `command/done`，
+    /// 由 `commandId` 关联），两者都是 **log-only**：不进模型 transcript，但进会话日志 ——
+    /// 所以手机能从订阅流里看到「按了什么、结果如何」。
+    ///
+    /// 与 `displayMessage` 分开：命令不是对话消息（不该套气泡、不该被当作某人的发言），
+    /// 它的展示形状是「一行命令 + 结果」。判定仍住这里，理由同 `displayMessage` ——
+    /// 它随上游事件形状变。
+    var commandLifecycle: CommandLifecycle? {
+        switch type {
+        case "command/run":
+            guard let commandId = data["commandId"]?.string,
+                  let name = data["name"]?.string else { return nil }
+            return .started(commandId: commandId, name: name, args: data["args"]?.string)
+
+        case "command/done":
+            guard let commandId = data["commandId"]?.string,
+                  let kind = data["kind"]?.string else { return nil }
+            let text = data["text"]?.string
+            // 只有上游明说 success 才算成功；别的取值（含将来新增的）一律按失败显示，
+            // 因为「以为成功了其实没有」比「以为失败其实成功」代价大。
+            return .settled(commandId: commandId, outcome: kind == "success" ? .success(text) : .failure(text))
+
+        default:
+            return nil
+        }
+    }
+}
+
+/// 命令生命周期的一条事件。
+enum CommandLifecycle: Equatable {
+    /// `command/run`：命令进入了 handler。
+    case started(commandId: String, name: String, args: String?)
+    /// `command/done`：配对的结局。
+    case settled(commandId: String, outcome: CommandOutcome)
+}
+
+/// 一次命令执行的结局。
+enum CommandOutcome: Equatable {
+    case success(String?)
+    case failure(String?)
+}
+
+extension SessionEvent {
     /// 把一条事件变成一条可显示的消息；变不出来就是 `nil`。
     ///
     /// ⚠️ **两种事件的消息不是一个形状**：

@@ -10,10 +10,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import { usageSnapshotOf } from './usage.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
+import type { CommandPort } from '../ports/command.ts'
 import type { ModelSelection } from '../wire/model.ts'
 import { createSessionPort, nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView, type PersistenceLike } from './sessions.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
+import { commandPortOver, type CommandsLike, type LiveAgentsLike } from './command.ts'
 import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from './call-through.ts'
 import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './write.ts'
 import { createLogger, LogModule } from '../log.ts'
@@ -26,6 +28,11 @@ const log = createLogger(LogModule.faces)
  * 读出来一律 `unknown`，由各消费点窄化成自己的 `*Like`。少了这一层，每读一个服务都要
  * 先绕一次 `as unknown as` —— 断言本身仍在，但它现在只表达「窄到什么」，不再兼职
  * 「这个属性存不存在」。
+ *
+ * ⚠️ 这个「可读」只对 **`inject` 里那几名**成立，类型看不出来：cordis 对未注入的服务
+ * 属性一读就抛（`cannot get property "x" without inject`），而 `apply` 在启动时跑 ——
+ * 一次越界读就让整个插件起不来。不注入的服务一律经 `ctx.reflect.get(name)` 取，
+ * 它是那条路由上唯一不要求 inject 的入口。
  */
 export type HostContext = Context & Record<string, unknown>
 
@@ -195,6 +202,47 @@ export function modelChannelOver(ctx: HostContext): ModelPort | undefined {
     return undefined
   }
   return modelPortOver(controller as ModelControllerLike)
+}
+
+/**
+ * 协议层眼中的命令通道。
+ *
+ * **`commands` 不在 `inject` 里**，所以这里必须经 `ctx.reflect.get` 取，不能写成
+ * `ctx.commands`：cordis 对没注入的服务属性一读就抛（`cannot get property "commands"
+ * without inject`），而 `apply` 是在启动时跑的 —— 一次读就把整个插件打死，连读会话、
+ * 发消息、推流一起停。
+ *
+ * 它也不该进 `inject`：命令是扩展，不是网关的核心。注入它等于让整个网关等一个可选插件，
+ * 插件缺席时 fiber 永远 pending —— 那比「两条命令 op 拒答」糟得多，而且没有任何输出。
+ *
+ * 所以取数发生在**调用时**：拿到就缓存，拿不到就抛，由协议层折成 `internal-error`
+ * （手机看到的是拒答，不是死连接）。命令插件晚于网关就绪时，下一次调用自己接上。
+ *
+ * 命令集是 per-agent 的，所以要同时在手的是会话注册表（取存活 agent）与命令服务本身；
+ * 前者在 `inject` 里，照常直接读。
+ */
+export function commandChannelOver(ctx: HostContext): CommandPort {
+  let resolved: CommandPort | undefined
+  return {
+    list: sessionId => port().list(sessionId),
+    execute: (sessionId, line) => port().execute(sessionId, line),
+  }
+
+  function port(): CommandPort {
+    if (resolved !== undefined) return resolved
+    const commands = ctx.reflect.get('commands') as Partial<CommandsLike> | undefined
+    const agents = ctx.agents as Partial<LiveAgentsLike> | undefined
+    if (
+      typeof commands?.list !== 'function' ||
+      typeof commands.execute !== 'function' ||
+      typeof agents?.get !== 'function'
+    ) {
+      throw new Error('commands service has no command face — command ops cannot be served')
+    }
+    resolved = commandPortOver(commands as CommandsLike, agents as LiveAgentsLike)
+    log.info('command channel wired')
+    return resolved
+  }
 }
 
 /**

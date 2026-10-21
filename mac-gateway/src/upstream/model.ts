@@ -13,6 +13,7 @@
 import { isRemoteError, isNotFound } from '../ports/errors.ts'
 import type { ModelCatalog, ModelSelection, ModelSelectMessage } from '../wire/model.ts'
 import type { ModelPort, ModelSelectOutcome } from '../ports/model.ts'
+import { signatureNoteOf } from './call-through.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.model)
@@ -35,11 +36,12 @@ export interface ModelControllerLike {
 export function modelPortOver(controller: ModelControllerLike): ModelPort {
   // 组装期签名检查：下面的调用按位置传 request 对象，只要形参表与运行时
   // 一致就是精确的。变化在这里触发 —— 启动时，而不是第一次点击时。
-  if (!parameterListIs(controller.selectModel, ['request'])) {
-    warnSignature('selectModel', controller.selectModel)
-  }
-  if (!parameterListIs(controller.modelCatalog, [])) {
-    warnSignature('modelCatalog', controller.modelCatalog)
+  for (const [member, expected] of [
+    ['selectModel', ['request']],
+    ['modelCatalog', []],
+  ] as const) {
+    const note = signatureNoteOf(controller, member, expected)
+    if (note !== undefined) log.warn(`model adapter: ${note} — calling positionally`)
   }
 
   return {
@@ -71,25 +73,4 @@ export function modelPortOver(controller: ModelControllerLike): ModelPort {
       }
     },
   }
-}
-
-/** 可调用对象的形参表是否恰好读出 `expected` 这些名字。 */
-function parameterListIs(fn: (...args: never[]) => unknown, expected: readonly string[]): boolean {
-  const source = Function.prototype.toString.call(fn)
-  const open = source.indexOf('(')
-  const close = source.indexOf(')', open + 1)
-  if (open === -1 || close === -1) return false // bound 或 native：读不出
-  const names = source
-    .slice(open + 1, close)
-    .split(',')
-    .map(name => name.trim())
-    .filter(name => name.length > 0)
-  return names.length === expected.length && expected.every((name, index) => names[index] === name)
-}
-
-/** 漂移告警：点名漂移者并展示切面，修复只需一次阅读。 */
-function warnSignature(member: string, fn: (...args: never[]) => unknown): void {
-  log.warn(
-    `model adapter: ${member}'s parameter list differs from the runtime signature this build was written against; reads: ${Function.prototype.toString.call(fn).slice(0, 160)}`,
-  )
 }

@@ -219,6 +219,30 @@ final class GatewayClient: ObservableObject {
         return selected
     }
 
+    // MARK: - 命令
+
+    /// 列该会话此刻能用的命令。**每次打开面板都拉**：命令集是 per-agent 的，
+    /// 随插件装卸与作用域变，不缓存成常量。
+    func commandCatalog(sessionId: String) async throws -> [CommandInfo] {
+        let response: CommandCatalogResponse = try await send(CommandCatalogRequest(sessionId: sessionId))
+        try response.validate()
+        return response.commands ?? []
+    }
+
+    /// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的
+    /// `command/run` / `command/done` 来 —— 这个回包不带执行结果。
+    @discardableResult
+    func executeCommand(sessionId: String, line: String) async throws -> String {
+        let response: CommandExecuteResponse = try await send(
+            CommandExecuteRequest(sessionId: sessionId, line: line)
+        )
+        try response.validate()
+        guard let commandId = response.commandId else {
+            throw GatewayClientError.malformedResponse(detail: "ok: true，但响应里没有 commandId")
+        }
+        return commandId
+    }
+
     // MARK: - 发一次请求（带身份，续期恰好重试一次）
 
     private func send<Request: Encodable, Response: Decodable>(
