@@ -105,24 +105,27 @@ final class GatewayClient: ObservableObject {
 
     /// 还活着的 access 票；没有就是 `nil`。
     ///
-    /// 流通道升级时要读它 —— 那里只有同步上下文。它**只回答现状，不会去换**：要换走 `ticket`。
-    /// 必须经本类，不许直接认 `CredentialStore` —— 票在 `tickets` 里，而它可以被注入。
+    /// 流通道升级时要读它 —— 那里只有同步上下文，拿不了异步的 `ticket()`。它**只回答现状，
+    /// 不会去换**。
+    ///
+    /// **为什么这里是两行转发，而 `perform` 却直接用 `tickets`**：`perform` 就在本类里，
+    /// 同一层内不必绕；而这两个方法是被 `Features/` 调的，它们是票这件事**在 Core 之外的
+    /// 唯一可见面**。把 `tickets` 交出去就等于连 `renewAnyway` 一起交出去 —— 那个绕过
+    /// 「先问有没有」，一次疏忽就让每个请求都换一张票。
     func validAccessToken() -> String? {
         tickets.validToken()
     }
 
-    /// 要一张票 —— **使用方唯一的入口**：有就立刻给，没有就去换（并发时搭同一趟）。
+    /// 要一张票 —— 使用方唯一的入口：有就立刻给，没有就去换（并发时搭同一趟）。
     ///
-    /// 三种结果各有各的处置（见 `AccessTicket`）。本类只补一件票那一层不知道的事：
+    /// 三种结果各有各的处置（见 `AccessTicket`）。本类在这两行里补一件票那一层不知道的事：
     /// 设备凭证在本地存着没有。
+    ///
+    /// **凭证按参传入，不让票那一层自己去取**：它现在是一台纯状态机 —— 输入只有注入的
+    /// 换票动作与这一枚凭证，所以每条断言都能只给这两样。换成注入一个读取器，它每次调用就
+    /// 要读一遍可变外部状态，断言也得跟着造一个。
     func ticket() async -> AccessTicket {
         await tickets.ticket(deviceToken: credentials.deviceToken)
-    }
-
-    /// 换一张新的，不问手上有没有 —— 用于「服务端刚说了 401」之后：本地以为那张还有效，
-    /// 读缓存只会把同一枚死票再发一遍。
-    private func renewTicketNow() async -> AccessTicket {
-        await tickets.renewAnyway(deviceToken: credentials.deviceToken)
     }
 
     /// **换票动作本身** —— 票那一层注入的就是它。线路与协议在这里，票的生命周期在那边。
@@ -185,7 +188,9 @@ final class GatewayClient: ObservableObject {
         // 票换不到时按处境说不通的话：`.unavailable` 是「未配对 / 关系被撤销」，
         // 而 `.retryLater` 是「这次没连上」—— 后者说成前者，用户会去查一件没发生的事。
         guard authenticated else { throw GatewayClientError.unauthenticated }
-        switch await renewTicketNow() {
+        // 调 `renewAnyway` 而不是 `ticket()`：本地那张被服务端否认了，读缓存只会把同一枚
+        // 死票再发一遍。设备凭证在这里现取 —— 它是这一刻的事实，不缓存在票那一层。
+        switch await tickets.renewAnyway(deviceToken: credentials.deviceToken) {
         case .granted(let fresh):
             let retried: Response? = try await sendOnce(
                 request, at: baseURL, authorization: fresh, treat401AsRefusal: false

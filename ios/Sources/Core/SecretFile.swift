@@ -6,8 +6,8 @@ import Foundation
  * 只管字节怎么落地 —— 路径、目录创建、原子写、`complete` 文件保护、失败留痕。**不认识
  * 任何一个具体的凭证**：哪个名字、内容什么语义、什么时候该删，由各自的业务包装决定
  * （设备凭证在 `Core/Gateway/Client/CredentialStore.swift`，组网接入 key 在
- * `MeshNetwork/TailnetNode.swift`）。正因为两边都要用，它才留在 `Secrets/` 这种不属于任何
- * 一方的位置。
+ * `MeshNetwork/TailnetNode.swift`）。正因为两边都要用，它才落在 `Core/` 顶层 ——
+ * 不属于任何一方，也就没有哪个域能在这里继续长出自己的概念。
  *
  * 存储选型：UserDefaults 也在沙盒里、卸载同样蒸发，但它是全局键值命名空间，语义是「偏好
  * 设置」，存密钥名不正言不顺（还容易留着调试残渣）。不用 Keychain 是因为它跨卸载存活、

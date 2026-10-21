@@ -3,11 +3,11 @@ import Foundation
 /**
  * 设备凭证的业务包装：它是什么、什么时候落盘、什么时候抹掉。
  *
- * **为什么在网关域而不在 `Secrets/`。** `SecretFile` 是基建（字节怎么落到磁盘：路径、权限、
- * 原子写、失败留痕），它被两方共用 —— 本类和 `MeshNetwork` 的接入 key。基建只该有一种，
- * 业务包装各随各的域：接入 key 的语义（空串不算 key）住在 `TailnetNode`，设备凭证的语义
- * （与这台 Mac 的关系）住在这里。把本类放进 `Secrets/`，等于让一个纯存储目录去认识
- * 「关系」这个概念 —— 那条依赖方向由 `LayeringTests` 的 `coreUpwardBans` 表守着。
+ * **为什么在网关域而不在 `Core/SecretFile.swift` 那一层。** `SecretFile` 是基建（字节怎么
+ * 落到磁盘：路径、权限、原子写、失败留痕），它被两方共用 —— 本类和 `MeshNetwork` 的接入 key。
+ * 基建只该有一种，业务包装各随各的域：接入 key 的语义（空串不算 key）住在 `TailnetNode`，
+ * 设备凭证的语义（与这台 Mac 的关系）住在这里。把本类塞进那层基建，等于让一个只管字节的
+ * 地方去认识「关系」这个概念 —— 那条依赖方向由 `LayeringTests` 的 `coreUpwardBans` 表守着。
  *
  * 设备凭证是**关系本体**：要经得起杀 App / 重启，被撤销才消失。访问票不在这里
  * —— 它是 15 分钟的运行时产物，见 `TicketKeeper`。

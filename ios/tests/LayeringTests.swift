@@ -196,7 +196,6 @@ final class LayeringTests: XCTestCase {
     /// `MarkdownParser` 不属于任何域，不在本表的约束内 —— 它们的存在就是为了让三方共用时
     /// 不必互相认识。
     private static let coreUpwardBans: [String: [String]] = [
-        "Secrets": ["MeshNetwork", "Gateway", "Connection"],
         "MeshNetwork": ["Gateway", "Connection"],
         "Gateway": ["Connection"],
     ]
@@ -308,39 +307,48 @@ final class LayeringTests: XCTestCase {
                        "过期判定该住在票那一层，不是别处")
     }
 
-    // MARK: - 断言 2d：Secrets 只装基建，不装业务包装
+    // MARK: - 断言 2d：落盘基建只有一份，且它是基建
 
-    /// `Core/Secrets/` 只放**落盘基建**（按名字存/取/删一个字符串），不放任何业务包装。
+    /// `Core/SecretFile.swift` 是**唯一的落盘基建**（按名字存/取/删一个字符串），
+    /// 且它只认识字节，不认识任何具体凭证。
     ///
-    /// 判据是「这个类型认识什么」而不是文件名：基建只认识文件名与字节；一旦某个类型里出现
-    /// 具体的凭证名（`"device-token"` / `"tailnet-key"`）或它在谈「关系」「撤销」这类语义，
-    /// 它就是一个业务包装，该回到自己的域去 —— 否则一个纯存储目录会开始认识别人的概念。
+    /// 两个方向：
+    /// 1. **只有一份基建** —— 第二个「按名字写文件」的实现出现时有第二份路径拼法、第二份
+    ///    文件保护设置、第二份失败日志；其中最要紧的那条（写失败必须留痕）会各写一遍。
+    /// 2. **基建里不出现具体凭证名** —— `"device-token"` / `"tailnet-key"` 属于业务包装。
+    ///    一旦出现，说明这里已经开始认识别人的概念，那个名字该归回自己的域。
     ///
-    /// 现役的唯一基建是 `SecretFile`，它被两个域共用（网关的设备凭证、组网的接入 key），
-    /// 所以它不属于任何一方。业务包装各自归位：`Gateway/Client/CredentialStore.swift`、
-    /// `MeshNetwork/TailnetNode.swift`。
-    func testSecretsHoldsOnlyStoragePrimitives() throws {
-        let secrets = sourcesRoot.appendingPathComponent("Core/Secrets")
-        let files = swiftFiles(under: secrets)
-        // 正控：目录必须扫到东西，否则「零违规」会被读成合规。
-        XCTAssertFalse(files.isEmpty, "Secrets 一个文件都没扫到 —— 先怀疑路径推算")
-        XCTAssertEqual(files.count, 1,
-                       "Secrets 只该装基建；业务包装归各自的域。现在有："
-                       + files.map(\.lastPathComponent).joined(separator: ", "))
+    /// 判据落在**这个文件**上而不是目录：容器能被建出来，就能重新积进别人的东西 ——
+    /// 盯住文件本身，「`Core/` 顶层的落盘基建只该是这一个」才是可验的事实。
+    func testSecretFileIsTheOnlyStoragePrimitive() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/SecretFile.swift")
+        // 正控：文件必须真的在，否则下面的读取会抛错，而「零违规」会被读成合规。
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                      "Core/SecretFile.swift 不在 —— 先怀疑路径推算")
 
-        // 第二个方向：基建本身也不许认识具体的凭证名 —— 名字归业务包装。
-        //
-        // 逐个文件查，不取 `files[0]`：目录扫描顺序由文件系统给，不保证先给 `SecretFile`。
-        // 拿错了文件，这条断言会「报出正确的问题、指错文件」—— 那种提示比没有更费时间。
-        var names: [(file: String, credential: String)] = []
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            for credential in ["device-token", "tailnet-key"] where text.contains("\"\(credential)\"") {
-                names.append((file.lastPathComponent, credential))
+        let text = try String(contentsOf: file, encoding: .utf8)
+        // 正控 2：确实是那个基建。删了一半或换了内容时，下面两条会「零命中」通过。
+        XCTAssertTrue(text.contains("enum SecretFile"), "这个文件里没有 SecretFile —— 先怀疑读错了文件")
+
+        var names: [String] = []
+        for credential in ["device-token", "tailnet-key"] where text.contains("\"\(credential)\"") {
+            names.append(credential)
+        }
+        XCTAssertEqual(names, [],
+                       "落盘基建里出现了具体凭证名 —— 名字属于业务包装，基建只接受一个参数")
+
+        // 第二个方向：Core 顶层不该再有一个「按名字写文件」的邻居。
+        // 判据是它做的事（写 Data 到 Application Support），不是文件名。
+        let coreTop = swiftFiles(in: sourcesRoot.appendingPathComponent("Core"))
+        var duplicates: [String] = []
+        for other in coreTop where other.lastPathComponent != "SecretFile.swift" {
+            let body = try String(contentsOf: other, encoding: .utf8)
+            if body.contains("completeFileProtection") {
+                duplicates.append(other.lastPathComponent)
             }
         }
-        XCTAssertEqual(names.map { "\($0.file): \($0.credential)" }, [],
-                       "基建里出现了具体凭证名 —— 名字属于业务包装，基建只接受一个参数")
+        XCTAssertEqual(duplicates, [],
+                       "Core 顶层有第二份落盘基建（也设了 completeFileProtection）：\(duplicates)")
     }
 
     // MARK: - 断言 2e：网关出口只发请求，不认识 op
