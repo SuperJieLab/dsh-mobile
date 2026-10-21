@@ -37,6 +37,8 @@ extension GatewayErrorCode {
             return "这个模型现在路由不过去 —— 换一个模型，或在 Mac 上检查凭证。"
         case .windowTooLarge:
             return "这个会话最近一轮本身就超过了一次能传的上限 —— 暂时打不开，等它有新进展后再来看。"
+        case .unknownCommand:
+            return "没有这条命令 —— 检查一下名字或写法，改完再发一次。"
         }
     }
 }

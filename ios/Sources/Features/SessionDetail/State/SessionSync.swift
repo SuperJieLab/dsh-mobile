@@ -164,22 +164,38 @@ final class SessionSync: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
-    /// 下发一条指令：回包 ok = 已受理，回答本身从订阅流里来；失败如实进状态行，
-    /// 输入的字还在框里。
-    func sendPrompt(_ text: String) async {
+    /// 下发一条指令：回包 ok = 已受理，回答本身从订阅流里来；失败如实进状态行。
+    ///
+    /// - Returns: 是否**已受理**。调用方据此决定清不清草稿 —— 没送到时那行字还在输入框里，
+    ///   用户可以直接重按一次。
+    @discardableResult
+    private func sendPrompt(_ text: String) async -> Bool {
         // 与发送按钮的置灰读同一份判定 —— 「判空」与「取值」同源。
-        guard let trimmed = PromptDraft.normalized(text) else { return }
+        guard let trimmed = PromptDraft.normalized(text) else { return false }
         do {
             try await promptSession(
                 client, sessionId: sessionId, text: trimmed, promptId: UUID().uuidString
             )
+            return true
         } catch {
             status = .failed(step: .sending, cause: .thrown(error))
             refreshView()
+            return false
         }
     }
 
     // MARK: - 命令
+
+    /// 把一行字送出去 —— 走哪条路由 `ComposerState` 判好交进来，这里只管送。
+    ///
+    /// - Returns: 是否**已受理**。调用方（`ComposerState`）据此决定清不清草稿。
+    @discardableResult
+    func deliver(_ dispatch: SlashDispatch) async -> Bool {
+        switch dispatch {
+        case .command(let line): return await executeCommand(line)
+        case .prompt(let text): return await sendPrompt(text)
+        }
+    }
 
     /// 执行一整行命令：回包 ok = **已受理**，执行结果本身从订阅流里的
     /// `command/run` / `command/done` 来。失败如实进状态行。
@@ -187,12 +203,18 @@ final class SessionSync: ObservableObject {
     /// 与 `sendPrompt` 分开而不是合并成一个「发一行字」的入口：两条路的**回包语义不同**
     /// （prompt 的 ok 是「进了收件箱」，命令的 ok 是「宿主开始执行」），失败的说法也不同 ——
     /// 状态行上一个是「指令没能送达」、一个是「命令没能执行」。
-    func executeCommand(_ line: String) async {
+    ///
+    /// - Returns: 是否**已受理**。`unknown-command`（名字打错 / 语法不对）是本期唯一
+    ///   用户能自己改好的失败，所以那条路上草稿必须留着 —— 见调用方。
+    @discardableResult
+    private func executeCommand(_ line: String) async -> Bool {
         do {
             try await runCommand(client, sessionId: sessionId, line: line)
+            return true
         } catch {
             status = .failed(step: .executing, cause: .thrown(error))
             refreshView()
+            return false
         }
     }
 

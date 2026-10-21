@@ -73,13 +73,16 @@ struct CommandPalette: View {
         }
     }
 
-    /// 一行候选：名字（等宽，与命令行的观感一致）+ 一句说明。
+    /// 一行候选：名字（等宽，与命令行的观感一致）+ 参数占位 + 一句说明。
+    ///
+    /// 参数占位来自宿主的 `input.hint`（拼法在 `CommandText.swift` 的 `invocation`）——
+    /// 用户选了带参数的命令之后，才知道后面该写什么。
     private func row(_ command: CommandInfo) -> some View {
         Button {
             onPick(command)
         } label: {
             VStack(alignment: .leading, spacing: 1) {
-                Text("/\(command.name)")
+                Text(command.invocation)
                     .font(.footnote)
                     .monospaced()
                 if !command.description.isEmpty {

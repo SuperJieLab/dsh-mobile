@@ -87,7 +87,12 @@ func fetchCommands(_ client: GatewayClient, sessionId: String) async throws -> [
     let response: CommandCatalogResponse = try await client.perform(
         CommandCatalogRequest(sessionId: sessionId)
     )
-    return response.commands ?? []
+    // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去 —— 那会把一次应答异常
+    // 显示成「这个会话没有可用的命令」（成功面），用户以为真没有。
+    guard let commands = response.commands else {
+        throw GatewayClientError.malformedResponse(detail: "commands")
+    }
+    return commands
 }
 
 /// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的

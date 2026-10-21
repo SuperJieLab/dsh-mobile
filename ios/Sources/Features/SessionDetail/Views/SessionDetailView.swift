@@ -21,8 +21,8 @@ struct SessionDetailView: View {
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
-    /// 输入框里的草稿（下发指令）。
-    @State private var draft = ""
+    /// 输入框那一行：草稿、能不能发、面板该不该开 —— 判定在 `State/ComposerState.swift`。
+    @StateObject private var composer = ComposerState()
     /// 本屏五个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
     @State private var activeSheet: DetailSheet?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
@@ -232,10 +232,10 @@ struct SessionDetailView: View {
                 noticeRow(notice)
             }
 
-            if case .querying(let query) = SlashTrigger.of(draft: draft) {
+            if let query = composer.paletteQuery {
                 CommandPalette(directory: commands, query: query) { command in
                     // 只回填，不执行：带参数的命令要用户自己补完再按发送。
-                    draft = SlashTrigger.insert(name: command.name)
+                    composer.pick(name: command.name)
                 }
             }
 
@@ -325,7 +325,7 @@ struct SessionDetailView: View {
     /// 输入框**不带自己的边框**：它坐在玻璃上，再加一圈描边就成了两层皮。
     private var composerRow: some View {
         HStack(spacing: 6) {
-            TextField("发一条指令给 DSH…", text: $draft, axis: .vertical)
+            TextField("发一条指令给 DSH…", text: $composer.text, axis: .vertical)
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 10)
@@ -337,36 +337,32 @@ struct SessionDetailView: View {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
             }
-            .disabled(PromptDraft.normalized(draft) == nil)
+            .disabled(!composer.canSubmit)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
     }
 
     /// 命令面板此刻开着没有 —— 只用来取「刚打开」那个边沿，好触发一次重拉。
+    ///
+    /// 读的是**归一化之后**的草稿，与 `send` 的分流同一份输入：各读一份原始草稿时，
+    /// `" /permission"`（前导空格）会让这里判「不在敲命令」（不弹、不重拉）而发送判「是命令」。
     private var isCommandPaletteOpen: Bool {
-        if case .querying = SlashTrigger.of(draft: draft) { return true }
-        return false
+        composer.paletteQuery != nil
     }
 
-    /// 发送：以 `/` 开头的一行交给命令通道，其余照旧发给模型。
+    /// 发送：一行字走哪条路，判定在 `SlashTrigger.dispatch` —— 视图只照它的结论办事。
     ///
-    /// 分流判据是「这一行以 `/` 开头」—— 与面板的判据（`SlashTrigger`：还要「第一个 `/`
-    /// 之后没有空白」）不同，因为发送时带参数是常态。名字与参数怎么切是宿主的语法，
-    /// 我们只决定走哪条路。
+    /// **草稿在「已受理」之后才清**：命令名字打错（`unknown-command`）是唯一用户能自己改好的
+    /// 失败，那条路上把输入框清掉等于让人重打整行。
     ///
     /// **代价**：以 `/` 开头的普通消息发不出去（会被当命令）。与 Web UI 同 —— 它把整个
     /// 斜杠前缀交给了命令系统。
     private func send() {
-        guard let text = PromptDraft.normalized(draft) else { return }
-        draft = ""
         // 发送即收键盘：功能条跟着回来，用户能看到它接下来的连接态与占用。
+        // 草稿由 `composer` 按「是否受理」决定留不留 —— 失败了那行字还在，改个字就能重按。
         isComposing = false
-        if text.hasPrefix("/") {
-            Task { await sync.executeCommand(text) }
-        } else {
-            Task { await sync.sendPrompt(text) }
-        }
+        Task { await composer.submit(sync.deliver) }
     }
 
     // MARK: - 详情面

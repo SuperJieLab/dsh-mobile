@@ -51,6 +51,59 @@ final class SlashTriggerTests: XCTestCase {
         ]
     }
 
+    // MARK: - O6 分流（决定这行字上 Mac 执行还是发给模型）
+
+    /// 归一化之后以 `/` 开头 → 命令；否则 → 消息。三条边界与面板的判定同源。
+    func testDispatchRoutesSlashLinesToCommandsOnly() {
+        XCTAssertEqual(SlashTrigger.dispatch(of: "/permission read-only"),
+                       .command("/permission read-only"), "带参数也整行交给宿主")
+        XCTAssertEqual(SlashTrigger.dispatch(of: "/compact"), .command("/compact"))
+        XCTAssertEqual(SlashTrigger.dispatch(of: "hello"), .prompt("hello"))
+        XCTAssertEqual(SlashTrigger.dispatch(of: "看下 src/Core 目录"),
+                       .prompt("看下 src/Core 目录"), "路径里的斜杠不是命令")
+    }
+
+    /// 面板与分流必须看**同一份**输入 —— 这是本期最容易分叉的一处。
+    ///
+    /// `" /permission"`（前导空格）归一化之后是 `/permission`。两处若各读一份原始草稿：
+    /// 面板判「不在敲命令」（不弹候选、也不重拉），发送却判「是命令」—— 用户看不到任何候选，
+    /// 却执行了一条命令。所以这里断言的是「同一份归一化结果喂给两边，结论不矛盾」。
+    func testPaletteAndDispatchReadTheSameNormalizedText() {
+        for draft in ["/per", " /permission", "/permission read-only", "hello", " /hello"] {
+            let normalized = PromptDraft.normalized(draft) ?? ""
+            let route = SlashTrigger.dispatch(of: normalized)
+            switch SlashTrigger.of(draft: normalized) {
+            case .querying:
+                XCTAssertEqual(route, .command(normalized),
+                               "面板在敲命令 \(draft) → 这一行必须走命令通道")
+            case .inactive:
+                // 面板收起不代表不是命令（带参数的行就是），但「不是命令」时必须一致。
+                if case .command = route {
+                    XCTAssertTrue(normalized.hasPrefix("/"),
+                                  "面板说不在敲命令、发送说走命令，只有「带参数的命令行」这一种")
+                }
+            }
+        }
+        XCTAssertEqual(PromptDraft.normalized(" /permission"), "/permission",
+                       "归一化会去掉前导空白 —— 两边都读它才不会分叉")
+    }
+
+    // MARK: - O2b 参数占位
+
+    /// 候选行上的「怎么用」：宿主给了 `input.hint` 就带上它，没有就只给名字。
+    ///
+    /// 判据要能区分两条命令：只断言「非空」的话，把 hint 丢掉仍然绿。
+    func testInvocationCarriesTheHostHint() {
+        let withHint = commands().first { $0.name == "permission" }
+        XCTAssertEqual(withHint?.invocation, "/permission <preset>", "有 hint：名字 + 占位")
+
+        let withoutHint = commands().first { $0.name == "compact" }
+        XCTAssertEqual(withoutHint?.invocation, "/compact", "没有 hint：不凭空编一个参数")
+
+        XCTAssertEqual(CommandInfo(name: "x", description: "", inputHint: "").invocation, "/x",
+                       "空串的 hint 等同没有 —— 不要留一个悬空空格")
+    }
+
     /// 空查询返回全部（宿主给的顺序）；前缀匹配优先于包含匹配；大小写不敏感。
     func testMatchRanksPrefixBeforeContains() {
         XCTAssertEqual(CommandDirectory.match(commands(), query: "").map(\.name),

@@ -521,8 +521,25 @@ final class TranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(rows.first?.outcome, .success("ok"))
     }
 
-    /// 两条命令交错到达也各归各行（配对键不是「最近一条」）。
+    /// 两条命令交错到达也各归各行 —— **先发的先结束**。
+    ///
+    /// 这组顺序是刻意的：把配对改成「配给最近一条还没有结局的命令」时，`doneA` 会贴到
+    /// `cmd-b` 上，结局互换，断言变红。
+    ///
+    /// 下面还有一条「后发的先结束」——**两条合起来**才同时挡住 FIFO 与 LIFO 两种猜法：
+    /// 只留一种顺序时，其中一种猜法会碰巧全对（单条绿灯不代表配对键对）。
     func testTwoInterleavedCommandsDoNotSwapOutcomes() {
+        let runA = #"{"type":"command/run","seq":10,"time":1,"data":{"commandId":"cmd-a","name":"compact"}}"#
+        let runB = #"{"type":"command/run","seq":11,"time":1,"data":{"commandId":"cmd-b","name":"export"}}"#
+        let doneA = #"{"type":"command/done","seq":12,"time":2,"data":{"commandId":"cmd-a","kind":"success","text":"done"}}"#
+        let doneB = #"{"type":"command/done","seq":13,"time":2,"data":{"commandId":"cmd-b","kind":"error","text":"no such dir"}}"#
+        let rows = commandRows(in: assemble([runA, runB, doneA, doneB]).nodes)
+        XCTAssertEqual(rows.first(where: { $0.commandId == "cmd-a" })?.outcome, .success("done"))
+        XCTAssertEqual(rows.first(where: { $0.commandId == "cmd-b" })?.outcome, .failure("no such dir"))
+    }
+
+    /// 同一个交错场景、**先发的后结束**。挡住「配给第一条还没有结局的命令」那种猜法。
+    func testTwoInterleavedCommandsFinishingOutOfOrder() {
         let runA = #"{"type":"command/run","seq":10,"time":1,"data":{"commandId":"cmd-a","name":"compact"}}"#
         let runB = #"{"type":"command/run","seq":11,"time":1,"data":{"commandId":"cmd-b","name":"export"}}"#
         let doneB = #"{"type":"command/done","seq":12,"time":2,"data":{"commandId":"cmd-b","kind":"error","text":"no such dir"}}"#

@@ -44,9 +44,6 @@ struct CommandRun: Equatable {
     let name: String
     let args: String?
     var outcome: CommandOutcome?
-    /// 首条事件的 seq —— 只用于排序与调试，不作身份。
-    let seq: Int
-    let time: Double
 
     /// 那一行上「命令是什么」那半句：名字 + 原样参数（参数缺席就只有名字）。
     var invocation: String {
@@ -263,7 +260,7 @@ struct TranscriptAssembler {
                 guard case .started(let commandId, let name, let args)? = event.commandLifecycle else { break }
                 flush()
                 nodes.append(.command(CommandRun(commandId: commandId, name: name, args: args,
-                                                 outcome: nil, seq: event.seq, time: event.time)))
+                                                 outcome: nil)))
 
             case "command/done":
                 guard case .settled(let commandId, let outcome)? = event.commandLifecycle else { break }
@@ -281,7 +278,7 @@ struct TranscriptAssembler {
                     // 只能用 id 出一行「结果」。**不编造名字** —— 那会是屏幕上唯一一条
                     // 说不清按了什么的记录。
                     nodes.append(.command(CommandRun(commandId: commandId, name: "", args: nil,
-                                                     outcome: outcome, seq: event.seq, time: event.time)))
+                                                     outcome: outcome)))
                 }
 
             case "tool/call":

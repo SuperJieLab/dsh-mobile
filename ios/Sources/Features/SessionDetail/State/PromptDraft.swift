@@ -6,7 +6,7 @@
  *
  * 纯判定：不 import SwiftUI、不读全局状态（判据在 `tests/PromptDraftTests.swift`）。
  *
- * 消费者：`SessionDetailView`（发送按钮的 `disabled`）、`SessionSync.sendPrompt`（入口 guard）。
+ * 消费者：`ComposerState`（发送按钮的 `canSubmit` 与提交时的取值）。
  */
 import Foundation
 

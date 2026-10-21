@@ -40,3 +40,36 @@ enum SlashTrigger: Equatable {
         "/\(name) "
     }
 }
+
+/// 一行字该走哪条路 —— **本期安全面上最有后果的一条判定**，所以它在状态层，不在视图里。
+///
+/// 走错方向的后果不对称：该发给模型的话走成命令，会被宿主当命令解析（可能真的执行了什么）；
+/// 该执行的命令走成消息，会变成一句对模型说的话。
+enum SlashDispatch: Equatable {
+    /// 交给命令通道，原样一整行。
+    case command(String)
+    /// 发给模型。
+    case prompt(String)
+
+    /// 这行文字实际要发出去的内容。
+    var text: String {
+        switch self {
+        case .command(let line): return line
+        case .prompt(let text): return text
+        }
+    }
+}
+
+extension SlashTrigger {
+
+    /// 分流：**归一化之后**整段以 `/` 开头就交给命令通道，否则发给模型。
+    ///
+    /// 入参必须是归一化后的文本（`PromptDraft.normalized`）—— 面板那侧（`of(draft:)`）读的
+    /// 是同一份归一化结果。两边同源是硬要求：各读一份原始草稿时，`" /permission"`（前导空格）
+    /// 会让面板判「不在敲命令」而发送判「是命令」—— 用户看不到候选，却执行了一条命令。
+    ///
+    /// 这里只回答「走哪条路」，不切名字与参数：那是宿主的语法，客户端切一遍就是第二份实现。
+    static func dispatch(of normalizedText: String) -> SlashDispatch {
+        normalizedText.hasPrefix("/") ? .command(normalizedText) : .prompt(normalizedText)
+    }
+}
