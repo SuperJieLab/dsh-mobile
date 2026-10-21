@@ -156,36 +156,88 @@ final class FollowReplayTests: XCTestCase {
         }(), "K3 无端点建连请求 → 不产连接任务，进入退避等待（激活后自愈）")
     }
 
-    /// 手上没有票时不发起握手，而是叫一声去换票 —— 换到之后才能连上。
+    /// 让出若干次，让 `FollowClient` 里那些 `Task { }` 真正跑完。
+    ///
+    /// ⚠️ **不能写成 `for _ in 0..<N where 条件`**：`where` 只跳过不满足的那一轮、不会让出，
+    /// 于是「条件是某种已达成的状态」时一次都不让出，被测的异步任务根本没机会跑 ——
+    /// 断言于是落在初始状态上，恒真。等待要按**次数**给，不按**状态**给。
+    private func settle(_ rounds: Int = 50) async {
+        for _ in 0..<rounds { await Task.yield() }
+    }
+
+    /// 手上没有票时不发起握手，而是去换一张 —— 换到了立刻连上。
     ///
     /// 判据盯的是**有没有发生握手**：裸连那一版也会进退避等待（K3 的形态），所以只看
-    /// `phase` 分不开两种写法。这条用 `sessionProvider` 是否被调用来当「起了握手」的证据，
-    /// 并用 `onMissingTicket` 被调用来当「去换票了」的证据。
+    /// `phase` 分不开两种写法。这条用 `sessionProvider` 是否被调用来当「起了握手」的证据。
     ///
     /// 为什么这比「慢一次」严重：退避重连这条路上没有任何东西会换票。裸连的话，票过期后
     /// 每一轮退避都是同一个 401，**永不收敛** —— 表现为静默断流，直到有人回前台。
-    func testNoTicketMeansNoHandshakeAndARequestForOne() async {
+    func testNoTicketMeansNoHandshakeThenReconnectOnceRenewed() async {
         let follow = FollowClient()
         follow.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
-        follow.authorizationProvider = { nil }  // 票过期 / 冷启动：手上一张都没有
+        // 第一次问到票时还没有，换完之后才有 —— 这正是冷启动与票过期的那一刻。
+        var ticket: String?
+        follow.authorizationProvider = { ticket }
         var handshakes = 0
         follow.sessionProvider = {
             handshakes += 1
             return .shared
         }
-        var asked = 0
-        follow.onMissingTicket = { asked += 1 }
+        var renewals = 0
+        follow.ticketRenewer = {
+            renewals += 1
+            ticket = "fresh"
+            return .granted("fresh")
+        }
 
         follow.start(sessionId: "s1")
-
         XCTAssertEqual(handshakes, 0, "没有票就不该发握手 —— 那一发必定 401")
-        XCTAssertEqual(asked, 1, "应当叫一次去换票")
-        XCTAssertTrue({ if case .waiting = follow.phase { return true }; return false }(),
-                      "并留在退避等待里（换票失败时靠它重试，成功则由上层提速）")
+
+        await settle()
+        XCTAssertEqual(renewals, 1, "应当去换一次票")
+        XCTAssertEqual(handshakes, 1, "换到之后应当立刻重连（跳过剩下一整轮退避）")
         follow.stop()
     }
 
-    /// 有票时照常握手 —— 上一条不能靠「永远不连」通过。
+    /// 换不到、且**不会自己好**（未配对 / 关系被撤销）→ 停止重试。
+    ///
+    /// 这一条防的是「无限空转」：每 10 秒一轮、静默、永不收敛，而屏幕上一个字都不会变。
+    func testAnUnobtainableTicketStopsTheLoopInsteadOfRetryingForever() async {
+        let follow = FollowClient()
+        follow.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
+        follow.authorizationProvider = { nil }
+        var handshakes = 0
+        follow.sessionProvider = {
+            handshakes += 1
+            return .shared
+        }
+        follow.ticketRenewer = { .unavailable }
+
+        follow.start(sessionId: "s1")
+        await settle()
+
+        XCTAssertEqual(handshakes, 0, "始终没有票 → 一次握手都不该发生")
+        XCTAssertEqual(follow.phase, .idle, "拿不到且不会自愈 → 停在 idle，而不是留在退避里")
+        follow.stop()
+    }
+
+    /// 换不到但状态没坏（网络不通）→ 继续退避，不停止。
+    func testARetryableFailureKeepsBackingOff() async {
+        let follow = FollowClient()
+        follow.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
+        follow.authorizationProvider = { nil }
+        follow.sessionProvider = { .shared }
+        follow.ticketRenewer = { .retryLater }
+
+        follow.start(sessionId: "s1")
+        await settle()
+
+        XCTAssertEqual({ if case .waiting = follow.phase { return true }; return false }(), true,
+                       "暂时换不到 → 留在退避等待里，退避自己会再来一轮")
+        follow.stop()
+    }
+
+    /// 有票时照常握手 —— 上面几条不能靠「永远不连」通过。
     func testWithATicketTheHandshakeHappens() async {
         let follow = FollowClient()
         follow.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
@@ -195,7 +247,7 @@ final class FollowReplayTests: XCTestCase {
             handshakes += 1
             return .shared
         }
-        follow.onMissingTicket = { XCTFail("有票却去要票") }
+        follow.ticketRenewer = { XCTFail("有票却去换票"); return .granted("x") }
 
         follow.start(sessionId: "s1")
 

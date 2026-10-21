@@ -229,6 +229,79 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(scanned, 100, "只扫到 \(scanned) 行 —— 先怀疑路径推算")
     }
 
+    // MARK: - 断言 2d：票的过期判定只有一处
+
+    /// 「访问票什么时候过期」全仓只有一处判断 —— 在 `TicketKeeper` 里。
+    ///
+    /// 这条替代不了审查，但它挡住一类会重演的事：票的判定被第二个地方复制一份（读缓存的一处、
+    /// 发起请求的一处），于是「本地认为还有效、另一处认为过期」在运行时看不出来。同型的先例
+    /// 是 `Menu` 与 `Picker` 各算一遍选中项，屏幕上勾与值对不上。
+    ///
+    /// 判据落在**比较表达式**上而不是字段名：`GatewayProtocol` 里那个 `expiresAt: Double?`
+    /// 是协议字段（解码必须还在），`GatewayClient` 里那行把它换成 `Date` 也是必要的一步
+    /// —— 两者都不做比较。
+    func testOnlyOnePlaceComparesTicketExpiry() throws {
+        let core = sourcesRoot.appendingPathComponent("Core")
+        var comparisons: [(file: String, line: Int)] = []
+
+        for file in swiftFiles(under: core) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (number, code) in codeLines(in: text) {
+                // 比较运算符左右涉及 expiresAt 才算出局：`now < issued.expiresAt`、
+                // `expiresAt > now`、`expiresAt <= …` 都算。
+                guard code.contains("expiresAt") else { continue }
+                let pattern = try NSRegularExpression(pattern: #"(<|>|<=|>=)\s*[\w.]*expiresAt|expiresAt\s*(<|>|<=|>=)"#)
+                let range = NSRange(code.startIndex..., in: code)
+                if pattern.firstMatch(in: code, range: range) != nil {
+                    comparisons.append((file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: ""), number))
+                }
+            }
+        }
+
+        // 正控：这一条必须真的扫到东西，否则「零处比较」会被读成「合规」。
+        XCTAssertEqual(comparisons.count, 1,
+                       "访问票的过期比较应当只有一处（TicketKeeper），实际："
+                       + comparisons.map { "\($0.file):\($0.line)" }.joined(separator: " / "))
+        XCTAssertEqual(comparisons.first?.file,
+                       "Core/Gateway/Client/TicketKeeper.swift",
+                       "过期判定该住在票那一层，不是别处")
+    }
+
+    // MARK: - 断言 2d：Secrets 只装基建，不装业务包装
+
+    /// `Core/Secrets/` 只放**落盘基建**（按名字存/取/删一个字符串），不放任何业务包装。
+    ///
+    /// 判据是「这个类型认识什么」而不是文件名：基建只认识文件名与字节；一旦某个类型里出现
+    /// 具体的凭证名（`"device-token"` / `"tailnet-key"`）或它在谈「关系」「撤销」这类语义，
+    /// 它就是一个业务包装，该回到自己的域去 —— 否则一个纯存储目录会开始认识别人的概念。
+    ///
+    /// 现役的唯一基建是 `SecretFile`，它被两个域共用（网关的设备凭证、组网的接入 key），
+    /// 所以它不属于任何一方。业务包装各自归位：`Gateway/Client/CredentialStore.swift`、
+    /// `MeshNetwork/TailnetNode.swift`。
+    func testSecretsHoldsOnlyStoragePrimitives() throws {
+        let secrets = sourcesRoot.appendingPathComponent("Core/Secrets")
+        let files = swiftFiles(under: secrets)
+        // 正控：目录必须扫到东西，否则「零违规」会被读成合规。
+        XCTAssertFalse(files.isEmpty, "Secrets 一个文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertEqual(files.count, 1,
+                       "Secrets 只该装基建；业务包装归各自的域。现在有："
+                       + files.map(\.lastPathComponent).joined(separator: ", "))
+
+        // 第二个方向：基建本身也不许认识具体的凭证名 —— 名字归业务包装。
+        //
+        // 逐个文件查，不取 `files[0]`：目录扫描顺序由文件系统给，不保证先给 `SecretFile`。
+        // 拿错了文件，这条断言会「报出正确的问题、指错文件」—— 那种提示比没有更费时间。
+        var names: [(file: String, credential: String)] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for credential in ["device-token", "tailnet-key"] where text.contains("\"\(credential)\"") {
+                names.append((file.lastPathComponent, credential))
+            }
+        }
+        XCTAssertEqual(names.map { "\($0.file): \($0.credential)" }, [],
+                       "基建里出现了具体凭证名 —— 名字属于业务包装，基建只接受一个参数")
+    }
+
     // MARK: - 断言 3：Views 下的类型不被别的界面当零件用
 
     /// 已知的跨界面复用。每一条都要有理由，且清单本身被断言（`testExceptionsAreStillReal`）——

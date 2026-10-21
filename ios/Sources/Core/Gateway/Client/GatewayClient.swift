@@ -1,24 +1,28 @@
 import Foundation
 
-/// 与 Mac 侧网关的 **op 门面 + 身份状态机**：每个 op 一个方法，内部经 `GatewayTransport`
-/// 发送；身份是这里的状态 —— 用之前先确认手上有票（没有就换一张），真的撞上 401 再**静默续期
-/// 一次并重试**。续期单飞让并发撞 401 的请求共享同一张新票。
+/// 与 Mac 侧网关的 **op 门面 + 身份权威**：每个 op 一个方法，内部经 `GatewayTransport`
+/// 发送。票从哪来、还剩多久、换不到该怎么办，全部收在这里 —— 两条通道都问它要。
 ///
-/// **为什么要「用之前先确认」**：访问票只活在内存里（`CredentialStore`），冷启动后、或票过期
-/// （15 分钟）后回来，手上就是没有票。纯反应式（等 401 再续）会让每一次这样的处境都先发一发
-/// 注定被拒的请求 —— 服务端记一条「没有有效票」，WS 那边还要多走一轮握手失败与退避。那串日志
-/// 与那几百毫秒的空屏都是这一步的自证，而不是网出了问题。
+/// **要票的唯一入口是 `ticket()`**，返回三态（`AccessTicket`）而不是 Bool：拿不到的原因分成
+/// 「不会自己好」与「等一等就好」两种，其中只有后者值得重试。并发的调用共享同一个在途换票
+/// 任务（单飞），所以「同时问」不会变成「同时换两张」。
+///
+/// **为什么要「用之前先确认」，而不是等 401 再换**：访问票只活在内存里（`CredentialStore`），
+/// 冷启动后、或票过期（15 分钟）后回来，手上就是没有票。纯反应式会让每一次这样的处境都先发
+/// 一发注定被拒的请求 —— 服务端记一条「没有有效票」，WS 那边还要多走一轮握手失败与退避。
+/// 撞上 401 仍然会换一次并重试（那覆盖的是「本地以为有票、服务端不认」，比如 Mac 重启）；
+/// 两条路分工，不是冗余。
 ///
 /// 协议类型与语义在 `GatewayProtocol.swift`，传输机制在 `GatewayTransport.swift`。
 /// `struct` 改 `class` 是因为续期单飞与已配对状态是**可变共享状态** —— 值语义会在视图间
 /// 复制出各自为政的凭证；仍 `@MainActor`，因为调用方本就在主线程。
 ///
-/// **命名按副作用分**：写操作读作祈使动词短语（`pair` / `refreshAccess` /
+/// **命名按副作用分**：写操作读作祈使动词短语（`pair` / `renewTicket` /
 /// `answerApproval` / `sendPrompt` / `selectModel`），读操作读作名词短语、与协议 op 同名
 /// （`snapshot` / `page` / `modelCatalog`）。**已知例外**：`listSessions` 是读操作却用了
 /// 动词短语 —— 改成 `sessions()` 会与属性读起来相混，故保留并在此登记。
 ///
-/// op 对应：`pair`→`pair` · `refreshAccess`→`refresh` · `listSessions`→`list-sessions` ·
+/// op 对应：`pair`→`pair` · `renewTicket`→`refresh` · `listSessions`→`list-sessions` ·
 /// `snapshot`→`snapshot` · `page`→`page` · `answerApproval`→`approval-answer` ·
 /// `sendPrompt`→`session-prompt` · `modelCatalog`→`model-catalog` ·
 /// `selectModel`→`model-select`。
@@ -34,20 +38,29 @@ final class GatewayClient: ObservableObject {
 
     private var transport: GatewayTransport?
 
-    /// 三张票在手机侧的家。与 transport 共持同一份；默认共享单例：全 App 一个身份。
+    /// 设备凭证在手机侧的家。默认共享单例：全 App 一个身份。
     private let credentials: CredentialStore
 
-    /// 续期单飞：同一时刻只允许一个 `refresh` 在途（401 竞态）。
-    /// 并发撞上 401 的请求都等这一张新票，然后各自重试一次。
-    private var refreshTask: Task<Bool, Never>?
+    /// 访问票的生命周期（有没有、还剩多久、要不要换、并发谁去换）。
+    ///
+    /// 换票动作 `renewTicket` 在本类 —— 它要线路与协议，而票那一层不该认识这些。
+    /// 接线在 `init` 末尾做而不是属性初始化式里：那个闭包要读 `self.renewTicket`，
+    /// 而属性初始化式跑在 `self` 完整可用之前（编译器会拦）。
+    private var tickets = TicketKeeper { _ in .retryLater }
 
     /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
     @Published private(set) var isPaired: Bool
 
     init(credentials: CredentialStore? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
-        self.credentials = credentials ?? .shared
-        self.isPaired = self.credentials.hasDeviceToken
+        let store = credentials ?? .shared
+        self.credentials = store
+        self.isPaired = store.hasDeviceToken
+        // 换成真的换票动作。弱引用：票那一层活不过门面，没有理由让它把门面吊住。
+        tickets = TicketKeeper { [weak self] deviceToken in
+            guard let self else { return .retryLater }
+            return await self.renewTicket(deviceToken: deviceToken)
+        }
     }
 
     /// 组网激活：节点验证 Running 后由 store 调用，这是端点从无到有的唯一时刻 ——
@@ -56,7 +69,7 @@ final class GatewayClient: ObservableObject {
     func activate(session: URLSession, baseURL: URL) {
         meshSession = session
         self.baseURL = baseURL
-        transport = GatewayTransport(baseURL: baseURL, credentials: credentials, session: session)
+        transport = GatewayTransport(baseURL: baseURL, session: session)
         // 传输切换是局域网 → tailnet 的分界点状态迁移，在此留痕。
         Log.info(Log.Module.gateway, "activated: HTTP+WS switched to \(baseURL.absoluteString)")
     }
@@ -73,58 +86,59 @@ final class GatewayClient: ObservableObject {
         Log.info(Log.Module.gateway, "paired — device token stored")
     }
 
-    /// 还活着的 access 票；没有就是 `nil`。过期的票等价于没有票，调用方走续期。
+    /// 还活着的 access 票；没有就是 `nil`。
     ///
-    /// 流通道升级时要读它。**必须经这里，不许直接认 `CredentialStore.shared`** ——
-    /// 本类的 `credentials` 可注入，WS 与 HTTP 若各取各的，换掉注入实例之后两条路径
-    /// 会各自为政，而那种不一致在运行时看不出来（默认都指向 `.shared`）。
+    /// 流通道升级时要读它 —— 那里只有同步上下文。它**只回答现状，不会去换**：要换走 `ticket`。
+    /// 必须经本类，不许直接认 `CredentialStore` —— 票在 `tickets` 里，而它可以被注入。
     func validAccessToken() -> String? {
-        credentials.validAccessToken()
+        tickets.validToken()
     }
 
-    /// 保证手上有一张还活着的票 —— **用之前先调它**：有票就什么都不做，没票就换一张。
+    /// 要一张票 —— **使用方唯一的入口**：有就立刻给，没有就去换（并发时搭同一趟）。
     ///
-    /// 幂等且单飞：进屏那一拍 HTTP 与 WS 两条路会同时问到它，只该发出一次 `refresh`。
-    /// 返回 false 表示换不到（未配对、或关系已被服务端掐断），调用方照常走自己的失败路径 ——
-    /// 这里不抛，因为「没有票」在 HTTP 那边本来就是可重试的一步。
-    @discardableResult
-    func ensureAccess() async -> Bool {
-        if credentials.validAccessToken() != nil { return true }
-        guard isPaired else { return false }
-        return await refreshAccess()
+    /// 三种结果各有各的处置（见 `AccessTicket`）。本类只补一件票那一层不知道的事：
+    /// 设备凭证在本地存着没有。
+    func ticket() async -> AccessTicket {
+        await tickets.ticket(deviceToken: credentials.deviceToken)
     }
 
-    /// 用设备凭证换一张新 access。返回 false 表示关系已被服务端掐断（401）—— 此时
-    /// 清掉本机凭证，App 回到未配对状态。单飞：撞车的调用共享同一个在途任务，不叠加请求。
-    func refreshAccess() async -> Bool {
-        if let refreshTask { return await refreshTask.value }
-        let task = Task<Bool, Never> { [weak self] in
-            guard let self, let deviceToken = self.credentials.deviceToken else { return false }
-            do {
-                let response: RefreshResponse = try await self.send(
-                    RefreshRequest(deviceToken: deviceToken), authenticated: false
-                )
-                try response.validate()
-                guard let token = response.accessToken, let expiresAt = response.expiresAt else { return false }
-                self.credentials.storeAccess(token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
-                Log.debug(Log.Module.session, "access ticket refreshed")
-                return true
-            } catch GatewayClientError.unauthenticated {
-                // 服务端不认这段关系了：撤销或凭证被替换。掐断本机状态。
-                Log.warn(Log.Module.gateway, "relationship severed by server — device token cleared")
-                self.credentials.deleteDeviceToken()
-                self.isPaired = false
-                return false
-            } catch {
-                // 传输失败不是关系终结：票换不到只是暂时，下次再试。
-                Log.warn(Log.Module.session, "refresh failed (transport) — retrying next 401")
-                return false
-            }
-        }
-        refreshTask = task
-        defer { refreshTask = nil }
-        return await task.value
+    /// 换一张新的，不问手上有没有 —— 用于「服务端刚说了 401」之后：本地以为那张还有效，
+    /// 读缓存只会把同一枚死票再发一遍。
+    private func renewTicketNow() async -> AccessTicket {
+        await tickets.renewAnyway(deviceToken: credentials.deviceToken)
     }
+
+    /// **换票动作本身** —— 票那一层注入的就是它。线路与协议在这里，票的生命周期在那边。
+    ///
+    /// 三条出口对应三种处境，不合并：服务端 401 意味着关系没了（连同设备凭证一起清掉，
+    /// App 回到未配对），传输失败只是这一次没成。
+    private func renewTicket(deviceToken: String) async -> TicketKeeper.Renewal {
+        do {
+            let response: RefreshResponse = try await send(
+                RefreshRequest(deviceToken: deviceToken), authenticated: false
+            )
+            try response.validate()
+            guard let token = response.accessToken, let expiresAt = response.expiresAt else {
+                // `ok: true` 却没带票：服务端的应答有问题，下一轮还会是同一个答案。
+                Log.warn(Log.Module.gateway, "refresh answered without a ticket")
+                return .retryLater
+            }
+            Log.debug(Log.Module.session, "access ticket renewed")
+            return .issued(.init(token: token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000)))
+        } catch GatewayClientError.unauthenticated {
+            // 服务端不认这段关系了：撤销或凭证被替换。掐断本机状态 —— 重试没有意义。
+            Log.warn(Log.Module.gateway, "relationship severed by server — device token cleared")
+            credentials.deleteDeviceToken()
+            tickets.clear()
+            isPaired = false
+            return .unavailable
+        } catch {
+            // 传输失败不是关系终结：票换不到只是暂时，退避后再试。
+            Log.warn(Log.Module.session, "ticket renewal failed (transport) — will retry")
+            return .retryLater
+        }
+    }
+
 
     // MARK: - 三个读 op
 
@@ -269,20 +283,37 @@ final class GatewayClient: ObservableObject {
         // 未激活 = 没有地址可打：fail-fast，不猜地址。
         guard let transport else { throw GatewayClientError.notActivated }
         // 手上有票才发。没有票照样发出去，换来的是一次注定被拒的往返 —— 服务端记一条
-        // 「没有有效票」，客户端再续期重试，同一件事花两次。先换再发只多一次 wait，
+        // 「没有有效票」，客户端再换票重试，同一件事花两次。先换再发只多一次 wait，
         // 而在票还在的场景里（15 分钟内）它一次都不等。
-        if authenticated { await ensureAccess() }
-        if let answer = try await transport.sendOnce(request, authenticated: authenticated, type: Response.self) {
+        let ticket = authenticated ? await self.ticket() : nil
+        if let answer = try await transport.sendOnce(
+            request, authorization: ticket?.token, treat401AsRefusal: !authenticated, type: Response.self
+        ) {
             return answer
         }
         // 走到这里 = 业务请求被 401 拒了（pair / refresh 的 401 在 sendOnce 里
         // 自带语义上抛，不会返回 nil）。换一张票（单飞），恰好重试一次。
-        guard authenticated, await refreshAccess() else {
+        //
+        // 票换不到时按处境说不通的话：`.unavailable` 是「未配对 / 关系被撤销」，
+        // 而 `.retryLater` 是「这次没连上」—— 后者说成前者，用户会去查一件没发生的事。
+        guard authenticated else { throw GatewayClientError.unauthenticated }
+        switch await renewTicketNow() {
+        case .granted(let fresh):
+            if let answer = try await transport.sendOnce(
+                request, authorization: fresh, treat401AsRefusal: false, type: Response.self
+            ) {
+                return answer
+            }
             throw GatewayClientError.unauthenticated
+        case .unavailable:
+            throw GatewayClientError.unauthenticated
+        case .retryLater:
+            throw GatewayClientError.transport(url: transport.baseURL, underlying: TicketUnavailable())
         }
-        if let answer = try await transport.sendOnce(request, authenticated: authenticated, type: Response.self) {
-            return answer
-        }
-        throw GatewayClientError.unauthenticated
     }
+}
+
+/// 换票没成（网络不通 / 网关不在）—— 只用来给「这次失败不是因为身份」一个可读的说法。
+private struct TicketUnavailable: LocalizedError {
+    var errorDescription: String? { "换取访问票失败 —— 网关没连上。" }
 }

@@ -4,8 +4,12 @@ import Foundation
 /// 把 URLError 原样带在错误里（翻成人话在 `Display/FailureText.swift`）。
 ///
 /// 切分判据 = 「改了要不要升协议版本」：这里的代码不碰协议语义 ——
-/// 消息结构在 `GatewayProtocol.swift`，身份状态机（pair / 续期单飞 / `isPaired`）留在
-/// `GatewayClient`，它调本类发送。
+/// 消息结构在 `GatewayProtocol.swift`，身份状态机（配对 / 换票单飞 / `isPaired`）留在
+/// `GatewayClient`。
+///
+/// **本类不认识凭证。** 它只收一个「这次请求带什么」的字符串，由 `GatewayClient` 算好传进来
+/// —— 票据的有效性、续约、以及「没有票时要不要继续」都在那一层。这里若自己去读
+/// `CredentialStore`，同一个问题就会有两个答案，而 HTTP 与 WS 各读一遍时两者还会不一致。
 @MainActor
 final class GatewayTransport {
     let baseURL: URL
@@ -22,20 +26,22 @@ final class GatewayTransport {
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
     nonisolated static let timeout: TimeInterval = 10
 
-    /// 三张票在手机侧的家。默认共享单例：全 App 一个身份。
-    let credentials: CredentialStore
-
-    init(baseURL: URL, credentials: CredentialStore, session: URLSession = .shared) {
+    init(baseURL: URL, session: URLSession = .shared) {
         self.baseURL = baseURL
-        self.credentials = credentials
         self.session = session
     }
 
-    /// 发一次（不带续期编排）。返回 `nil` 表示被 401 拒了 —— 续期单飞与重试
-    /// 恰好一次的编排是身份状态机，留在 `GatewayClient.send`。
+    /// 发一次（不带换票编排）。返回 `nil` 表示被 401 拒了 —— 换票单飞与重试恰好一次的
+    /// 编排是身份状态机，留在 `GatewayClient.send`。
+    ///
+    /// 两个参数是两件事，不能合并：
+    /// - `authorization`：这次请求带什么票（`nil` = 不带头）。
+    /// - `treat401AsRefusal`：401 该怎么读。配对与换票的 401 是**定论**（要报出信封里的原因，
+    ///   比如配对码不对）；业务 op 的 401 是**再试一次的信号**（返回 `nil` 交给外层）。
     func sendOnce<Request: Encodable, Response: Decodable>(
         _ request: Request,
-        authenticated: Bool,
+        authorization: String?,
+        treat401AsRefusal: Bool,
         type: Response.Type
     ) async throws -> Response? {
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
@@ -43,8 +49,8 @@ final class GatewayTransport {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // 身份只走传输头，不进消息体：消息体的每一个字段都是协议的一部分，
         // 凭证放进去会让它出现在日志、重放与错误回显里。
-        if authenticated, let access = credentials.validAccessToken() {
-            urlRequest.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
+        if let authorization {
+            urlRequest.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
         }
         urlRequest.timeoutInterval = Self.timeout
         urlRequest.httpBody = try JSONEncoder().encode(request)
@@ -61,9 +67,9 @@ final class GatewayTransport {
 
         if let http = urlResponse as? HTTPURLResponse {
             guard http.statusCode != 401 else {
-                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层续期重试；鉴权请求
-                // （pair / refresh）的 401 自带语义，必须读出信封上抛：配对码不对要说配对码不对。
-                guard authenticated else {
+                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层换票重试；配对与换票
+                // 的 401 自带语义，必须读出信封上抛：配对码不对要说配对码不对。
+                guard treat401AsRefusal else {
                     if let failure = envelopeFailure(in: payload) {
                         if failure.code == GatewayErrorCode.unauthenticated.rawValue {
                             Log.info(Log.Module.gateway, "auth op refused: \(failure.code) — \(failure.message)")
@@ -73,8 +79,8 @@ final class GatewayTransport {
                     }
                     throw GatewayClientError.unauthenticated
                 }
-                // 正常续期编排的第一环：debug 留痕，不打满 info。
-                Log.debug(Log.Module.gateway, "401 on business op — refreshing ticket")
+                // 换票编排的第一环：debug 留痕，不打满 info。
+                Log.debug(Log.Module.gateway, "401 on business op — renewing ticket")
                 return nil
             }
             if http.statusCode != 200 {

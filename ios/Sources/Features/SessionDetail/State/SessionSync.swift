@@ -118,17 +118,11 @@ final class SessionSync: ObservableObject {
         // HTTP 那条也走 client 注入的 store，两条路径必须同源，否则换掉注入实例之后它们
         // 会各自为政。
         followClient.authorizationProvider = { [weak self] in self?.client.validAccessToken() }
-        // 没有票时去换一张，换到了立刻重连 —— 否则退避循环里每一轮都是同一个 401，
-        // 而这条路上没有别的东西会去换票（见 `FollowClient.onMissingTicket`）。
-        // 捕获局部实例而不是 `self.follow`：后者会递归进这个 lazy 初始化器。
-        followClient.onMissingTicket = { [weak self, weak followClient] in
-            guard let self, let followClient else { return }
-            Task { [weak self, weak followClient] in
-                guard let self, let followClient else { return }
-                // 换不到（未配对 / 网络不通）就什么都不做：让退避自己继续，不叠加请求。
-                guard await self.client.ensureAccess() else { return }
-                followClient.reconnectNow()
-            }
+        // 换票只是「给一个能力」：换到之后该重连、换不到该等还是该停，由 `FollowClient`
+        // 自己按结果决定（见 `renewThenRetry`）—— 那是连接编排，不是本层的事。
+        followClient.ticketRenewer = { [weak self] in
+            guard let self else { return .unavailable }
+            return await self.client.ticket()
         }
         // 传输与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
         followClient.sessionProvider = { [weak self] in self?.client.meshSession ?? .shared }
@@ -383,12 +377,7 @@ final class SessionSync: ObservableObject {
     ///   手里空着时等价于打开。重连因此不会把已经翻出来的历史还回去）
     /// - 事件帧 → `mirror.apply(.received(SessionSnapshot(asOfSeq: seq + 1, …)))` —— 一条事件就是
     ///   一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
-    func startFollowing() async {
-        // 升级请求上那张票与 HTTP 是同一张（`authorizationProvider` 读的也是它）。没有票时
-        // 先换再连：否则这一次握手注定被拒，要多走一轮退避，而首屏正等着它。
-        // `.task` 在离屏时取消 —— 换票途中离开就不该再起连接。
-        await client.ensureAccess()
-        guard !Task.isCancelled else { return }
+    func startFollowing() {
         follow.start(sessionId: sessionId)
         scheduleFirstScreenFallback()
     }
@@ -416,9 +405,10 @@ final class SessionSync: ObservableObject {
 
     /// 回前台立即触发重连：上游「恢复立即试」的复现。已就绪或正在握手时无事发生。
     /// 只动连接编排，不碰镜像 —— 新 opening 会经 `applyOpening` 原路进来。
-    func reconnectNow() async {
-        await client.ensureAccess()
-        guard !Task.isCancelled else { return }
+    ///
+    /// 票在不在这一层不关心：`FollowClient` 见空票会自己去换（`ticketRenewer`），
+    /// 本层只提供那个能力。
+    func reconnectNow() {
         follow.reconnectNow()
     }
 

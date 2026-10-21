@@ -44,13 +44,14 @@ final class FollowClient: NSObject {
     /// 取一张有效的访问凭证 —— upgrade 请求带上它。**没有就说明现在不该连**：
     /// 见 `connect` 里对空票的处理。
     var authorizationProvider: (() -> String?)?
-    /// 手上没有票时叫一声 —— 上层去换一张，换到了再 `reconnectNow()` 提速。
+    /// 换一张票。`connect` 见空票时调它，**并且由本类自己决定下一步**（见 `renewThenRetry`）：
+    /// 换到了就跳过剩余退避重连，换不到就按处境等或停。
     ///
-    /// 为什么必须有人管这件事：退避重连这条路上没有别的东西会去换票（`start` 与
-    /// `reconnectNow` 的前置都只在各自入口跑一次）。票过期后若照旧裸连，每一轮退避都是
-    /// 一次注定被拒的握手，而且**永不收敛** —— 服务端看不到票，我们也永远拿不到新的，
-    /// 直到有人回前台或重新进屏。那表现就是静默断流，不是慢一下。
-    var onMissingTicket: (() -> Void)?
+    /// 为什么决定权在这里而不是注入方：退避重连这条路上没有别的东西会去换票（`start` 与
+    /// `reconnectNow` 的前置都只在各自入口跑一次）。票过期后若照旧裸连，每一轮退避都是一次
+    /// 注定被拒的握手，而且**永不收敛** —— 服务端看不到票，我们也永远拿不到新的，直到有人回
+    /// 前台或重新进屏。那表现就是静默断流，不是慢一下。
+    var ticketRenewer: (() async -> AccessTicket)?
     /// 建连的传输与地址每次现取：store 激活后下一轮连接即走隧道，本类零改动。
     /// 返回 nil = 端点不存在（未激活）——不猜地址，connect 据此进退避等待。
     var sessionProvider: () -> URLSession = { .shared }
@@ -194,13 +195,10 @@ final class FollowClient: NSObject {
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = Self.streamPath
 
-        // 没有票**不裸连**：这一发必定被 401 拒，而且在退避循环里票不会自己长出来 ——
-        // 一旦这样起步，此后每一轮都是同一个失败。改为「叫一声去换票 + 继续退避」：
-        // 换到之后上层调 `reconnectNow()` 跳过剩下的等待，换不到就下一轮再试。
+        // 没有票**不裸连**：这一发必定被 401 拒。交给 `renewThenRetry` 决定下一步。
         guard let access = authorizationProvider?() else {
-            Log.info(Log.Module.session, "connect g\(current) skipped — no access ticket; asking for a new one")
-            onMissingTicket?()
-            scheduleReconnect()
+            Log.info(Log.Module.session, "connect g\(current) skipped — no access ticket")
+            renewThenRetry()
             return
         }
 
@@ -547,6 +545,41 @@ final class FollowClient: NSObject {
         let exponent = min(max(attempt, 1), 16) - 1
         let cap = min(baseBackoffMs * (1 << exponent), maxBackoffMs)
         return Int(Double(cap) * (0.5 + min(max(random, 0), 1) * 0.5))
+    }
+
+    /// 没有票时的那一步：去换，然后按结果安排下一步。
+    ///
+    /// 三种结果三种走向，**不能合并**：
+    /// - 换到 → 立刻重连（跳过这次退避——它挡着的正是刚刚被解决的那个问题）
+    /// - 等一等就好（网络不通 / 网关不在）→ 继续退避，状态没坏
+    /// - 拿不到且不会自己好（未配对 / 关系被撤销）→ **停**。再试是纯空转：每 10 秒一次、
+    ///   静默、永不收敛，而屏幕上什么都不会变。由界面去说「需要重新配对」。
+    private func renewThenRetry() {
+        guard following else { return }
+        // 必须先离开 `.connecting`：这一代没有建出连接，而 `connect` 早在前几步就把
+        // phase 置成了 `.connecting`。留着它有两个后果 —— 换到票之后 `reconnectNow`
+        // 会以「正在握手」为由拒绝（于是永远连不上），而界面会一直显示「连接中…」。
+        // `.idle` 在此刻是准确的：没有连接，也没有排定的重试（下面才决定要不要排）。
+        phase = .idle
+        guard let ticketRenewer else {
+            // 没接换票器（预览 / 单测的裸实例）：退回退避，不假装自己会换。
+            scheduleReconnect()
+            return
+        }
+        Task { [weak self] in
+            let outcome = await ticketRenewer()
+            guard let self, self.following else { return }
+            switch outcome {
+            case .granted:
+                Log.info(Log.Module.session, "ticket renewed — reconnecting now")
+                self.reconnectNow()
+            case .retryLater:
+                self.scheduleReconnect()
+            case .unavailable:
+                Log.warn(Log.Module.session, "no ticket and none obtainable — stopping the follow loop")
+                self.phase = .idle
+            }
+        }
     }
 
     /// 退避重连 —— 延迟由 `backoffDelayMs` 决定。
