@@ -550,6 +550,103 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, 0, "线上形状里出现了显示口径的符号")
     }
 
+    /// 三件线上形状各只有一处声明，且都在 `Wire/Mux.swift` —— 与网关 `wire/mux.ts` 按名对看。
+    ///
+    /// 失败模式是「另写一份刚好够用的」：形状散在使用处时，两端各写一份且互不相认，改字段
+    /// 那一侧靠回忆或 grep 发现。判据按**声明**数，不按引用数 —— 引用本来就会有多处，
+    /// 而重复声明才是那一份新的形状。
+    ///
+    /// **逐个文件认 `struct` 而不是用 `declaredTypes(in:)`**：那个函数跳过 `private` /
+    /// `fileprivate`，而「另写一份刚好够用的」有一种写法恰好是 `private struct` —— **嵌套在
+    /// 某个类型里**（不同作用域，编译器不报重复声明）。顶格的同名重复由编译器挡（`invalid
+    /// redeclaration`），嵌套的那一份只有这条判据看得见。
+    ///
+    /// 声明位置的断言与网关的文件名对应：形状出现在 `Wire/` 之外就红。
+    /// 判据自带正控：三个名字一个都没扫到时，下面的比较会以一个空的实测值对上一份非空期望。
+    ///
+    /// 盲区：只认 `struct`。写成 `typealias FollowRequest = …` 或包在条件编译分支里认不出
+    /// （漏报方向，靠评审）。
+    func testWireShapesAreDeclaredOnce() throws {
+        let shapes = ["MuxServerEnvelope", "FollowRequest", "OpeningFrame"]
+        var homes: [String: [String]] = [:]
+
+        for file in swiftFiles(under: sourcesRoot) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (_, code) in codeLines(in: text) {
+                for shape in shapes where Self.declaresStruct(shape, in: code) {
+                    homes[shape, default: []].append(relative)
+                }
+            }
+        }
+
+        for shape in shapes {
+            XCTAssertEqual(homes[shape], ["Core/Gateway/Wire/Mux.swift"],
+                           "\(shape) 应只有一处声明且在 Wire/Mux.swift，实际：\(homes[shape] ?? [])")
+        }
+    }
+
+    /// 这一行是否声明了 `struct <name>`（允许前面带访问修饰）。
+    private static func declaresStruct(_ name: String, in line: String) -> Bool {
+        guard let pattern = try? NSRegularExpression(
+            pattern: "\\bstruct\\s+" + NSRegularExpression.escapedPattern(for: name) + "\\b")
+        else { return false }
+        let range = NSRange(line.startIndex..., in: line)
+        return pattern.firstMatch(in: line, options: [], range: range) != nil
+    }
+
+    /// 开流帧只有一个拼装点，且点名在清单里 —— 清单本身也被断言。
+    ///
+    /// 拼装点住在连接层，所以形状判据只能以「点名一处」的方式容纳它：豁免要写出坐标，
+    /// 坐标对不上（清单里那个文件不再构造，或别处也构造）就红。红在该看见它的时候，
+    /// 而不是静默留在代码库里。
+    func testOpenFramesAreBuiltInOnePlace() throws {
+        let marker = "MuxOpenFrame.following("
+        var homes: Set<String> = []
+        var hits = 0
+
+        for file in swiftFiles(under: sourcesRoot) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (_, code) in codeLines(in: text) where code.contains(marker) {
+                hits += 1
+                homes.insert(relative)
+            }
+        }
+
+        XCTAssertGreaterThan(hits, 0, "全仓一处都没扫到 —— 先怀疑名字或路径，别把空集读成合规")
+        XCTAssertEqual(homes.sorted(), ["Core/Gateway/Stream/FollowClient.swift"],
+                       "开流帧的拼装点不在清单里：\(homes.sorted())")
+    }
+
+    /// `OpeningFrame` 的类型体不认识 `SessionPage` —— 线上形状不认识状态机的输入。
+    ///
+    /// 认的是**类型体**（`struct OpeningFrame {` 到它的右花括号），不是整个文件：同一个文件里
+    /// `MuxOpenFrame` 的注释可以提到窗口。判据带正控：取到的类型体里必须有 `cursor`，
+    /// 否则说明切块切错了位置，此时「零处 SessionPage」是假绿。
+    ///
+    /// 盲区：类型体里若声明同名嵌套结构，切块会提前结束（漏报方向）；这一条靠评审看。
+    func testOpeningFrameDoesNotKnowSessionPage() throws {
+        let text = try String(contentsOf: wireDirectory.appendingPathComponent("Mux.swift"),
+                              encoding: .utf8)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let start = lines.firstIndex(where: { $0 == "struct OpeningFrame {" }) else {
+            return XCTFail("没找到顶格的 `struct OpeningFrame {` —— 先怀疑名字或路径")
+        }
+        // 结束行取**顶格**的 `}`：嵌套类型与函数的右花括号都有缩进，按行首判才切得准。
+        guard let end = lines[start...].firstIndex(where: { $0 == "}" }) else {
+            return XCTFail("`struct OpeningFrame` 的类型体没有结束行 —— 先怀疑切块")
+        }
+        let body = lines[start...end]
+
+        XCTAssertTrue(body.contains { $0.contains("let cursor: Int") },
+                      "切出来的类型体里没有 `let cursor: Int` —— 切块位置错了，下面的零命中不算证据")
+        for (offset, line) in body.enumerated() where contains("SessionPage", in: line) {
+            XCTFail("Mux.swift:\(start + offset + 1) 的 OpeningFrame 类型体里出现 SessionPage"
+                    + " —— 投影归 SessionPage 自己（init(opening:)），形状只交字段")
+        }
+    }
+
     /// `Display/` 不引用实现层的类型 —— 它要能被状态层与视图复用的前提。
     func testDisplayDoesNotReferenceImplementationTypes() throws {
         let forbidden = try declaredTypes(under: gatewayImplementationDirectories, topLevelOnly: true)
@@ -909,7 +1006,7 @@ final class LayeringTests: XCTestCase {
             guard looksLikeCopy else { continue }
             copies += 1
             XCTFail("SessionSync.swift:\(start + 1) 起三行内又在逐字段构造窗口"
-                    + " —— 用 opening.page / SessionPage")
+                    + " —— 用 SessionPage(opening:)")
         }
         XCTAssertEqual(copies, 0, "编排里还有三个字段的搬运")
     }

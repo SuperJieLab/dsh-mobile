@@ -447,7 +447,7 @@ final class SessionSync: ObservableObject {
         // 「打开」（整段取窗口）；重连时本地可能已有翻出来的历史，那时走「重对齐」——
         // 本地更早的部分原样保留，只换尾部。
         let wasEmpty = mirror.isEmpty
-        let verdict = mirror.realign(with: opening.page)
+        let verdict = mirror.realign(with: SessionPage(opening: opening))
 
         // 未定稿基线：opening 里带了进行中的 attempt 就恢复流式输出，没有就清场。
         if let baseline = opening.assistantStream {

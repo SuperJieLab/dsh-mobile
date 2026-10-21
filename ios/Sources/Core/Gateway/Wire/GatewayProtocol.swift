@@ -486,3 +486,17 @@ struct SessionPage: Equatable {
     let hasOlder: Bool
     let events: [SessionEvent]
 }
+
+extension SessionPage {
+    /// 由 opening 帧的字段拼出窗口 —— 这条流的打开就是一次「最近一段」的窗口。
+    ///
+    /// `cursor`（订阅流的说法：已读到的位置）与 `asOfSeq`（窗口的说法：窗口末尾，不含）是同一个量
+    /// 的两个名字，改名只在这里发生一次。归这里是因为 `asOfSeq` 这个名字属于 `SessionPage`：
+    /// 谁持有目标名字，谁负责翻译。
+    init(opening: OpeningFrame) {
+        self.init(pageStart: opening.pageStart,
+                  asOfSeq: opening.cursor,
+                  hasOlder: opening.hasOlder,
+                  events: opening.events)
+    }
+}

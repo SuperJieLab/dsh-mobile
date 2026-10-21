@@ -100,7 +100,6 @@ final class FollowClient: NSObject {
     private let maxMissedPongs = 2
 
     private static let streamPath = "/rpc/stream"
-    private static let streamId = 1
     private static let baseBackoffMs = 500
     private static let maxBackoffMs = 10_000
 
@@ -219,7 +218,8 @@ final class FollowClient: NSObject {
         // 服务端等的就是它：没有 open，永远不会有 opening。
         if let sessionId {
             Log.debug(Log.Module.session, "g\(current) sending open for \(sessionId)")
-            openFollowStream(sessionId: sessionId)
+            // 连帧都没发出去：这一代已经收场（关连接 + 排了重连），再起收发与心跳只是两次空转。
+            guard openFollowStream(sessionId: sessionId) else { return }
         }
 
         // 就绪硬超时不在这里起 —— 它挂在 `openFollowStream` 上，于是「每一次开流尝试」都带时限
@@ -229,21 +229,31 @@ final class FollowClient: NSObject {
     }
 
     /// 在当前连接上发一条 open 帧，开始（或重建）订阅流。
-    private func openFollowStream(sessionId sessionIdToFollow: String) {
+    ///
+    /// 帧由 `MuxOpenFrame` 编出来再交给 `send` —— 本方法只决定「现在要开流」，
+    /// 内容与外壳归形状（`Wire/Mux.swift`）。
+    ///
+    /// 返回 `false` 的唯一途径是编码失败，处置与 `send` 失败相同（关连接、退避重连）。
+    /// 编码只涉及 `String` 与 `Int` 两类字段，`JSONEncoder` 对它们不会失败 —— 这条分支是
+    /// 编译器要求处理的，实机不可达；留着它是为了「编不出来就不发」这件事有代码，而不是靠
+    /// `try!` 假装它不存在。
+    @discardableResult
+    private func openFollowStream(sessionId sessionIdToFollow: String) -> Bool {
         phase = .connecting
-        let open: [String: JSONValue] = [
-            "type": .string("open"),
-            "streamId": .number(Double(Self.streamId)),
-            "payload": .object([
-                "op": .string("follow"),
-                "sessionId": .string(sessionIdToFollow),
-            ]),
-        ]
-        send(open)
+        do {
+            send(text: try MuxOpenFrame.following(sessionId: sessionIdToFollow).encoded())
+        } catch {
+            // 编不出来就发不出去：与 send 失败同一条处置（关连接、退避重连）。
+            Log.warn(Log.Module.session, "g\(generation) open frame encoding failed: \(error)")
+            closeTask()
+            scheduleReconnect()
+            return false
+        }
         // 每一次开流尝试都在这里带时限 —— 首连与重开（`end` 帧、`reopenStream`）走的是同一个入口。
         // 只在 `connect` 里 arm 会漏掉重开：那时「等不到 opening」就没有任何看门人（心跳只管已成流
         // 的连接，见 `livenessTick`）。
         armReadyTimeout()
+        return true
     }
 
     /// 就绪硬超时：从**这次开流尝试**起算，多久没等到 opening 就当它没成。
@@ -310,7 +320,7 @@ final class FollowClient: NSObject {
             return
         }
         let rawData = Data(text.utf8)
-        guard let frame = try? JSONDecoder().decode(MuxFrame.self, from: rawData) else {
+        guard let frame = try? JSONDecoder().decode(MuxServerEnvelope.self, from: rawData) else {
             Log.warn(Log.Module.session, "g\(current) unparsable frame (first 120 chars): \(text.prefix(120))")
             return // 解不了的帧不是消息，忽略
         }
@@ -407,9 +417,8 @@ final class FollowClient: NSObject {
 
     // MARK: - 发
 
-    private func send(_ json: [String: JSONValue]) {
-        guard let data = try? JSONEncoder().encode(json),
-              let text = String(data: data, encoding: .utf8) else { return }
+    /// 发一段已经编好的文本 —— 本方法不拼协议，只负责「在代次与传输都对得上时发出去」。
+    private func send(text: String) {
         // 发起时的代次与传输要捕捉下来：回调回来时它们可能已经过时。被取代的 send 以取消
         // （-999）告终，而那个回调若还算数，就会把**刚建立的新连接**关掉、再排一次重连 ——
         // 新连接又被下一次重连掐回来，每 2 秒一转、永不恢复。
@@ -600,30 +609,4 @@ final class FollowClient: NSObject {
         reconnectWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Double(delay) / 1000, execute: work)
     }
-}
-
-// MARK: - 帧与载荷的解析
-
-/// mux 帧的外壳：`{type, streamId, payload?}`（服务端只发 item / end / error）。
-private struct MuxFrame: Decodable {
-    let type: String
-    let payload: JSONValue?
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        type = try container.decode(String.self, forKey: .type)
-        payload = try container.decodeIfPresent(JSONValue.self, forKey: .payload)
-    }
-
-    private enum CodingKeys: String, CodingKey { case type, streamId, payload }
-}
-
-/// 事件帧的 typed 信封：payload 本体就是 SessionEvent。
-private struct FrameWithEvent: Decodable {
-    let payload: FailableDecodable<SessionEvent>?
-}
-
-/// usage 帧的 typed 信封：payload 本体就是 UsageSnapshot。
-private struct FrameWithUsage: Decodable {
-    let payload: FailableDecodable<UsageSnapshot>?
 }

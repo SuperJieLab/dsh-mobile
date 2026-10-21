@@ -1,0 +1,162 @@
+/**
+ * 订阅流通道的线上形状 —— 与网关 `mac-gateway/src/wire/mux.ts` 按文件名对着看。
+ *
+ * 网关那一份写着「手机端有一份对应定义 —— 改字段那边必须同改」。这里的每一件都对应
+ * `mux.ts` 里的一个接口：
+ * - `MuxServerEnvelope` ↔ 服务端帧外壳（`type` / `streamId` / `payload`）；
+ * - `FollowRequest` ↔ `FollowRequest`（开一条订阅流的参数）；
+ * - `MuxOpenFrame` ↔ 客户端开流帧（`MuxClientFrame` 里 `type: "open"` 那一支）；
+ * - `OpeningFrame` ↔ `FollowOpening`（打开帧的载荷）。
+ *
+ * **只声明客户端真收发的那几条**，不是把网关的全套抄过来：网关还有 `MuxCancelFrame`（流级取消），
+ * 客户端不发 —— 抄来就是死代码。
+ *
+ * 这个目录只放形状与编解码，不放「这条打开装哪些事件」那类判断：那属于连接层。
+ */
+import Foundation
+
+// MARK: - 帧外壳
+
+/// 服务端帧的外壳：`{type, streamId, payload?}`。
+///
+/// 只声明客户端真读的两个字段：`type` 决定这一帧交给谁，`payload` 是内容本身。
+/// 外壳还带 `streamId`，本类型不声明它 —— 客户端只开编号 1 一条流，收到别的编号也不分派，
+/// 声明了没有消费者。
+struct MuxServerEnvelope: Decodable {
+    let type: String
+    let payload: JSONValue?
+}
+
+// MARK: - 开流请求
+
+/// 开一条订阅流的请求体 —— 网关侧的同名接口。
+///
+/// 与网关那份**不同形**：网关的 `FollowRequest` 不含 `op`（`op` 的校验在 `followRequestOf`
+/// 里单独一句），客户端这一侧在**编码时写出** `op`。类型自身不存 `op`：存了之后谁都能构造一个
+/// `op` 不对的 follow 请求，而那条线上路径不存在。
+///
+/// 网关另有可选参数 `maxMessages`（打开帧携带的条数上界），客户端从不发它 —— 取服务端默认值。
+struct FollowRequest: Encodable {
+    let sessionId: String
+
+    private enum CodingKeys: String, CodingKey { case op, sessionId }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("follow", forKey: .op)
+        try container.encode(sessionId, forKey: .sessionId)
+    }
+}
+
+/// 开流帧：`{type: "open", streamId: 1, payload: <FollowRequest>}`。
+///
+/// 构造入口只有一个 —— `following(sessionId:)`。形状自己决定 `op`、流编号与外壳三层，
+/// 调用方只给会话：流编号是这条流的身份，不该由连接层决定。
+///
+/// 请求类型也不由连接层构造：拼装点仍在连接层（本期范围边界），而 `LayeringTests` 把任何
+/// `XxxRequest(` 构造都算作「在状态层之外拼请求」—— 那确实是一次协议请求的构造，判据红得对，
+/// 所以让连接层只调工厂、不认识请求类型。
+struct MuxOpenFrame: Encodable {
+
+    /// 客户端只有一条流。编号由形状定，连接层不决定它。
+    private static let streamId = 1
+
+    private let request: FollowRequest
+
+    static func following(sessionId: String) -> MuxOpenFrame {
+        MuxOpenFrame(request: FollowRequest(sessionId: sessionId))
+    }
+
+    private enum CodingKeys: String, CodingKey { case type, streamId, payload }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("open", forKey: .type)
+        try container.encode(Self.streamId, forKey: .streamId)
+        try container.encode(request, forKey: .payload)
+    }
+
+    /// 编成要发出去的那段文本。
+    ///
+    /// `.sortedKeys` 不是风格问题：字典走 `JSONEncoder` 时键序随哈希，同一份输入连编两次会得到
+    /// 不同字节 —— 排序之后「同一输入两次编码相同」才是一条能常驻的断言。
+    func encoded() throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(self), as: UTF8.self)
+    }
+}
+
+// MARK: - 打开帧的载荷
+
+/**
+ * opening 帧的 typed 形状（网关侧的 `FollowOpening`）：帧原文**就地解码一次**，
+ * 不经 `JSONValue → Data → typed` 的往返 —— 那条路上每一步都可能悄悄改掉一次取值。
+ *
+ * 只解字段、不做改名：`cursor`（订阅流的说法，已读到的位置）到 `SessionPage.asOfSeq`
+ * （窗口的说法，窗口末尾、不含）的改名由持有目标名字的一侧做 —— `SessionPage.init(opening:)`。
+ *
+ * 字段语义（与既有 JSONValue 判读逐字对齐）：
+ * - `events` 走 `FailableDecodable` —— 坏事件单条跳过，其余照常显示；
+ * - `model` / `occupancy` 用「Optional 包 FailableDecodable」区分
+ *   「字段不在 = 服务端读不出，不猜」与「字段在 = 落地或丢弃」两件事；
+ * - `assistantStream` 保持 `JSONValue` 原样 —— `parseBaseline` 只认声明字段，量小。
+ */
+struct OpeningFrame {
+    let sessionId: String
+    let pageStart: Int
+    let cursor: Int
+    let hasOlder: Bool
+    let events: [SessionEvent]
+    let assistantStream: JSONValue?
+    let model: ModelSelection?
+    let occupancy: UsageSnapshot?
+
+    /// 从 item 帧原文解码。形状不是 opening（缺 sessionId / cursor / events）返回 nil——
+    /// 路由判据与既有 JSONValue 检查一致，误判不允许发生。
+    static func decode(_ data: Data) -> OpeningFrame? {
+        struct Envelope: Decodable {
+            struct Payload: Decodable {
+                let sessionId: String?
+                let pageStart: Int?
+                let cursor: Int?
+                let hasOlder: Bool?
+                let events: [FailableDecodable<SessionEvent>]?
+                let assistantStream: JSONValue?
+                let model: FailableDecodable<ModelSelection>?
+                let occupancy: FailableDecodable<UsageSnapshot>?
+            }
+            let payload: Payload?
+        }
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
+              let payload = envelope.payload,
+              let sessionId = payload.sessionId,
+              let cursor = payload.cursor,
+              let failableEvents = payload.events else { return nil }
+        return OpeningFrame(
+            sessionId: sessionId,
+            pageStart: payload.pageStart ?? 0,
+            cursor: cursor,
+            hasOlder: payload.hasOlder ?? false,
+            events: failableEvents.compactMap(\.value),
+            assistantStream: payload.assistantStream,
+            model: payload.model?.value,
+            occupancy: payload.occupancy?.value
+        )
+    }
+}
+
+// MARK: - 两类带 typed 载荷的整帧信封
+
+/// 事件帧的 typed 信封：payload 本体就是 SessionEvent。
+///
+/// 「整帧 typed 解一次」是既有做法：先解成 `JSONValue` 再编回去重解，那条路上每一步都可能
+/// 悄悄改掉一次取值。
+struct FrameWithEvent: Decodable {
+    let payload: FailableDecodable<SessionEvent>?
+}
+
+/// usage 帧的 typed 信封：payload 本体就是 UsageSnapshot。
+struct FrameWithUsage: Decodable {
+    let payload: FailableDecodable<UsageSnapshot>?
+}
