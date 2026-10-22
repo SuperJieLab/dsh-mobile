@@ -37,6 +37,9 @@ final class SessionListState: ObservableObject {
     /// 在途的那一次。单飞的落点，也是这批账的归属。
     private var inflight: Task<[SessionSummary], Error>?
     /// 这一次在途期间到达的变更，按到达顺序 —— 落地时依次重放。
+    ///
+    /// 只有 `defer` 清它（`apply` 只在 `inflight != nil` 时入账，而 `inflight` 只在这个
+    /// 函数体内非 nil）⇒ 进 `reload` 时它必然是空的。
     private var buffered: [SessionListChange] = []
     /// 是否已经听过事件流（`attach` 幂等）。
     private var attached = false
@@ -73,9 +76,18 @@ final class SessionListState: ObservableObject {
     }
 
     /// 一条列表增量。立即生效；在途时同时记进这一批账，等落地后重放到响应上。
+    ///
+    /// **可见性在这里筛，两条路都筛**：拉取那一半在 `reload` 里过一遍
+    /// `SessionVisibility`，而事件推来的行若不过同一道，`blank`（在 Mac 上刚点新建、
+    /// 还没说话）与 `subagent` 会当场出现在列表上，下拉之后又消失。合并层不判可见性
+    /// （那是它的边界），所以这一层是唯一的落点。
     func apply(_ change: SessionListChange) {
-        sessions = SessionListMerger.apply(change, to: sessions)
+        sessions = visible(SessionListMerger.apply(change, to: sessions))
         if inflight != nil { buffered.append(change) }
+    }
+
+    private func visible(_ rows: [SessionSummary]) -> [SessionSummary] {
+        rows.filter(SessionVisibility.isVisible)
     }
 
     /// 取一次。服务端给出事实（`blank` / `origin`），**显示哪些**由 `SessionVisibility` 答。
@@ -87,7 +99,6 @@ final class SessionListState: ObservableObject {
         }
         let task = Task { try await fetch() }
         inflight = task
-        buffered = []
         isLoading = true
         defer {
             inflight = nil
@@ -99,7 +110,9 @@ final class SessionListState: ObservableObject {
             // 先摆响应的顺序，再把这批账依次重放 —— 反过来会让事件带来的位置被响应冲掉。
             var merged = rows.filter(SessionVisibility.isVisible)
             for change in buffered { merged = SessionListMerger.apply(change, to: merged) }
-            sessions = merged
+            // 重放会把事件推来的行加回去，所以落地之后再筛一次 —— 只筛一次的话，
+            // 在途期间到达的 blank / subagent 行会从这一处漏进列表。
+            sessions = visible(merged)
             outcome = .ready
         } catch {
             // 列表保留（事件带来的变化已经生效），只换失败面。

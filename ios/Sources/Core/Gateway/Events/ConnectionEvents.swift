@@ -92,8 +92,9 @@ final class ConnectionEvents {
         switch reading.content {
         case let .ready(reported):
             generation = reported
-            // 每个 ready 都通知，不比较新旧：网关只在源换代次时发它，同一个值不会出现
-            // 两次 —— 而「失效」那一次必须通知，否则消费方不知道该清空。
+            // 每个 ready 都通知，**不比较新旧**：网关每次开流都发一条（重连后即使代次
+            // 相同也发），而「每一次 ready」的语义是「从这一刻起你看到的都是新的」。
+            // 按「值变了才处理」去优化，会让重连之后的重新对齐失效。
             for handler in generationHandlers { handler(reported) }
         case let .emit(name, args):
             for handler in handlers[name] ?? [] { handler(args) }

@@ -84,10 +84,13 @@ struct SessionListView: View {
             }
         }
         .refreshable { await state.reload() }
-        .task { await state.reload() }
-        // 订阅在**视图出现**时接上（取数在状态层，而「什么时候开始听」是平台事件）。
-        // 重复出现时 `attach` 幂等，不会注册第二个听众。
-        .task { state.attach(events: events) }
+        // 一个 task、一条语句序：先订阅再首载。两个 `.task` 之间没有执行顺序的承诺，
+        // 而「订阅之前到达的那一帧」不会进账（那时没有在途请求可归）。
+        // `attach` 幂等，视图重复出现不会注册第二个听众。
+        .task {
+            state.attach(events: events)
+            await state.reload()
+        }
         // 组网就绪即首载：启动窗口内的请求会 fail-fast（端点还不存在），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
         // 这里的 `guard case .ready` 只是省一次必然失败的请求；「未就绪」该怎么显示由

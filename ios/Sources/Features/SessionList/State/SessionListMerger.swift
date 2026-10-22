@@ -40,12 +40,17 @@ enum SessionListMerger {
 
     // MARK: - 行
 
-    /// 事件行叠加到已有行上：它知道的那几格取新的，`createdAt` 这种它不知道的保留旧值。
+    /// 事件行叠加到已有行上：它知道的那几格取新的，不知道的保留旧值。
+    ///
+    /// **`title` 缺席也保留旧值**，尽管协议里「缺席」同时表示「无标题」与「投影不可用」。
+    /// 取保留：上游每次 `agent/created` / `agent/disposed` 都重发 `added`，若一律覆盖，
+    /// 一次没有投影的重发就会把已知标题抹成「（无标题）」，直到下一次拉取。代价是
+    /// 「标题真的被清空」要等下一次拉取才反映出来 —— 那比每次重发都闪一下好。
     private static func merge(_ incoming: SessionSummary, into rows: [SessionSummary]) -> SessionSummary {
         guard let existing = rows.first(where: { $0.id == incoming.id }) else { return incoming }
         return SessionSummary(
             id: incoming.id,
-            title: incoming.title,
+            title: incoming.title ?? existing.title,
             createdAt: incoming.createdAt ?? existing.createdAt,
             updatedAt: incoming.updatedAt,
             running: incoming.running,

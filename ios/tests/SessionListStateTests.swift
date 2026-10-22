@@ -95,6 +95,26 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(fetch.calls, 2)
     }
 
+    // MARK: - L1 事件不是基线
+
+    /// 事件造出来的行，在基线落地之后**不被保留** —— 这是「事件不是基线」唯一可观察的形式。
+    ///
+    /// 只断「apply 会加一行」是不区分两种设计的：任何实现都通过。真正区分的是下一步：
+    /// 拉取拿回一份**不含它**的列表，它必须消失（它不在基线里，而那一发在途时它还没到，
+    /// 所以也没有账可以把它重放回来）。
+    func testARowThatOnlyAnEventKnewAboutDoesNotSurviveTheBaseline() async throws {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.result = .success([row("a", updatedAt: 100)])
+        let state = make(fetch)
+
+        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300}}"#))
+        XCTAssertEqual(state.sessions.map(\.id), ["b"], "事件先到：列表只有它")
+
+        await state.reload()
+        XCTAssertEqual(state.sessions.map(\.id), ["a"], "基线说了算：b 不在里面，就该消失")
+    }
+
     // MARK: - L2 在途期间的变更
 
     /// 刷新在途时来了两条变更（新增 B、A 有活动）：落地后两条都在，且顺序按时间。
@@ -159,6 +179,45 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(state.sessions[0].id, "b")
     }
 
+    // MARK: - 可见性：两条路同一道筛
+
+    /// 事件推来的 `blank` 行不进列表 —— 与拉取给的行同一条规则。
+    ///
+    /// 「在 Mac 上点了一下新建、还没说话」是最常见的形态：不筛的话手机会立刻多出一行
+    /// 「（无标题）」，下拉之后又消失，页脚计数也跟着错。
+    func testInvisibleRowsFromEventsNeverEnterTheList() throws {
+        let state = make(FakeFetch())
+        state.apply(try change("""
+        {"kind":"added","row":{"id":"s1","updatedAt":100,"blank":true}}
+        """))
+        XCTAssertTrue(state.sessions.isEmpty, "blank 行不显示")
+
+        state.apply(try change("""
+        {"kind":"added","row":{"id":"s2","updatedAt":90,"origin":"subagent"}}
+        """))
+        XCTAssertTrue(state.sessions.isEmpty, "子会话不显示")
+
+        state.apply(try change(#"{"kind":"added","row":{"id":"s3","updatedAt":80}}"#))
+        XCTAssertEqual(state.sessions.map(\.id), ["s3"], "普通行照常出现")
+    }
+
+    /// 在途期间到达的不可见行，重放之后也不该漏进来 —— 落地后要再筛一次。
+    func testAnInvisibleRowBufferedDuringAPullDoesNotLeakOnReplay() async throws {
+        let fetch = FakeFetch()
+        fetch.result = .success([row("a", updatedAt: 100)])
+        let state = make(fetch)
+
+        let pull = Task { await state.reload() }
+        await settle()
+        state.apply(try change("""
+        {"kind":"added","row":{"id":"b","updatedAt":300,"blank":true}}
+        """))
+        fetch.release()
+        await pull.value
+
+        XCTAssertEqual(state.sessions.map(\.id), ["a"], "重放不该把 blank 行加回来")
+    }
+
     // MARK: - 装配：一帧从事件流走到列表
 
     /// 一整跳：事件流上收到一帧列表增量，列表就变了。
@@ -191,10 +250,14 @@ final class SessionListStateTests: XCTestCase {
         let state = make(fetch)
         await state.reload()
 
+        // 第二发要真的停在在途：不这样的话，`apply` 落在失败之后，这条就退化成
+        // 「失败不清空 + apply 会改行」，而后半是 apply 的定义。
         fetch.result = .failure(GatewayClientError.notActivated)
+        fetch.holds = true
         let pull = Task { await state.reload() }
         await settle()
         state.apply(try change(#"{"kind":"activity","id":"a","updatedAt":500}"#))
+        fetch.release()
         await pull.value
 
         XCTAssertEqual(state.sessions.map(\.id), ["a"], "失败不清空")

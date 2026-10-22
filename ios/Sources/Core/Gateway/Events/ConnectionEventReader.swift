@@ -100,6 +100,9 @@ enum ConnectionEventReader {
                 // 形状判定的正身在 `SessionListChange.decode`（那里有它自己的判据）——
                 // 这一跳只把「这条流的一种货物」接到那个类型上，不复制任何一条规则。
                 guard let change = payload["change"].flatMap(SessionListChange.decode) else {
+                    // 留痕：网关加了第五种 kind 时，这里没有分支可走，现场只剩这一行。
+                    Log.warn(Log.Module.session,
+                             "dropped a session-list change this build does not know")
                     return ConnectionEventReading(content: .ignored)
                 }
                 return ConnectionEventReading(content: .sessionList(change))

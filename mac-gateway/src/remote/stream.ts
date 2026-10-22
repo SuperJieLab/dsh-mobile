@@ -149,9 +149,10 @@ function excerptOf(text: string): string {
  * 这条流**不会自己结束**：源断了只发一条无代次的 `ready`，因为结束流会让手机立刻重开
  * 一条注定拿不到正文的流，而重开没有退避。唯一的收场是客户端取消或连接收尾。
  *
- * 两个载荷就是它的全部词汇：`ready`（源的状态，`generation` 缺席 = 没有活的代次）与
- * `emit`（源的内容，名字与参数原样）。源上的 `waterfall` / `cancel` 是审批的事，同一条源
- * 上两类消费方各取所需 —— 这条流不转发它们。
+ * 三种载荷是它的全部词汇：`ready`（源的状态，`generation` 缺席 = 没有活的代次）、
+ * `emit`（源的内容，名字与参数原样）、`session-list`（会话列表的一条增量 —— 上游那四类
+ * `api-session/*` 在发出之前翻成我们的形状，见 `upstream/session-events.ts`）。源上的
+ * `waterfall` / `cancel` 是审批的事，同一条源上两类消费方各取所需 —— 这条流不转发它们。
  */
 function pumpEvents(
   socket: Duplex,

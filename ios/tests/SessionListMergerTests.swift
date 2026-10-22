@@ -90,6 +90,17 @@ final class SessionListMergerTests: XCTestCase {
         XCTAssertEqual(rows[0].title, "标题", "它知道的那几格要更新")
     }
 
+    /// 标题缺席时保留旧值 —— 与 `createdAt` 同一条规则。
+    ///
+    /// 上游每次 `agent/created` / `agent/disposed` 都重发一次 `added`，其中可能没有投影块；
+    /// 若一律覆盖，一次这样的重发就把已知标题抹成「（无标题）」，直到下一次拉取。
+    func testAnEventWithoutATitleKeepsTheKnownOne() {
+        let existing = [session("s1", title: "部署脚本", updatedAt: 100)]
+        let rows = SessionListMerger.apply(
+            .added(session("s1", title: nil, updatedAt: 100, createdAt: nil)), to: existing)
+        XCTAssertEqual(rows[0].title, "部署脚本")
+    }
+
     // MARK: - L4 顺序
 
     /// 活动时间变新即上浮到它该在的位置；时间不倒退。
@@ -144,8 +155,8 @@ final class SessionListMergerTests: XCTestCase {
         XCTAssertEqual(SessionListMerger.apply(.removed("ghost"), to: rows).map(\.id), ["a", "b"])
     }
 
-    /// 一条变更不带可见性判断：`blank` 的行照样进数组，画不画由视图经
-    /// `SessionVisibility` 决定 —— 合并层不复制那条规则。
+    /// 一条变更不带可见性判断：`blank` 的行照样进数组，画不画由**状态层**经
+    /// `SessionVisibility` 决定 —— 合并层不复制那条规则（那一条在 `SessionListStateTests`）。
     func testVisibilityIsNotDecidedHere() {
         let rows = SessionListMerger.apply(
             .added(session("s1", updatedAt: 100, createdAt: nil, blank: true)), to: [])

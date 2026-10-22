@@ -1203,6 +1203,20 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(found.count, 1, "列表状态只能有一个实例：\(found)")
     }
 
+    /// 列表视图真的把事件流交给了状态层。
+    ///
+    /// 这一行是整条链路的入口，而它没有任何行为判据能碰到（视图不在测试覆盖里）：
+    /// 删掉它，两端的判据全绿而列表永远不动。结构判据是唯一守得住它的形式。
+    func testTheListScreenSubscribesToTheEventStream() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        XCTAssertTrue(lines.contains { $0.1.contains("state.attach(events:") },
+                      "列表视图没有把事件流交给状态层 —— 事件到不了列表")
+        XCTAssertTrue(lines.contains { $0.1.contains("await state.reload()") },
+                      "扫错文件了：连首载都不在这份文件里")
+    }
+
     /// 上游的事件名与字段名不出网关。手机端只认 `SessionListChange` 的四支 ——
     /// 它若也认识 `api-session/added`，上游每改一次形状就要改两处。
     func testTheClientDoesNotKnowUpstreamEventNames() throws {
