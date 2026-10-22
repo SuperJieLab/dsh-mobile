@@ -178,7 +178,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
           },
         })
         for (const heldItem of held) {
-          send({ type: 'approval', payload: { kind: 'request', eventId: heldItem.eventId, toolName: heldItem.toolName, ...(heldItem.callId === undefined ? {} : { callId: heldItem.callId }), ...(heldItem.reason === undefined ? {} : { reason: heldItem.reason }) } })
+          send({ type: 'approval', payload: { kind: 'request', eventId: heldItem.eventId, sessionId: heldItem.sessionId, toolName: heldItem.toolName, ...(heldItem.callId === undefined ? {} : { callId: heldItem.callId }), ...(heldItem.reason === undefined ? {} : { reason: heldItem.reason }) } })
         }
       },
     })

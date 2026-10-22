@@ -21,6 +21,8 @@
 import { isNotFound } from '../ports/errors.ts'
 import type { ApprovalOutcome } from '../ports/write.ts'
 import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
+import type { MuxApprovalFrame, MuxApprovalPayload } from '../wire/mux.ts'
+import { nonEmptyString } from '../wire/fields.ts'
 import type { UpstreamWireFrame } from '../ports/events.ts'
 import type { ForwardedEvents } from './remote-events.ts'
 import { createLogger, LogModule } from '../log.ts'
@@ -36,14 +38,21 @@ export interface RemoteEventAnswerLike {
   dispatchRpc(endpoint: string, payload: { args: unknown }, signal: AbortSignal): Promise<unknown>
 }
 
-/** 中继推向已连接手机的内容 —— WS 适配器的广播切面。 */
+/**
+ * 中继推向已连接手机的帧 —— WS 适配器的广播切面。
+ *
+ * 收的是**审批帧**而不是任意帧：中继只推这一种，收宽了就等于放弃「构造漏字段」的
+ * 编译期检查（`sessionId` 这种必填项只能在类型上守）。
+ */
 export interface BroadcasterLike {
-  broadcast(frame: unknown): void
+  broadcast(frame: MuxApprovalFrame): void
 }
 
 /** 中继为手机暂存的一个 `approval/request` 帧。 */
 interface HeldRequest {
   eventId: string
+  /** 属于哪个会话 —— 上游帧的 `agentId`。暂存它，重投时才有得带。 */
+  sessionId: string
   toolName: string
   callId?: string
   reason?: string
@@ -99,6 +108,24 @@ export class ApprovalRelay {
   }
 
   /**
+   * 一个待答问题编码成线上那一帧 —— 实时与重投**共用这一处**。
+   *
+   * 两处各写一遍时，往一处加字段、另一处忘掉，测试看不出差别（两份代码长得几乎一样），
+   * 而症状只有重连后才有。合成一处之后，漏字段是编译错误。
+   */
+  #requestFrame(held: HeldRequest): MuxApprovalFrame {
+    const payload: MuxApprovalPayload = {
+      kind: 'request',
+      eventId: held.eventId,
+      sessionId: held.sessionId,
+      toolName: held.toolName,
+      ...(held.callId === undefined ? {} : { callId: held.callId }),
+      ...(held.reason === undefined ? {} : { reason: held.reason }),
+    }
+    return { type: 'approval', payload }
+  }
+
+  /**
    * 身份换代 = 待答表不再有效。宿主会把仍在等待的问题重投给下一代，所以这里只丢，
    * 不补发、也不通知手机（下一代的问题会作为新帧到达）。
    */
@@ -113,18 +140,23 @@ export class ApprovalRelay {
     const request = frame.request as { toolName?: unknown; callId?: unknown; reason?: unknown } | undefined
     const toolName = typeof request?.toolName === 'string' ? request.toolName : undefined
     if (toolName === undefined) return // 不是审批形状的请求；不归我们解释
+    // 归属只有产生处知道。读不出就不收 —— 转发一条不知道属于谁的审批，等于让下游二选一：
+    // 丢掉（等于没收到）或放进某一屏（等于串会话）。后者更坏，所以这里 fail closed。
+    const sessionId = nonEmptyString(frame.agentId)
+    if (sessionId === undefined) {
+      log.warn(`approval ${frame.eventId} carries no session (agentId ${JSON.stringify(frame.agentId)}) — dropped`)
+      return
+    }
     const held: HeldRequest = {
       eventId: frame.eventId,
+      sessionId,
       toolName,
       ...(typeof request?.callId === 'string' ? { callId: request.callId } : {}),
       ...(typeof request?.reason === 'string' ? { reason: request.reason } : {}),
     }
     this.#pending.set(frame.eventId, held)
-    log.info(`approval relay holding "${held.toolName}" (${held.eventId})`)
-    this.#broadcaster.broadcast({
-      type: 'approval',
-      payload: { kind: 'request', eventId: held.eventId, toolName: held.toolName, ...(held.callId === undefined ? {} : { callId: held.callId }), ...(held.reason === undefined ? {} : { reason: held.reason }) },
-    })
+    log.info(`approval relay holding "${held.toolName}" (${held.eventId}) for "${held.sessionId}"`)
+    this.#broadcaster.broadcast(this.#requestFrame(held))
   }
 
   /** 仍在等待的问题 —— 新连接手机会被重放的内容。 */

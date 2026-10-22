@@ -92,21 +92,75 @@ async function liveRelay(options: { refuse?: unknown } = {}) {
   return { feed, results, sink, events, relay, stop: () => events.stop() }
 }
 
-function waterfallFrame(eventId: string, toolName = 'shell'): UpstreamWireFrame {
-  return { type: 'waterfall', event: 'approval/request', eventId, agentId: 'agent-1', request: { toolName, reason: 'needs write' } }
+function waterfallFrame(eventId: string, toolName = 'shell', agentId = 'agent-1'): UpstreamWireFrame {
+  return { type: 'waterfall', event: 'approval/request', eventId, agentId, request: { toolName, reason: 'needs write' } }
+}
+
+/**
+ * 截获 warn / error 两级的日志行。
+ *
+ * 这两级走 `console.error`（`log.ts` 的 `emit` 在**调用时**读它），所以在测试里临时替换
+ * 那个函数就能读到它们。替换必须成对（`finally` 里还原），否则后面所有用例的日志都进了
+ * 这个数组、别人的断言跟着变。
+ */
+async function captureLogs(body: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = []
+  const original = console.error
+  console.error = (line: unknown) => { lines.push(String(line)) }
+  try {
+    await body()
+  } finally {
+    console.error = original
+  }
+  return lines
 }
 
 // -- 待答与应答 --------------------------------------------------------------
 
-test('relay: a waterfall frame is held and broadcast; the phone sees the request payload', async () => {
+test('relay: the frame says which session the question belongs to, and it is held with it', async () => {
+  const { feed, relay, stop } = await liveRelay()
+  try {
+    feed.push(waterfallFrame('e1', 'shell', 'session-7'))
+    await until(() => relay.held().length === 1, 'the question is held')
+
+    assert.equal(relay.held()[0]?.sessionId, 'session-7',
+      'the identity reaches the held set — a frame that only carries it downstream would lose it on replay')
+  } finally {
+    stop()
+  }
+})
+
+test('relay: the broadcast request carries the session too', async () => {
   const { feed, sink, stop } = await liveRelay()
   try {
-    feed.push(waterfallFrame('e1'))
+    feed.push(waterfallFrame('e1', 'shell', 'session-7'))
     await until(() => sink.frames.length === 1, 'the request is broadcast')
     assert.deepEqual(sink.frames, [{
       type: 'approval',
-      payload: { kind: 'request', eventId: 'e1', toolName: 'shell', reason: 'needs write' },
+      payload: {
+        kind: 'request', eventId: 'e1', sessionId: 'session-7',
+        toolName: 'shell', reason: 'needs write',
+      },
     }])
+  } finally {
+    stop()
+  }
+})
+
+test('relay: a request with no session is neither held nor broadcast, and the log says why', async () => {
+  const { feed, sink, relay, stop } = await liveRelay()
+  try {
+    // 空串与非字符串两种：上游的 agentId 由作用域给出，读不出就是「不知道属于谁」。
+    const lines = await captureLogs(async () => {
+      feed.push(waterfallFrame('e1', 'shell', ''))
+      feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'e2', agentId: 42 as unknown as string, request: { toolName: 'shell' } })
+      await new Promise<void>((resolve) => setTimeout(resolve, 80))
+    })
+
+    assert.deepEqual(relay.held(), [], 'an unattributable question must not be held — it would be replayed forever')
+    assert.deepEqual(sink.frames, [], 'and it must not be shown to anyone: a card in the wrong session is worse than no card')
+    assert.ok(lines.some(line => line.includes('no session') && line.includes('e1')),
+      `the drop must leave a trace — got ${JSON.stringify(lines)}`)
   } finally {
     stop()
   }
