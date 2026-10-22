@@ -11,7 +11,7 @@
  *
  * 覆盖不到的一半（写在代码里而不是留给下一个人猜）：本文件装配的是**它自己**的那一份
  * `onClientConnected`，所以它证明的是「这段接线能work」，不是「`index.ts` 里那段一定接了」。
- * 后者由 `structure.test.ts` 的 W7（三种 `kind` 只允许在 `write.ts` 出现）与真机现象守。
+ * 后者由 `structure.test.ts` 的「每个 kind 只构造一次」与真机现象守。
  */
 
 import assert from 'node:assert/strict'
@@ -27,12 +27,9 @@ import type { UpstreamWireFrame } from '../../src/ports/events.ts'
 import { connect, fakeSource, receive } from './harness.ts'
 import { fakeEventStream, until } from '../upstream/fake-events.ts'
 
-const answered: unknown[] = []
-
-/** 结果门：这一条不关心应答，但要给它一个能构造的对象。 */
+/** 结果门：这一条不关心应答，只要能构造出中继要的那个对象。 */
 const door: RemoteEventAnswerLike = {
-  async dispatchRpc(_endpoint, payload) {
-    answered.push(payload)
+  async dispatchRpc() {
     return { ok: true, value: undefined }
   },
 }

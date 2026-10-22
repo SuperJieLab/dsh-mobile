@@ -17,6 +17,7 @@ import type { WireEvent } from '../../src/wire/rpc.ts'
 import {
   connect, event, fakeFeed, fakeSource, filler, receive, send, snapshotFrame, turn,
 } from './harness.ts'
+import { until } from '../upstream/fake-events.ts'
 
 test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 }, async () => {
   const log = [0, 1, 2].map(event)
@@ -949,15 +950,6 @@ test('E2: an events stream opens with ready, then forwards each emit verbatim', 
     server.close()
   }
 })
-
-/** 等一个条件，按次数算而不是按毫秒 —— 失败的用例要说清「什么没发生」。 */
-async function until(condition: () => boolean, what: string): Promise<void> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    if (condition()) return
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-  throw new Error(`never happened: ${what}`)
-}
 
 test('E2b: cancelling an events stream unsubscribes it and reclaims its id', { timeout: 10_000 }, async () => {
   // 事件流是唯一**不会自己结束**的流，所以它的收场只有一条路：取消或连接收尾。

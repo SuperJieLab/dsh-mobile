@@ -155,15 +155,14 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       openingCapBytes: limits.maxOpeningBytes,
       // `{op:'events'}` 的流订阅这份源：身份是网关进程的，流是这条连接的。
       events: forwardedEvents,
-      // 新接入的手机先拿到对账帧（所有挂起问题的 id），再逐条重放 ——
-      // 它因此可以丢掉那些在其离线期间 `cancel` 已触发的转发卡片：
-      // 缺席的 id 是权威的。帧序列由中继给出：它才是知道「还挂着什么」的那一层，
-      // 装配层拼帧会让同一份形状在这里与 `write.ts` 各长一遍。
+      // 新接入的手机先拿到对账帧、再逐条收到仍挂起的问题 —— 它因此可以丢掉那些在其
+      // 离线期间 `cancel` 已触发的卡片（缺席的 id 是权威的）。序列由中继给出。
       onClientConnected: (send) => {
         for (const frame of relay.replayFrames()) send(frame)
       },
     })
-    approvalFace.connect((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))
+    // 中继产出的帧经广播切面推给每条连接（含连接建立之后才到达的那些）。
+    approvalFace.connect((frame) => broadcaster.broadcast(frame))
 
     // 资源采样（R8 期1 链路 B）：5s 一条 res 记录 —— 事件循环是 dsh 全进程
     // 共享面，读数只做趋势；debug 级默认静默，采集时 DSH_LOG_DEBUG=1。

@@ -8,7 +8,8 @@
  * 通过 `dispatchRpc("$events/result")` 应答。手机与浏览器是对等方：第一个应答终结
  * waterfall，落败方得到 `unknown-approval`（fail-closed）。
  *
- * 手机从未见过的问题由 WS 适配器在下一次连接时重放；中继保持其待答集合直到上游
+ * 手机从未见过的问题，由本层在每条新连接接入时给出要重投的帧序列（`replayFrames`），
+ * 适配器只负责逐条送出；中继保持其待答集合直到上游
  * `cancel` 到达 —— 或者身份换代（源断了，宿主会把仍在等待的问题重投一遍，沿用旧
  * 集合就是重放已消费的应答）。构造上即一次性：已交付的应答只在网关接受后才移除
  * 待答项，且每次交付都映射到一次性词汇（`allowed-once` / `rejected`）——
@@ -21,7 +22,7 @@
 import { isNotFound } from '../ports/errors.ts'
 import type { ApprovalOutcome } from '../ports/write.ts'
 import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
-import type { MuxApprovalFrame, MuxApprovalPayload } from '../wire/mux.ts'
+import type { MuxApprovalFrame, MuxApprovalPayload, MuxApprovalRequest } from '../wire/mux.ts'
 import { nonEmptyString } from '../wire/fields.ts'
 import type { UpstreamWireFrame } from '../ports/events.ts'
 import type { ForwardedEvents } from './remote-events.ts'
@@ -32,7 +33,7 @@ const log = createLogger(LogModule.relay)
 /**
  * 网关应答门的窄切面 —— 中继唯一需要的上游能力。
  *
- * 开流不在这里：身份由 `ForwardedEvents` 持有，中继从它那里收帧（E6）。
+ * 开流不在这里：身份由 `ForwardedEvents` 持有，中继从它那里收帧。
  */
 export interface RemoteEventAnswerLike {
   dispatchRpc(endpoint: string, payload: { args: unknown }, signal: AbortSignal): Promise<unknown>
@@ -48,15 +49,14 @@ export interface BroadcasterLike {
   broadcast(frame: MuxApprovalFrame): void
 }
 
-/** 中继为手机暂存的一个 `approval/request` 帧。 */
-interface HeldRequest {
-  eventId: string
-  /** 属于哪个会话 —— 上游帧的 `agentId`。暂存它，重投时才有得带。 */
-  sessionId: string
-  toolName: string
-  callId?: string
-  reason?: string
-}
+/**
+ * 中继为手机暂存的一个 `approval/request` 帧。
+ *
+ * 直接取线上形的 `request` 支去掉 `kind`：暂存的字段集合与要发出去的**必须是同一份**。
+ * 抄一遍的话，「暂存里有、帧上没有」这种漏字段在评审里看不出来（两份声明相隔几十行、
+ * 长得几乎一样），而症状只有重连重投之后才出现。
+ */
+type HeldRequest = Omit<MuxApprovalRequest, 'kind'>
 
 export class ApprovalRelay {
   /** 应答要带上的身份由它给出（身份属于源，不属于中继）。 */
@@ -111,18 +111,10 @@ export class ApprovalRelay {
    * 一个待答问题编码成线上那一帧 —— 实时与重投**共用这一处**。
    *
    * 两处各写一遍时，往一处加字段、另一处忘掉，测试看不出差别（两份代码长得几乎一样），
-   * 而症状只有重连后才有。合成一处之后，漏字段是编译错误。
+   * 而症状只有重连后才有。字段集合由 `HeldRequest` 与线上形同源保证，这里只补 `kind`。
    */
   #requestFrame(held: HeldRequest): MuxApprovalFrame {
-    const payload: MuxApprovalPayload = {
-      kind: 'request',
-      eventId: held.eventId,
-      sessionId: held.sessionId,
-      toolName: held.toolName,
-      ...(held.callId === undefined ? {} : { callId: held.callId }),
-      ...(held.reason === undefined ? {} : { reason: held.reason }),
-    }
-    return { type: 'approval', payload }
+    return { type: 'approval', payload: { kind: 'request', ...held } }
   }
 
   /**
@@ -175,17 +167,16 @@ export class ApprovalRelay {
    * 的问题投给下一代，硬发一份旧集合就是在重放已经作废的投递。
    */
   replayFrames(): MuxApprovalFrame[] {
+    // 没有存活的身份时待答表已被清空（源换代就丢），所以这一支的名单恒空。
+    const live = this.#events.clientId !== undefined
     const held = this.held()
-    if (this.#events.clientId === undefined) {
-      const payload: MuxApprovalPayload = { kind: 'sync', eventIds: [], callIds: [], stale: true }
-      return [{ type: 'approval', payload }]
-    }
     const ledger: MuxApprovalPayload = {
       kind: 'sync',
       eventIds: held.map(item => item.eventId),
       // callIds 随行：客户端要靠它判断由日志重建的那些卡是不是悬空审计
       //（asked 之后宿主在询问中途死掉，decided 永远等不到）。
       callIds: held.flatMap(item => item.callId === undefined ? [] : [item.callId]),
+      ...(live ? {} : { stale: true as const }),
     }
     return [
       { type: 'approval', payload: ledger },
@@ -194,8 +185,8 @@ export class ApprovalRelay {
   }
 
   /**
-   * 线路侧：通过网关的结果门交付一个应答；重试的 `answerId` 重放首个结果（W1），
-   * 未指向已暂存问题的一律拒绝（W2）。
+   * 线路侧：通过网关的结果门交付一个应答；重试的 `answerId` 重放首个结果，
+   * 未指向已暂存问题的一律拒绝。
    */
   async answerApproval(answer: ApprovalAnswerMessage): Promise<ApprovalOutcome> {
     const { value } = this.#replay.remember(answer.answerId, () => this.deliver(answer))

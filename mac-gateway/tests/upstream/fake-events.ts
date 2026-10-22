@@ -1,9 +1,5 @@
 /**
- * 两份上游假件的共用处 —— `$events` 流与「等到某件事发生」。
- *
- * 为什么单独一个文件：`write.test.ts` 与 `remote-events.test.ts` 各有一份几乎一样的
- * `fakeSource`（连 5 ms 轮询与 `breaker` 都相同），差异只有 `failFirstOpen` 与 clientId
- * 的编号方式。第三份（传输层的端到端冒烟）如果再抄一遍，改一处就漏两处。
+ * 上游假件的共用处 —— `$events` 流与「等到某件事发生」。
  *
  * 这里替代的是**上游的 `$events` 身份**（网络与宿主之外）；流、socket、成帧都是真的。
  */
@@ -22,7 +18,9 @@ import type { UpstreamWireFrame } from '../../src/ports/events.ts'
 export function fakeEventStream(options: { failFirstOpen?: boolean } = {}) {
   const channels: ((frame: UpstreamWireFrame) => void)[] = []
   const breakers: (() => void)[] = []
-  let announce: (() => void) | undefined
+  // 构造 `started` 的 executor 是同步跑的，所以任何调用方拿到 `feed` 之前它已经赋值 ——
+  // 下面三处 `announce()` 没有「还没赋值」的那一态。
+  let announce!: () => void
   const started = new Promise<void>((resolve) => { announce = resolve })
   let opened = 0
 
@@ -32,7 +30,7 @@ export function fakeEventStream(options: { failFirstOpen?: boolean } = {}) {
       opened += 1
       if (options.failFirstOpen === true && opened === 1) {
         // 叫醒等待方再抛：否则这个用例会挂到超时，看不出「失败」与「卡住」的区别。
-        announce?.()
+        announce()
         throw new Error('stream broke')
       }
       const queue: UpstreamWireFrame[] = []
@@ -40,7 +38,7 @@ export function fakeEventStream(options: { failFirstOpen?: boolean } = {}) {
       channels.push((frame) => queue.push(frame))
       let broken = false
       breakers.push(() => { broken = true })
-      announce?.()
+      announce()
       yield { type: 'ready', clientId: `client-${opened}` }
       while (!signal.aborted && !broken) {
         while (queue.length > 0) yield queue.shift()!

@@ -1458,34 +1458,41 @@ test('the silent-refusal list only names ops the protocol actually dispatches', 
 })
 
 // ---------------------------------------------------------------------------
-// W7：审批帧只在一处构造 —— 装配层不拼帧
+// 审批帧：每个 kind 只构造一次，装配层不拼帧
 // ---------------------------------------------------------------------------
 
 /**
- * 三种审批帧（`request` / `cancel` / `sync`）的 `kind` 字面量只允许出现在两个文件：
- * `wire/mux.ts` 声明它的形状，`upstream/write.ts` 持有待答表并构造它。
+ * 三种审批帧（`request` / `cancel` / `sync`）各自**只有一个构造点**，且都在 `upstream/write.ts`；
+ * `wire/mux.ts` 里的是形状**声明**，不是构造。
  *
- * 守的是「装配层顺手拼一帧」这个真实风险 —— 重投序列原本就写在 `index.ts` 里，往那一处
- * 加字段、`write.ts` 的另一处忘掉，两份代码相距很远、长得却几乎一样，评审看不出来。
- * 判据按**期望文件**断言（不是零命中）：清单写在这里，多一个文件就红。
+ * 守的是「装配层顺手拼一帧」这个真实风险 —— 重投序列曾经写在 `index.ts` 里，往那一处加字段、
+ * `write.ts` 的另一处忘掉，两份代码相距很远、长得却几乎一样，评审看不出来。
+ *
+ * 数的是**次数**不是文件：同一文件里的第二处构造（例如在 stale 分支补一条占位 `request`）
+ * 不该因为「文件没变」就放行。判据按期望值断言，不是零命中。
  */
-test('approval frames are built where the held set lives, not in the assembly', () => {
-  const expected = ['upstream/write.ts', 'wire/mux.ts']
-  const seen = new Map<string, string[]>()
+test('each approval kind is constructed exactly once, where the held set lives', () => {
+  const constructionHome = 'upstream/write.ts'
+  const declarationHome = 'wire/mux.ts'
+  const seen = new Map<string, { file: string; count: number }[]>()
   for (const file of filesUnder(SRC)) {
     const code = stripComments(readFileSync(file, 'utf8'))
     for (const kind of ['request', 'cancel', 'sync'] as const) {
       const hits = [...code.matchAll(new RegExp(`kind:\\s*'${kind}'`, 'g'))].length
       if (hits === 0) continue
-      seen.set(kind, [...(seen.get(kind) ?? []), where(file)])
+      seen.set(kind, [...(seen.get(kind) ?? []), { file: where(file), count: hits }])
     }
   }
 
   // 活性锚：一份都没扫到说明路径或正则失效，下面的比较会「通过」。
   assert.equal(seen.size, 3, `the scan found no approval kinds at all — got ${JSON.stringify([...seen.keys()])}`)
 
-  for (const [kind, files] of seen) {
-    assert.deepEqual(files.sort(), expected,
-      `\`kind: '${kind}'\` must live in ${expected.join(' + ')} — a third home is a second constructor`)
+  for (const [kind, homes] of seen) {
+    const constructors = homes.filter(home => home.file === constructionHome)
+    const declarers = homes.filter(home => home.file !== constructionHome)
+    assert.equal(constructors.reduce((total, home) => total + home.count, 0), 1,
+      `\`kind: '${kind}'\` must be constructed exactly once, in ${constructionHome} — got ${JSON.stringify(homes)}`)
+    assert.deepEqual(declarers.map(home => home.file), [declarationHome],
+      `\`kind: '${kind}'\` is declared in ${declarationHome} and constructed in ${constructionHome} — a third home is a second constructor`)
   }
 })

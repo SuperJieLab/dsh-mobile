@@ -755,6 +755,55 @@ test('a freshly connected phone is reconciled first: sync frame names the standi
     assert.deepEqual(approvalFrames[0], { kind: 'sync', eventIds: ['wire-1'], callIds: [] },
       'the first approval frame must be the reconciliation list, so the client can drop stale cards')
     assert.equal((approvalFrames[1] as { kind?: string }).kind, 'request')
+    assert.equal((approvalFrames[1] as { sessionId?: string }).sessionId, 'agent-1',
+      'the replayed request carries the identity too — a live-only field would look right here and fail on reconnect')
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    teardown()
+  }
+})
+
+test('a request that arrives while the phone is already connected reaches it live', { timeout: 10_000 }, async () => {
+  // 这条与上一条分开：上一条守重投（推送在连接之前），这一条守**实时那一支**的接线。
+  // 两处代码在 `index.ts` 里相邻，但走的是两条路 —— 只守重投的话，`face.connect` 那一行
+  // 删掉也全绿，而症状是「连着的时候到达的审批永远不显示，只有重连那一刻才出现」。
+  const port = freshPort(43_200)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const socket = streamWithToken(port, access)
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve(), { once: true })
+      socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
+      setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
+    })
+
+    const requests: Array<Record<string, unknown>> = []
+    socket.addEventListener('message', event => {
+      const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; payload?: Record<string, unknown> }
+      if (frame.type === 'approval' && frame.payload?.kind === 'request') requests.push(frame.payload)
+    })
+
+    // 连接建好之后再让宿主提出问题 —— 这正是「用户正看着这一屏」的那一刻。
+    gateway.push({
+      type: 'waterfall',
+      event: 'approval/request',
+      eventId: 'live-1',
+      agentId: 'agent-1',
+      request: { toolName: 'shell', reason: 'needs write' },
+    })
+
+    for (let attempt = 0; attempt < 100 && requests.length === 0; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    assert.deepEqual(requests, [{
+      kind: 'request', eventId: 'live-1', sessionId: 'agent-1', toolName: 'shell', reason: 'needs write',
+    }], 'a question raised while the phone is connected must be pushed, not left until the next reconnect')
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {

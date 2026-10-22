@@ -65,23 +65,29 @@ export interface MuxErrorFrame {
 }
 
 /**
+ * 一条待答问题的载荷 —— 连接级 `approval` 帧的第一支。
+ *
+ * `sessionId` 是**必填**：这条帧没有流编号，属于哪一屏只能由它自己说。缺了就无法归位，
+ * 客户端不会显示它（宁可少一张卡，也不把卡放错会话）。
+ */
+export interface MuxApprovalRequest {
+  kind: 'request'
+  eventId: string
+  /** 属于哪个会话 —— 上游 waterfall 帧的 `agentId`。 */
+  sessionId: string
+  toolName: string
+  callId?: string
+  reason?: string
+}
+
+/**
  * 连接级 `approval` 推送的载荷 —— 三种，按 `kind` 分。
  *
- * `request` 的 `sessionId` 是**必填**：这条帧没有流编号，属于哪一屏只能由它自己说。
- * 缺了就无法归位，客户端不会显示它（宁可少一张卡，也不把卡放错会话）。
- * `cancel` 与 `sync` 不带：前者按 `eventId` 全局寻址，可能指向一条早已不在表里的项；
- * 后者是整条连接的名单，不属于任何会话。
+ * 只有 `request` 带归属。`cancel` 按 `eventId` 全局寻址（它可能指向一条早已不在表里的项，
+ * 那时归属无从说起）；`sync` 是整条连接的名单，不属于任何会话。
  */
 export type MuxApprovalPayload =
-  | {
-      kind: 'request'
-      eventId: string
-      /** 属于哪个会话 —— 上游 waterfall 帧的 `agentId`。 */
-      sessionId: string
-      toolName: string
-      callId?: string
-      reason?: string
-    }
+  | MuxApprovalRequest
   | { kind: 'cancel'; eventId: string }
   | { kind: 'sync'; eventIds: string[]; callIds: string[]; stale?: true }
 

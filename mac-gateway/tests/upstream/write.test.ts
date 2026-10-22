@@ -1,6 +1,6 @@
 /**
- * The approval relay's behaviour tests (M5, 实施期修正 11): waterfall frames held and
- * broadcast, one-shot delivery through the result door, replay, and the cancel path.
+ * The approval relay's behaviour: waterfall frames held and broadcast with their session,
+ * one-shot delivery through the result door, the replay sequence, and the cancel path.
  *
  * The relay no longer opens `$events` itself: it subscribes to `ForwardedEvents`
  * (judged on its own in `remote-events.test.ts`). Here the source is a fake stream and
@@ -242,7 +242,10 @@ test('relay: the replay puts the ledger first and carries the same identity as t
   const { feed, relay, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1', 'shell', 's1'))
-    feed.push(waterfallFrame('e2', 'write', 's2'))
+    // 第二条带 callId：对账名单里的 `callIds` 是客户端判「悬空审计」的唯一依据
+    // （日志里有 asked、上游却没有它 —— 重建出来的卡按不动）。不带一条的话，
+    // `callIds: []` 与「这个字段根本没算」在断言上完全一样。
+    feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'e2', agentId: 's2', request: { toolName: 'write', callId: 'call-1' } })
     await until(() => relay.held().length === 2, 'both questions are held')
 
     const frames = relay.replayFrames()
@@ -253,6 +256,7 @@ test('relay: the replay puts the ledger first and carries the same identity as t
     assert.equal(ledger.kind, 'sync')
     if (ledger.kind !== 'sync') return
     assert.deepEqual(ledger.eventIds, ['e1', 'e2'])
+    assert.deepEqual(ledger.callIds, ['call-1'], 'a standing callId must reach the client, or the dangling-audit sweep loses its input')
     assert.equal(ledger.stale, undefined, 'a live source speaks authoritatively — only a dead one says stale')
 
     const requests = frames.slice(1).map(frame => frame.payload)
@@ -285,7 +289,7 @@ test('relay: with no live source the replay is one stale ledger and no requests'
   }
 })
 
-// -- prompt pump (unchanged by 修正 11) ---------------------------------------
+// -- prompt 泵 ---------------------------------------------------------------
 
 test('pump: accepted prompt forwards through the controller door', async () => {
   const seen: unknown[] = []

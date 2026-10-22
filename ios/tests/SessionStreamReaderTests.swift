@@ -126,8 +126,7 @@ final class SessionStreamReaderTests: XCTestCase {
 
     /// 审批帧是连接级的：它没有 `streamId`。外壳把它解成 `nil`，判读照样认得出载荷。
     ///
-    /// 载荷里的 `sessionId` 是**本期新增的必填项**：这条帧没有编号可归属，属于哪一屏只能
-    /// 由它自己说。缺了就不放行（A3），说了别的会话也不放行（A2）。
+    /// 载荷里的 `sessionId` 是必填的：这条帧没有编号可归属，属于哪一屏只能由它自己说。
     func testApprovalFrameHasNoStreamId() throws {
         let text = #"{"type":"approval","payload":{"kind":"request","sessionId":"s-1","callId":"c1"}}"#
         let reading = try read(text)
@@ -139,18 +138,17 @@ final class SessionStreamReaderTests: XCTestCase {
         XCTAssertNil(try envelope(text).streamId, "审批帧没有流编号 —— 它不是哪条流的一部分")
     }
 
-    // MARK: - A1–A4：审批只进它所属的那个会话
+    // MARK: - 审批只进它所属的那个会话
 
-    /// 同会话放行，且「审批不算建成」这条既有边界不变 —— 建成若在这里成立，源还没就绪时
-    /// 心跳就开始判死（`livenessTick` 的注释记着那处现场）。
-    func testApprovalForThisSessionPassesAndIsNotAnEstablishment() throws {
+    /// 同会话放行。另有一条样本专断「审批不建立这条流」—— 建成若在审批上成立，源还没就绪
+    /// 时心跳就开始判死（`livenessTick` 的注释记着那处现场）；那是「建成」的判据，不在这条里。
+    func testApprovalForThisSessionPasses() throws {
         let reading = try read(
             #"{"type":"approval","payload":{"kind":"request","sessionId":"s-1","toolName":"shell"}}"#,
             session: "s-1")
         guard case .approval = reading.content else {
             return XCTFail("同会话的审批该放行，实际：\(reading.content)")
         }
-        XCTAssertFalse(reading.establishes, "审批不建立这条流")
     }
 
     /// 别的会话的审批不进这一屏。广播面向所有连接，过滤只能发生在判读这一层 ——
@@ -162,7 +160,6 @@ final class SessionStreamReaderTests: XCTestCase {
         guard case .ignored = reading.content else {
             return XCTFail("别的会话的审批必须丢弃，实际：\(reading.content)")
         }
-        XCTAssertEqual(reading.next, .keep, "丢弃不是这条流的事 —— 不动连接、不动流")
     }
 
     /// 没有归属的请求一律丢弃：旧网关不发这个字段，那时宁可少一张卡，也不把卡放错会话。
@@ -187,7 +184,22 @@ final class SessionStreamReaderTests: XCTestCase {
             guard case .approval = reading.content else {
                 return XCTFail("「\(text)」该放行，实际：\(reading.content)")
             }
-            XCTAssertFalse(reading.establishes)
+        }
+    }
+
+    /// 认不出的审批载荷**默认丢弃**，而不是「默认放行让状态层自己忽略」。
+    ///
+    /// 差别在新增一类审批载荷的那一天：默认放行意味着它可以先绕过归属检查、一路走到
+    /// 状态层，直到有人给它加一个 `case` 才突然生效 —— 而那一刻串会话就回来了。
+    func testUnknownApprovalKindIsDropped() throws {
+        for text in [
+            #"{"type":"approval","payload":{"kind":"question","sessionId":"s-1"}}"#,
+            #"{"type":"approval","payload":{}}"#,
+        ] {
+            let reading = try read(text, session: "s-1")
+            guard case .ignored = reading.content else {
+                return XCTFail("「\(text)」该丢弃，实际：\(reading.content)")
+            }
         }
     }
 

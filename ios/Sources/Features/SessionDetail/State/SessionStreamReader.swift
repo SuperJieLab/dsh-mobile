@@ -20,7 +20,8 @@ struct StreamReading {
         case transient(JSONValue)
         /// 一份占用读数。
         case usage(UsageSnapshot)
-        /// 一条连接级审批帧（没有 `streamId`，与这条流无关）。
+        /// 一条连接级审批帧。`request` 到这一层时已经核过归属（一定是本会话的）；
+        /// `cancel` 与 `sync` 不属于任何会话，原样交给状态层。
         case approval(JSONValue)
         /// 流通道里的协议内拒绝。
         case refused(GatewayFailure)
@@ -57,7 +58,8 @@ struct StreamReading {
  *
  * 之所以要能不建连接就回答：判读错了不会编译失败，也不会有哪条测试红 —— 它认的是上游的
  * 事件形状，一份会漂移的东西。做成静态函数，是它唯一能被断言的形式。它不持有状态、
- * 不碰 socket；唯一的副作用是「解不出打开帧」那一行日志（那行是就绪超时的第一现场）。
+ * 不碰 socket；副作用只有日志：解不出打开帧那一行（就绪超时的第一现场），以及被丢掉的
+ * 审批那一行（归属不对或压根没有，见 `approval` 分支）。
  *
  * 判据与网关侧的帧语义逐条对齐（两端协定的订阅流一节）：
  *
@@ -80,7 +82,8 @@ enum SessionStreamReader {
     ///   - envelope: 已解出的帧外壳（`type` / `streamId` / `payload`）。
     ///   - raw: 帧的原始字节 —— typed 载荷（打开帧、事件、占用）从它直解一次，
     ///     不经 `JSONValue` 往返。
-    ///   - sessionId: 本流的会话。占用帧要核它：帧串流时不能画别人的占用。
+    ///   - sessionId: 本流的会话。占用帧与审批的 `request` 都要核它：前者串流时会画别人的
+    ///     占用，后者会建出一张属于别人的卡。
     static func read(envelope: MuxServerEnvelope, raw: Data, sessionId: String) -> StreamReading {
         switch envelope.type {
         case "item":
@@ -120,20 +123,39 @@ enum SessionStreamReader {
         case "approval":
             guard let payload = envelope.payload else { return StreamReading(content: .ignored) }
             // 审批帧是**连接级**的（没有编号），广播又面向所有连接 —— 归属只能由载荷自己说。
-            // 只放行本会话的 `request`：别的会话的、以及没带归属的，一律丢弃。后者对应
-            // 「旧网关不发这个字段」那一刻，宁可少一张卡，也不把卡放错会话。
-            // `cancel` / `sync` 不带归属，也不该被这条规则误伤：前者按 `eventId` 全局寻址，
-            // 后者是整条连接的名单，两者都与「哪一屏」无关。
-            if payload["kind"]?.string == "request", payload["sessionId"]?.string != sessionId {
-                Log.warn(Log.Module.session,
-                         "dropped an approval that belongs to \"\(payload["sessionId"]?.string ?? "<none>")\", not \"\(sessionId)\"")
+            // 按 kind 分派而不是「只有 request 才核」：后者会让第四种 kind 绕过归属检查，
+            // 而它今天落到状态层是被静默丢掉的，症状要等到有人给它加一个 case 才出现。
+            // 分派写成穷举的 switch，新 kind 从「默认放行」变成「默认丢弃」。
+            switch payload["kind"]?.string {
+            case "request":
+                guard let owner = payload["sessionId"]?.string else {
+                    // 「新客户端 × 旧网关」的形状：旧网关不发这个字段。宁可少一张卡，
+                    // 也不把卡放错会话 —— 这条要看得到，否则现场只有「审批不显示」。
+                    Log.warn(Log.Module.session,
+                             "dropped an approval with no session (older gateway?) for \"\(sessionId)\"")
+                    return StreamReading(content: .ignored)
+                }
+                guard owner == sessionId else {
+                    // 常态而非故障：广播发给了每一条连接，别的会话的那一份注定落在这里。
+                    Log.debug(Log.Module.session, "dropped an approval for \"\(owner)\" on \"\(sessionId)\"")
+                    return StreamReading(content: .ignored)
+                }
+                return StreamReading(content: .approval(payload))
+            case "cancel", "sync":
+                // 两者不带归属，也不该被这条规则误伤：前者按 `eventId` 全局寻址（可能指向
+                // 一条早已不在表里的项），后者是整条连接的名单，都与「哪一屏」无关。
+                return StreamReading(content: .approval(payload))
+            default:
+                // 认不出的审批载荷：不猜，也不交给状态层。
                 return StreamReading(content: .ignored)
             }
-            return StreamReading(content: .approval(payload))
 
         case "usage":
             guard let payload = envelope.payload,
                   payload["sessionId"]?.string == sessionId else {
+                // 与审批不同，这里不留痕：外部读数串流是常态（每次 `usage` 帧都只属于一个
+                // 会话，而广播的每一条连接都会收到别人那一份），记日志只会把真正要看的那几行
+                // 淹掉。
                 return StreamReading(content: .ignored)
             }
             let envelope = try? JSONDecoder().decode(FrameWithUsage.self, from: raw)
