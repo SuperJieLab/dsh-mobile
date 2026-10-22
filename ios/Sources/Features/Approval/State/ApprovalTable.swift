@@ -61,7 +61,7 @@ struct ApprovalTable {
             }
         case "cancel":
             guard let eventId = payload["eventId"]?.string else { return }
-            entries.removeAll { $0.eventId == eventId }
+            remove(eventId: eventId)
         default:
             break
         }

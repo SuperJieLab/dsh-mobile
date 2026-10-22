@@ -25,8 +25,11 @@ final class GatewayLink: ObservableObject, SessionStreamHandle, ConnectionStream
 
     private let follow: FollowClient
 
-    init(client: GatewayClient) {
-        let follow = FollowClient()
+    /// - Parameter follow: 默认自己造一个（`nil` 而不是默认表达式：跨 actor 的默认值
+    ///   求值不合法）。可注入是为了**这一跳能被断言** —— 转发成员写成空实现时，
+    ///   两端各自的判据都还是绿的。
+    init(client: GatewayClient, follow: FollowClient? = nil) {
+        let follow = follow ?? FollowClient()
         self.follow = follow
 
         follow.onPhaseChange = { [weak self] phase in self?.phase = phase }
@@ -77,16 +80,11 @@ final class GatewayLink: ObservableObject, SessionStreamHandle, ConnectionStream
         follow.reconnectNow()
     }
 
-    // MARK: - 无编号帧与代次
+    // MARK: - 无编号帧
 
     /// 无编号帧的收货人 —— App 级，与连接同寿。
     var unscopedSink: (any UnscopedFrameSink)? {
         get { follow.unscopedSink }
         set { follow.unscopedSink = newValue }
-    }
-
-    /// 新连接代次开始。持有者是 App 级的那张表 —— 它据此清空上一代的基线。
-    func onConnectionGeneration(_ handler: @escaping (Int) -> Void) {
-        follow.onConnectionGeneration = handler
     }
 }

@@ -30,6 +30,9 @@ final class ScriptedURLProtocol: URLProtocol {
     static var transportFailure: URLError?
     /// 收到的请求（时间序），每条带 op 与 authorization 头。
     static var calls: [(op: String, authorization: String?)] = []
+    /// 收到的请求体，按 op 归组（时间序）。断言载荷用 —— 只记 op 与票的话，
+    /// 「decision 写反」「幂等键没透传」这类错法一条都看不出来。
+    static var bodies: [String: [[String: Any]]] = [:]
     private static let lock = NSLock()
 
     static func reset(replies: [String: Reply]) {
@@ -38,6 +41,7 @@ final class ScriptedURLProtocol: URLProtocol {
         self.replies = replies
         self.transportFailure = nil
         calls = []
+        bodies = [:]
     }
 
     static func snapshot() -> [(op: String, authorization: String?)] {
@@ -56,11 +60,12 @@ final class ScriptedURLProtocol: URLProtocol {
         }
         // `URLProtocol` 拿到的 `httpBody` 是空的 —— 请求体在 `httpBodyStream` 里，只能从流读。
         let body = request.httpBody ?? Self.bodyStream(of: request)
-        let op = body
-            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            .flatMap { $0["op"] as? String } ?? "?"
+        let parsed = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let op = parsed.flatMap { $0["op"] as? String } ?? "?"
 
-        let reply = Self.claim(op: op, authorization: request.value(forHTTPHeaderField: "Authorization"))
+        let reply = Self.claim(
+            op: op, authorization: request.value(forHTTPHeaderField: "Authorization"), body: parsed
+        )
         let payload = Data(reply.body.utf8)
         let response = HTTPURLResponse(
             url: request.url ?? URL(string: "http://127.0.0.1/")!,
@@ -75,10 +80,11 @@ final class ScriptedURLProtocol: URLProtocol {
 
     override func stopLoading() {}
 
-    private static func claim(op: String, authorization: String?) -> Reply {
+    private static func claim(op: String, authorization: String?, body: [String: Any]?) -> Reply {
         lock.lock()
         defer { lock.unlock() }
         calls.append((op, authorization))
+        if let body { bodies[op, default: []].append(body) }
         return replies[op] ?? Reply(
             status: 200,
             body: #"{"v":2,"ok":false,"error":{"code":"internal-error","message":"no reply scripted for \#(op)"}}"#

@@ -1135,11 +1135,13 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 待答表的三条结构判据
 
-    /// 补偿逻辑退场：配对、残骸过滤、悬空审计、已收口知识四类东西的符号一个都不剩。
+    /// 被删掉的那套补偿逻辑（配对、残骸过滤、悬空审计、已收口知识）的符号没有被粘回来。
     ///
+    /// 它守的是**删除不被回退**，不是「配对以另一个名字复活」—— 后者抓不住，那正是
+    /// `ApprovalTable` 的签名只收载荷、收不到事件流的意义。
     /// 只扫代码行（注释里解释「为什么不再需要它」是正当的）。活性锚用文件数 ——
     /// 路径推算错了时，下面的空集会被读成合规。
-    func testTheCompensatingApprovalLogicIsGone() throws {
+    func testTheDeletedApprovalSymbolsHaveNotComeBack() throws {
         let dead = ["ApprovalInbox", "standingCallIds", "settledCallIds",
                     "approvals.rebuild", "func pairs("]
         var hits: [String] = []

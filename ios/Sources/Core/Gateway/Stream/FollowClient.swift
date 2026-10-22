@@ -105,8 +105,6 @@ final class FollowClient: NSObject {
     /// 一个成员而不是一条「谁代收」的规则：帧没有编号时，「归谁」不该取决于谁先登记 ——
     /// 那条规则既没有判据，也随屏幕开关漂。收货人与连接同寿，由根部接上。
     var unscopedSink: (any UnscopedFrameSink)?
-    /// 新连接代次开始。消费方据此清空手里的基线 —— 换代次之前的每一帧都属于上一代。
-    var onConnectionGeneration: ((Int) -> Void)?
     /// 取一张有效的访问凭证 —— upgrade 请求带上它。**没有就说明现在不该连**：
     /// 见 `connect` 里对空票的处理。
     var authorizationProvider: (() -> String?)?
@@ -301,9 +299,6 @@ final class FollowClient: NSObject {
         // 否则握手持续失败时会退化成每秒一次的疯狂循环。
         generation += 1
         let current = generation
-        // 新代次的第一帧到达之前通知：消费方要在这之前把上一代的基线清掉，
-        // 否则重投进来的项会与旧项混在一起。
-        onConnectionGeneration?(current)
         // 新代次的第一帧到达之前通知：消费方要在这之前把上一代的基线清掉，
         // 否则重投进来的项会与旧项混在一起。
 
@@ -582,8 +577,6 @@ final class FollowClient: NSObject {
         for key in Array(streams.keys) { forget(key) }
     }
 
-    /// 有两个订阅者同时声明要无编号帧时，只有先登记者拿 —— 记一条错误日志，
-    /// 别让第二份「声明了却永远收不到」静默存在。
     /// 按编号找流。表很小（一条连接上几条），线性扫比维护第二张反查表便宜。
     private func stream(withId id: StreamId) -> (key: ObjectIdentifier, stream: OpenStream)? {
         for (key, stream) in streams where stream.id == id { return (key, stream) }
@@ -619,7 +612,7 @@ final class FollowClient: NSObject {
     /// 而这段顺序关乎一条健康连接会不会被自己的心跳判死。
     func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
         // 收到任何一帧都是「对端还活着」的证据 —— 由心跳那一拍消费（见 `livenessTick`）。
-        // ⚠️ 它**不**等于「这条流已建成」：升级后先到的审批对账帧也算「收到过东西」，
+        // ⚠️ 它**不**等于「这条流已建成」：升级后先到的任何一帧都算「收到过东西」，
         // 而那时打开帧的一大帧可能还在路上 —— 把它当成就绪，心跳会立刻激活、
         // 再在几拍之后把一条正在正常传输的连接判死。
         heardFromPeer = true

@@ -49,14 +49,18 @@ final class ApprovalStoreTests: XCTestCase {
         return .object(payload)
     }
 
+    private func cancel(_ eventId: String) -> JSONValue {
+        .object(["kind": .string("cancel"), "eventId": .string(eventId)])
+    }
+
     private func refused(_ code: String) -> GatewayClientError {
         .refused(GatewayFailure(code: code, message: "gateway said so"))
     }
 
     // MARK: - 收下与发布
 
-    /// 帧进来就发布出去，且按会话分组 —— 别的会话读不到。
-    func testReceivedFramesArePublishedPerSession() {
+    /// 帧进来就按会话分组 —— 别的会话读不到。
+    func testReceivedFramesAreGroupedBySession() {
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.receive(request(session: "s1"))
         store.receive(request(session: "s2", eventId: "e2", callId: "c2"))
@@ -165,20 +169,10 @@ final class ApprovalStoreTests: XCTestCase {
 
     // MARK: - 接线
 
-    /// 投递口的替身：连接层只认识它这两个成员。
+    /// 投递口的替身：连接层只认识这一个成员。
     @MainActor
     private final class FakeFeed: UnscopedFrameFeed {
         var unscopedSink: (any UnscopedFrameSink)?
-        private var generationHandlers: [(Int) -> Void] = []
-
-        func onConnectionGeneration(_ handler: @escaping (Int) -> Void) {
-            generationHandlers.append(handler)
-        }
-
-        /// 连接层换代次时叫这一下。
-        func announce(_ generation: Int) {
-            for handler in generationHandlers { handler(generation) }
-        }
 
         /// `/rpc/stream` 上到达的一帧无编号帧。
         func push(_ frame: MuxServerEnvelope) {
@@ -190,10 +184,10 @@ final class ApprovalStoreTests: XCTestCase {
         MuxServerEnvelope(type: "approval", streamId: nil, payload: payload)
     }
 
-    /// 三处接线一次断完：帧进表、新代次清空、源失效清空。
+    /// 两处接线一次断完：帧进表、源失效清空。
     ///
-    /// 三处各自能单独坏（而且坏了都不编译失败），所以三处各一条断言。
-    func testAttachWiresTheFramePathAndBothClearingTriggers() {
+    /// 两处各自能单独坏（而且坏了都不编译失败），所以两处各一条断言。
+    func testAttachWiresTheFramePathAndSourceLoss() {
         let events = ConnectionEvents()
         let feed = FakeFeed()
         let store = ApprovalStore(answerer: FakeAnswerer())
@@ -204,12 +198,61 @@ final class ApprovalStoreTests: XCTestCase {
         feed.push(envelope(request()))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "帧从投递口进来就成了一条")
 
-        feed.announce(2)
-        XCTAssertTrue(store.pending(in: "s1").isEmpty, "新连接代次清空：重投会重建")
-
-        feed.push(envelope(request()))
         events.handle(ConnectionEventReading(content: .ready(generation: nil)))
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "源失效清空：网关的上游没了，手里这些答不了")
+    }
+
+    /// 名单帧是重建的界线：它到达时表清空，随后的重投重建 —— 断线期间不动，
+    /// 因为那时根本收不到它。
+    func testTheLedgerFrameMarksAReconnectAndRestartsTheTable() {
+        let store = ApprovalStore(answerer: FakeAnswerer())
+        store.receive(request(eventId: "e9", callId: "c9"))
+        XCTAssertEqual(store.pending(in: "s1").count, 1, "断线之前收到的那一条还在")
+
+        // 重连：服务端先发名单（只有一条仍挂着），再逐条重投。
+        store.receive(.object(["kind": .string("sync"),
+                               "eventIds": .array([.string("e1")]),
+                               "callIds": .array([.string("c1")])]))
+        XCTAssertTrue(store.pending(in: "s1").isEmpty,
+                      "名单是界线：断线期间别人答掉的那些不该留到这时")
+
+        store.receive(request())
+        XCTAssertEqual(store.pending(in: "s1").map(\.identity), ["c1"], "重投重建")
+    }
+
+    /// 名单的 `stale` 标记不影响这条界线 —— 源没就绪时手里那些同样一条都答不了。
+    func testAStaleLedgerAlsoClears() {
+        let store = ApprovalStore(answerer: FakeAnswerer())
+        store.receive(request())
+
+        store.receive(.object(["kind": .string("sync"), "eventIds": .array([]),
+                               "callIds": .array([]), "stale": .bool(true)]))
+        XCTAssertTrue(store.pending(in: "s1").isEmpty)
+    }
+
+    /// 在途期间被上游撤回：卡没了，也不该留下「已投递」这句没有指代的话。
+    ///
+    /// 那条撤销是从另一条路进来的（`cancel`），它把状态行一起清掉了；回答随后到达，
+    /// 于是「成功」这一支面对的是一个已经不在的卡。
+    func testACancelWhileTheAnswerIsInFlightLeavesNoNotice() async {
+        let answerer = FakeAnswerer()
+        answerer.holdsFirstCall = true
+        let store = ApprovalStore(answerer: answerer)
+        store.receive(request())
+        let entry = store.pending(in: "s1")[0]
+
+        let answer = Task { await store.answer(entry, allow: true) }
+        for _ in 0..<500 {
+            if !answerer.calls.isEmpty { break }
+            await Task.yield()
+        }
+        store.receive(cancel("e1"))
+        answerer.release()
+        await answer.value
+
+        XCTAssertTrue(store.pending(in: "s1").isEmpty)
+        XCTAssertNil(store.state(for: "c1"))
+        XCTAssertNil(store.notice(for: "s1"), "卡都不在了，那句话没有指代")
     }
 
     // MARK: - 清空

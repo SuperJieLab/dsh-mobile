@@ -55,8 +55,7 @@ struct StreamReading {
  *
  * 之所以要能不建连接就回答：判读错了不会编译失败，也不会有哪条测试红 —— 它认的是上游的
  * 事件形状，一份会漂移的东西。做成静态函数，是它唯一能被断言的形式。它不持有状态、
- * 不碰 socket；副作用只有日志：解不出打开帧那一行（就绪超时的第一现场），以及被丢掉的
- * 审批那一行（归属不对或压根没有，见 `approval` 分支）。
+ * 不碰 socket；副作用只有一行日志：解不出打开帧的那一帧（就绪超时的第一现场）。
  *
  * 判据与网关侧的帧语义逐条对齐（两端协定的订阅流一节）：
  *
@@ -66,7 +65,6 @@ struct StreamReading {
  * | `item`，载荷 `type` 是 `assistant-stream` | 未定稿帧 | 载荷里的 `frame` 原样转出 |
  * | `item`，载荷有 `type` + `seq` | 事件帧 | 载荷本体就是一条事件；解不出如实丢弃 |
  * | `usage` | 占用读数 | 载荷 `sessionId` 必须等于本流的会话，否则丢弃 |
- * | `approval` | 审批帧 | 没有 `streamId`，与这条流无关；`request` 还要求载荷自带归属且等于本流 |
  * | `error` | 拒绝 | 载荷是 `{code, message}` |
  * | `end` | 收尾 | —— |
  *
@@ -79,8 +77,7 @@ enum SessionStreamReader {
     ///   - envelope: 已解出的帧外壳（`type` / `streamId` / `payload`）。
     ///   - raw: 帧的原始字节 —— typed 载荷（打开帧、事件、占用）从它直解一次，
     ///     不经 `JSONValue` 往返。
-    ///   - sessionId: 本流的会话。占用帧与审批的 `request` 都要核它：前者串流时会画别人的
-    ///     占用，后者会建出一张属于别人的卡。
+    ///   - sessionId: 本流的会话。占用帧要核它：帧串流时会画出别人的占用。
     static func read(envelope: MuxServerEnvelope, raw: Data, sessionId: String) -> StreamReading {
         switch envelope.type {
         case "item":

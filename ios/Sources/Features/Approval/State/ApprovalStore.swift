@@ -64,9 +64,6 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
         table.pending(in: sessionId)
     }
 
-    /// 全部会话的条数。
-    var count: Int { table.count }
-
     func state(for identity: String) -> AnswerState? {
         states[identity]
     }
@@ -75,18 +72,20 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
         notices[sessionId]
     }
 
-    /// 三处接线一次接完：无编号帧的收货人、新代次清空、源失效清空。
+    /// 两处接线一次接完：无编号帧的收货人、源失效清空。
     ///
-    /// 三处各自能单独坏，而且坏了都不编译失败 —— 症状分别是「审批永不显示」「重连后卡
-    /// 不回来」「断了上游之后留着一张按不动的卡」。
+    /// 两处各自能单独坏，而且坏了都不编译失败 —— 症状分别是「审批永不显示」与
+    /// 「网关的上游没了之后留着一张按不动的卡」。
+    ///
+    /// 这里没有「换连接代次清空」这一条：清空由服务端的名单帧触发（见 `receive`）。
+    /// 挂在客户端「开始连」上是错的 —— 一次连不上的重试会把卡片清掉，而那正是离线
+    /// 期间用户唯一能看见的东西。
     func attach(feed: any UnscopedFrameFeed, events: ConnectionEvents) {
         feed.unscopedSink = self
-        feed.onConnectionGeneration { [weak self] _ in self?.clear() }
         events.onGeneration { [weak self] generation in
             guard generation == nil else { return }
             self?.clear()
         }
-
     }
 
     /// 连接层送来的无编号帧。只认审批，其余一概不看 —— 连接层不认识帧类型，
@@ -97,7 +96,15 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
     }
 
     /// 网关推来的一条 `approval` 载荷。
+    ///
+    /// 名单帧（`sync`）是**重建的界线**：服务端每次连接都先发它、再逐条重投，所以收到
+    /// 它就说明「手里这份到此为止，接下来这份是完整的」。名单内容本身不读 —— 谁的卡
+    /// 该留着，由「清空 + 重投」回答，不由客户端比对两份名单回答。
     func receive(_ payload: JSONValue) {
+        if payload["kind"]?.string == "sync" {
+            clear()
+            return
+        }
         table.absorb(payload)
         if payload["kind"]?.string == "request", let sessionId = payload["sessionId"]?.string {
             // 新的一问来了，上一句说明（「已投递」/「已经不在了」）讲的是别的事。
@@ -118,29 +125,37 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
         guard states[entry.identity] == nil else { return }
         // 发出之前就置位：写在回包之后的话，等待期间守卫是空的，连点两次会发两次。
         states[entry.identity] = .sending
+        // 收尾统一在这一处：三个出口都要清掉已不在表里的状态行，早退的那两个
+        // 漏掉时，下一张同身份的卡会因为「已经有状态」而按不动。
+        defer { pruneStates() }
         do {
             try await answerer.answer(
                 eventId: entry.eventId, allow: allow, answerId: UUID().uuidString
             )
             // 上游先摘掉自己的投递再广播取消 —— 应答者收不到自己的收口帧，等就是永远等。
-            table.remove(identity: entry.identity)
-            notices[entry.sessionId] = ApprovalStore.deliveredNote(allow: allow)
+            settle(entry, notice: ApprovalStore.deliveredNote(allow: allow))
         } catch GatewayClientError.refused(let failure)
             where failure.code == GatewayErrorCode.unknownApproval.rawValue {
             // 这条已经不在了：留着就是一张永远按不动的卡。
-            table.remove(identity: entry.identity)
-            notices[entry.sessionId] = failure.readableDescription
+            settle(entry, notice: failure.readableDescription)
         } catch GatewayClientError.refused(let failure) {
             // 服务端拒了这次投递，问题仍挂着 —— 卡留着并写明原因。
             states[entry.identity] = .refused(failure.readableDescription)
-            return
         } catch {
             // 传输失败 ≠ 未生效：如实转「未知」，等上游结算。
             states[entry.identity] = .unknown
-            return
         }
+    }
+
+    /// 结局已定：撤卡、写一句说明。
+    ///
+    /// 等待期间这一条可能已被上游的 `cancel` 撤掉（那时状态行也跟着清空了）——
+    /// 卡都不在了，这句话就成了没有指代的一句，所以只在它仍是自己那一张时才写。
+    private func settle(_ entry: ApprovalTable.Entry, notice: String) {
+        table.remove(identity: entry.identity)
+        guard states[entry.identity] == .sending else { return }
         states[entry.identity] = nil
-        pruneStates()
+        notices[entry.sessionId] = notice
     }
 
     /// 清掉已不在表里的状态行。

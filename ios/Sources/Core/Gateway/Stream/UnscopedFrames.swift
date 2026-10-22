@@ -15,15 +15,13 @@ protocol UnscopedFrameSink: AnyObject {
 }
 
 /**
- * 连接层对「不属于流的帧」与「换代次」的两件对外能力。
+ * 无编号帧的投递口：收货人可设。
  *
  * 收成协议而不是给一个具体的 `FollowClient`：消费方要能脱离 socket 接线、被断言 ——
- * 这两件事坏了都不编译失败（症状是「审批永不显示」或「重连后卡片不回来」）。
+ * 这一跳坏了不编译失败，症状是「审批永不显示」。
  */
 @MainActor
 protocol UnscopedFrameFeed: AnyObject {
     /// 无编号帧的收货人。
     var unscopedSink: (any UnscopedFrameSink)? { get set }
-    /// 新连接代次开始。
-    func onConnectionGeneration(_ handler: @escaping (Int) -> Void)
 }

@@ -243,28 +243,26 @@ final class StreamLayerTests: XCTestCase {
         XCTAssertEqual(subscriber.handled, 0, "退回给某条流代收正是这一版要消掉的那条规则")
     }
 
-    // MARK: - 换代次的通知
+    // MARK: - 门面的转发
 
-    /// 每次 `connect` 都通知一次代次：清空要赶在新连接的第一帧重投之前。
+    /// `GatewayLink` 的三个转发成员真的转到了连接层。
     ///
-    /// 同一代里开流不算换代次 —— 否则每开一屏就清一次表，卡片会闪。
-    func testEveryNewConnectionGenerationIsAnnouncedOnce() {
-        let follow = connected()
-        var generations: [Int] = []
-        follow.onConnectionGeneration = { generations.append($0) }
+    /// 这一跳两端各有判据（连接层「谁收无编号帧」、表「收到之后怎么处理」），而**中间**
+    /// 没有：把 setter 写成空实现，两边都绿，症状是「审批永不显示」。
+    func testTheFacadeForwardsTheSinkToTheConnection() throws {
+        let follow = FollowClient()
+        let link = GatewayLink(client: GatewayClient(), follow: follow)
+        let sink = Sink()
 
-        follow.activate()
-        XCTAssertEqual(generations.count, 1, "要一条连接就是新代次")
+        link.unscopedSink = sink
 
-        let subscriber = Subscriber()
-        follow.open(subscription(subscriber))
-        XCTAssertEqual(generations.count, 1, "在同一条连接上开流不是换代次")
+        XCTAssertTrue(follow.unscopedSink === sink, "门面的 setter 没转到连接层")
+        XCTAssertTrue(link.unscopedSink === sink, "读回来的也必须是同一个")
 
-        follow.connect()
-        XCTAssertEqual(generations.count, 2, "重连是新代次")
-        XCTAssertNotEqual(generations[0], generations[1], "代次只增")
-
-        follow.deactivate()
+        // 反向：换一个收货人，连接层跟着换 —— 写死的 getter 不会红，写死的 setter 会。
+        let other = Sink()
+        follow.unscopedSink = other
+        XCTAssertTrue(link.unscopedSink === other)
     }
 
     // MARK: - O7：重开换号
