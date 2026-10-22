@@ -16,6 +16,7 @@
  * 与列表路径同源：标题都走 `titleOf`，所以「无标题」在两条路上是同一条判定。
  */
 import type { SessionListChange, SessionListRow } from '../wire/session-events.ts'
+import { nonEmptyString } from '../wire/fields.ts'
 import { titleOf, type ProjectionValues } from './sessions.ts'
 
 /** 上游 `api-session/added` 携带的 `SessionSummary` 里我们读的那几个字段。 */
@@ -100,8 +101,4 @@ function projectionValuesOf(projections: unknown): ProjectionValues | undefined 
   const values = (projections as { values?: unknown }).values
   if (typeof values !== 'object' || values === null) return undefined
   return values as ProjectionValues
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
 }

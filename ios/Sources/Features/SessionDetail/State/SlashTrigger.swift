@@ -42,7 +42,7 @@ enum SlashTrigger: Equatable {
     }
 }
 
-/// 一行字该走哪条路 —— **本期安全面上最有后果的一条判定**，所以它在状态层，不在视图里。
+/// 一行字该走哪条路 —— **安全面上最有后果的一条判定**，所以它在状态层，不在视图里。
 ///
 /// 走错方向的后果不对称：该发给模型的话走成命令，会被宿主当命令解析（可能真的执行了什么）；
 /// 该执行的命令走成消息，会变成一句对模型说的话。
@@ -51,14 +51,6 @@ enum SlashDispatch: Equatable {
     case command(String)
     /// 发给模型。
     case prompt(String)
-
-    /// 这行文字实际要发出去的内容。
-    var text: String {
-        switch self {
-        case .command(let line): return line
-        case .prompt(let text): return text
-        }
-    }
 }
 
 extension SlashTrigger {

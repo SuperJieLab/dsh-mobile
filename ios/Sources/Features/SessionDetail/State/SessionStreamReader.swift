@@ -117,9 +117,8 @@ enum SessionStreamReader {
         case "usage":
             guard let payload = envelope.payload,
                   payload["sessionId"]?.string == sessionId else {
-                // 与审批不同，这里不留痕：外部读数串流是常态（每次 `usage` 帧都只属于一个
-                // 会话，而广播的每一条连接都会收到别人那一份），记日志只会把真正要看的那几行
-                // 淹掉。
+                // 这里不留痕：外部读数串流是常态（每条 `usage` 帧只属于一个会话，而广播
+                // 让每条连接都收到别人那一份），记日志只会把真正要看的那几行淹掉。
                 return StreamReading(content: .ignored)
             }
             let envelope = try? JSONDecoder().decode(FrameWithUsage.self, from: raw)

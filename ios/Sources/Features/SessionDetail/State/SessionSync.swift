@@ -29,7 +29,7 @@ final class SessionSync: ObservableObject {
         case failed(step: Step, cause: Cause)
     }
 
-    /// 失败发生在哪一步。六个步骤各有一句说法 —— 同一类原因在不同步骤上说的话不一样
+    /// 失败发生在哪一步。每个步骤各有一句说法 —— 同一类原因在不同步骤上说的话不一样
     /// （打开时说「这一屏还是空的」，往回翻时说「未能加载更早的消息」）。
     enum Step {
         case opening
@@ -447,7 +447,7 @@ final class SessionSync: ObservableObject {
     /// 打开帧与事件帧的到达/应用埋点（`kind=opening` / `kind=event`）。
     ///
     /// 只有这两类值得计时：它们各自代表「首屏窗口到手」与「一条事件落地」，延迟超标时这
-    /// 两行是判断卡在哪一段的第一现场。其余类别（占用、审批、收尾）一个渲染帧就完了，
+    /// 两行是判断卡在哪一段的第一现场。其余类别（占用、收尾）一个渲染帧就完了，
     /// 计时只会把日志撑大。
     private func recordPerf(_ reading: StreamReading, bytes: Int, recv: Double, apply: Double) {
         switch reading.content {

@@ -7,10 +7,8 @@ enum Log {
 
     /// 模块标签集中在此登记，调用点不允许写散字符串；新场景需要新标签时先来这里加。
     enum Module {
-        static let app = "app"
         static let mesh = "mesh"
         static let gateway = "gateway"
-        static let pairing = "pairing"
         static let session = "session"
     }
 

@@ -39,7 +39,7 @@ struct SessionSummary: Decodable, Identifiable, Hashable {
     /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——
     /// 既不是 `null` 也不是空串。这是契约的一部分，不是故障。
     let title: String?
-    /// 会话创建时间。**客户端当前不读它** —— 留作协议行的完整镜像。
+    /// 会话创建时间。客户端不显示它，但**合并时要保留**（事件推来的行没有这一格）。
     ///
     /// **可选**：列表拉取给出的行都带它，而事件推来的行不带（上游 `api-session/added`
     /// 的 summary 里没有这一格）。合并时事件不得抹掉已知行的那一格。
@@ -142,8 +142,8 @@ enum JSONValue: Decodable, Encodable, Equatable {
     /// 取对象里的一个键；拿不到就是 nil。
     subscript(key: String) -> JSONValue? { object?[key] }
 
-    /// 拿一个整数字段；拿不到就是 `nil`。凡要读协议对象的地方都用它（`TransientChannel`
-    /// 不用它，只编协议层的测试脚本就不必连带编译一个用不到的状态机）。
+    /// 拿一个整数字段；拿不到就是 `nil`。凡要读协议对象里的整数都用它 ——
+    /// 非负整数才算数（负数与小数一律 `nil`），因为协议里的整数字段都不接受负值。
     var int: Int? {
         if case .number(let value) = self, value == value.rounded(), value >= 0 { return Int(value) }
         return nil

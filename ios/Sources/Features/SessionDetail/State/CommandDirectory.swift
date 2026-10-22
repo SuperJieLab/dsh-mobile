@@ -99,15 +99,15 @@ func fetchCommands(_ client: GatewayClient, sessionId: String) async throws -> [
 /// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的
 /// `command/run` / `command/done` 来 —— 这个回包不带执行结果。
 ///
-/// 返回 `commandId` 只为了给调用方留一条可对账的线，不是结果。
+/// 回包里的 `commandId` 不返回：这一版没有任何一处按它对账（结果靠流里的
+/// `commandId` 与 `runCommand` 的 `command/run` 配对）。但它**必须有** ——
+/// `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
 @MainActor
-@discardableResult
-func runCommand(_ client: GatewayClient, sessionId: String, line: String) async throws -> String {
+func runCommand(_ client: GatewayClient, sessionId: String, line: String) async throws {
     let response: CommandExecuteResponse = try await client.perform(
         CommandExecuteRequest(sessionId: sessionId, line: line)
     )
-    guard let commandId = response.commandId else {
+    guard response.commandId != nil else {
         throw GatewayClientError.malformedResponse(detail: "commandId")
     }
-    return commandId
 }

@@ -53,7 +53,7 @@ struct DshMobileApp: App {
                     .task {
                         link.activate()
                         events.attach(to: link)
-                        // 三处接线：无编号帧的收货人、换代次清空、源失效清空。
+                        // 两处接线：无编号帧的收货人、源失效清空。
                         approvals.attach(feed: link, events: events)
                     }
                     // 两个重连点放在根部而不是某一屏：这都是 App 级事件，关掉会话详情

@@ -8,7 +8,7 @@
  * 先被看见。
  *
  * **不做的三件事**：不判断可见性（`blank` / `subagent` 归 `SessionVisibility`，
- * 在视图那一层）、不删拉取给的行（只有 `removed` 删）、不新增未知 id 的
+ * 由状态层两半各过一遍）、不删拉取给的行（只有 `removed` 删）、不新增未知 id 的
  * `status` / `activity`（它们说的是「已经有一行」的事，凭空造行等于替拉取做主）。
  */
 import Foundation

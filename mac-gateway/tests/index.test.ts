@@ -659,18 +659,6 @@ test('an upgrade without an access token is refused before the handshake', { tim
 
 // MARK: - the write channel (M5 W5)
 
-/** A waterfall request whose session tail is an `approval/asked` audit event. */
-function waterfallRequest(id: string): unknown {
-  return {
-    agent: {
-      session: {
-        seq: 1,
-        eventAt: (seq: number) => (seq === 0 ? { type: 'approval/asked', data: { id, toolName: 'shell' } } : undefined),
-      },
-    },
-  }
-}
-
 test('a real HTTP approval-answer settles a held waterfall frame; the consumed question then refuses', { timeout: 10_000 }, async () => {
   const port = freshPort(43_000)
   const credentialsPath = tempCredentialsPath()

@@ -23,8 +23,9 @@ import Foundation
  * 订阅方，再按对方回的 `StreamReply` 决定动作。它不认识 op 名、不认识帧类型的取值 ——
  * 要发的开流内容由订阅方凭刚造好的编号拼出来（`Subscription.build`）。
  *
- * **订阅方的答复只作用于它那一条流**（`reopen` / `retry` / `stop`）。连接级重连只有三个
- * 触发者 —— socket 关闭、心跳判死、帧层破坏，全在本类自己的代码里。
+ * **订阅方的答复只作用于它那一条流**（`reopen` / `retry` / `stop`）。连接级重连的触发者
+ * 全在本类自己的代码里：收端失败、发端失败、心跳判死、就绪超时（外加无端点与换票两条退避）。
+ * 解不出的帧**不**在这里 —— 它只留一行痕，不动连接。
  *
  * 协议名与端口全从 `GatewayClient.baseURL` 推导 —— 全 App 只有一个要改的地址。
  */
@@ -55,18 +56,6 @@ final class FollowClient: NSObject {
         let build: (StreamId) throws -> String
         /// 收到一帧：外壳 + 原始字节。返回值决定这条流下一步怎么办。
         let handler: (MuxServerEnvelope, Data) -> StreamReply
-
-        init(
-            owner: AnyObject,
-            label: String,
-            build: @escaping (StreamId) throws -> String,
-            handler: @escaping (MuxServerEnvelope, Data) -> StreamReply
-        ) {
-            self.owner = owner
-            self.label = label
-            self.build = build
-            self.handler = handler
-        }
     }
 
     /// 一条已登记的流。

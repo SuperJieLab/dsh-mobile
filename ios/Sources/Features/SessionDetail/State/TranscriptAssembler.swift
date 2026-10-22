@@ -323,7 +323,7 @@ struct TranscriptAssembler {
 
             default:
                 // 不认识的新类型：跳过，已组装的节点不受影响；留一条痕，按类型去重。
-                if !Self.consumedTypes.contains(event.type), !Self.isKnownBypass(event.type) {
+                if !Self.isKnownBypass(event.type) {
                     if reportedUnknownTypes.insert(event.type).inserted {
                         onUnknownEventType?(event.type)
                     }
@@ -568,14 +568,6 @@ private extension TranscriptAssembler {
     }
 
     // MARK: 事件类型的认识范围
-
-    /// 组装器自己消费的类型。
-    static let consumedTypes: Set<String> = [
-        "user/message", "assistant/message",
-        "turn/start", "turn/end", "step/start", "step/end",
-        "tool/call", "tool/result",
-        "command/run", "command/done",
-    ]
 
         /// 会话日志里必然出现、但归别的链路管的事件类型前缀（审批、投影、沙箱、子代理、用量…）。
         /// 这不是「支持的清单」，是**降噪的清单** —— 没有它「不认识就上报」会让每次打开会话变成

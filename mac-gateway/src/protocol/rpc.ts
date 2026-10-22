@@ -100,8 +100,8 @@ export async function handle(
       case 'page':
         return await page(envelope, port)
       case 'model-catalog':
-        // 读 op。仅只读测试装配会缺端口；生产必接线，
-        // 此拒绝在生产不可达。
+        // 读 op。端口缺席是装配层宣布过的事实（`faces.ts` 在宿主没有模型切面时
+        // 返回 undefined 并留痕），所以这一支在生产也可达 —— 拒答而不是崩。
         if (model === undefined) return failure('internal-error', 'model channel not wired for "model-catalog"')
         return await modelCatalog(model)
       case 'model-select':

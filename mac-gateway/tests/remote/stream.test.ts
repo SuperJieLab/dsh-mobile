@@ -915,7 +915,7 @@ async function eventsServer() {
 }
 
 test('E2: an events stream opens with ready, then forwards each emit verbatim', { timeout: 10_000 }, async () => {
-  // 两张载荷就是这条流的全部词汇：`ready`（源的状态）与 `emit`（源的内容）。
+  // 这条流的词汇：`ready`（源的状态）、`emit`（源的内容）、`session-list`（列表增量）。
   // 未出生的事件也要能到达 —— 这就是 P2「收得到」在网关侧的判据。
   const { feed, server } = await eventsServer()
   try {

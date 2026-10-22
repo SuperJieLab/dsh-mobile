@@ -81,15 +81,7 @@ final class LayeringTests: XCTestCase {
 
     /// `Features/` 下全部 `.swift`（递归），用来回答「谁引用了这个名字」。
     private func allFeatureSwiftFiles() -> [URL] {
-        guard let walker = FileManager.default.enumerator(at: featuresRoot,
-                                                          includingPropertiesForKeys: nil,
-                                                          options: [.skipsHiddenFiles])
-        else { return [] }
-        var result: [URL] = []
-        for case let url as URL in walker where url.pathExtension == "swift" {
-            result.append(url)
-        }
-        return result
+        swiftFiles(under: featuresRoot)
     }
 
     // MARK: - 断言 1：每个界面都有 State/ 与 Views/
@@ -1455,15 +1447,6 @@ final class LayeringTests: XCTestCase {
     private func contains(_ name: String, in text: String) -> Bool {
         let pattern = "\\b" + NSRegularExpression.escapedPattern(for: name) + "\\b"
         return text.range(of: pattern, options: .regularExpression) != nil
-    }
-
-    /// 单行双引号字面量。盲区：三引号多行串、转义引号。
-    private static let stringLiteral = try! NSRegularExpression(pattern: #""([^"\\]|\\.)*""#)
-
-    private func quotedLiterals(in line: String) -> [String] {
-        let range = NSRange(line.startIndex..., in: line)
-        return Self.stringLiteral.matches(in: line, options: [], range: range)
-            .compactMap { Range($0.range, in: line).map { range in String(line[range]) } }
     }
 
     private func containsHan(_ text: String) -> Bool {

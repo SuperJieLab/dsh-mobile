@@ -40,16 +40,16 @@ func readSnapshot(
 /// - Parameters:
 /// - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」（打开会话）；
 ///   往回翻时传上一次的 `pageStart`。
-/// - maxMessages: 最多取多少条消息。不传就用服务端的默认值。
+
 @MainActor
 func readPage(
     _ client: GatewayClient,
     sessionId: String,
     beforeSeq: Int? = nil,
-    maxMessages: Int? = nil
 ) async throws -> SessionPage {
     let response: PageResponse = try await client.perform(
-        PageRequest(sessionId: sessionId, beforeSeq: beforeSeq, maxMessages: maxMessages)
+        // `maxMessages` 恒不传：客户端从不限制条数，取服务端默认。
+        PageRequest(sessionId: sessionId, beforeSeq: beforeSeq, maxMessages: nil)
     )
     // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
     guard let pageStart = response.pageStart,

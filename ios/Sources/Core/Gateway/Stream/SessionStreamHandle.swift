@@ -7,13 +7,11 @@ import Foundation
  * 会把同一条连接上的另一条流一起拽断；而屏幕这一侧看到的只是「另一条流没了」。
  * 需要连接级动作的只有根部（回前台、组网就绪），它持有的是具体类型。
  *
- * 连接阶段在这里是**只读**的：连接详情要显示「现在连到哪一步」，那是读，不是做。
+ * 连接阶段**不**在这个协议上：读它要能订阅（`$phase`），而那只有具体类型给得出；
+ * 屏幕这一侧因此两份引用（`streams` 只做、`link` 只读），合成一个就丢掉了后一半。
  */
 @MainActor
 protocol SessionStreamHandle: AnyObject {
-
-    /// 连接阶段 —— 功能条的网络格与连接详情的数据源。
-    var phase: FollowClient.Phase { get }
 
     /// 登记一条流（会话详情进屏）。
     func open(_ subscription: FollowClient.Subscription)

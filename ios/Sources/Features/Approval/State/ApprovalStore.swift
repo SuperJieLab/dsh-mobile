@@ -118,7 +118,7 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
         pruneStates()
     }
 
-    /// 连接代次换了，或网关的上游没了：手里的项一条都答不了。之后由网关重投重建。
+    /// 网关的上游没了：手里的项一条都答不了。之后由网关重投重建。
     func clear() {
         table.clear()
         states.removeAll()

@@ -77,7 +77,7 @@ struct ApprovalTable {
         entries.removeAll { $0.identity == identity }
     }
 
-    /// 连接代次换了 / 网关的上游没了：手里这些一条都答不了，全清。
+    /// 网关的上游没了：手里这些一条都答不了，全清。
     /// 之后由网关重投重建 —— 它才是「还挂着什么」的权威。
     mutating func clear() {
         entries.removeAll()
