@@ -87,11 +87,14 @@ export interface MuxUsageFrame {
 export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApprovalFrame | MuxUsageFrame
 
 /**
- * 从线上文本解析一条客户端帧。
+ * 从线上文本解析一条客户端帧的**信封**：`type` 与非空 `streamId`。
  *
- * @returns 无法解析的 JSON、未知 `type`、空 `streamId`、`open` 载荷不是
- *   follow 请求 —— 一律返回 `undefined`，并以传输层 close 应对：解析不了的
- *   东西不是消息，也没有可拒收它的流。
+ * 只判到这一层。`open` 的 `payload` 是什么由 `openRequestOf` 在流这一层判 —— 分界就是
+ * 「这一帧还能不能归到一条流上」：**归得上**（信封完好、编号在手），内容坏了只拒那条流
+ * （一条带编号的 error 帧）；**归不上**（不是 JSON、缺编号、`type` 不认识），才以传输层
+ * close 应对 —— 解析不了的东西不是消息，也没有可拒收它的流。
+ *
+ * @returns 归不到任何一条流时返回 `undefined`。
  */
 export function parseClientFrame(text: string): MuxClientFrame | undefined {
   let parsed: unknown
@@ -107,11 +110,7 @@ export function parseClientFrame(text: string): MuxClientFrame | undefined {
 
   if (frame.type === 'cancel') return { type: 'cancel', streamId }
 
-  if (frame.type === 'open') {
-    return followRequestOf(frame.payload) === undefined
-      ? undefined
-      : { type: 'open', streamId, payload: frame.payload }
-  }
+  if (frame.type === 'open') return { type: 'open', streamId, payload: frame.payload }
 
   return undefined
 }
@@ -151,6 +150,31 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
   return isPositiveInteger(record.maxMessages)
     ? { sessionId, maxMessages: record.maxMessages }
     : { sessionId }
+}
+
+/**
+ * 一条 `open` 帧要开的是**哪种**流 —— 载荷的判定结果。
+ *
+ * 与信封分两层判：`parseClientFrame` 只说「这是几号流」，这里说「这条流要什么」。
+ * 认不出的 op 因此不是畸形帧 —— 它归得上一条流，只是那条流开不起来（一条带编号的
+ * `unknown-op` error，连接与别的流不动）。
+ *
+ * 两种流的恢复语义不同（一条有窗口与水位，一条不重放），所以它们是两个取值而不是
+ * 一个带可选字段的形状：可选字段会把「事件流没有会话」表达成「会话可能缺席」。
+ */
+export type OpenRequest = ({ kind: 'follow' } & FollowRequest) | { kind: 'events' }
+
+/**
+ * 把 `open` 载荷校验为一条开流请求。
+ *
+ * @returns 认不出的 op、或 follow 缺会话名时返回 `undefined` —— 调用方据此回一条
+ *   带编号的 `unknown-op`，**不关连接**。
+ */
+export function openRequestOf(payload: unknown): OpenRequest | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
+  if ((payload as Record<string, unknown>).op === 'events') return { kind: 'events' }
+  const follow = followRequestOf(payload)
+  return follow === undefined ? undefined : { kind: 'follow', ...follow }
 }
 
 /** 打开帧的载荷：`page` 形状的窗口加上这条流的锚点。 */

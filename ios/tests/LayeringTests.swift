@@ -567,7 +567,8 @@ final class LayeringTests: XCTestCase {
     /// 盲区：只认 `struct`。写成 `typealias FollowRequest = …` 或包在条件编译分支里认不出
     /// （漏报方向，靠评审）。
     func testWireShapesAreDeclaredOnce() throws {
-        let shapes = ["MuxServerEnvelope", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest", "OpeningFrame"]
+        let shapes = ["MuxServerEnvelope", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest",
+                      "EventsRequest", "OpeningFrame"]
         var homes: [String: [String]] = [:]
 
         for file in swiftFiles(under: sourcesRoot) {
@@ -595,28 +596,56 @@ final class LayeringTests: XCTestCase {
         return pattern.firstMatch(in: line, options: [], range: range) != nil
     }
 
-    /// 开流帧只有一个拼装点，且点名在清单里 —— 清单本身也被断言。
+    /// 开流帧**按 op 点名**拼装：每一类开流只有一处拼装点，且每一处都在清单写下的位置。
     ///
-    /// 拼装点住在连接层，所以形状判据只能以「点名一处」的方式容纳它：豁免要写出坐标，
-    /// 坐标对不上（清单里那个文件不再构造，或别处也构造）就红。红在该看见它的时候，
-    /// 而不是静默留在代码库里。
-    func testOpenFramesAreBuiltInOnePlace() throws {
-        let marker = "MuxOpenFrame.following("
-        var homes: Set<String> = []
-        var hits = 0
-
+    /// 旧写法只认 `MuxOpenFrame.following(` 一个 marker：第二类开流帧（`events(`）加进来之后
+    /// 它照样全绿 ——「一处拼装」这条纪律对新增的那一类一点都没生效。清单因此改成
+    /// 「op → 文件」，并且**清单自己也断**：源码里出现第三个工厂而清单没登记时，最后一条红。
+    ///
+    /// 拼装点住在状态层与 App 级容器，所以形状判据只能以「点名一处」的方式容纳它们：
+    /// 豁免要写出坐标，坐标对不上（清单里那个文件不再构造，或别处也构造）就红。
+    func testOpenFramesAreBuiltInDeclaredPlaces() throws {
+        let declared: [(op: String, file: String)] = [
+            ("following", "Features/SessionDetail/State/SessionSync.swift"),
+            ("events", "Core/Gateway/Events/ConnectionEvents.swift"),
+        ]
+        var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {
             let text = try String(contentsOf: file, encoding: .utf8)
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-            for (_, code) in codeLines(in: text) where code.contains(marker) {
-                hits += 1
-                homes.insert(relative)
-            }
+            files.append((relative, codeLines(in: text)))
         }
 
-        XCTAssertGreaterThan(hits, 0, "全仓一处都没扫到 —— 先怀疑名字或路径，别把空集读成合规")
-        XCTAssertEqual(homes.sorted(), ["Features/SessionDetail/State/SessionSync.swift"],
-                       "开流帧的拼装点不在清单里：\(homes.sorted())")
+        for item in declared {
+            let marker = "MuxOpenFrame.\(item.op)("
+            let homes = Set(files.filter { entry in
+                entry.code.contains { $0.1.contains(marker) }
+            }.map { $0.relative })
+            XCTAssertEqual(homes, Set([item.file]),
+                           "`\(marker)` 的拼装点不在清单里：\(homes.sorted())")
+        }
+
+        // 清单自身：源码里出现、而清单没认领的工厂 → 红。否则「再加一类开流」静默绕过它。
+        //
+        // 扫**整段文本**而不是逐行，也不要求工厂名紧跟 `(`：换行书写（`MuxOpenFrame` 一行、
+        // `.events(...)` 下一行）与「先取成员引用再调」都是真实存在的写法，按行按括号会把
+        // 它们当成没出现 —— 而这正是这条判据唯一要抓的东西。
+        //
+        // 盲区：根本不经过工厂、自己拼 `{"type":"open",...}` 字面量的形态扫不到。那个方向
+        // 只能由「`Wire/Mux.swift` 是唯一的开流帧构造入口」这条纪律挡着，靠评审。
+        let factory = try NSRegularExpression(pattern: "MuxOpenFrame\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)")
+        var found: Set<String> = []
+        for file in swiftFiles(under: sourcesRoot) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let range = NSRange(text.startIndex..., in: text)
+            for match in factory.matches(in: text, range: range) {
+                if let name = Range(match.range(at: 1), in: text) {
+                    found.insert(String(text[name]))
+                }
+            }
+        }
+        XCTAssertEqual(found, Set(declared.map { $0.op }),
+                       "有拼装点没登记在清单里（扫到为空也走这条）：\(found.sorted())")
     }
 
     /// 连接层不认识业务 —— 它的代码行里数不出 op 名、帧类型取值、协议错误码、会话字段。

@@ -28,6 +28,7 @@ mac-gateway/deploy/tls/
 ios/Frameworks/
 ios/build/
 ios/.build/
+ios/.dd/
 ios/DerivedData/
 xcuserdata/
 # xcodebuild 的输出重定向（老版本脚本用 .txt，新脚本用 .log —— 两类都别进仓库）

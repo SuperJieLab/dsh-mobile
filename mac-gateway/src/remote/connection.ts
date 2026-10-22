@@ -14,6 +14,7 @@ import type { MuxServerFrame, StreamId } from '../wire/mux.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../protocol/rpc.ts'
 import { describeError } from '../ports/errors.ts'
 import type { FollowSource } from '../ports/follow.ts'
+import type { ForwardedSource } from '../ports/events.ts'
 import {
   WsFrameParser,
   acceptKeyOf,
@@ -132,6 +133,13 @@ export const DEFAULT_OPENING_BYTES = DEFAULT_LIMITS.maxOpeningBytes
 export interface StreamOptions {
   /** 每个接入的客户端调用一次，附带限定于该 socket 的发送器。 */
   onClientConnected?: ClientHook
+  /**
+   * 进程里那份转发事件源（`{op:'events'}` 的流订阅它）。
+   *
+   * 缺席**不是**降级路径：装配忘了接它时，事件流要拿到一条显式的拒绝，而不是一条
+   * 永远等不到正文的流。只在「这台网关不提供事件流」的测试里才该缺席。
+   */
+  events?: ForwardedSource
   /** 打开帧的字节上界；缺省即 {@link DEFAULT_OPENING_BYTES}。 */
   openingCapBytes?: number
   /**
@@ -231,15 +239,19 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
           write(socket, encodeClose())
           socket.end()
           break
-        case 'text':
-          if (!onClientText(socket, source, streams, frame.text, openingCapBytes)) {
-            // 同一个编号被第二次 open —— 客户端坏了，这条连接上的一切都不再可信。
-            // 关掉而不是静默忽略：忽略的表现是「客户端等 45 秒就绪超时」，两端都看不出原因。
-            log.error('stream protocol violation: duplicate stream id — closing the connection')
-            socket.destroy()
-            return
-          }
-          break
+        case 'text': {
+          const outcome = onClientText(socket, source, options.events, streams, frame.text, openingCapBytes)
+          if (outcome.ok) break
+          // 两档都在这里关连接，但原因不同，日志必须分得开：
+          //   重复编号 —— 客户端坏了，这条连接上的一切都不再可信；
+          //   归不到流 —— 帧读不出编号，没有可拒收它的流（有编号的坏载荷不走这条路）。
+          // 静默忽略的表现是「客户端等 45 秒就绪超时」，两端都看不出原因。
+          log.error(outcome.reason === 'duplicate-id'
+            ? 'stream protocol violation: duplicate stream id — closing the connection'
+            : `stream protocol violation: frame belongs to no stream (${outcome.excerpt}) — closing the connection`)
+          socket.destroy()
+          return
+        }
       }
     }
   }

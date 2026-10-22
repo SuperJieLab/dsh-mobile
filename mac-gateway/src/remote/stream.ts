@@ -12,13 +12,14 @@
  *
  *   window-too-large   传输自有 —— 说的是「这一帧装不下」，由字节上界
  *                      （`StreamOptions.openingCapBytes`）产生，不是会话状态
- *   unknown-op         载荷不是 follow 请求 —— 形状判定在 `wire/mux.ts` 的解析器，
- *                      这里只把结论送回去
- *   internal-error     **这一条有两种产生者**：一种是上游失败经映射（那种在
- *                      `protocol/error-codes.ts`），另一种是本层自己发现的
- *                      「源承诺无缺口、实际却跳了 seq」—— 那不是上游抛的错，
- *                      是传输在见证契约被违反。两个产生者同码，因为对客户端
- *                      而言补救相同（这条流已经不可信）。
+ *   unknown-op         载荷不是这条流认得的请求 —— 形状判定用 `wire/mux.ts` 的
+ *                      `openRequestOf`，这里只决定怎么回：一条带编号的 error 帧，
+ *                      **连接与其他流不动**
+ *   internal-error     **这一条有三个产生者**：上游失败经映射（那种在
+ *                      `protocol/error-codes.ts`）；本层自己发现的「源承诺无缺口、
+ *                      实际却跳了 seq」—— 那不是上游抛的错，是传输在见证契约被违反；
+ *                      以及「这条流要的源没接上」（装配错误）。三者同码，因为对客户端
+ *                      而言补救相同（这条流已经不可信，换一条才有意义）。
  *
  * 其余由**上游失败**折出来的码（`unreadable-session` / `unknown-session`）不在这里：
  * 它们在 `protocol/error-codes.ts`，因为那套规则随上游的错误语义漂，而传输层不该
@@ -27,7 +28,7 @@
 
 import {
   DEFAULT_FOLLOW_MESSAGES,
-  followRequestOf,
+  openRequestOf,
   parseClientFrame,
   type FollowOpening,
   type StreamId,
@@ -41,6 +42,7 @@ import type { WireEvent } from '../wire/rpc.ts'
 import type { UsageSnapshot } from '../wire/usage.ts'
 import type { ModelSelection } from '../wire/model.ts'
 import type { FollowSource } from '../ports/follow.ts'
+import type { ForwardedSource } from '../ports/events.ts'
 import type { Duplex } from 'node:stream'
 import { encodeTextFrame } from './frames.ts'
 import { gwRecord, send, type PerfContext } from './egress.ts'
@@ -49,45 +51,135 @@ import { createLogger, LogModule, perfNow, perfRecord } from '../log.ts'
 const log = createLogger(LogModule.ws)
 
 /**
- * 路由一条解析好的客户端文本帧：`open` 起泵，`cancel` 停泵。契约的
- * 解析器已拒掉畸形帧，活下来的都过了形状检查。
+ * 一条客户端文本帧的处置结论 —— **本层只给结论，连接层才动手**。
  *
- * @returns `false` = 这条连接上出现了协议违规（同一个编号被第二次 `open`），调用方必须
- *   关掉它。编号由客户端现造且**约定不复用**，重复意味着客户端坏了 —— 再在这条连接上
- *   服务，每一条流都不可信。静默忽略更糟：客户端会等到 45 秒就绪超时才走，而那一帧
- *   到底发生了什么，两端日志都没有。
+ * 「关不关这条 socket」超出「一条流」的存活范围，所以这里不碰 socket 的生死：它只回答
+ * 这一帧归到哪儿。归得上（`ok`）就是这条流的事；归不上（`ok: false`）才升级成连接级，
+ * 由调用方关掉它。
+ */
+export type ClientFrameOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: 'duplicate-id' }
+  | { readonly ok: false; readonly reason: 'unreadable-frame'; readonly excerpt: string }
+
+/** 记进日志的帧首长度：够认出「这是哪一版的客户端在说话」，又不至于把一整帧倒进日志。 */
+const EXCERPT_LIMIT = 120
+
+/**
+ * 路由一条解析好的客户端文本帧：`open` 起泵，`cancel` 停泵。
+ *
+ * 两档分界的判据是**编号在不在手**，不是内容坏到什么程度：
+ *
+ *   - **编号在手**（信封完好）→ 这条流的事：op 认不出就回一条带该编号的 `unknown-op`，
+ *     连接与别的流不动。内容坏了不等于这条连接不可信 —— 它还能服务别的流。
+ *   - **编号读不出**（不是 JSON、缺 `streamId`、`type` 不认识）→ 无从归流，报
+ *     `unreadable-frame`，调用方关连接。
+ *
+ * `duplicate-id` 同理：同一个编号被第二次 `open`（编号约定不复用）意味着客户端坏了 ——
+ * 再在这条连接上服务，每一条流都不可信。静默忽略更糟：客户端会等到 45 秒就绪超时才走，
+ * 而那一帧到底发生了什么，两端日志都没有。
  */
 export function onClientText(
   socket: Duplex,
   source: FollowSource,
+  feed: ForwardedSource | undefined,
   streams: Map<StreamId, { abort: AbortController }>,
   text: string,
   openingCapBytes: number,
-): boolean {
+): ClientFrameOutcome {
   const frame = parseClientFrame(text)
-  if (frame === undefined) return true
+  if (frame === undefined) return { ok: false, reason: 'unreadable-frame', excerpt: excerptOf(text) }
 
   if (frame.type === 'cancel') {
     // **只停泵，不动表**：条目由泵自己的收尾删（`pump` 的 `done`）。取消即删的话，
     // 之后同号的 `open` 会落进那个空档，而旧泵退出时的收尾删掉的是**新**条目 ——
     // 于是后续的 `cancel` 找不到它：流关不掉，同号还能再开一条并行。
     streams.get(frame.streamId)?.abort.abort()
-    return true
+    return { ok: true }
   }
 
   // 以下是 frame.type === 'open'
-  if (streams.has(frame.streamId)) return false
+  if (streams.has(frame.streamId)) return { ok: false, reason: 'duplicate-id' }
 
-  const request = followRequestOf(frame.payload)
+  const request = openRequestOf(frame.payload)
   if (request === undefined) {
-    send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'unknown-op', message: 'open payload is not a follow request' } })
-    return true
+    send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'unknown-op', message: 'open payload names no stream op this gateway serves' } })
+    return { ok: true }
   }
 
   const abort = new AbortController()
   streams.set(frame.streamId, { abort })
-  void pump(socket, source, frame.streamId, request, abort.signal, () => streams.delete(frame.streamId), openingCapBytes)
-  return true
+  const done = (): void => { streams.delete(frame.streamId) }
+
+  if (request.kind === 'events') {
+    if (feed === undefined) {
+      // 装配错误，不是客户端错误：这条流在这里没有被接上。拒绝要响 —— 静默的表现是
+      // 客户端等 45 秒就绪超时，而就绪超时判的是**整条连接**（两条流一起被关）。
+      log.error(`events stream ${frame.streamId} was opened, but this gateway wires no forwarded-event source — refused`)
+      streams.delete(frame.streamId)
+      send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'internal-error', message: 'this gateway has no forwarded-event source' } })
+      return { ok: true }
+    }
+    pumpEvents(socket, feed, frame.streamId, abort.signal, done)
+    return { ok: true }
+  }
+
+  void pump(socket, source, frame.streamId, request, abort.signal, done, openingCapBytes)
+  return { ok: true }
+}
+
+/**
+ * 帧首若干字符，供日志认人。
+ *
+ * 按 `slice` 截断可能切开一个代理对（末位成孤立代理），这是刻意的：这段文本只进日志，
+ * 宁可末位是个问号，也不为它做一套按码点的截断。
+ */
+function excerptOf(text: string): string {
+  return text.length <= EXCERPT_LIMIT ? text : `${text.slice(0, EXCERPT_LIMIT)}…`
+}
+
+/**
+ * 泵一条事件流：订阅进程里那份源，一条流一个订阅者。
+ *
+ * **开口帧不等源**：订阅那一刻先发一条 `ready`，此后源的每次换代次再发一条。若开口要
+ * 等源就绪，一次源的事故会让这条流一直等不到打开帧 —— 而就绪超时判的是**整条连接**，
+ * 于是一条流的事故变成所有流反复重开。
+ *
+ * 这条流**不会自己结束**：源断了只发一条无代次的 `ready`，因为结束流会让手机立刻重开
+ * 一条注定拿不到正文的流，而重开没有退避。唯一的收场是客户端取消或连接收尾。
+ *
+ * 两个载荷就是它的全部词汇：`ready`（源的状态，`generation` 缺席 = 没有活的代次）与
+ * `emit`（源的内容，名字与参数原样）。源上的 `waterfall` / `cancel` 是审批的事，同一条源
+ * 上两类消费方各取所需 —— 这条流不转发它们。
+ */
+function pumpEvents(
+  socket: Duplex,
+  feed: ForwardedSource,
+  streamId: StreamId,
+  signal: AbortSignal,
+  done: () => void,
+): void {
+  const announce = (): void => {
+    const generation = feed.generation
+    send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
+  }
+  // 先订阅、再发开口帧：两句之间没有 `await`，源不可能插进来一帧 —— 于是「第一条 item
+  // 一定是 ready」与「订阅之后一帧都不漏」同时成立。反过来（先发后订阅）会丢掉夹在
+  // 中间的那一帧，而这条流不重放，丢了就是永久丢。
+  const unsubscribe = feed.subscribe({
+    generation: () => { announce() },
+    frame: (frame) => {
+      if (frame.type !== 'emit') return
+      send(socket, { type: 'item', streamId, payload: { kind: 'emit', event: frame.event, args: frame.args } })
+    },
+  })
+  announce()
+  log.info(`events stream opened — source ${feed.generation === undefined ? 'has no generation' : `generation ${feed.generation}`}`)
+
+  signal.addEventListener('abort', () => {
+    unsubscribe()
+    done()
+  }, { once: true })
 }
 
 /**

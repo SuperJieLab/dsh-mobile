@@ -12,9 +12,6 @@ struct SessionDetailView: View {
     let client: GatewayClient
     let session: SessionSummary
 
-    /// 到网关的常驻连接（App 级）。本屏只登记 / 注销一条流，连接本身不归它。
-    @ObservedObject var link: GatewayLink
-
     /// 同步编排。视图重建时会新建一个、窗口重取一次 —— 重取的理由见 `SessionSync`。
     @StateObject private var sync: SessionSync
     /// 模型目录。宿主持有：功能条那一格要用目录默认值兜底显示名，两处读的必须是同一份。
@@ -30,13 +27,14 @@ struct SessionDetailView: View {
     @State private var activeSheet: DetailSheet?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
-    /// 根部注入的连接域：功能条的网络格、连接详情与「就绪即重连」都读它。
+    /// 根部注入的连接域：功能条的网络格与连接详情读它（图中转与节点状态）。
     @EnvironmentObject private var store: ConnectionStore
 
+    /// - Parameter link: 只在这里交给 `SessionSync`，本视图不保留 —— 屏幕能对连接做的
+    ///   只有流级动作（`SessionSync.retry()`），连接级动作在它的类型上不存在。
     init(client: GatewayClient, session: SessionSummary, link: GatewayLink) {
         self.client = client
         self.session = session
-        _link = ObservedObject(wrappedValue: link)
         _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id, link: link))
         _catalog = StateObject(
             wrappedValue: ModelCatalogState { try await fetchCatalog(client) }
@@ -62,7 +60,7 @@ struct SessionDetailView: View {
             }
         }
         // 进屏即登记一条流：opening 给首屏，事件与未定稿实时推。
-        // 离屏即注销那一条。`sync()`（HTTP 全量对齐）留在「滚到底部」时作兜底。
+        // 离屏即注销那一条。`sync()`（HTTP 全量对齐）只留作首屏兜底。
         //
         // 连接不归本屏：回前台与组网就绪的重连点在根部（`DshMobileApp`）—— 那是 App 级
         // 事件，关掉这一屏它照样该发生。
@@ -257,7 +255,7 @@ struct SessionDetailView: View {
         // 等级名与模型名读同一个 `shown`：两处各取一份会出现「模型是 A、等级是 B 的」。
         let shown = sync.displayedModel ?? catalog.lastKnownDefault
         return ComposerStripModel.make(
-            phase: link.phase,
+            phase: sync.phase,
             carrier: store.meshPath,
             usage: sync.usage,
             modelName: shown.map { $0.model } ?? "未知",
@@ -361,12 +359,12 @@ struct SessionDetailView: View {
     // MARK: - 详情面
 
     private var networkSheet: some View {
-        NetworkSheet(phase: link.phase,
+        NetworkSheet(phase: sync.phase,
                      carrier: store.meshPath,
                      lastFrameAt: sync.lastFrameAt,
                      nodeState: store.nodeState,
                      configDamaged: store.storedConfigDamaged,
-                     onRetry: { link.reconnectNow() },
+                     onRetry: { sync.retry() },
                      onOpenMesh: { activeSheet = .mesh })
     }
 

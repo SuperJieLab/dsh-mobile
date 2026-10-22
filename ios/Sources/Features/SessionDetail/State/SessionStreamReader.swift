@@ -44,8 +44,8 @@ struct StreamReading {
         case .ended:
             return .reopen
         case .refused(let failure):
-            // 会话级终态重连只会得到同一个结果；其余拒绝按可重试处理。
-            return SessionStreamReader.isTerminal(code: failure.code) ? .stop : .reconnect
+            // 会话级终态再开只会得到同一个结果；其余拒绝值得按这条流自己的退避再试一次。
+            return SessionStreamReader.isTerminal(code: failure.code) ? .stop : .retry
         case .opening, .event, .transient, .usage, .approval, .ignored:
             return .keep
         }
@@ -138,13 +138,13 @@ enum SessionStreamReader {
     }
 
     /**
-     * 重连有没有意义 —— `true` 表示这是会话级终态：重连只会得到同一个结果。
+     * 再开这条流有没有意义 —— `true` 表示这是会话级终态：再开只会得到同一个结果。
      *
-     * `window-too-large` 属于这一类：那个窗口不会因为重连而变小，反复重连只会把一次确定的
-     * 拒绝变成一串无用的尝试。**未知码按可重试处理** —— 白名单之外的码不该让会话卡死。
+     * `window-too-large` 属于这一类：那个窗口不会因为再开而变小，反复尝试只会把一次确定的
+     * 拒绝变成一串无用的请求。**未知码按可重试处理** —— 白名单之外的码不该让会话卡死。
      *
-     * 这条判断住这里而不是连接层：连接层的默认动作是重连（最坏的偏离是「该停的多连几次」，
-     * 屏幕上一直显示重连中，看得见）；要不要停由订阅方说。
+     * 这条判断住这里而不是连接层：连接层只按答复执行（默认什么都不做，最坏的偏离是「该停的
+     * 多试几次」，看得见）；要不要停由订阅方说。
      */
     static func isTerminal(code: String) -> Bool {
         code == GatewayErrorCode.unknownSession.rawValue

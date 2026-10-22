@@ -12,7 +12,43 @@ import assert from 'node:assert/strict'
 import type { Server } from 'node:http'
 import { STREAM_PATH } from '../../src/remote/connection.ts'
 import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
+import type { ForwardedSink, ForwardedSource, UpstreamWireFrame } from '../../src/ports/events.ts'
 import type { WireEvent } from '../../src/wire/rpc.ts'
+
+/**
+ * 一份**由测试驱动**的转发事件源：换代次、发帧都在测试手里。
+ *
+ * 与 `fakeSource` 同一条分工 —— 这里替代的是「上游的 `$events` 身份」（网络与宿主之外），
+ * 而流、socket、成帧都是真的。
+ */
+export function fakeFeed(): ForwardedSource & {
+  emit(event: string, args: unknown): void
+  push(frame: UpstreamWireFrame): void
+  /** 换代次；`undefined` = 源失效。 */
+  setGeneration(generation: number | undefined): void
+  subscribers(): number
+} {
+  const sinks = new Set<ForwardedSink>()
+  let current: number | undefined
+  return {
+    get generation() { return current },
+    subscribe(sink) {
+      sinks.add(sink)
+      return () => { sinks.delete(sink) }
+    },
+    setGeneration(generation) {
+      current = generation
+      for (const sink of sinks) sink.generation(generation)
+    },
+    emit(event, args) {
+      for (const sink of sinks) sink.frame({ type: 'emit', event, args })
+    },
+    push(frame) {
+      for (const sink of sinks) sink.frame(frame)
+    },
+    subscribers: () => sinks.size,
+  }
+}
 
 /** A follow source replaying scripted frames, optionally lying. */
 export function fakeSource(
@@ -22,8 +58,8 @@ export function fakeSource(
   return {
     calls: 0,
     requests: [],
-    // 这套夹具只造事件流：占用读数与模型基线在这里显式缺席，不伪造一个值 ——
-    // `FollowSource` 是全的形状，缺了这两格编译期就不成立。
+    // 这套夹具只造事件流：`occupancyOf` 是必填形状，这里给「不知道」；`modelOf` 是可选的，
+    // 整套夹具不造模型基线 —— 一个值都不伪造。
     occupancyOf: () => undefined,
     async *follow(request, signal) {
       this.calls += 1

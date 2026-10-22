@@ -4,9 +4,8 @@ import Foundation
 /**
  * 到网关的那一条**常驻连接** —— App 级，唯一实例，由根部创建。
  *
- * 它只装一件事：连接的生命周期归谁。在这之前那个答案是「会话详情」——进屏开、离屏关，
- * 于是切一个会话就要重新握手、重新带票、重新建隧道，并把整个窗口当 opening 重传一次。
- * 上移到 App 之后：前台期间要一条连接，会话详情只在这条连接上**登记 / 注销一条流**。
+ * 它只装一件事：连接的生命周期归谁。归 App —— 前台期间要一条连接，会话详情只在这条连接上
+ * **登记 / 注销一条流**。屏幕那一侧永远看不到「进屏重新握手、离屏丢掉整窗」这件事。
  *
  * 为什么需要这一层而不是在根部直接拿 `FollowClient`：连接阶段要能被 SwiftUI 观察
  * （功能条的网络格），而连接层不碰 Combine 的发布机制。这一层只搬运阶段与转发登记，
@@ -14,9 +13,11 @@ import Foundation
  *
  * **连接参数只在这里绑一次**：票在哪取、传输换成哪一条、地址从哪来，三件都是「怎么连」
  * 的一半，与「看哪个会话」无关。订阅方因此拿不到它们，也就不可能长出第二个决策者。
+ *
+ * 屏幕那一侧拿到的不是这个类型，而是 `SessionStreamHandle` —— 它没有连接级动作。
  */
 @MainActor
-final class GatewayLink: ObservableObject {
+final class GatewayLink: ObservableObject, SessionStreamHandle, ConnectionStreamOpening {
 
     /// 连接阶段 —— 功能条网络格与连接详情的数据源。
     @Published private(set) var phase: FollowClient.Phase = .idle
@@ -63,12 +64,14 @@ final class GatewayLink: ObservableObject {
         follow.close(owner: owner)
     }
 
-    /// 这条流的基线丢了（未定稿断号、服务端正常收尾）：换一个编号在本连接上重开。
-    func reopenStream() {
-        follow.reopenStream()
+    /// 这一条流的基线丢了（未定稿断号、服务端正常收尾）：换一个编号在本连接上重开。
+    /// 连接与别的流不动。
+    func reopen(owner: AnyObject) {
+        follow.reopen(owner: owner)
     }
 
-    /// 回前台 / 组网就绪：立即重连（跳过退避）。
+    /// 回前台 / 组网就绪：立即重连（跳过退避）。**连接级动作** —— 只给根部用，
+    /// 屏幕手里没有这个成员。
     func reconnectNow() {
         follow.reconnectNow()
     }

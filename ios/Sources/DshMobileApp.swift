@@ -3,8 +3,8 @@ import SwiftUI
 /// dsh-mobile 的 iPhone 客户端：会话列表 / 会话详情 / 配对 / 审批四个界面的根部，
 /// 也是协议纯度的一面镜子 —— 客户端若需要改协议才跑得起来，说明协议没设计对。
 ///
-/// 根部只做一行级接线：创建 `TailnetNode` / `GatewayClient` /
-/// `ConnectionStore` 三件并注入，启动与回前台编排全部在 store。node 与 client
+/// 根部只做接线：node / client / store / link / events 各一件并注入；启动编排在 store，
+/// 两个重连点（回前台、组网就绪）在根部。node 与 client
 /// 是同一实例的两份引用（StateObject 持 store、let 持 client）。
 @main
 struct DshMobileApp: App {
@@ -14,6 +14,13 @@ struct DshMobileApp: App {
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
     @StateObject private var link: GatewayLink
     private let client: GatewayClient
+    /// 连接级事件流的收端 —— App 级，与连接同寿。
+    private let events: ConnectionEvents
+    /// 事件流的第一个消费方。
+    ///
+    /// 它不是「为了保住监听」才被持有：监听是注册在 `ConnectionEvents` 上的闭包，闭包不引用
+    /// 这个实例。持有它只是给这个消费方一个具名、与 App 同寿的落点，删掉它也行为不变。
+    private let eventLog: ConnectionEventLog
 
     init() {
         let node = TailnetNode()
@@ -22,6 +29,9 @@ struct DshMobileApp: App {
         _store = StateObject(wrappedValue: ConnectionStore(client: client, node: node))
         _link = StateObject(wrappedValue: GatewayLink(client: client))
         self.client = client
+        let events = ConnectionEvents()
+        self.events = events
+        self.eventLog = ConnectionEventLog(events: events)
     }
 
     var body: some Scene {
@@ -39,7 +49,11 @@ struct DshMobileApp: App {
                     }
                     // 连接常驻：App 一到前台就要一条。此刻可以一条流都没有 ——
                     // 停在会话列表时它照样连着（心跳也照样判活）。
-                    .task { link.activate() }
+                    // 事件流同时登记：它不绑会话，停在列表页也正是要看「别的设备上发生了什么」。
+                    .task {
+                        link.activate()
+                        events.attach(to: link)
+                    }
                     // 两个重连点放在根部而不是某一屏：这都是 App 级事件，关掉会话详情
                     // 它们照样该发生。
                     // ① 回前台立即重连 —— 上游「恢复立即试」的复现；已就绪 / 握手中的

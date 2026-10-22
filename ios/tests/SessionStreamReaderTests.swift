@@ -180,7 +180,7 @@ final class SessionStreamReaderTests: XCTestCase {
 
     // MARK: - O10：这条流接下来怎么办
 
-    /// 四种动作各有归属：收尾重开、终态停、其余拒绝重连、其他什么都不做。
+    /// 四种动作各有归属：收尾立刻重开、终态停、其余拒绝按退避重开、其他什么都不做。
     func testNextActionOfEachKind() throws {
         let reopen = try read(#"{"type":"end","streamId":"s-1"}"#)
         XCTAssertEqual(reopen.next, .reopen)
@@ -193,7 +193,7 @@ final class SessionStreamReaderTests: XCTestCase {
         }
 
         let retryable = try read(#"{"type":"error","streamId":"s-1","payload":{"code":"internal-error","message":""}}"#)
-        XCTAssertEqual(retryable.next, .reconnect, "非终态的拒绝要退避重连")
+        XCTAssertEqual(retryable.next, .retry, "非终态的拒绝要按这条流自己的退避重开")
 
         let opening = try read(#"{"type":"item","streamId":"s-1","payload":{"sessionId":"s-1","cursor":1,"events":[]}}"#)
         XCTAssertEqual(opening.next, .keep, "打开帧之后什么都不用做")
@@ -201,11 +201,11 @@ final class SessionStreamReaderTests: XCTestCase {
 
     // MARK: - O11：未知码按可重试
 
-    /// 白名单之外的码不该让会话卡死：宁可多连几次（屏幕上看得见「重连中」），
+    /// 白名单之外的码不该让会话卡死：宁可多开几次（屏幕上看得见在恢复），
     /// 也不要静默挂死。
     func testAnUnknownCodeIsRetried() throws {
         let reading = try read(#"{"type":"error","streamId":"s-1","payload":{"code":"some-future-code","message":""}}"#)
 
-        XCTAssertEqual(reading.next, .reconnect)
+        XCTAssertEqual(reading.next, .retry)
     }
 }

@@ -2,42 +2,37 @@
  * 写通道适配器：审批中继与 prompt 泵。
  *
  * **中继。** `api-remotes` 在 waterfall 中更早，把每个 `approval/request` 挂进
- * `pendingRemoteEvents` 等待*远程客户端*应答，因此中继把本插件变成一个远程
- * 事件流客户端 —— 打开网关的 `$events` 流，把每个 `approval/request` 帧作为
- * `approval` 帧转发给手机，并在点击时通过 `dispatchRpc("$events/result")`
- * 应答。手机与浏览器是对等方：第一个应答终结 waterfall，落败方得到
- * `unknown-approval`（fail-closed）。
+ * `pendingRemoteEvents` 等待*远程客户端*应答，因此宿主侧需要一个远程事件流客户端
+ * 在场。那个身份归 `ForwardedEvents`（`remote-events.ts`，进程一份）；中继只是它的
+ * 一个订阅者：把每个 `approval/request` 帧作为 `approval` 帧转发给手机，并在点击时
+ * 通过 `dispatchRpc("$events/result")` 应答。手机与浏览器是对等方：第一个应答终结
+ * waterfall，落败方得到 `unknown-approval`（fail-closed）。
  *
- * 手机从未见过的问题由 WS 适配器在下一次连接时重放；中继保持其待答集合直到
- * 上游 `cancel` 到达。构造上即一次性：已交付的应答只在网关接受后才移除待答项，
- * 且每次交付都映射到一次性词汇（`allowed-once` / `rejected`）——
+ * 手机从未见过的问题由 WS 适配器在下一次连接时重放；中继保持其待答集合直到上游
+ * `cancel` 到达 —— 或者身份换代（源断了，宿主会把仍在等待的问题重投一遍，沿用旧
+ * 集合就是重放已消费的应答）。构造上即一次性：已交付的应答只在网关接受后才移除
+ * 待答项，且每次交付都映射到一次性词汇（`allowed-once` / `rejected`）——
  * 中继绝不推断持久授权。
  *
  * 泵把 prompt 转发给 controller 的 `prompt`（web UI 自己的门）；
  * `promptId` 即请求 id，controller 会去重。
  */
 
-import { describeError, isNotFound } from '../ports/errors.ts'
+import { isNotFound } from '../ports/errors.ts'
 import type { ApprovalOutcome } from '../ports/write.ts'
 import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
+import type { UpstreamWireFrame } from '../ports/events.ts'
+import type { ForwardedEvents } from './remote-events.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.relay)
 
-/** 网关 `$events` 线上流的一帧，仅到中继关心的程度。 */
-export type UpstreamWireFrame =
-  | { type: 'ready'; clientId: string; host?: unknown }
-  | { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }
-  | { type: 'cancel'; eventId: string }
-  | { type: 'emit'; event: string; args: unknown }
-
-/** 中继驱动的网关服务部分。 */
-export interface RemoteEventGatewayLike {
-  openWireStream(
-    endpoint: string,
-    payload: { args: Record<string, never> },
-    signal: AbortSignal,
-  ): AsyncIterable<UpstreamWireFrame> | Promise<AsyncIterable<UpstreamWireFrame>>
+/**
+ * 网关应答门的窄切面 —— 中继唯一需要的上游能力。
+ *
+ * 开流不在这里：身份由 `ForwardedEvents` 持有，中继从它那里收帧（E6）。
+ */
+export interface RemoteEventAnswerLike {
   dispatchRpc(endpoint: string, payload: { args: unknown }, signal: AbortSignal): Promise<unknown>
 }
 
@@ -54,90 +49,63 @@ interface HeldRequest {
   reason?: string
 }
 
-/** `$events` 流的重连退避，形状与 follow 客户端相同。 */
-const RELAY_RECONNECT_MIN_MS = 500
-const RELAY_RECONNECT_MAX_MS = 10_000
-
 export class ApprovalRelay {
-  readonly #gateway: RemoteEventGatewayLike
+  /** 应答要带上的身份由它给出（身份属于源，不属于中继）。 */
+  readonly #events: ForwardedEvents
+  readonly #door: RemoteEventAnswerLike
   readonly #broadcaster: BroadcasterLike
   readonly #pending = new Map<string, HeldRequest>()
   /** 存的是**这一次交付**（一个 Promise），不是它的结局 —— 重试的 `answerId` 因此共用同一次交付。 */
   readonly #replay = new ReplayTable<Promise<ApprovalOutcome>>()
-  #clientId: string | undefined
-  #abort: AbortController | undefined
-  #lifetime: AbortSignal | undefined
+  /** 应答门与中继同寿：插件拆除时一并取消在途交付。 */
+  readonly #lifetime: AbortSignal
 
-  constructor(gateway: RemoteEventGatewayLike, broadcaster: BroadcasterLike) {
-    this.#gateway = gateway
+  /**
+   * 构造即订阅：源上的一切通知从中继「在」的那一刻起就到它这里。
+   *
+   * `lifetime` 不是流的手柄（流归 `ForwardedEvents` 开），它只用来取消一次在途的
+   * 应答交付 —— 上游的应答门要求一个真实的取消信号。
+   */
+  constructor(
+    events: ForwardedEvents,
+    door: RemoteEventAnswerLike,
+    broadcaster: BroadcasterLike,
+    lifetime: AbortSignal,
+  ) {
+    this.#events = events
+    this.#door = door
     this.#broadcaster = broadcaster
+    this.#lifetime = lifetime
+    events.subscribe({
+      generation: (generation) => {
+        if (generation === undefined) this.#dropHeld()
+      },
+      frame: (frame) => this.#onFrame(frame),
+    })
+  }
+
+  /** 上游来的一帧中，中继认得的那两种。 */
+  #onFrame(frame: UpstreamWireFrame): void {
+    if (frame.type === 'waterfall' && frame.event === 'approval/request') {
+      this.#hold(frame)
+      return
+    }
+    if (frame.type === 'cancel') {
+      this.#pending.delete(frame.eventId)
+      // 上游自己结算了这个问题（别处先答、或它被撤回）—— 这是「卡为什么消失」的唯一线索。
+      log.info(`approval ${frame.eventId} was cancelled upstream`)
+      this.#broadcaster.broadcast({ type: 'approval', payload: { kind: 'cancel', eventId: frame.eventId } })
+    }
   }
 
   /**
-   * 打开 `$events` 流并运行中继循环，直到 `lifetime` 中止（插件拆除）。
-   * 绝不抛错；一代结束、封顶退避后下一代开始 —— 存活不是可选项，死掉的中继
-   * 会让手机的审批视图静默清空。
+   * 身份换代 = 待答表不再有效。宿主会把仍在等待的问题重投给下一代，所以这里只丢，
+   * 不补发、也不通知手机（下一代的问题会作为新帧到达）。
    */
-  start(lifetime: AbortSignal): void {
-    this.#lifetime = lifetime
-    void this.#run()
-  }
-
-  /** 测试专用出口（生产 teardown 走 relayLifetime.abort()）。 */
-  stop(): void {
-    this.#abort?.abort()
-  }
-
-  /** 中继当前是否持有存活的 `$events` 客户端身份。 */
-  get ready(): boolean {
-    return this.#clientId !== undefined
-  }
-
-  async #run(): Promise<void> {
-    this.#abort = new AbortController()
-    const signal = AbortSignal.any([this.#abort.signal, this.#lifetime ?? neverAborted()])
-    let backoff = RELAY_RECONNECT_MIN_MS
-    while (!signal.aborted) {
-      try {
-        // openWireStream 是异步的（runtime lib/index.js:581）：直接迭代它返回的
-        // Promise 会抛 "not async iterable"，所以先解包已 resolve 的生成器。
-        const stream = await this.#gateway.openWireStream('$events', { args: {} }, signal)
-        for await (const frame of stream) {
-          if (signal.aborted) return
-          if (frame.type === 'ready') {
-            this.#clientId = frame.clientId
-            backoff = RELAY_RECONNECT_MIN_MS
-            log.info(`approval relay ready (clientId ${frame.clientId})`)
-            continue
-          }
-          if (frame.type === 'waterfall' && frame.event === 'approval/request') {
-            this.#hold(frame)
-            continue
-          }
-          if (frame.type === 'cancel') {
-            this.#pending.delete(frame.eventId)
-            // 上游自己结算了这个问题（别处先答、或它被撤回）—— 这是「卡为什么消失」的唯一线索。
-            log.info(`approval ${frame.eventId} was cancelled upstream`)
-            this.#broadcaster.broadcast({ type: 'approval', payload: { kind: 'cancel', eventId: frame.eventId } })
-            continue
-          }
-        }
-        if (signal.aborted) return
-        log.warn('approval relay stream ended; reconnecting')
-      } catch (error) {
-        if (signal.aborted) return
-        log.error(`approval relay stream failed: ${describeError(error)}; reconnecting`)
-      }
-      // 客户端身份随流一起死掉：网关会重投每个仍在等待的问题，沿用旧集合
-      // 会重放已消费的应答。
-      this.#clientId = undefined
-      this.#pending.clear()
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, backoff)
-        signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
-      })
-      backoff = Math.min(backoff * 2, RELAY_RECONNECT_MAX_MS)
-    }
+  #dropHeld(): void {
+    const dropped = this.#pending.size
+    this.#pending.clear()
+    if (dropped > 0) log.info(`${dropped} held approval(s) dropped with the $events identity`)
   }
 
   /** 为手机暂存一个问题，并推给每个已连接的客户端。 */
@@ -152,7 +120,7 @@ export class ApprovalRelay {
       ...(typeof request?.reason === 'string' ? { reason: request.reason } : {}),
     }
     this.#pending.set(frame.eventId, held)
-    log.info(`approval relay holding "${held.toolName}" (${frame.eventId})`)
+    log.info(`approval relay holding "${held.toolName}" (${held.eventId})`)
     this.#broadcaster.broadcast({
       type: 'approval',
       payload: { kind: 'request', eventId: held.eventId, toolName: held.toolName, ...(held.callId === undefined ? {} : { callId: held.callId }), ...(held.reason === undefined ? {} : { reason: held.reason }) },
@@ -175,17 +143,19 @@ export class ApprovalRelay {
 
   /** 实际的一次性交付。运行在 `ReplayTable.remember` 内部。 */
   private async deliver(answer: ApprovalAnswerMessage): Promise<ApprovalOutcome> {
-    if (this.#clientId === undefined || !this.#pending.has(answer.eventId)) {
+    // 身份不住了 ⇒ 上游无从认出这次应答，答案送不到任何地方。
+    const clientId = this.#events.clientId
+    if (clientId === undefined || !this.#pending.has(answer.eventId)) {
       log.info(`answer for ${answer.eventId}: no held question — unknown-approval`)
       return 'unknown-approval'
     }
-    const reply = await this.#gateway.dispatchRpc('$events/result', {
+    const reply = await this.#door.dispatchRpc('$events/result', {
       args: {
-        clientId: this.#clientId,
+        clientId,
         eventId: answer.eventId,
         outcome: { kind: 'result', value: outcomeOfDecision(answer.decision) },
       },
-    }, this.#lifetime ?? neverAborted())
+    }, this.#lifetime)
     // 上游把失败**编码进返回值**而不是抛出 —— 不看它就区分不出「答上了」与
     // 「上游拒了」，而后者的现场是：我们还以为答完，轮次其实卡在原地等应答。
     const refusal = refusalOf(reply)
@@ -212,12 +182,6 @@ export function refusalOf(reply: unknown): string | undefined {
   const code = typeof error?.code === 'string' ? error.code : 'unknown'
   const message = typeof error?.message === 'string' ? `: ${error.message}` : ''
   return `${code}${message}`
-}
-
-/** 永不中止的信号，供无 lifetime 的调用路径使用。 */
-function neverAborted(): AbortSignal {
-  const controller = new AbortController()
-  return controller.signal
 }
 
 /** 本泵调用的 controller prompt 门部分。 */

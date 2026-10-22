@@ -21,8 +21,7 @@ final class SessionSync: ObservableObject {
     /// 状态行要说的事。**重置与失败必须说得出来** —— 那是用户唯一能察觉异常的地方。
     ///
     /// 失败只说「哪一步 + 哪一类原因」，不说句子：句子随产品决定变，住 `Display/SyncText.swift`
-    ///。因此这个类型**不再可比较**（原因里带着抛出来的错误对象）；视图要问
-    /// 「在不在同步」时读 `isSyncing` / `isIdle` 这两个形状查询。
+    ///。因此这个类型**不再可比较**（原因里带着抛出来的错误对象）。
     enum Status {
         case idle
         case syncing
@@ -106,7 +105,15 @@ final class SessionSync: ObservableObject {
     /// **连接归 App**（`GatewayLink`）——这一屏只登记「我要看这个会话」，不再持有连接。
     /// 连接层交来整帧，判读在 `SessionStreamReader`（纯函数），本层只做副作用并把
     /// 「这条流接下来怎么办」回给它 —— 判据在这边、动作在那边，两边都不需要知道对方认识什么。
-    private let link: GatewayLink
+    ///
+    /// 类型是窄接口而不是 `GatewayLink`：连接级动作（重连整条连接）在这个类型上不存在，
+    /// 于是「一条流坏了去重连全部」在这里写不出来。
+    private let streams: any SessionStreamHandle
+    /// 连接阶段 —— 本屏读连接状态的唯一出处（功能条网络格与连接详情都读它）。
+    ///
+    /// 它与 `streams` 来自同一个对象，但一个是读一个是做：合成一个成员会让「读连接状态」
+    /// 顺手带上「动连接」的全部能力。发布流的订阅在 `init` 里就地接上，不另存一份属性。
+    @Published private(set) var phase: FollowClient.Phase = .idle
     private var transient = TransientChannel()
 
     /// 首屏兜底：WS 迟迟不给窗口时用 HTTP 拉一次。
@@ -127,6 +134,8 @@ final class SessionSync: ObservableObject {
     /// 把嵌套状态机的变化冒泡成自己的 objectWillChange ——
     /// 不转发的话审批卡的增删不触发视图重算。
     private var approvalsObservation: AnyCancellable?
+    /// 连接阶段变化的转发（`phase` 是它的落地处）。
+    private var phaseObservation: AnyCancellable?
     /// 刷新合并闸：事件帧批处理，判定在值类型 `RefreshGate`。
     private var refreshGate = RefreshGate()
     /// flush 是否已有一次调度在途（防重复调度）。
@@ -137,10 +146,13 @@ final class SessionSync: ObservableObject {
     init(client: GatewayClient, sessionId: String, link: GatewayLink) {
         self.client = client
         self.sessionId = sessionId
-        self.link = link
+        self.streams = link
         self.approvals = ApprovalStore(client: client)
         approvalsObservation = approvals.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
+        // 只订阅、不下手：发布流就地接上，不必留一个属性给下一任读者。
+        phaseObservation = link.$phase
+            .sink { [weak self] phase in self?.phase = phase }
     }
 
     /// 下发一条指令：回包 ok = 已受理，回答本身从订阅流里来；失败如实进状态行。
@@ -389,10 +401,14 @@ final class SessionSync: ObservableObject {
         // `build` 只捕获会话 id（值类型），不拽住整个同步器；`handler` 是 `[weak self]`。
         // `owner` 反过来**故意**强持有：它是身份，注销时靠它比对（弱了就等于没有身份），
         // 而它在 `close(owner:)` 里随订阅一起释放 —— 泄漏的边界是这条订阅，不是本屏。
+        //
+        // `takesUnscoped`：审批帧是连接级的（没有流编号），它归会话流消费 ——
+        // 那条流说的是「这个会话里发生了什么」，而审批属于会话。
         let sessionId = self.sessionId
-        link.open(FollowClient.Subscription(
+        streams.open(FollowClient.Subscription(
             owner: self,
             label: sessionId,
+            takesUnscoped: true,
             build: { id in
                 try MuxOpenFrame.following(sessionId: sessionId, streamId: id).encoded()
             },
@@ -412,6 +428,14 @@ final class SessionSync: ObservableObject {
         scheduleFirstScreenFallback()
     }
 
+    /// 「重试」只重开**这一条**流：换号、在现有连接上重开，另一条流与连接本身不动。
+    ///
+    /// 它是流级动作，所以屏幕拿到的是它而不是重连整条连接 —— 后者会把事件流一起拽断，
+    /// 而用户按的那个按钮说的是「我这一屏没内容」。
+    func retry() {
+        streams.reopen(owner: self)
+    }
+
     /// 2.5 秒是「明显慢了」与「还在正常握手」的分界 —— 正常情况下 opening 一秒内到。
     /// 只在手里还是空的时候兜：已经有内容说明首屏来过，不需要第二条通道。
     private func scheduleFirstScreenFallback() {
@@ -428,7 +452,7 @@ final class SessionSync: ObservableObject {
     func stopFollowing() {
         firstScreenFallback?.cancel()
         firstScreenFallback = nil
-        link.close(owner: self)
+        streams.close(owner: self)
         transient = TransientChannel()
         transientText = ""
     }
@@ -588,7 +612,7 @@ final class SessionSync: ObservableObject {
         if verdict == .broken {
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
             Log.warn(Log.Module.session, "TransientChannel broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
-            link.reopenStream()
+            streams.reopen(owner: self)
             return
         }
         transientText = transient.text
@@ -676,21 +700,5 @@ final class SessionSync: ObservableObject {
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
         approvals.rebuild(from: mirror.events)
-    }
-}
-
-extension SessionSync.Status {
-
-    /// 「现在是不是在同步」—— 形状查询，不是句子：视图拿它做分支（要不要转圈、要不要禁用）。
-    /// 它随 `Status` 的形状变，所以住在类型这边，不住 `Display/`。
-    var isSyncing: Bool {
-        if case .syncing = self { return true }
-        return false
-    }
-
-    /// 「还没开始」—— 同上。
-    var isIdle: Bool {
-        if case .idle = self { return true }
-        return false
     }
 }

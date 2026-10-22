@@ -10,7 +10,7 @@
  *
  *   wire/      两端共守的形状与编解码 —— 改它，手机端必须同改
  *   ports/     装配边界：端口接口与上游失败的词汇
- *   protocol/  服务端协议判定            （期2 才出现）
+ *   protocol/  服务端协议判定
  *   remote/    面向手机的传输
  *   upstream/  面向 DSH 宿主的适配
  *
@@ -304,6 +304,21 @@ test('the parser reads import edges, not comments or strings', () => {
     '注释掉的 import 不得出现；字符串里的 `//` 不得把后面的 import 吃掉',
   )
 })
+
+test('the scanner keeps its place across a template, its interpolation, and a nested one', () => {
+  // 这条守的是扫描器**自己的**失效方式：模板里的嵌套模板若被当成「本层收尾」，
+  // 扫描器从那里起在代码与字符串之间翻个面，之后整段文件的注释、import、导出
+  // 都判错 —— 而所有零命中型判据都只会因此更绿（假绿，没人会知道）。
+  const source = [
+    "const paint = `a ${ x === undefined ? 'b' : `no \\`x\\` (${y})` } tail`",
+    'const after = 1',
+    "// import { ghost } from '../ghost.ts'",
+    "import { real } from '../real.ts'",
+  ].join('\n')
+  assert.deepEqual(importsOf(source), ['../real.ts'],
+    'the commented import stays a comment, and the real one after it is still a code edge')
+})
+
 
 test('the parser refuses forms it cannot follow', () => {
   // 动态 import 的边只有运行期才存在，静态扫描读不到 —— 报错，别当成没有依赖。
@@ -603,6 +618,64 @@ test('upstream/ does not import protocol/', () => {
 })
 
 // ---------------------------------------------------------------------------
+// E6：上游 `$events` 身份只有一个持有者
+// ---------------------------------------------------------------------------
+
+/**
+ * 源码里**调用**上游开流门的地方：`x.openWireStream(`（成员调用）。
+ *
+ * 为什么不认「这个标识符出现几次」：装配处有一句
+ * `openWireStream: (endpoint, payload, signal) => …`（把门装成对象成员）、一句
+ * `` `openWireStream=${typeof raw.openWireStream}` ``（日志文案），还有接口里的
+ * `openWireStream(` 声明 —— 三处都不是「又开了一条流」。而「谁在开流」问的是
+ * **调用点**，所以只认带点号的那一种。
+ *
+ * 两侧边界都是刻意的：字符串里写成的调用会被算进来（假红，有人会看一眼改掉）；
+ * 把门取个别名再调（`const open = g.openWireStream`）它认不出（假绿）——
+ * 后一半由下面的端点字面量判据兜住：第二份身份必须自己把 `'$events'` 写出来。
+ */
+export function openerCallsIn(source: string): number {
+  return stripComments(source).match(/\.openWireStream\s*\(/g)?.length ?? 0
+}
+
+/** 源码里把 `$events` 写成一整个字符串字面量的地方（不含 `'$events/result'`）。 */
+export function eventEndpointIn(source: string): string[] {
+  return [...stripComments(source).matchAll(/(['"`])\$events\1/g)].map(match => match[0])
+}
+
+test('the identity scanners tell a call and an endpoint apart from a member read and a neighbour endpoint', () => {
+  assert.equal(openerCallsIn("await gateway.openWireStream('$events', { args: {} }, signal)"), 1)
+  assert.equal(openerCallsIn('const opening = raw.openWireStream'), 0, 'a member read is not a call')
+  assert.equal(openerCallsIn('const members = `openWireStream=${typeof raw.openWireStream}`'), 0,
+    'a log line quoting the member opens nothing')
+  assert.equal(openerCallsIn('// 旧的写法：gateway.openWireStream(\n'), 0, 'a comment opens nothing')
+
+  assert.deepEqual(eventEndpointIn("open('$events')"), ["'$events'"])
+  assert.deepEqual(eventEndpointIn('open("$events")'), ['"$events"'])
+  assert.deepEqual(eventEndpointIn("dispatchRpc('$events/result')"), [],
+    'the answer door is a different endpoint — it is not the identity')
+  assert.deepEqual(eventEndpointIn('// 宿主的 $events 流\n'), [], 'a comment is not an identity')
+})
+
+test('the upstream $events identity has exactly one holder', () => {
+  // 宿主的挂起问题会投给**每一个** owner 客户端：两份身份会让同一份审批各存一遍，
+  // 而症状（手机上的卡片消失又出现、应答报 unknown-approval）离成因很远。
+  const callers = filesUnder(SRC).flatMap(file => {
+    const count = openerCallsIn(readFileSync(file, 'utf8'))
+    return count === 0 ? [] : [`${where(file)}: ${count}`]
+  })
+  assert.deepEqual(callers, ['upstream/remote-events.ts: 1'],
+    'exactly one module opens $events, and it is the one that owns the identity')
+
+  const endpoints = filesUnder(SRC).flatMap(file => {
+    const found = eventEndpointIn(readFileSync(file, 'utf8'))
+    return found.length === 0 ? [] : [`${where(file)}: ${found.length}`]
+  })
+  assert.deepEqual(endpoints, ['upstream/remote-events.ts: 1'],
+    'so exactly one module may name the endpoint — a second one is a second identity')
+})
+
+// ---------------------------------------------------------------------------
 // V4：wire/ 内部无环
 // ---------------------------------------------------------------------------
 
@@ -626,6 +699,7 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'mux.ts', name: 'parseClientFrame', shape: 'MuxClientFrame' },
   { file: 'mux.ts', name: 'encodeServerFrame', shape: 'MuxServerFrame' },
   { file: 'mux.ts', name: 'followRequestOf', shape: 'FollowRequest' },
+  { file: 'mux.ts', name: 'openRequestOf', shape: 'OpenRequest' },
   { file: 'model.ts', name: 'modelSelectRequestOf', shape: 'ModelSelectMessage' },
   { file: 'command.ts', name: 'commandExecuteRequestOf', shape: 'CommandExecuteMessage' },
   { file: 'write.ts', name: 'approvalAnswerOf', shape: 'ApprovalAnswerMessage' },
@@ -717,7 +791,16 @@ export function exportSurfaceOf(
   return { functions, shapes, classes }
 }
 
-/** 从 `start`（一个引号）跳到它闭合之后。反引号按普通字符串处理（本仓不写模板插值）。 */
+/**
+ * 从 `start`（一个引号）跳到它闭合之后。
+ *
+ * 模板字符串里的 `${…}` 要按**代码**处理：那里面可以有嵌套模板与引号（本仓的
+ * `` `${x === undefined ? 'no x' : \`no \`x\` (${y})\`}` `` 就是这种）。不认插值的话，
+ * 嵌套模板的开头会被当成本层的收尾 —— 扫描器从那里起在「代码」与「字符串」之间
+ * 翻了个面，之后整段文件的注释与 import 判定全错位（实测：`faces.ts` 的一句
+ * log.warn 之后，注释里的 `` `$events` `` 被算成了代码）。
+ * 那种失明的方向是**假绿**（判据看不见本该看见的东西），比假红贵。
+ */
 function skipString(code: string, start: number): number {
   const quote = code[start] as string
   let i = start + 1
@@ -726,7 +809,31 @@ function skipString(code: string, start: number): number {
       i += 2
       continue
     }
+    if (quote === '`' && code[i] === '$' && code[i + 1] === '{') {
+      i = skipInterpolation(code, i + 2)
+      continue
+    }
     if (code[i] === quote) return i + 1
+    i += 1
+  }
+  return i
+}
+
+/** `${` 之后的那段代码，扫到与它配对的 `}` 之后；沿途的字符串（含嵌套模板）跳过。 */
+function skipInterpolation(code: string, start: number): number {
+  let depth = 1
+  let i = start
+  while (i < code.length) {
+    const ch = code[i] as string
+    if (ch === "'" || ch === '"' || ch === '`') {
+      i = skipString(code, i)
+      continue
+    }
+    if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return i + 1
+    }
     i += 1
   }
   return i

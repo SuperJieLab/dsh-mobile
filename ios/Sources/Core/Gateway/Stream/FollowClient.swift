@@ -16,9 +16,15 @@ import Foundation
  * **「要连着」与「要开哪条流」是两件事**：`activate()` 只表示要一条连接（App 在前台），
  * 登记一份订阅才表示要看某个会话。离开会话只取消那条流，连接留着。
  *
+ * **一条连接上挂着若干条流。** `streams` 按订阅者身份索引，表项装订阅、编号、要发出去的
+ * 文本，以及这条流自己的退避档位。两条流平级：谁都不占谁的位，一条坏了不动另一条。
+ *
  * 本类只回答「线还在不在」：它解帧的外壳（三个字段存在与否），按编号归属后把整帧原样交给
  * 订阅方，再按对方回的 `StreamReply` 决定动作。它不认识 op 名、不认识帧类型的取值 ——
- * 要发的开流内容由订阅方**凭刚造好的编号**拼出来（`Subscription.build`）。
+ * 要发的开流内容由订阅方凭刚造好的编号拼出来（`Subscription.build`）。
+ *
+ * **订阅方的答复只作用于它那一条流**（`reopen` / `retry` / `stop`）。连接级重连只有三个
+ * 触发者 —— socket 关闭、心跳判死、帧层破坏，全在本类自己的代码里。
  *
  * 协议名与端口全从 `GatewayClient.baseURL` 推导 —— 全 App 只有一个要改的地址。
  */
@@ -33,9 +39,9 @@ final class FollowClient: NSObject {
         case waiting(ms: Int)
     }
 
-    /// 一份订阅：谁在看、日志里叫什么、开流文本怎么拼、帧怎么判。
+    /// 一份订阅：谁在看、日志里叫什么、开流文本怎么拼、帧怎么判，以及要不要没有编号的帧。
     ///
-    /// 四样**一起**交进来（而不是先登记、再设一个 `onFrame`）：两个入口会让「谁的回调」
+    /// 五样**一起**交进来（而不是先登记、再设一个 `onFrame`）：两个入口会让「谁的回调」
     /// 在注销之后仍然挂着 —— 那时新订阅者已经就位，旧回调却还在收帧。
     struct Subscription {
         /// 订阅者身份。注销时比对：不是当前订阅者就什么都不做。
@@ -45,10 +51,57 @@ final class FollowClient: NSObject {
         let owner: AnyObject
         /// 日志里用来区分实例的标识（会话 id）。本类不解释它。
         let label: String
+        /// 没有流编号的帧（连接级审批）要不要交给它。**默认不要** —— 这类帧属于会话流，
+        /// 一条连接级事件流拿到它只会多一次「认不出的载荷」。
+        ///
+        /// `let` 带初值会让合成的初始化器不再接受这个参数，所以默认值写在自定义 `init` 上：
+        /// 它是这个类型唯一的「有后果的默认」，值得占那几行。
+        let takesUnscoped: Bool
         /// 凭刚造好的编号拼出开流文本 —— 连接层不认识 `op` 与会话，拼装归订阅方。
         let build: (StreamId) throws -> String
         /// 收到一帧：外壳 + 原始字节。返回值决定这条流下一步怎么办。
         let handler: (MuxServerEnvelope, Data) -> StreamReply
+
+        init(
+            owner: AnyObject,
+            label: String,
+            takesUnscoped: Bool = false,
+            build: @escaping (StreamId) throws -> String,
+            handler: @escaping (MuxServerEnvelope, Data) -> StreamReply
+        ) {
+            self.owner = owner
+            self.label = label
+            self.takesUnscoped = takesUnscoped
+            self.build = build
+            self.handler = handler
+        }
+    }
+
+    /// 一条已登记的流。
+    ///
+    /// 做成 class 而不是字典里的 struct：编号、文本、退避档位、在途定时器都要被几处就地改动
+    /// （重开换号、建立后清档位、注销时取消定时器），值语义会让每一处都变成一次回写。
+    private final class OpenStream {
+        let subscription: Subscription
+        /// 登记顺序。无编号帧只交给声明了 `takesUnscoped` 的那一条；有第二个声明者时，
+        /// 先登记者拿 —— 这件事需要一个确定的次序，而字典的次序不是。
+        let sequence: Int
+        var id: StreamId
+        var text: String
+        /// 这条流自己的退避档位。按流一份，一条流的退避不拖累另一条。
+        var retryAttempt = 0
+        var retryWorkItem: DispatchWorkItem?
+        /// 「已发出 open、还没收到开口帧」的那一段。心跳让路的唯一判据（见 `livenessTick`）。
+        var openInFlight = false
+        /// 这一条流是否已经开出去过。再开一次就是**新的开流**，要新号（`sendAllOpens`）。
+        var openedAtLeastOnce = false
+
+        init(subscription: Subscription, sequence: Int, id: StreamId, text: String) {
+            self.subscription = subscription
+            self.sequence = sequence
+            self.id = id
+            self.text = text
+        }
     }
 
     // MARK: - 回调（由宿主注入；全部在主线程）
@@ -74,9 +127,8 @@ final class FollowClient: NSObject {
     // MARK: - 状态
 
     /// 连接阶段 —— 对外由 `onPhaseChange` 转发，视图读宿主的 `phase`。
-    /// 通知挂在 setter 上：
-    /// `connect`、开流、收到打开帧、退避等待、`deactivate` 五处都会改它，
-    /// 手写必定漏接一处。
+    /// 通知挂在 setter 上：`connect`、收到打开帧、退避等待、`deactivate` 四处都会改它，
+    /// 手写必定漏接一处。**开流不改它** —— 在已就绪的连接上开第二条流，屏幕不该闪「连接中」。
     private(set) var phase: Phase = .idle {
         didSet {
             guard phase != oldValue else { return }
@@ -86,18 +138,11 @@ final class FollowClient: NSObject {
 
     /// 连接代次 —— 每次连接递增；回调带着发起时的代次，对不上就丢。
     private var generation = 0
-    /// 这条连接的标识，只进日志（会话 id）—— 它区分的是「谁的第 2 代」：`g2` 在两个实例
-    /// （进出会话详情各一份订阅）里会重号。
-    private var label: String?
-    /// 当前这一份订阅。空 = 没有人在看；**连接照样活着**（见 `active`）。
-    private var subscription: Subscription?
-    /// 这条流的编号 —— 登记时现造，注销即作废，重开换新的。
-    ///
-    /// 对测试可读：这是「按号归流」的比对基准，页面外的判据要能读到它。
-    private(set) var streamId: StreamId?
-    /// 要发出去的那段开流内容。由订阅方凭编号拼好，`sendOpen` 与重连都发它。
-    private var openText: String?
-    /// 已建成的流编号。`phase` 说连接，这个集合说每条流；第二条流介入时不会互相覆盖。
+    /// 这条连接上登记着的流，键是订阅者身份。空 = 一条流都没有；**连接照样活着**。
+    private var streams: [ObjectIdentifier: OpenStream] = [:]
+    /// 登记过多少条（只增）—— `OpenStream.sequence` 的来源。
+    private var registrations = 0
+    /// 已建成的流编号。`phase` 说连接，这个集合说每条流。
     ///
     /// 对测试可读：本层「建成」的消费点（`noteReply`）不碰 socket，值得被单独断言 ——
     /// 这段迁移错了不会编译失败，症状是心跳永不激活或退避永不归零。
@@ -166,7 +211,7 @@ final class FollowClient: NSObject {
     /// 不要连接了（App 收尾 / 测试清理）：关连接、取消一切定时器。
     func deactivate() {
         active = false
-        detachStream()
+        forgetAll()
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         closeTask()
@@ -174,22 +219,25 @@ final class FollowClient: NSObject {
         phase = .idle
     }
 
-    /// 登记一份订阅：造一个新编号、拼出开流文本；连接在就立刻发，不在就起一次连接。
+    /// 登记一条流：造一个新编号、拼出开流文本；连接在就立刻发，不在就起一次连接。
     ///
-    /// 同一个订阅者重复登记是幂等的（视图重算不该换号）；换了订阅者则先取消旧的 ——
-    /// 旧号作废，新流拿另一个号，于是旧流的残帧进不了新画面（`route`）。
+    /// 同一个订阅者重复登记是幂等的（视图重算不该换号）。**不同的订阅者各自一条流** ——
+    /// 后登记者不会顶掉先登记者，否则「会话详情开着时事件流建不起来」与「事件流占着连接时
+    /// 会话详情打不开」就是同一个故障的两种表现。
     func open(_ subscription: Subscription) {
-        if let current = self.subscription, current.owner === subscription.owner { return }
-        closeStream()
+        let key = ObjectIdentifier(subscription.owner)
+        guard streams[key] == nil else { return }
         guard let fresh = mint(subscription) else { return }
-        self.subscription = subscription
-        label = subscription.label
-        streamId = fresh.id
-        openText = fresh.text
+        registrations += 1
+        let stream = OpenStream(
+            subscription: subscription, sequence: registrations, id: fresh.id, text: fresh.text
+        )
+        streams[key] = stream
+        noteUnscopedClaimants()
         guard active else { return }
         if task != nil {
-            // 连接已经在（或在握手）：只发开流帧，**不重建连接** —— 这正是本期的收益。
-            sendOpen()
+            // 连接已经在（或在握手）：只发开流帧，**不重建连接** —— 这正是常驻连接的收益。
+            sendOpen(stream)
         } else {
             // 退避里排着的那一拍取代掉：流已经登记好了，没有理由再等一轮。
             reconnectWorkItem?.cancel()
@@ -198,24 +246,31 @@ final class FollowClient: NSObject {
         }
     }
 
-    /// 注销一份订阅：只注销「自己登记的那一次」，晚到的注销不碰新流。
+    /// 注销一份订阅：只注销「自己登记的那一条」，晚到的注销不碰别的流。
     func close(owner: AnyObject) {
-        guard let current = subscription, current.owner === owner else { return }
-        closeStream()
+        let key = ObjectIdentifier(owner)
+        guard let stream = streams[key] else { return }
+        // 没发过的流没有可取消的东西：`send` 在无连接时一个字节都不记。
+        sendCancel(stream.id)
+        forget(key)
     }
 
-    /// 重开当前的流：用于未定稿断号与服务端正常收尾 —— 现有连接还活着，但这一段的基线已经丢了。
+    /// 这一条流换号重开：基线丢了、或用户按了「重试」。**连接与别的流不动。**
     ///
     /// **先取消旧号，再换号重开**：同号重开时，网关的流表里可能还占着那个编号，而「占用中」
     /// 的打开会被直接忽略 —— 这次重开就什么都不会发生，只能等 45 秒的就绪超时兜底。
-    func reopenStream() {
-        guard active, let current = subscription, let previous = streamId else { return }
-        if task != nil { sendCancel(previous) }
-        established.remove(previous)
-        guard let fresh = mint(current) else { return }
-        streamId = fresh.id
-        openText = fresh.text
-        sendOpen()
+    ///
+    /// 连接不在时（退避里、或从没建起来）顺手起一次连接：调用方说的是「现在就要这条流」，
+    /// 而排在后面的那一拍退避挡着的正是这件事。
+    func reopen(owner: AnyObject) {
+        guard active else { return }
+        reopen(key: ObjectIdentifier(owner))
+    }
+
+    /// 某个订阅者此刻的流编号。对测试可读：编号是「按号归流」的比对基准，
+    /// 而流表本身不该为了断言而敞开口子。
+    func streamId(of owner: AnyObject) -> StreamId? {
+        streams[ObjectIdentifier(owner)]?.id
     }
 
     /// 回前台立即触发一次重连 —— 上游「恢复立即试」（online 事件 → 重连控制器）的复现。
@@ -231,7 +286,12 @@ final class FollowClient: NSObject {
 
     // MARK: - 连接
 
-    private func connect() {
+    /// 起一次连接（新代次）。
+    ///
+    /// 对内可见（不 `private`）与 `handleMessage` / `route` / `noteReply` 同理：这里有一条
+    /// 只有在此处才断言得到的**契约** —— 换代次之后每条登记着的流都要用自己的新编号重开。
+    /// 走一条真 socket 也能看见它，但那时「谁该重开」与网络的偶然混在一起。
+    func connect() {
         guard active else { return }
         // 无端点（组网未激活）：不猜地址，也不动代次与 phase 的连接语义，
         // 直接进既有退避循环 —— 激活后下一轮自动连上。
@@ -256,7 +316,7 @@ final class FollowClient: NSObject {
         Log.perf(Log.Module.session, PerfRecord(
             seg: .dev, t: PerfRecord.nowMs(),
             fields: ["kind": .text("connect-init"), "gen": .number(Double(current)),
-                     "who": .text(label ?? "-")]
+                     "who": .text(labelsText)]
         ))
 
         // 上一代次的连接必须先关掉：不关的话旧 socket 的 receive/heartbeat
@@ -290,12 +350,12 @@ final class FollowClient: NSObject {
         task = webSocketTask
         // 带上标识：`g2` 在两个实例（进出会话详情各一份订阅）里会重号，
         // 只有它加上会话能区分「谁的第 2 代」。
-        Log.info(Log.Module.session, "connect g\(current) [\(label ?? "-")] → \(components.url!)")
+        Log.info(Log.Module.session, "connect g\(current) [\(labelsText)] → \(components.url!)")
         webSocketTask.resume()
 
         // 握手由系统完成，开流内容立即发出（未就绪的连接会替我们排队）——
-        // 服务端等的就是它：没有它，永远不会有打开帧。没有流时这一句什么都不发。
-        sendOpen()
+        // 服务端等的就是它：没有它，永远不会有打开帧。没有流时这几句什么都不发。
+        sendAllOpens()
 
         // 就绪硬超时不在这里起 —— 它挂在 `sendOpen` 上，于是「每一次开流尝试」都带时限
         //（首连与重开同路），见 `armReadyTimeout`。
@@ -303,19 +363,45 @@ final class FollowClient: NSObject {
         heartbeat(on: webSocketTask, generation: current)
     }
 
-    /// 在当前连接上发出开流内容，开始（或重建）这条流。没有订阅时什么都不做。
+    /// 这条连接上登记着的流标签（按登记序、逗号分隔），只进日志 —— 本层不解释它们。
+    private var labelsText: String {
+        let labels = orderedStreams.map(\.subscription.label)
+        return labels.isEmpty ? "-" : labels.joined(separator: ",")
+    }
+
+    /// 按登记顺序排好的流。开流、日志、无编号帧的归属都跟着这个次序 ——
+    /// 乱序会让「先登记者」变成一次偶然。
+    private var orderedStreams: [OpenStream] {
+        streams.values.sorted { $0.sequence < $1.sequence }
+    }
+
+    /// 在当前连接上把每一条登记好的流都开出去（首连与重连同路）。
     ///
-    /// 内容与外壳都不是这里造的（`openText` 由订阅方凭编号拼好），本方法只决定「现在要开流」。
-    private func sendOpen() {
-        guard let openText, let streamId else { return }
-        phase = .connecting
+    /// 换代次之后每条流都用**新号**：上一代那个号连同它还在路上的残帧一起作废，
+    /// 而新号是「这一次开流」的身份。第一次开出去的流不算重新开，它的号是登记时造的那个。
+    private func sendAllOpens() {
+        for stream in orderedStreams {
+            if stream.openedAtLeastOnce {
+                guard renumber(stream) else { continue }
+            }
+            sendOpen(stream)
+        }
+    }
+
+    /// 在这一条流上发出它的开流内容，开始（或重建）它。
+    ///
+    /// **不动连接阶段**：在已经就绪的连接上开第二条流，屏幕不该闪一下「连接中」——
+    /// 阶段的含义是「这条连接走到哪一步了」，与登记了几条流无关。
+    private func sendOpen(_ stream: OpenStream) {
         // 这一次尝试还没建成：旧编号的「建成」不成立，否则就绪超时与心跳都会照着旧账判。
-        established.remove(streamId)
-        send(text: openText)
-        // 每一次开流尝试都在这里带时限 —— 首连与重开（收尾帧、`reopenStream`）走的是同一个入口。
-        // 只在 `connect` 里 arm 会漏掉重开：那时「等不到打开帧」就没有任何看门人（心跳只管
-        // 不等打开帧的连接，见 `livenessTick`）。
-        armReadyTimeout()
+        established.remove(stream.id)
+        stream.openInFlight = true
+        stream.openedAtLeastOnce = true
+        send(text: stream.text)
+        // 每一次开流尝试都在这里带时限 —— 首连与重开（收尾帧、`reopen`）走的是同一个入口。
+        // 只在 `connect` 里 arm 会漏掉重开：那时「等不到打开帧」就没有任何看门人
+        //（心跳只管不在等打开帧的连接，见 `livenessTick`）。
+        armReadyTimeout(stream: stream)
     }
 
     /// 发一条取消帧。**只对发过开流的那条流发** —— 没发过就没有可取消的东西。
@@ -327,25 +413,33 @@ final class FollowClient: NSObject {
         send(text: text)
     }
 
-    /// 就绪硬超时：从**这次开流尝试**起算，多久没等到打开帧就当它没成。
+    /// 就绪硬超时：从**这次开流尝试**起算，多久没等到开口帧就当它没成。
+    ///
+    /// 按流各起一个 —— 每一条流都有自己的「这一次尝试」。超时的处置仍是连接级的
+    /// （关连接、退避重连）：真要在流这一级处置，得先能让客户端区分「这条流没起来」与
+    /// 「这条连接传不动」，而今天拿不到那个信号。
     ///
     /// ⚠️ `budget` 是**秒**，必须乘 10⁹ 转成纳秒。把秒数直接当纳秒传进去，超时会在
     /// 微秒级就到点 —— 每次连接都立即被判失败，开流帧被 cancel 成 -999，
     /// 于是永远收不到打开帧，而日志里只看到无穷无尽的「重连」。
-    private func armReadyTimeout() {
+    private func armReadyTimeout(stream: OpenStream) {
         guard let webSocketTask = task else { return }
         let current = generation
-        let stream = streamId
         let budget = Self.readyTimeout
-        let labelForLog = label ?? "-"
+        let labelForLog = stream.subscription.label
+        let owner = ObjectIdentifier(stream.subscription.owner)
+        let id = stream.id
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000))
+            // 判据是「还是这次尝试」：编号换了、条目没了、或已经建成，都说明这一拍作废。
             guard let self, self.generation == current, self.task === webSocketTask,
-                  let stream, !self.established.contains(stream) else { return }
+                  let live = self.streams[owner], live.id == id, live.openInFlight,
+                  !self.established.contains(id) else { return }
             // 这一行是「这次连接为什么没成」的第一现场：45 秒还没等到打开帧，通常意味着
             // 慢链路正传一大帧（1.25 MB 在 125 KB/s 上要传约 10 秒），或者对面根本没在
             // 服务这个会话。
-            Log.warn(Log.Module.session, "g\(current) [\(labelForLog)] ready timeout (\(Int(budget))s) — closing and retrying")
+            Log.warn(Log.Module.session,
+                     "g\(current) [\(labelForLog)] ready timeout (\(Int(budget))s) — closing and retrying")
             self.closeTask()
             self.scheduleReconnect()
         }
@@ -382,19 +476,120 @@ final class FollowClient: NSObject {
         UUID().uuidString.lowercased()
     }
 
-    /// 取消并清掉当前这条流。连接不动。
-    private func closeStream() {
-        if let previous = streamId, task != nil { sendCancel(previous) }
-        detachStream()
+    /// 换一个新编号并让订阅方重新拼文本。**旧号的取消由调用方决定时机** ——
+    /// 「立刻重开」与「退避之后重开」在这件事上不同。
+    @discardableResult
+    private func renumber(_ stream: OpenStream) -> Bool {
+        guard let fresh = mint(stream.subscription) else { return false }
+        stream.id = fresh.id
+        stream.text = fresh.text
+        return true
+    }
+
+    /// 立刻换号重开一条流（不进退避）。
+    private func reopen(key: ObjectIdentifier) {
+        guard let stream = streams[key] else { return }
+        stream.retryWorkItem?.cancel()
+        stream.retryWorkItem = nil
+        stream.retryAttempt = 0
+        sendCancel(stream.id)
+        established.remove(stream.id)
+        stream.openInFlight = false
+        guard renumber(stream) else { return }
+        if task != nil {
+            sendOpen(stream)
+        } else {
+            reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
+            connect()
+        }
+    }
+
+    /// 这条流被拒但值得再试：**按它自己的退避**换号重开。
+    ///
+    /// 旧号当场作废（被拒的流不会再有内容），新号等退避到了再造 —— 等待期间这条流不在等
+    /// 开口帧，于是心跳照常判活，不会因为「一条流在睡觉」而放过半开连接。
+    private func scheduleRetry(_ key: ObjectIdentifier) {
+        guard active, let stream = streams[key] else { return }
+        sendCancel(stream.id)
+        established.remove(stream.id)
+        stream.openInFlight = false
+        // 新号当场就位，只是还没发出去 —— 于是这条流的编号始终是「下一个要用的」，
+        // 不会是那个已经被拒掉的。等待期间若连接换届，`sendAllOpens` 会把它一起开出去。
+        guard renumber(stream) else { return }
+
+        stream.retryAttempt += 1
+        let delay = Self.backoffDelayMs(attempt: stream.retryAttempt,
+                                        random: Double.random(in: 0..<1))
+        stream.retryWorkItem?.cancel()
+        Log.info(Log.Module.session,
+                 "stream [\(stream.subscription.label)] retry in \(delay)ms (attempt \(stream.retryAttempt))")
+        let work = DispatchWorkItem { [weak self] in self?.retryNow(key) }
+        stream.retryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(delay) / 1000, execute: work)
+    }
+
+    /// 退避到点那一拍要不要真的发 open。
+    ///
+    /// 两个条件各挡一种重复：**在途**挡「同一个号被开两次」（网关把重复编号判成协议违规、
+    /// 直接关连接），**已建成**挡「没必要的重开」。两种都不是「退避错了」，而是这一拍
+    /// 已经被别的东西——重连、或用户手按的重试——提前满足了。
+    ///
+    /// 抽成纯函数是为了让它可断言：等待期里的帧分不清是这一拍还是重连发的。
+    static func shouldOpenOnRetry(openInFlight: Bool, established: Bool) -> Bool {
+        !openInFlight && !established
+    }
+
+    /// 退避到点：把这条流再开一次。
+    ///
+    /// 号在排这一拍的时候已经换好了。等待期间若连接换过代次（`sendAllOpens` 已经把它开出去），
+    /// 这一拍就什么都不做 —— 同一个号重发一次 open 会被网关当成「重复编号」而**关掉连接**。
+    private func retryNow(_ key: ObjectIdentifier) {
+        guard active, let stream = streams[key] else { return }
+        stream.retryWorkItem = nil
+        guard Self.shouldOpenOnRetry(openInFlight: stream.openInFlight,
+                                     established: established.contains(stream.id)) else { return }
+        if task != nil {
+            sendOpen(stream)
+        } else {
+            reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
+            connect()
+        }
+    }
+
+    /// 这条流是否排着一拍退避。对测试可读：它是「退避真的排上了」的唯一观测点，
+    /// 与 `streamId(of:)` 同一条理由 —— 流表不该为了断言敞开。
+    func isWaitingToRetry(owner: AnyObject) -> Bool {
+        streams[ObjectIdentifier(owner)]?.retryWorkItem != nil
+    }
+
+    /// 从表里摘掉一条流。**不发帧** —— 该不该取消由调用方决定：注销要取消，
+    /// 服务端已经收尾的那一条不要。
+    private func forget(_ key: ObjectIdentifier) {
+        guard let stream = streams.removeValue(forKey: key) else { return }
+        stream.retryWorkItem?.cancel()
+        stream.retryWorkItem = nil
+        established.remove(stream.id)
     }
 
     /// 只清本地登记（不发帧）。代次切换与收尾共用它。
-    private func detachStream() {
-        if let id = streamId { established.remove(id) }
-        subscription = nil
-        streamId = nil
-        openText = nil
-        label = nil
+    private func forgetAll() {
+        for key in Array(streams.keys) { forget(key) }
+    }
+
+    /// 有两个订阅者同时声明要无编号帧时，只有先登记者拿 —— 记一条错误日志，
+    /// 别让第二份「声明了却永远收不到」静默存在。
+    private func noteUnscopedClaimants() {
+        guard claimants.count > 1 else { return }
+        Log.error(Log.Module.session,
+                  "\(claimants.count) streams claim unscoped frames — only the earliest registrant receives them")
+    }
+
+    /// 按编号找流。表很小（一条连接上几条），线性扫比维护第二张反查表便宜。
+    private func stream(withId id: StreamId) -> (key: ObjectIdentifier, stream: OpenStream)? {
+        for (key, stream) in streams where stream.id == id { return (key, stream) }
+        return nil
     }
 
     // MARK: - 收
@@ -444,44 +639,69 @@ final class FollowClient: NSObject {
         let reply = route(frame, raw: rawData)
         noteReply(reply, streamId: frame.streamId)
 
+        // 四个动作只作用于这一条流。判不出是哪一条（没有编号、或编号已不在表里）时
+        // 什么都不做 —— 迟到的尾巴不该改变任何东西。
         switch reply.next {
         case .keep:
             break
         case .reopen:
-            // 流还在，只是不在工作了：换一个编号在同一条连接上重开，不动代次、不重建连接。
-            guard active else { return }
-            reopenStream()
-        case .reconnect:
-            closeTask()
-            scheduleReconnect()
+            guard let id = frame.streamId, let found = stream(withId: id) else { return }
+            reopen(key: found.key)
+        case .retry:
+            guard let id = frame.streamId, let found = stream(withId: id) else { return }
+            scheduleRetry(found.key)
         case .stop:
-            // 终态：这条流再开也是同一个结果。收起它 —— **连接不动**（常驻），只是没有流了。
-            detachStream()
+            // 终态：这条流再开也是同一个结果。收起它 —— **连接与别的流不动**。
+            guard let id = frame.streamId, let found = stream(withId: id) else { return }
+            forget(found.key)
         }
     }
 
-    /// 投递口：编号不是本流的一律丢弃，其余连帧带字节交给订阅方。
+    /// 投递口：编号属于哪条流就交给哪条，其余丢弃；没有编号的帧只交给声明了
+    /// `takesUnscoped` 的那一条。
     ///
     /// 编号不复用之后，唯一还会带着**别的**编号到达的帧，是上一条流的尾巴（取消之后仍在
     /// 路上的事件帧）。放它们进判读器，最轻是一次没必要的「跳号重开」，最重是用上一个
-    /// 会话的窗口覆盖这一屏。连接级帧没有编号（审批），不归流，照旧交出去。
+    /// 会话的窗口覆盖这一屏。连接级帧没有编号（审批），它属于声明了的那一条 ——
+    /// 一条连接级事件流拿到它只会多一次「认不出的载荷」。
     ///
     /// 单独成方法（而不是摊在 `handleMessage` 里）是为了它能被单独断言：它只回答
-    /// 「这一帧归不归本流」，不掺「线还在不在」的那一半（那一半在 `handleMessage`）。
+    /// 「这一帧归不归这条流」，不掺「线还在不在」的那一半（那一半在 `handleMessage`）。
     func route(_ frame: MuxServerEnvelope, raw: Data) -> StreamReply {
-        if let id = frame.streamId, id != streamId { return StreamReply() }
-        return subscription?.handler(frame, raw) ?? StreamReply()
+        if let id = frame.streamId {
+            guard let found = stream(withId: id) else { return StreamReply() }
+            return found.stream.subscription.handler(frame, raw)
+        }
+        guard let claimant = unscopedStream() else { return StreamReply() }
+        return claimant.subscription.handler(frame, raw)
+    }
+
+    /// 声明了要无编号帧的那几条，按登记顺序。
+    private var claimants: [OpenStream] {
+        streams.values
+            .filter { $0.subscription.takesUnscoped }
+            .sorted { $0.sequence < $1.sequence }
+    }
+
+    /// 无编号帧的归属：声明了 `takesUnscoped` 且**登记最早**的那一条。
+    private func unscopedStream() -> OpenStream? {
+        claimants.first
     }
 
     /// 按订阅方的答复更新本层状态 —— 「建成判据由订阅方给、时机在连接层」的可执行版本。
     ///
     /// 建成即退避归零：不归零的话，握手持续失败之后即使终于成功，也会带着爬满的档位继续
-    /// 退避 —— 一次成功不该被上一段失败的账拖住。
+    /// 退避 —— 一次成功不该被上一段失败的账拖住。这条流自己的重试档位也归零：
+    /// 它已经证明能建成，下一次失败该从最短的等法重新算。
     ///
     /// 单独成方法（而不是摊在 `handleMessage` 里）是为了它能被单独断言：`receiveLoop`
     /// 那条环要一条真 socket 才走得到，而这段迁移是心跳与退避的唯一输入。
     func noteReply(_ reply: StreamReply, streamId replyStreamId: StreamId?) {
-        guard reply.establishes, let id = replyStreamId ?? streamId else { return }
+        guard reply.establishes, let id = replyStreamId else { return }
+        if let found = stream(withId: id) {
+            found.stream.openInFlight = false
+            found.stream.retryAttempt = 0
+        }
         established.insert(id)
         reconnectAttempt = 0
         missedPongs = 0
@@ -552,14 +772,13 @@ final class FollowClient: NSObject {
         }
     }
 
-    /// 有没有一条流「已发出 open、还没收到打开帧」。
+    /// 有没有一条流「已发出 open、还没收到开口帧」。
     ///
     /// 心跳让路的只有这一段：大帧正占着 TCP、pong 排在它后面。空闲（一条流也没有）与
     /// 已建成的连接都照常判死 —— 连接常驻之后大部分时间是空闲的，那一段的半开连接
     /// （切网、休眠时收不到 FIN）必须能被发现。
     private var awaitingOpening: Bool {
-        guard let id = streamId else { return false }
-        return !established.contains(id)
+        streams.values.contains { $0.openInFlight }
     }
 
     /// 一次心跳节拍的判定结果。
@@ -618,6 +837,9 @@ final class FollowClient: NSObject {
     /**
      * 重连延迟的纯函数（`random` 注入）—— 曲线与抖动范围是这段编排里唯一**可断言**的行为：不碰
      * socket 就能验证。完整的「断线 → 退避 → 重连 → 代次递增」需要真网络，由真机测试覆盖。
+     *
+     * 连接级重连与单条流的 `.retry` 共用这条曲线：两者都是「等一等再试」，差别只在
+     * 谁被重开（整条连接 / 那一条流），而那个差别不该顺手把等待曲线也分叉成两条。
      *
      * - Parameters:
      * - attempt: 第几次重连（从 1 起）。

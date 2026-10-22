@@ -9,6 +9,7 @@ export const LogModule = {
   http: "http",
   ws: "ws",
   relay: "relay",
+  forwarded: "forwarded",
   faces: "faces",
   model: "model",
   command: "command",

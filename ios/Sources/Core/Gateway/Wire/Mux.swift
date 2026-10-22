@@ -5,6 +5,7 @@
  * `mux.ts` 里的一个接口：
  * - `MuxServerEnvelope` ↔ 服务端帧外壳（`type` / `streamId` / `payload`）；
  * - `FollowRequest` ↔ `FollowRequest`（开一条订阅流的参数）；
+ * - `EventsRequest` ↔ `openRequestOf` 的 `events` 那一支（开一条连接级事件流，不绑会话）；
  * - `MuxOpenFrame` ↔ 客户端开流帧（`MuxClientFrame` 里 `type: "open"` 那一支）；
  * - `MuxCancelFrame` ↔ 同一联合里的 `type: "cancel"` 那一支；
  * - `OpeningFrame` ↔ `FollowOpening`（打开帧的载荷）。
@@ -61,23 +62,50 @@ struct FollowRequest: Encodable {
     }
 }
 
-/// 开流帧：`{type: "open", streamId: "<编号>", payload: <FollowRequest>}`。
+/// 开一条连接级事件流的请求体：`{"op":"events"}` —— 载荷里只有 `op`。
 ///
-/// 构造入口只有一个 —— `following(sessionId:streamId:)`。形状自己决定 `op` 与外壳两层，
-/// 调用方给两样：跟谁（会话）与这条流叫什么号。
+/// 与 `FollowRequest` 同一条纪律（`op` 由类型自己写出，调用方给不出错的值），但**没有会话
+/// 字段**才是要害：这条流不属于任何一个会话，说的是「这台机器上发生了什么」。带一个
+/// `sessionId` 不会被网关拒（`openRequestOf` 只看 `op`），却会让两端对「它绑不绑会话」的
+/// 理解分岔 —— 所以这里连字段都不给它留。
+struct EventsRequest: Encodable {
+
+    private enum CodingKeys: String, CodingKey { case op }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("events", forKey: .op)
+    }
+}
+
+/// 开流帧：`{type: "open", streamId: "<编号>", payload: <载荷>}`。
+///
+/// 构造入口只有两个工厂 —— `following(sessionId:streamId:)` 与 `events(streamId:)`。形状自己
+/// 决定 `op` 与外壳两层，调用方只给「要哪一种流 + 这条流叫什么号」。
+///
+/// 载荷声明成私有的两支而不是泛型或 `Any`：op 与载荷是一起变的（`follow` 要会话、`events`
+/// 什么都不要），拆成两个自由度就能构造出「op 与载荷不配」的帧 —— 那种帧网关认不出，
+/// 客户端会等到超时。
 ///
 /// 编号由连接层造（它是唯一知道「这条连接上哪些号在用」的地方），文本由状态层拼（`op`
 /// 是协议词，连接层不认识）—— 两者在 `FollowClient.open(_:)` 的拼装闭包处对接。
-///
-/// 拼装点只有一处，在会话详情的状态编排里（`SessionSync.startFollowing()`）。
 struct MuxOpenFrame: Encodable {
 
     let streamId: StreamId
 
-    private let request: FollowRequest
+    private let payload: Payload
+
+    private enum Payload {
+        case follow(FollowRequest)
+        case events
+    }
 
     static func following(sessionId: String, streamId: StreamId) -> MuxOpenFrame {
-        MuxOpenFrame(streamId: streamId, request: FollowRequest(sessionId: sessionId))
+        MuxOpenFrame(streamId: streamId, payload: .follow(FollowRequest(sessionId: sessionId)))
+    }
+
+    static func events(streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, payload: .events)
     }
 
     private enum CodingKeys: String, CodingKey { case type, streamId, payload }
@@ -86,7 +114,12 @@ struct MuxOpenFrame: Encodable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("open", forKey: .type)
         try container.encode(streamId, forKey: .streamId)
-        try container.encode(request, forKey: .payload)
+        switch payload {
+        case let .follow(request):
+            try container.encode(request, forKey: .payload)
+        case .events:
+            try container.encode(EventsRequest(), forKey: .payload)
+        }
     }
 
     /// 编成要发出去的那段文本。

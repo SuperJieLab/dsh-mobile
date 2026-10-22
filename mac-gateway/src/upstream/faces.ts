@@ -17,7 +17,9 @@ import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { commandPortOver, type CommandsLike, type LiveAgentsLike } from './command.ts'
 import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from './call-through.ts'
-import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventGatewayLike, type UpstreamWireFrame } from './write.ts'
+import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventAnswerLike } from './write.ts'
+import type { RemoteEventStreamLike } from './remote-events.ts'
+import type { UpstreamWireFrame } from '../ports/events.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.faces)
@@ -246,7 +248,8 @@ export function commandChannelOver(ctx: HostContext): CommandPort {
 }
 
 /**
- * 审批中继所驱动的网关服务切面。
+ * 网关在装配处的切面：**两个门，两个消费者**。开流门归 `ForwardedEvents`（进程一份的
+ * `$events` 身份），应答门归审批中继；本函数把它们一次解析出来并共享同一个 Peer。
  *
  * `ctx.typertGateway` 拿到的是被 traceable/严格视图包过的成员，
  * 异步生成器方法包装后不再可迭代（真机日志 `openWireStream is not a function or
@@ -259,10 +262,10 @@ export function commandChannelOver(ctx: HostContext): CommandPort {
  * `wireStream.open`（types.d.ts:87）；缺席才碰私有 `openWireStream`，实参**按形参名**填
  * （`openStreamThrough`），形参表读不出（bind/native 包过）时按 arity 兜底并告警。
  *
- * 本函数还负责中继的**身份**：向 `connection` 服务要一个进程内 Peer（{@link peerFor}）——
+ * 本函数还负责它们共同的**身份**：向 `connection` 服务要一个进程内 Peer（{@link peerFor}）——
  * 自 0.2 起开流必须以一个真实 Peer 的名义，而它在该版是必需实参（R11）。
  */
-export function gatewayOver(ctx: HostContext): RemoteEventGatewayLike {
+export function gatewayOver(ctx: HostContext): RemoteEventStreamLike & RemoteEventAnswerLike {
   const view = ctx.typertGateway as unknown as Record<PropertyKey, unknown> | undefined
   if (view === undefined || typeof view !== 'object') {
     throw new Error('ctx.typertGateway is unavailable — the web profile did not provide the gateway service')
@@ -288,8 +291,8 @@ export function gatewayOver(ctx: HostContext): RemoteEventGatewayLike {
     | undefined
   const opening = typeof declared?.open === 'function' ? declared.open : raw.openWireStream
   if (typeof opening !== 'function') {
-    log.error(`approval relay gateway members: ${members}`)
-    throw new Error('ctx.typertGateway exposes neither wireStream.open nor openWireStream — approval relay cannot run')
+    log.error(`gateway face members: ${members}`)
+    throw new Error('ctx.typertGateway exposes neither wireStream.open nor openWireStream — the $events source cannot run')
   }
   const opener = opening as (...args: unknown[]) => Promise<AsyncIterable<unknown>>
   // 两个候选开流者的归属不同：声明面 `wireStream.open` 是**字段**（挂在 `wireStream` 上，
@@ -297,7 +300,7 @@ export function gatewayOver(ctx: HostContext): RemoteEventGatewayLike {
   const declaredOpener = opener === declared?.open
   const openerOwner = declaredOpener ? declared : raw
   log.info(
-    `approval relay gateway: ${declaredOpener ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
+    `gateway face: ${declaredOpener ? 'wireStream.open (declared)' : 'openWireStream (private)'} + dispatchRpc`,
   )
   // 必需实参有两个：取消信号与 peer。这里只对 `signal` 报警，是因为 `peer` 另有兜底
   // （`positionalArguments` 的 4 / 5 档都带它）；而拼写不匹配的信号在重连循环里是看不见的，
@@ -305,7 +308,7 @@ export function gatewayOver(ctx: HostContext): RemoteEventGatewayLike {
   const names = parameterNamesOf(opener)
   if (names === undefined || !names.includes('signal')) {
     log.warn(
-      `approval relay: the stream opener declares ${names === undefined ? 'no readable parameters' : `no \`signal\` (${names.join(', ')})`}; feeding it positionally, cancellation last. reads: ${Function.prototype.toString.call(opener).slice(0, 160)}`,
+      `gateway face: the stream opener declares ${names === undefined ? 'no readable parameters' : `no \`signal\` (${names.join(', ')})`}; feeding it positionally, cancellation last. reads: ${Function.prototype.toString.call(opener).slice(0, 160)}`,
     )
   }
 
@@ -313,7 +316,7 @@ export function gatewayOver(ctx: HostContext): RemoteEventGatewayLike {
   const peer = peerFor(ctx)
 
   return {
-    // `$events` 说的是中继自己的词汇，所以仅在这一个边界把流类型按此标注 ——
+    // `$events` 说的是上游源的词汇，所以仅在这一个边界把流类型按此标注 ——
     // opener 本身在上游是无类型的。
     openWireStream: (endpoint, payload, signal) =>
       openStreamThrough(opener, { endpoint, payload, peer, signal }, openerOwner) as Promise<AsyncIterable<UpstreamWireFrame>>,

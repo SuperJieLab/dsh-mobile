@@ -1,50 +1,69 @@
 /**
  * The approval relay's behaviour tests (M5, 实施期修正 11): waterfall frames held and
  * broadcast, one-shot delivery through the result door, replay, and the cancel path.
- * The gateway is a fake `$events` stream — the same contract the real one presents.
+ *
+ * The relay no longer opens `$events` itself: it subscribes to `ForwardedEvents`
+ * (judged on its own in `remote-events.test.ts`). Here the source is a fake stream and
+ * the door is a fake recorder — the two things the relay actually talks to.
  */
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
+import { ForwardedEvents, type RemoteEventStreamLike } from '../../src/upstream/remote-events.ts'
+import type { UpstreamWireFrame } from '../../src/ports/events.ts'
 import {
   ApprovalRelay, ReplayTable, outcomeOfDecision, pumpPrompt, refusalOf,
-  type RemoteEventGatewayLike, type UpstreamWireFrame,
+  type RemoteEventAnswerLike,
 } from '../../src/upstream/write.ts'
 
 // -- helpers -----------------------------------------------------------------
 
-/** A fake gateway: one controlled `$events` stream plus a recorded result door. */
-function fakeGateway(options: { refuse?: unknown } = {}) {
-  const pushes: ((frame: UpstreamWireFrame) => void)[] = []
-  const results: { clientId: string; eventId: string; outcome: unknown }[] = []
-  let resolveFirst: (() => void) | undefined
-  const streamStarted = new Promise<void>((resolve) => { resolveFirst = resolve })
+/** A fake `$events` source: the test pushes frames, and the test ends a generation. */
+function fakeSource() {
+  const channels: ((frame: UpstreamWireFrame) => void)[] = []
+  const breakers: (() => void)[] = []
+  let announce: (() => void) | undefined
+  const started = new Promise<void>((resolve) => { announce = resolve })
 
-  const gateway: RemoteEventGatewayLike & { push(frame: UpstreamWireFrame): void } = {
+  const source: RemoteEventStreamLike = {
     async *openWireStream(endpoint, _payload, signal) {
       assert.equal(endpoint, '$events')
       const queue: UpstreamWireFrame[] = []
       // Register the push channel BEFORE the first yield: a frame pushed
       // between body start and the ready frame must not be lost.
-      pushes.push((frame) => queue.push(frame))
-      resolveFirst?.()
+      channels.push((frame) => queue.push(frame))
+      let broken = false
+      breakers.push(() => { broken = true })
+      announce?.()
       yield { type: 'ready', clientId: 'fake-client' }
-      while (!signal.aborted) {
+      while (!signal.aborted && !broken) {
         while (queue.length > 0) yield queue.shift()!
-        await new Promise<void>((r) => setTimeout(r, 5))
+        await new Promise<void>((resolve) => setTimeout(resolve, 5))
       }
     },
+  }
+
+  return {
+    source,
+    started,
+    push(frame: UpstreamWireFrame): void { channels.at(-1)?.(frame) },
+    /** End the current generation (a normal stream end, not a throw). */
+    end(): void { breakers.at(-1)?.() },
+  }
+}
+
+/** The result door: records every delivery, answers with `refuse` when the test wants it to. */
+function fakeDoor(options: { refuse?: unknown } = {}) {
+  const results: { clientId: string; eventId: string; outcome: unknown }[] = []
+  const door: RemoteEventAnswerLike = {
     async dispatchRpc(_endpoint, payload) {
       const args = (payload as { args: { clientId: string; eventId: string; outcome: unknown } }).args
       results.push(args)
       return options.refuse ?? { ok: true, value: undefined }
     },
-    push(frame) {
-      for (const push of pushes) push(frame)
-    },
   }
-  return { gateway, results, streamStarted }
+  return { door, results }
 }
 
 function broadcaster() {
@@ -52,24 +71,38 @@ function broadcaster() {
   return { frames, broadcast(frame: unknown): void { frames.push(frame) } }
 }
 
+/** Wait for a condition, by count rather than by wall clock. */
+async function until(condition: () => boolean, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    if (condition()) return
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+  }
+  assert.fail(`never happened: ${what}`)
+}
+
 async function liveRelay(options: { refuse?: unknown } = {}) {
-  const { gateway, results, streamStarted } = fakeGateway(options)
+  const feed = fakeSource()
+  const { door, results } = fakeDoor(options)
   const sink = broadcaster()
-  const relay = new ApprovalRelay(gateway, sink)
-  relay.start(AbortSignal.timeout(10_000))
-  await streamStarted
-  return { gateway, results, sink, relay, stop: () => relay.stop() }
+  const events = new ForwardedEvents(feed.source)
+  const relay = new ApprovalRelay(events, door, sink, AbortSignal.timeout(10_000))
+  events.start(AbortSignal.timeout(10_000))
+  await feed.started
+  await until(() => events.ready, 'the source is ready')
+  return { feed, results, sink, events, relay, stop: () => events.stop() }
 }
 
 function waterfallFrame(eventId: string, toolName = 'shell'): UpstreamWireFrame {
   return { type: 'waterfall', event: 'approval/request', eventId, agentId: 'agent-1', request: { toolName, reason: 'needs write' } }
 }
 
+// -- 待答与应答 --------------------------------------------------------------
+
 test('relay: a waterfall frame is held and broadcast; the phone sees the request payload', async () => {
-  const { gateway, sink, stop } = await liveRelay()
+  const { feed, sink, stop } = await liveRelay()
   try {
-    gateway.push(waterfallFrame('e1'))
-    await new Promise((r) => setTimeout(r, 30))
+    feed.push(waterfallFrame('e1'))
+    await until(() => sink.frames.length === 1, 'the request is broadcast')
     assert.deepEqual(sink.frames, [{
       type: 'approval',
       payload: { kind: 'request', eventId: 'e1', toolName: 'shell', reason: 'needs write' },
@@ -80,13 +113,14 @@ test('relay: a waterfall frame is held and broadcast; the phone sees the request
 })
 
 test('relay: wire answer reaches the result door with the one-shot outcome; second answer is unknown', async () => {
-  const { gateway, results, relay, stop } = await liveRelay()
+  const { feed, results, relay, stop } = await liveRelay()
   try {
-    gateway.push(waterfallFrame('e1'))
-    await new Promise((r) => setTimeout(r, 30))
+    feed.push(waterfallFrame('e1'))
+    await until(() => relay.held().length === 1, 'the question is held')
 
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k' }), 'delivered')
-    assert.deepEqual(results, [{ clientId: 'fake-client', eventId: 'e1', outcome: { kind: 'result', value: 'rejected' } }])
+    assert.deepEqual(results, [{ clientId: 'fake-client', eventId: 'e1', outcome: { kind: 'result', value: 'rejected' } }],
+      'the answer carries the source’s identity — the relay does not mint one')
 
     // One-shot: the question is gone; a different answer meets unknown-approval.
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2' }), 'unknown-approval')
@@ -96,10 +130,10 @@ test('relay: wire answer reaches the result door with the one-shot outcome; seco
 })
 
 test('relay: a retried answerId replays the first outcome without a second delivery', async () => {
-  const { gateway, results, relay, stop } = await liveRelay()
+  const { feed, results, relay, stop } = await liveRelay()
   try {
-    gateway.push(waterfallFrame('e1'))
-    await new Promise((r) => setTimeout(r, 30))
+    feed.push(waterfallFrame('e1'))
+    await until(() => relay.held().length === 1, 'the question is held')
 
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'same' }), 'delivered')
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'same' }), 'delivered',
@@ -114,12 +148,12 @@ test('relay: a refused answer is not reported as delivered, and the question sta
   // What the runtime does now (`dsh-api-gateway/lib/index.js:961-977` at 0.2.1-alpha.3):
   // the `$events/result` door validates the Peer, so a mismatch comes back as a value,
   // not a throw. Treating that as "delivered" hides a turn that is still waiting.
-  const { gateway, results, relay, stop } = await liveRelay({
+  const { feed, results, relay, stop } = await liveRelay({
     refuse: { ok: false, error: { code: 'gateway/interactions-forbidden', message: 'Remote event result belongs to another Peer' } },
   })
   try {
-    gateway.push(waterfallFrame('e1'))
-    await new Promise((r) => setTimeout(r, 30))
+    feed.push(waterfallFrame('e1'))
+    await until(() => relay.held().length === 1, 'the question is held')
 
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k' }), 'undelivered')
     assert.equal(results.length, 1, 'the answer still goes out exactly once')
@@ -145,12 +179,12 @@ test('refusalOf: reads the gateway’s encoded failure, and only that', () => {
 })
 
 test('relay: a cancel frame clears the question; late answer meets unknown-approval and the phone is told', async () => {
-  const { gateway, sink, relay, stop } = await liveRelay()
+  const { feed, sink, relay, stop } = await liveRelay()
   try {
-    gateway.push(waterfallFrame('e1'))
-    await new Promise((r) => setTimeout(r, 30))
-    gateway.push({ type: 'cancel', eventId: 'e1' })
-    await new Promise((r) => setTimeout(r, 30))
+    feed.push(waterfallFrame('e1'))
+    await until(() => relay.held().length === 1, 'the question is held')
+    feed.push({ type: 'cancel', eventId: 'e1' })
+    await until(() => sink.frames.length === 2, 'the cancel is broadcast')
 
     assert.deepEqual(sink.frames.at(-1), { type: 'approval', payload: { kind: 'cancel', eventId: 'e1' } })
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval')
@@ -159,46 +193,34 @@ test('relay: a cancel frame clears the question; late answer meets unknown-appro
   }
 })
 
-test('relay: non-approval waterfall events and malformed requests are ignored', async () => {
-  const { gateway, sink, stop } = await liveRelay()
+test('relay: non-approval waterfall events, malformed requests and plain emits are ignored', async () => {
+  const { feed, sink, stop } = await liveRelay()
   try {
-    gateway.push({ type: 'waterfall', event: 'user-questions/request', eventId: 'u1', agentId: 'a', request: { question: 'q' } })
-    gateway.push({ type: 'waterfall', event: 'approval/request', eventId: 'u2', agentId: 'a', request: {} })
-    gateway.push({ type: 'emit', event: 'api-session/status', args: {} })
-    await new Promise((r) => setTimeout(r, 30))
+    feed.push({ type: 'waterfall', event: 'user-questions/request', eventId: 'u1', agentId: 'a', request: { question: 'q' } })
+    feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'u2', agentId: 'a', request: {} })
+    feed.push({ type: 'emit', event: 'api-session/status', args: {} })
+    // 让这三帧走完一整个扇出，再断言「什么都没发生」—— 先断言会与上一轮的帧赛跑。
+    await new Promise<void>((resolve) => setTimeout(resolve, 50))
     assert.deepEqual(sink.frames, [])
   } finally {
     stop()
   }
 })
 
-test('relay: a broken stream reconnects and the next generation serves fresh frames', async () => {
-  let attempts = 0
-  const sink = broadcaster()
-  const results: unknown[] = []
-  const relay = new ApprovalRelay({
-    // First generation dies instantly (the old relay would stay dead until
-    // the next plugin reload — exactly the failure the phone experienced as
-    // "approval cards vanish"); the second serves normally.
-    async * openWireStream(_endpoint, _payload, signal) {
-      attempts += 1
-      if (attempts === 1) throw new Error('stream broke')
-      yield { type: 'ready', clientId: 'fake-client-2' }
-      while (!signal.aborted) await new Promise((r) => setTimeout(r, 5))
-    },
-    async dispatchRpc(_endpoint, payload) {
-      results.push((payload as { args: unknown }).args)
-      return { ok: true }
-    },
-  }, sink)
-  relay.start(AbortSignal.timeout(10_000))
+test('relay: the source dying drops held questions, and the next generation starts clean', async () => {
+  // 身份换代 = 宿主会把仍在等待的问题重投一遍。沿用旧集合就是重放已消费的应答，
+  // 所以中继必须在「源没了」那一刻把待答表丢掉 —— 这是它跟源一起动的那一半。
+  const { feed, relay, stop } = await liveRelay()
   try {
-    // 500 ms initial backoff; wait past it plus slack.
-    await new Promise((r) => setTimeout(r, 900))
-    assert.equal(attempts >= 2, true, 'the relay must attempt a second generation')
-    assert.equal(relay.ready, true, 'the relay must be live again after reconnect')
+    feed.push(waterfallFrame('e1'))
+    await until(() => relay.held().length === 1, 'the question is held')
+
+    feed.end()
+    await until(() => relay.held().length === 0, 'the held question goes with the source')
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval',
+      'and an answer that arrives afterwards cannot be delivered to an identity that is gone')
   } finally {
-    relay.stop()
+    stop()
   }
 })
 

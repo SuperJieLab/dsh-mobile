@@ -27,6 +27,7 @@ import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
 import { broadcasterOver, commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
+import { ForwardedEvents } from './upstream/remote-events.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
 
 const log = createLogger(LogModule.main)
@@ -122,14 +123,16 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   }
   log.info(`pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
 
-  // 写通道：中继把 `approval-answer` 桥接到网关的 `$events` 流
-  // （宿主侧 waterfall 监听器收不到远程应答 —— api-remotes 会把它们挂起，
-  // 直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`
-  // （M5 §四）。
+  // 写通道：上游 `$events` 流由 `ForwardedEvents` 持有（进程一份身份），中继订阅它
+  // 把 `approval-answer` 桥接回去（宿主侧 waterfall 监听器收不到远程应答 —— api-remotes
+  // 会把它们挂起，直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`
+  // （M5 §四）。手机侧的事件流是同一个源的第二类订阅者，不开第二条身份。
   const relayLifetime = new AbortController()
   const approvalFace = broadcasterOver()
-  const relay = new ApprovalRelay(gatewayOver(ctx), approvalFace)
-  relay.start(relayLifetime.signal)
+  const gatewayFace = gatewayOver(ctx)
+  const forwardedEvents = new ForwardedEvents(gatewayFace)
+  const relay = new ApprovalRelay(forwardedEvents, gatewayFace, approvalFace, relayLifetime.signal)
+  forwardedEvents.start(relayLifetime.signal)
   const writePort = writePortOver(ctx, relay)
   // 模型通道：声明式 face 调用中继与泵所用的同一控制器；服务缺席
   // 必须在装配时说清，而不是第一次点击时。
@@ -150,12 +153,14 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       // 打开帧的字节上界与 HTTP 路径的上限同源（同一个 `limits`）—— 两端各自
       // 记一个数才是口径不一致的来源。
       openingCapBytes: limits.maxOpeningBytes,
+      // `{op:'events'}` 的流订阅这份源：身份是网关进程的，流是这条连接的。
+      events: forwardedEvents,
       // 新接入的手机先拿到对账帧（所有挂起问题的 id），再逐条重放 ——
       // 它因此可以丢掉那些在其离线期间 `cancel` 已触发的转发卡片：
       // 缺席的 id 是权威的。
       onClientConnected: (send) => {
         const held = relay.held()
-        if (!relay.ready) {
+        if (!forwardedEvents.ready) {
           // 无存活的 `$events` 身份，持有集合证明不了什么：`stale` 同步
           // 告诉客户端保留卡片，而不是对着一个说谎的列表去剪。
           send({ type: 'approval', payload: { kind: 'sync', eventIds: [], callIds: [], stale: true } })

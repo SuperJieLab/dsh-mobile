@@ -182,4 +182,30 @@ final class MuxShapeTests: XCTestCase {
         XCTAssertTrue(page.hasOlder, "hasOlder 直传")
         XCTAssertEqual(page.events.map(\.seq), [7], "events 直传")
     }
+
+    // MARK: - O8：第二类开流帧（连接级事件流）
+
+    /// 事件流的开流帧：外壳与 follow 那一套完全相同，载荷只有 `op`。
+    ///
+    /// 网关侧的分派靠两段 —— 信封读编号、`openRequestOf` 读 `op`（`wire/mux.ts`）。所以这一帧
+    /// 多一个字段（比如顺手带上 `sessionId`）虽不会被拒，却会让两端对「这条流绑不绑会话」的
+    /// 理解分岔；少写 `type` 则连信封都读不出，整条连接会被关。
+    func testEventsOpenFrameIsTheDeclaredBytes() throws {
+        XCTAssertEqual(try MuxOpenFrame.events(streamId: "e1").encoded(),
+                       #"{"payload":{"op":"events"},"streamId":"e1","type":"open"}"#,
+                       "事件流开流帧的字节与形状声明不一致 —— 字段名或外壳被改动过")
+    }
+
+    /// 确定性的那一半：重新构造、重新编码，5 次得到同一个字符串。
+    ///
+    /// 与 follow 同一条纪律（`.sortedKeys`），但它是**第二份**独立验证：两个工厂各自走
+    /// `muxText(of:)`，哪一天有人在 `events` 那条路上绕开它自己拼 JSON，这一条先红。
+    func testEventsOpenFrameEncodingIsStableAcrossRuns() throws {
+        let texts = try (1...5).map { _ in
+            try MuxOpenFrame.events(streamId: "e1").encoded()
+        }
+
+        XCTAssertEqual(Set(texts).count, 1,
+                       "同一份输入编出了 \(Set(texts).count) 种字节 —— 键序没有钉住")
+    }
 }
