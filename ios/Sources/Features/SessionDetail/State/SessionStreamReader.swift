@@ -67,9 +67,9 @@ struct StreamReading {
  * | `item`，载荷 `type` 是 `assistant-stream` | 未定稿帧 | 载荷里的 `frame` 原样转出 |
  * | `item`，载荷有 `type` + `seq` | 事件帧 | 载荷本体就是一条事件；解不出如实丢弃 |
  * | `usage` | 占用读数 | 载荷 `sessionId` 必须等于本流的会话，否则丢弃 |
+ * | `approval` | 审批帧 | 没有 `streamId`，与这条流无关；`request` 还要求载荷自带归属且等于本流 |
  * | `error` | 拒绝 | 载荷是 `{code, message}` |
  * | `end` | 收尾 | —— |
- * | `approval` | 审批帧 | 没有 `streamId`，与这条流无关 |
  *
  * 顺序不是随意排的：打开帧的判据最严，必须先试；未定稿帧带 `type` 但不带 `seq`，
  * 所以排在事件帧之前。
@@ -119,6 +119,16 @@ enum SessionStreamReader {
 
         case "approval":
             guard let payload = envelope.payload else { return StreamReading(content: .ignored) }
+            // 审批帧是**连接级**的（没有编号），广播又面向所有连接 —— 归属只能由载荷自己说。
+            // 只放行本会话的 `request`：别的会话的、以及没带归属的，一律丢弃。后者对应
+            // 「旧网关不发这个字段」那一刻，宁可少一张卡，也不把卡放错会话。
+            // `cancel` / `sync` 不带归属，也不该被这条规则误伤：前者按 `eventId` 全局寻址，
+            // 后者是整条连接的名单，两者都与「哪一屏」无关。
+            if payload["kind"]?.string == "request", payload["sessionId"]?.string != sessionId {
+                Log.warn(Log.Module.session,
+                         "dropped an approval that belongs to \"\(payload["sessionId"]?.string ?? "<none>")\", not \"\(sessionId)\"")
+                return StreamReading(content: .ignored)
+            }
             return StreamReading(content: .approval(payload))
 
         case "usage":
