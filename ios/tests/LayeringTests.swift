@@ -1203,6 +1203,103 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(found.count, 1, "列表状态只能有一个实例：\(found)")
     }
 
+    // MARK: - 待审批标记的三条结构判据
+
+    /// 列表行真的读了待答表。视图不在测试覆盖里，这一跳只能靠结构判据守。
+    ///
+    /// 守的是「行有第二个数据源」这件事本身：漏了它，标记永远不出现，而两端的判据
+    /// （表的计数、标签的形状）都是绿的。
+    ///
+    /// `SessionRow` 的调用行里必须带 `pendingCount(in:`，且那个块的构造里必须出现标签函数
+    /// —— 只断前一半的话，把计数传进去却不画，仍然绿。
+    func testTheListRowReadsThePendingTable() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+
+        // 按实参块扫，不按行：实参写完一行是 90 列，换行书写是常态，
+        // 而按行扫会把「换行后漏传」读成合规的同时，把「换行后传了」读成不合规。
+        let calls = callArguments(of: "SessionRow", in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertFalse(calls.isEmpty, "连 `SessionRow(` 都没扫到 —— 先怀疑路径或改名")
+        XCTAssertTrue(calls.contains { $0.contains("pendingCount(in:") },
+                      "行的构造没把本会话的待批条数传进去 —— 标记永远是 0")
+
+        let block = try XCTUnwrap(self.block(startingAt: "struct SessionRow", in: lines),
+                                  "找不到 `SessionRow` 的定义 —— 先怀疑改名")
+        XCTAssertTrue(block.contains { $0.1.contains("SessionRowChip.of(") },
+                      "行拿到了计数却没画标签 —— 中间那一跳没人接")
+    }
+
+    /// 列表的取数不认识审批 —— 标记不带来任何一次新请求。
+    ///
+    /// 它的反面不是「多一个字段」，而是「列表为了显示标记又拉一次审批」：那是两张表各自
+    /// 维护一份事实的开始。计数只从本机那张 App 级的表读。
+    func testTheListStateDoesNotKnowAboutApprovals() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/SessionList/State/SessionListState.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertTrue(lines.contains { $0.1.contains("final class SessionListState") },
+                      "扫错文件了 —— 先怀疑路径")
+        let hits = lines.filter { $0.1.contains("Approval") }.map(\.0)
+        XCTAssertEqual(hits, [], "列表的取数层出现了审批（第 \(hits) 行）—— 标记应当只读表")
+    }
+
+    /// 标记不是按钮：那一行里没有任何手势，也没有响应动作。
+    ///
+    /// 只扫 `SessionRow` 那个块 —— 同一屏别处有按钮（工具栏、刷新）是正常的，
+    /// 而这一行里出现按钮或手势，就等于列表页也能应答。
+    func testTheApprovalMarkerIsNotTappable() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        let block = try XCTUnwrap(self.block(startingAt: "struct SessionRow", in: lines),
+                                  "找不到 `SessionRow` 的定义 —— 先怀疑改名")
+        // 活性锚：块里必须有标签函数，否则「零手势」只是因为扫错了地方。
+        XCTAssertTrue(block.contains { $0.1.contains("SessionRowChip") },
+                      "这个块里没有标签 —— 活性锚不成立，下面的空集会被读成合规")
+
+        for needle in ["Button(", "onTapGesture", ".gesture(", "NavigationLink("] {
+            let hits = block.filter { $0.1.contains(needle) }.map(\.0)
+            XCTAssertEqual(hits, [], "行里出现了 `\(needle)`（第 \(hits) 行）—— 标记只承载「看见」")
+        }
+    }
+
+    /// 每一次 `name(...)` 调用的实参原文（不含括号本身），跨行也算一次。
+    ///
+    /// 按括号配平取，不按行。盲区：字符串字面量里的括号会被当成结构 —— 本仓的构造调用
+    /// 实参里没有这种串，真出现时会报成「多一次调用」，看得见。
+    private func callArguments(of name: String, in text: String) -> [String] {
+        var out: [String] = []
+        var from = text.startIndex
+        while let open = text.range(of: name + "(", range: from..<text.endIndex) {
+            var depth = 0
+            var collected = ""
+            var cursor = text.index(open.lowerBound, offsetBy: name.count)
+            while cursor < text.endIndex {
+                let char = text[cursor]
+                if char == "(" { depth += 1 }
+                if char == ")" {
+                    depth -= 1
+                    if depth == 0 { break }
+                }
+                collected.append(char)
+                cursor = text.index(after: cursor)
+            }
+            out.append(collected)
+            from = text.index(after: open.lowerBound)
+        }
+        return out
+    }
+
+    /// 从 `marker` 那一行起，取到下一个顶格 `}`（含）为止。找不到 marker 返回 `nil`。
+    private func block(startingAt marker: String,
+                       in lines: [(Int, String)]) -> [(Int, String)]? {
+        guard let start = lines.firstIndex(where: { $0.1.contains(marker) }) else { return nil }
+        var out: [(Int, String)] = []
+        for line in lines[start...] {
+            out.append(line)
+            if line.1.hasPrefix("}") { break }
+        }
+        return out
+    }
+
     /// 列表视图真的把事件流交给了状态层。
     ///
     /// 这一行是整条链路的入口，而它没有任何行为判据能碰到（视图不在测试覆盖里）：

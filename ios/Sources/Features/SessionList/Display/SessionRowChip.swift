@@ -11,7 +11,9 @@
 import Foundation
 
 /// 一行上的一个标签。顺序由 `of` 给：先运行态、后待批。
-enum SessionRowChip: Equatable {
+///
+/// `Hashable` 是为了让它当 `ForEach` 的标识 —— 标签的形状本身就是它的身份。
+enum SessionRowChip: Hashable {
 
     /// 这个会话正在跑。
     case running

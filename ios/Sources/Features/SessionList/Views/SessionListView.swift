@@ -22,6 +22,8 @@ struct SessionListView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @EnvironmentObject private var store: ConnectionStore
+    /// 根部注入的待答表：每一行问它「本会话还挂着几条」。只读，不发请求。
+    @EnvironmentObject private var approvals: ApprovalStore
 
     init(client: GatewayClient, link: GatewayLink, events: ConnectionEvents) {
         self.client = client
@@ -55,7 +57,9 @@ struct SessionListView: View {
 
             ForEach(state.sessions) { session in
                 NavigationLink(value: session) {
-                    SessionRow(session: session)
+                    // 计数现取：表是唯一来源，不为它备一份镜像（两份事实就有谁先更新的问题）。
+                    SessionRow(session: session,
+                               pendingCount: approvals.pendingCount(in: session.id))
                 }
             }
 
@@ -134,6 +138,13 @@ struct SessionListView: View {
 /// 列表里的一行。
 private struct SessionRow: View {
     let session: SessionSummary
+    /// 本会话还挂着的审批条数（来自 App 级的那张待答表）。
+    let pendingCount: Int
+
+    /// 这一行该画哪几枚标签 —— 排序与文字都在 `SessionRowChip` 里，这里不拼条件。
+    private var chips: [SessionRowChip] {
+        SessionRowChip.of(running: session.running, pendingCount: pendingCount)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -142,10 +153,11 @@ private struct SessionRow: View {
                     .font(.headline)
                     .lineLimit(2)
 
-                if session.running {
-                    Text("进行中")
+                // 两件事不同（在做 / 等你），所以并列、各自着色，谁也不顶掉谁。
+                ForEach(chips, id: \.self) { chip in
+                    Text(chip.text)
                         .font(.caption2)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(tint(for: chip))
                 }
             }
 
@@ -159,5 +171,12 @@ private struct SessionRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+    }
+
+    private func tint(for chip: SessionRowChip) -> Color {
+        switch chip {
+        case .running: return .accentColor
+        case .pending: return .orange
+        }
     }
 }
