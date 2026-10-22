@@ -157,29 +157,10 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       events: forwardedEvents,
       // 新接入的手机先拿到对账帧（所有挂起问题的 id），再逐条重放 ——
       // 它因此可以丢掉那些在其离线期间 `cancel` 已触发的转发卡片：
-      // 缺席的 id 是权威的。
+      // 缺席的 id 是权威的。帧序列由中继给出：它才是知道「还挂着什么」的那一层，
+      // 装配层拼帧会让同一份形状在这里与 `write.ts` 各长一遍。
       onClientConnected: (send) => {
-        const held = relay.held()
-        if (!forwardedEvents.ready) {
-          // 无存活的 `$events` 身份，持有集合证明不了什么：`stale` 同步
-          // 告诉客户端保留卡片，而不是对着一个说谎的列表去剪。
-          send({ type: 'approval', payload: { kind: 'sync', eventIds: [], callIds: [], stale: true } })
-          return
-        }
-        send({
-          type: 'approval',
-          payload: {
-            kind: 'sync',
-            eventIds: held.map(h => h.eventId),
-            // callIds 随行，让由审计重建的卡片（日志中的 asked − decided）
-            // 能与网关仍持有的对上账：悬空的 asked（宿主在询问中途死亡）
-            // 不得复活。
-            callIds: held.flatMap(h => h.callId === undefined ? [] : [h.callId]),
-          },
-        })
-        for (const heldItem of held) {
-          send({ type: 'approval', payload: { kind: 'request', eventId: heldItem.eventId, sessionId: heldItem.sessionId, toolName: heldItem.toolName, ...(heldItem.callId === undefined ? {} : { callId: heldItem.callId }), ...(heldItem.reason === undefined ? {} : { reason: heldItem.reason }) } })
-        }
+        for (const frame of relay.replayFrames()) send(frame)
       },
     })
     approvalFace.connect((frame) => broadcaster.broadcast(frame as Parameters<typeof broadcaster.broadcast>[0]))

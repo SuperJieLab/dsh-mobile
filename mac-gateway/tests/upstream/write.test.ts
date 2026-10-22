@@ -10,48 +10,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ForwardedEvents, type RemoteEventStreamLike } from '../../src/upstream/remote-events.ts'
+import { ForwardedEvents } from '../../src/upstream/remote-events.ts'
 import type { UpstreamWireFrame } from '../../src/ports/events.ts'
 import {
   ApprovalRelay, ReplayTable, outcomeOfDecision, pumpPrompt, refusalOf,
   type RemoteEventAnswerLike,
 } from '../../src/upstream/write.ts'
+import { fakeEventStream, until } from './fake-events.ts'
 
 // -- helpers -----------------------------------------------------------------
-
-/** A fake `$events` source: the test pushes frames, and the test ends a generation. */
-function fakeSource() {
-  const channels: ((frame: UpstreamWireFrame) => void)[] = []
-  const breakers: (() => void)[] = []
-  let announce: (() => void) | undefined
-  const started = new Promise<void>((resolve) => { announce = resolve })
-
-  const source: RemoteEventStreamLike = {
-    async *openWireStream(endpoint, _payload, signal) {
-      assert.equal(endpoint, '$events')
-      const queue: UpstreamWireFrame[] = []
-      // Register the push channel BEFORE the first yield: a frame pushed
-      // between body start and the ready frame must not be lost.
-      channels.push((frame) => queue.push(frame))
-      let broken = false
-      breakers.push(() => { broken = true })
-      announce?.()
-      yield { type: 'ready', clientId: 'fake-client' }
-      while (!signal.aborted && !broken) {
-        while (queue.length > 0) yield queue.shift()!
-        await new Promise<void>((resolve) => setTimeout(resolve, 5))
-      }
-    },
-  }
-
-  return {
-    source,
-    started,
-    push(frame: UpstreamWireFrame): void { channels.at(-1)?.(frame) },
-    /** End the current generation (a normal stream end, not a throw). */
-    end(): void { breakers.at(-1)?.() },
-  }
-}
 
 /** The result door: records every delivery, answers with `refuse` when the test wants it to. */
 function fakeDoor(options: { refuse?: unknown } = {}) {
@@ -71,17 +38,8 @@ function broadcaster() {
   return { frames, broadcast(frame: unknown): void { frames.push(frame) } }
 }
 
-/** Wait for a condition, by count rather than by wall clock. */
-async function until(condition: () => boolean, what: string): Promise<void> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    if (condition()) return
-    await new Promise<void>((resolve) => setTimeout(resolve, 10))
-  }
-  assert.fail(`never happened: ${what}`)
-}
-
 async function liveRelay(options: { refuse?: unknown } = {}) {
-  const feed = fakeSource()
+  const feed = fakeEventStream()
   const { door, results } = fakeDoor(options)
   const sink = broadcaster()
   const events = new ForwardedEvents(feed.source)
@@ -173,7 +131,7 @@ test('relay: wire answer reaches the result door with the one-shot outcome; seco
     await until(() => relay.held().length === 1, 'the question is held')
 
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k' }), 'delivered')
-    assert.deepEqual(results, [{ clientId: 'fake-client', eventId: 'e1', outcome: { kind: 'result', value: 'rejected' } }],
+    assert.deepEqual(results, [{ clientId: 'client-1', eventId: 'e1', outcome: { kind: 'result', value: 'rejected' } }],
       'the answer carries the source’s identity — the relay does not mint one')
 
     // One-shot: the question is gone; a different answer meets unknown-approval.
@@ -273,6 +231,55 @@ test('relay: the source dying drops held questions, and the next generation star
     await until(() => relay.held().length === 0, 'the held question goes with the source')
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval',
       'and an answer that arrives afterwards cannot be delivered to an identity that is gone')
+  } finally {
+    stop()
+  }
+})
+
+// -- 连接建立时的重投序列 ----------------------------------------------------
+
+test('relay: the replay puts the ledger first and carries the same identity as the live broadcast', async () => {
+  const { feed, relay, stop } = await liveRelay()
+  try {
+    feed.push(waterfallFrame('e1', 'shell', 's1'))
+    feed.push(waterfallFrame('e2', 'write', 's2'))
+    await until(() => relay.held().length === 2, 'both questions are held')
+
+    const frames = relay.replayFrames()
+    assert.deepEqual(frames.map(frame => frame.payload.kind), ['sync', 'request', 'request'],
+      'the ledger comes first — a request that arrives before it would be swept away by the sweep')
+
+    const ledger = frames[0]!.payload
+    assert.equal(ledger.kind, 'sync')
+    if (ledger.kind !== 'sync') return
+    assert.deepEqual(ledger.eventIds, ['e1', 'e2'])
+    assert.equal(ledger.stale, undefined, 'a live source speaks authoritatively — only a dead one says stale')
+
+    const requests = frames.slice(1).map(frame => frame.payload)
+    assert.deepEqual(
+      requests.map(payload => payload.kind === 'request' ? [payload.eventId, payload.sessionId] : undefined),
+      [['e1', 's1'], ['e2', 's2']],
+      'the replay must carry the identity: a client that only gets it on the live path loses it after a reconnect',
+    )
+  } finally {
+    stop()
+  }
+})
+
+test('relay: with no live source the replay is one stale ledger and no requests', async () => {
+  const { feed, relay, events, stop } = await liveRelay()
+  try {
+    feed.push(waterfallFrame('e1', 'shell', 's1'))
+    await until(() => relay.held().length === 1, 'the question is held')
+    feed.end()
+    await until(() => !events.ready, 'the source is gone')
+
+    // 空名单 + stale：客户端据此保留卡片。写成非 stale 的空名单就是一句谎话 ——
+    // 它会把这期间别人答掉的卡当成「上游没有」，然后剪掉。
+    assert.deepEqual(relay.replayFrames(), [{
+      type: 'approval',
+      payload: { kind: 'sync', eventIds: [], callIds: [], stale: true },
+    }])
   } finally {
     stop()
   }

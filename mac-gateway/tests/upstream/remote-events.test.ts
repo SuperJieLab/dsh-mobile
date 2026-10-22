@@ -9,49 +9,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ForwardedEvents, type RemoteEventStreamLike } from '../../src/upstream/remote-events.ts'
+import { ForwardedEvents } from '../../src/upstream/remote-events.ts'
 import type { UpstreamWireFrame } from '../../src/ports/events.ts'
+import { fakeEventStream, until } from './fake-events.ts'
 
 // -- fixtures ----------------------------------------------------------------
-
-/** One controlled `$events` source; every generation gets its own clientId. */
-function fakeSource(options: { failFirstOpen?: boolean } = {}) {
-  const channels: ((frame: UpstreamWireFrame) => void)[] = []
-  const breakers: (() => void)[] = []
-  let announce: (() => void) | undefined
-  const started = new Promise<void>((resolve) => { announce = resolve })
-  let opened = 0
-
-  const source: RemoteEventStreamLike = {
-    async *openWireStream(endpoint, _payload, signal) {
-      assert.equal(endpoint, '$events', 'the identity opens the forwarded-event stream and nothing else')
-      opened += 1
-      if (options.failFirstOpen === true && opened === 1) {
-        // 叫醒等待方再抛：否则这个用例会挂到超时，看不出「失败」与「卡住」的区别。
-        announce?.()
-        throw new Error('stream broke')
-      }
-      const queue: UpstreamWireFrame[] = []
-      channels.push((frame) => queue.push(frame))
-      let broken = false
-      breakers.push(() => { broken = true })
-      announce?.()
-      yield { type: 'ready', clientId: `client-${opened}` }
-      while (!signal.aborted && !broken) {
-        while (queue.length > 0) yield queue.shift()!
-        await new Promise<void>((resolve) => setTimeout(resolve, 5))
-      }
-    },
-  }
-
-  return {
-    source,
-    started,
-    get opened() { return opened },
-    push(frame: UpstreamWireFrame): void { channels.at(-1)?.(frame) },
-    break(): void { breakers.at(-1)?.() },
-  }
-}
 
 /** A sink that records what it was told, in order. */
 function recorder() {
@@ -65,17 +27,8 @@ function recorder() {
   }
 }
 
-/** Wait for a condition, by count rather than by wall clock; failing names what never happened. */
-async function until(condition: () => boolean, what: string): Promise<void> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    if (condition()) return
-    await new Promise<void>((resolve) => setTimeout(resolve, 10))
-  }
-  assert.fail(`never happened: ${what}`)
-}
-
 async function liveSource(options: { failFirstOpen?: boolean } = {}) {
-  const feed = fakeSource(options)
+  const feed = fakeEventStream(options)
   const events = new ForwardedEvents(feed.source)
   events.start(AbortSignal.timeout(10_000))
   await feed.started
@@ -116,7 +69,7 @@ test('a live subscription hears a new generation, and only once', async () => {
     const late = recorder()
     events.subscribe(late)
     // 让源换代：当前这一代收尾 → 退避 → 下一代 ready。
-    feed.break()
+    feed.end()
     await until(() => late.generations.length === 2, 'lost, then rebuilt')
     assert.deepEqual(late.generations, [undefined, 2],
       'the loss is announced as "no generation", and the counter continues where it stopped')
@@ -131,7 +84,7 @@ test('an identity that dies takes its generation with it', async () => {
   const { feed, events, stop } = await liveSource()
   try {
     assert.equal(events.ready, true)
-    feed.break()
+    feed.end()
     await until(() => !events.ready, 'the source is marked gone')
     assert.equal(events.generation, undefined, 'a source that is not there has no generation — not "the old one"')
     assert.equal(events.clientId, undefined)

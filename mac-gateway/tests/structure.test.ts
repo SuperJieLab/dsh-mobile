@@ -1456,3 +1456,36 @@ test('the silent-refusal list only names ops the protocol actually dispatches', 
   assert.deepEqual([...silent].filter(op => !ops.includes(op)), [],
     'a silent-refusal entry that names no dispatched op protects nothing and hides the next drift')
 })
+
+// ---------------------------------------------------------------------------
+// W7：审批帧只在一处构造 —— 装配层不拼帧
+// ---------------------------------------------------------------------------
+
+/**
+ * 三种审批帧（`request` / `cancel` / `sync`）的 `kind` 字面量只允许出现在两个文件：
+ * `wire/mux.ts` 声明它的形状，`upstream/write.ts` 持有待答表并构造它。
+ *
+ * 守的是「装配层顺手拼一帧」这个真实风险 —— 重投序列原本就写在 `index.ts` 里，往那一处
+ * 加字段、`write.ts` 的另一处忘掉，两份代码相距很远、长得却几乎一样，评审看不出来。
+ * 判据按**期望文件**断言（不是零命中）：清单写在这里，多一个文件就红。
+ */
+test('approval frames are built where the held set lives, not in the assembly', () => {
+  const expected = ['upstream/write.ts', 'wire/mux.ts']
+  const seen = new Map<string, string[]>()
+  for (const file of filesUnder(SRC)) {
+    const code = stripComments(readFileSync(file, 'utf8'))
+    for (const kind of ['request', 'cancel', 'sync'] as const) {
+      const hits = [...code.matchAll(new RegExp(`kind:\\s*'${kind}'`, 'g'))].length
+      if (hits === 0) continue
+      seen.set(kind, [...(seen.get(kind) ?? []), where(file)])
+    }
+  }
+
+  // 活性锚：一份都没扫到说明路径或正则失效，下面的比较会「通过」。
+  assert.equal(seen.size, 3, `the scan found no approval kinds at all — got ${JSON.stringify([...seen.keys()])}`)
+
+  for (const [kind, files] of seen) {
+    assert.deepEqual(files.sort(), expected,
+      `\`kind: '${kind}'\` must live in ${expected.join(' + ')} — a third home is a second constructor`)
+  }
+})

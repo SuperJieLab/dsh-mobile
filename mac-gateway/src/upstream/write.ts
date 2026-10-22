@@ -165,6 +165,35 @@ export class ApprovalRelay {
   }
 
   /**
+   * 一条新连接该收到的整段帧序列 —— 先对账、再逐条重投。
+   *
+   * 顺序是承诺：客户端先按 `sync` 把不在名单里的卡剪掉，再按 `request` 建卡。反过来
+   * 送达的话，先建出来的卡会被紧随其后的名单剪掉，屏幕上闪一下。
+   *
+   * `stale` 的含义是「这份名单证明不了什么」：此刻没有存活的 `$events` 身份，我们不知道
+   * 上游还挂着什么。那时只发一条标记为 stale 的空名单，**不重投** —— 宿主会把仍在等待
+   * 的问题投给下一代，硬发一份旧集合就是在重放已经作废的投递。
+   */
+  replayFrames(): MuxApprovalFrame[] {
+    const held = this.held()
+    if (this.#events.clientId === undefined) {
+      const payload: MuxApprovalPayload = { kind: 'sync', eventIds: [], callIds: [], stale: true }
+      return [{ type: 'approval', payload }]
+    }
+    const ledger: MuxApprovalPayload = {
+      kind: 'sync',
+      eventIds: held.map(item => item.eventId),
+      // callIds 随行：客户端要靠它判断由日志重建的那些卡是不是悬空审计
+      //（asked 之后宿主在询问中途死掉，decided 永远等不到）。
+      callIds: held.flatMap(item => item.callId === undefined ? [] : [item.callId]),
+    }
+    return [
+      { type: 'approval', payload: ledger },
+      ...held.map(item => this.#requestFrame(item)),
+    ]
+  }
+
+  /**
    * 线路侧：通过网关的结果门交付一个应答；重试的 `answerId` 重放首个结果（W1），
    * 未指向已暂存问题的一律拒绝（W2）。
    */
