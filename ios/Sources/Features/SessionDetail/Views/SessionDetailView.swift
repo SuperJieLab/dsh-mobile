@@ -29,6 +29,8 @@ struct SessionDetailView: View {
     @FocusState private var isComposing: Bool
     /// 根部注入的连接域：功能条的网络格与连接详情读它（图中转与节点状态）。
     @EnvironmentObject private var store: ConnectionStore
+    /// 根部注入的待答表：App 级，不随本屏生死 —— 停在列表时到达的审批也在里面。
+    @EnvironmentObject private var approvals: ApprovalStore
 
     /// - Parameter link: 只在这里交给 `SessionSync`，本视图不保留 —— 屏幕能对连接做的
     ///   只有流级动作（`SessionSync.retry()`），连接级动作在它的类型上不存在。
@@ -263,31 +265,36 @@ struct SessionDetailView: View {
         )
     }
 
+    /// 本会话还挂着的卡。表按会话分组，这里只取这一栏 —— 别的会话的那几条不进这一屏。
+    private var pendingApprovals: [ApprovalTable.Entry] {
+        approvals.pending(in: session.id)
+    }
+
     /// 待批卡：只露第一张，其余折成一行计数。
     ///
     /// 审批是串行的 —— 批完一张才该看下一张。同时露两张不提供额外判断信息，只会把输入框
     /// 再往上推 132pt，而那正是「挤」的主因。卡本身仍在输入框上方：它必须一眼看见。
     @ViewBuilder
     private var approvalSection: some View {
-        if let first = sync.approvals.pending.first {
-            ApprovalCard(approval: first, state: sync.approvals.states[first.id]) { allow in
-                Task { await sync.approvals.answer(first, allow: allow) }
+        if let first = pendingApprovals.first {
+            ApprovalCard(approval: first, state: approvals.state(for: first.identity)) { allow in
+                Task { await approvals.answer(first, allow: allow) }
             }
             .padding(.horizontal, 4)
             .padding(.bottom, 6)
 
-            if sync.approvals.pending.count > 1 {
+            if pendingApprovals.count > 1 {
                 Button {
                     activeSheet = .approvals
                 } label: {
-                    Text("还有 \(sync.approvals.pending.count - 1) 个待批准")
+                    Text("还有 \(pendingApprovals.count - 1) 个待批准")
                         .font(.footnote)
                 }
                 .padding(.bottom, 6)
             }
         }
 
-        if let notice = sync.approvals.notice {
+        if let notice = approvals.notice(for: session.id) {
             Text(notice)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -370,7 +377,7 @@ struct SessionDetailView: View {
 
     /// 折叠起来的那些卡。**不含**上方已经露出的第一张 —— 文案说「还有 N 个」，列出来的就该是 N 个。
     private var allApprovalsSheet: some View {
-        let rest = Array(sync.approvals.pending.dropFirst())
+        let rest = Array(pendingApprovals.dropFirst())
         return NavigationStack {
             Group {
                 if rest.isEmpty {
@@ -384,8 +391,8 @@ struct SessionDetailView: View {
                         VStack(spacing: 8) {
                             ForEach(rest) { approval in
                                 ApprovalCard(approval: approval,
-                                             state: sync.approvals.states[approval.id]) { allow in
-                                    Task { await sync.approvals.answer(approval, allow: allow) }
+                                             state: approvals.state(for: approval.identity)) { allow in
+                                    Task { await approvals.answer(approval, allow: allow) }
                                 }
                             }
                         }

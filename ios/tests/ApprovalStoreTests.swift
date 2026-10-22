@@ -10,7 +10,7 @@ import XCTest
 @testable import DshMobile
 
 @MainActor
-final class PendingApprovalsTests: XCTestCase {
+final class ApprovalStoreTests: XCTestCase {
 
     /// 可挂起、可指定结果、可计数的作答门。
     @MainActor
@@ -57,7 +57,7 @@ final class PendingApprovalsTests: XCTestCase {
 
     /// 帧进来就发布出去，且按会话分组 —— 别的会话读不到。
     func testReceivedFramesArePublishedPerSession() {
-        let store = PendingApprovals(answerer: FakeAnswerer())
+        let store = ApprovalStore(answerer: FakeAnswerer())
         store.receive(request(session: "s1"))
         store.receive(request(session: "s2", eventId: "e2", callId: "c2"))
 
@@ -68,7 +68,7 @@ final class PendingApprovalsTests: XCTestCase {
 
     /// 取消把那张卡与它的状态一起清掉 —— 状态字典里不该留看不见的旧值。
     func testCancelRemovesTheEntryAndItsAnswerState() {
-        let store = PendingApprovals(answerer: FakeAnswerer())
+        let store = ApprovalStore(answerer: FakeAnswerer())
         store.receive(request())
         store.receive(.object(["kind": .string("cancel"), "eventId": .string("e1")]))
 
@@ -80,7 +80,7 @@ final class PendingApprovalsTests: XCTestCase {
 
     /// 成功即移除，不等任何回流帧：上游先摘掉自己的投递再广播取消，应答者收不到自己的收口帧。
     func testASuccessfulAnswerRemovesTheEntryWithoutWaitingForAFrame() async {
-        let store = PendingApprovals(answerer: FakeAnswerer())
+        let store = ApprovalStore(answerer: FakeAnswerer())
         store.receive(request())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
@@ -88,14 +88,14 @@ final class PendingApprovalsTests: XCTestCase {
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "答完即走 —— 没有任何帧参与")
         XCTAssertNil(store.state(for: "c1"))
         // 同源断言：守的是「成功分支有没有说话」，不守文案 —— 文案坏了由 Display 那一侧的事管。
-        XCTAssertEqual(store.notice(for: "s1"), PendingApprovals.deliveredNote(allow: true))
+        XCTAssertEqual(store.notice(for: "s1"), ApprovalStore.deliveredNote(allow: true))
     }
 
     /// 「这条已经不在了」：移除并说明 —— 留着就是一张永远按不动的卡。
     func testAnAlreadyGoneApprovalIsRemovedWithAnExplanation() async {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(refused("unknown-approval"))
-        let store = PendingApprovals(answerer: answerer)
+        let store = ApprovalStore(answerer: answerer)
         store.receive(request())
 
         await store.answer(store.pending(in: "s1")[0], allow: false)
@@ -112,7 +112,7 @@ final class PendingApprovalsTests: XCTestCase {
     func testATransportFailureLeavesTheCardAndMarksItUnknown() async {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(GatewayClientError.notActivated)
-        let store = PendingApprovals(answerer: answerer)
+        let store = ApprovalStore(answerer: answerer)
         store.receive(request())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
@@ -125,7 +125,7 @@ final class PendingApprovalsTests: XCTestCase {
     func testARefusalByTheGatewayKeepsTheCardWithItsReason() async {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(refused("internal-error"))
-        let store = PendingApprovals(answerer: answerer)
+        let store = ApprovalStore(answerer: answerer)
         store.receive(request())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
@@ -143,7 +143,7 @@ final class PendingApprovalsTests: XCTestCase {
     func testASecondTapWhileTheFirstIsInFlightDoesNothing() async {
         let answerer = FakeAnswerer()
         answerer.holdsFirstCall = true
-        let store = PendingApprovals(answerer: answerer)
+        let store = ApprovalStore(answerer: answerer)
         store.receive(request())
         let entry = store.pending(in: "s1")[0]
 
@@ -196,7 +196,7 @@ final class PendingApprovalsTests: XCTestCase {
     func testAttachWiresTheFramePathAndBothClearingTriggers() {
         let events = ConnectionEvents()
         let feed = FakeFeed()
-        let store = PendingApprovals(answerer: FakeAnswerer())
+        let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(feed: feed, events: events)
 
         XCTAssertTrue(feed.unscopedSink === store, "连接层收到的无编号帧该交给这张表")
@@ -216,7 +216,7 @@ final class PendingApprovalsTests: XCTestCase {
 
     /// 换代清空：卡与状态一起没了，之后重投一条就回来一条。
     func testClearDropsEveryEntryAndEveryState() {
-        let store = PendingApprovals(answerer: FakeAnswerer())
+        let store = ApprovalStore(answerer: FakeAnswerer())
         store.receive(request(session: "s1", eventId: "e1", callId: "c1"))
         store.receive(request(session: "s2", eventId: "e2", callId: "c2"))
 
@@ -226,5 +226,6 @@ final class PendingApprovalsTests: XCTestCase {
         XCTAssertTrue(store.pending(in: "s2").isEmpty)
         XCTAssertNil(store.state(for: "c1"))
         XCTAssertNil(store.state(for: "c2"))
+        XCTAssertNil(store.notice(for: "s1"), "上一代的说明也过时了")
     }
 }

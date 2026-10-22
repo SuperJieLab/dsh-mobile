@@ -1,123 +1,151 @@
 /**
- * 待批审批的宿主：持门面，把判定的输出镜像成可观察属性，并把一次应答的三种结局翻成卡片状态。
+ * 待答审批的宿主：持表、发布给界面、把一次应答的三种结局翻成卡片状态。
  *
- * 判定在 `ApprovalInbox`，这里只剩三件事：
- * 1) 把 `rebuild` / `receive` 转给判定，再把结果发布出去；
- * 2) 把「去答一个」发出去（幂等判重 + 可应答性检查）；
- * 3) 按结局改卡集合与状态 —— 成功与 `unknown-approval` 都撤卡（后者带说明），传输失败只标
- *    「已发出，结果未知」：断线的写操作是「未知」不是「失败」。
+ * 判定在 `ApprovalTable`，这里只剩三件事：把帧转给表并发布结果、把「去答一个」发出去
+ * （在途守卫 + 幂等键）、按结局改状态与说明。它与 App 同寿 —— 停在会话列表时表照样在长。
  *
- * 每次都带客户端生成的 `answerId`（幂等键）：回包丢了重试，服务端回放第一次的结果，
- * 绝不二次投递。
- */import Combine
+ * 每次应答都带客户端生成的 `answerId`：回包丢了重试，网关回放第一次的结果，绝不二次投递。
+ */
+import Combine
 import Foundation
 
+/// 发一次应答。收成一行是为了三种结局能被分别注入 —— 它们只在网络那一层分得开，
+/// 而「卡留不留、说明什么」全按结局分支。
 @MainActor
-final class ApprovalStore: ObservableObject {
+protocol ApprovalAnswering {
+    func answer(eventId: String, allow: Bool, answerId: String) async throws
+}
 
-    /// 一张卡片的应答进展（不在 `pending` 里就没有这一项）。
-    enum AnswerState: Equatable {
-        /// 还没动过。
-        case idle
-        /// 已发出，回包还没到 —— 结果未知。
-        case unknown
-    }
+/// 生产实现：走既有的一次 HTTP 应答。
+///
+/// `ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。失败如实上抛：
+/// `unknown-approval` 表示这条审批已经不在了。
+@MainActor
+struct GatewayApprovalAnswerer: ApprovalAnswering {
+    let client: GatewayClient
 
-    @Published private(set) var pending: [ApprovalInbox.PendingApproval] = []
-    /// 每条审批的应答进展（不在 `pending` 里的不存在）。
-    @Published private(set) var states: [String: AnswerState] = [:]
-    /// 与单条卡片无关的一句话说明（如「审批已被取消」）。
-    @Published private(set) var notice: String?
-
-    private let client: GatewayClient
-    /// 判定。宿主持有它、把结果发布出去 —— 本类型不重算任何规则。
-    private var inbox = ApprovalInbox()
-
-    init(client: GatewayClient) {
-        self.client = client
-    }
-
-    /// 用镜像里的全部事件重建待批集合。
-    func rebuild(from events: [SessionEvent]) {
-        inbox.rebuild(from: events)
-        pending = inbox.pending
-        pruneStates()
-    }
-
-    /// 网关审批推送：交给判定吸收，再把卡集合发布出去。
-    ///
-    /// 清状态行的时机照旧：`cancel` 只清「按 `eventId` 记的那一行」（独立帧卡的那一行）；
-    /// 审计卡的行留到下一次重算，由 `pruneStates` 过滤 —— 那时卡已经不在集合里了。
-    /// `sync` 之后才做整体过滤；`request` 不清理。
-    func receive(_ payload: JSONValue) {
-        inbox.absorb(payload)
-        pending = inbox.pending
-        switch payload["kind"]?.string {
-        case "cancel":
-            if let eventId = payload["eventId"]?.string { states[eventId] = nil }
-        case "sync":
-            pruneStates()
-        default:
-            break
-        }
-    }
-
-    /// 应答一条待批审批。寻址键 = 绑定到的 waterfall `eventId`；还没绑上的卡片
-    /// （重建出的、转发帧未到）不能应答 —— 而不是把审计 id 冒充线上键。
-    func answer(_ approval: ApprovalInbox.PendingApproval, allow: Bool) async {
-        guard states[approval.id] == nil || states[approval.id] == .idle else { return }
-        // `canAnswer` 是卡与宿主共用的唯一规则；这里仍留守卫，兜住「渲染后、点击前」帧被撤的竞态。
-        guard approval.canAnswer, let eventId = approval.eventId else {
-            notice = Self.notForwardedNote
-            return
-        }
-        do {
-            try await answerApproval(
-                client, eventId: eventId, allow: allow, answerId: UUID().uuidString
+    func answer(eventId: String, allow: Bool, answerId: String) async throws {
+        let _: ApprovalAnswerResponse = try await client.perform(
+            ApprovalAnswerRequest(
+                eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId
             )
-            // 自清（上游行为：receiveRemoteEventResult 先移除应答者自己的 delivery 再广播
-            // cancel —— 自己答掉的审批，cancel 只发给别人，我们收不到收口帧）。上游语义
-            // 「先答先收口」，回包成功即结局已定，与 Web UI 同样在应答当下收掉卡片。
-            drop(approval)
-            notice = Self.deliveredNote(allow: allow)
-        } catch GatewayClientError.refused(let failure)
-            where failure.code == GatewayErrorCode.unknownApproval.rawValue {
-            // 审批已不在：撤卡。真正的结局以 decided 为准，未回流时重开会话重建时可见。
-            notice = failure.readableDescription
-            drop(approval)
-        } catch {
-            // 传输失败 ≠ 未生效：如实转「未知」，等 decided 收口。
-            states[approval.id] = .unknown
-        }
-    }
-
-    /// 撤一张卡并清掉它的状态行 —— 两个「结局已定」的分支走这里。
-    private func drop(_ approval: ApprovalInbox.PendingApproval) {
-        inbox.remove(id: approval.id)
-        pending = inbox.pending
-        states[approval.id] = nil
-    }
-
-    /// 清掉已不在屏上的状态行（免得字典里积着看不见的旧值）。
-    private func pruneStates() {
-        states = states.filter { key, _ in
-            pending.contains(where: { card in card.id == key || card.eventId == key })
-        }
+        )
     }
 }
 
-/// 应答一条审批。`ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。
-/// 失败如实上抛：`unknown-approval` 表示这条审批已经不在了。
 @MainActor
-func answerApproval(
-    _ client: GatewayClient,
-    eventId: String,
-    allow: Bool,
-    answerId: String
-) async throws {
-    let _: ApprovalAnswerResponse = try await client.perform(
-        ApprovalAnswerRequest(
-            eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId
-        )
-    )
+final class ApprovalStore: ObservableObject, UnscopedFrameSink {
+
+    /// 一张卡的应答进展。没有这一项 = 还没动过（也就可以按）。
+    enum AnswerState: Equatable {
+        /// 请求已发出、回包还没到。
+        case sending
+        /// 已发出但结果未知（传输失败）—— 卡留着，等上游结算。
+        case unknown
+        /// 服务端拒了这次投递，附人话说明 —— 那个问题仍挂在网关的暂存里。
+        case refused(String)
+    }
+
+    /// 表本身发布出去：它一变，读它的视图就重算。不另存一份镜像 ——
+    /// 两份数据会有「谁先更新」的问题，而这里没有第二个写者。
+    @Published private var table = ApprovalTable()
+    @Published private(set) var states: [String: AnswerState] = [:]
+    /// 每个会话最近一句话（「已投递」「这条已经不在了」）。新卡到达即清 —— 说明讲的是上一件事。
+    @Published private(set) var notices: [String: String] = [:]
+
+    private let answerer: any ApprovalAnswering
+
+    init(answerer: any ApprovalAnswering) {
+        self.answerer = answerer
+    }
+
+    /// 某个会话还挂着的卡，按到达顺序。
+    func pending(in sessionId: String) -> [ApprovalTable.Entry] {
+        table.pending(in: sessionId)
+    }
+
+    /// 全部会话的条数。
+    var count: Int { table.count }
+
+    func state(for identity: String) -> AnswerState? {
+        states[identity]
+    }
+
+    func notice(for sessionId: String) -> String? {
+        notices[sessionId]
+    }
+
+    /// 三处接线一次接完：无编号帧的收货人、新代次清空、源失效清空。
+    ///
+    /// 三处各自能单独坏，而且坏了都不编译失败 —— 症状分别是「审批永不显示」「重连后卡
+    /// 不回来」「断了上游之后留着一张按不动的卡」。
+    func attach(feed: any UnscopedFrameFeed, events: ConnectionEvents) {
+        feed.unscopedSink = self
+        feed.onConnectionGeneration { [weak self] _ in self?.clear() }
+        events.onGeneration { [weak self] generation in
+            guard generation == nil else { return }
+            self?.clear()
+        }
+
+    }
+
+    /// 连接层送来的无编号帧。只认审批，其余一概不看 —— 连接层不认识帧类型，
+    /// 分类在这一层做。
+    func accept(_ frame: MuxServerEnvelope) {
+        guard frame.type == "approval", let payload = frame.payload else { return }
+        receive(payload)
+    }
+
+    /// 网关推来的一条 `approval` 载荷。
+    func receive(_ payload: JSONValue) {
+        table.absorb(payload)
+        if payload["kind"]?.string == "request", let sessionId = payload["sessionId"]?.string {
+            // 新的一问来了，上一句说明（「已投递」/「已经不在了」）讲的是别的事。
+            notices[sessionId] = nil
+        }
+        pruneStates()
+    }
+
+    /// 连接代次换了，或网关的上游没了：手里的项一条都答不了。之后由网关重投重建。
+    func clear() {
+        table.clear()
+        states.removeAll()
+        notices.removeAll()
+    }
+
+    /// 应答一张卡。守卫只看「有没有状态」—— 在途、未知、被拒的那一张都不再发第二次。
+    func answer(_ entry: ApprovalTable.Entry, allow: Bool) async {
+        guard states[entry.identity] == nil else { return }
+        // 发出之前就置位：写在回包之后的话，等待期间守卫是空的，连点两次会发两次。
+        states[entry.identity] = .sending
+        do {
+            try await answerer.answer(
+                eventId: entry.eventId, allow: allow, answerId: UUID().uuidString
+            )
+            // 上游先摘掉自己的投递再广播取消 —— 应答者收不到自己的收口帧，等就是永远等。
+            table.remove(identity: entry.identity)
+            notices[entry.sessionId] = ApprovalStore.deliveredNote(allow: allow)
+        } catch GatewayClientError.refused(let failure)
+            where failure.code == GatewayErrorCode.unknownApproval.rawValue {
+            // 这条已经不在了：留着就是一张永远按不动的卡。
+            table.remove(identity: entry.identity)
+            notices[entry.sessionId] = failure.readableDescription
+        } catch GatewayClientError.refused(let failure) {
+            // 服务端拒了这次投递，问题仍挂着 —— 卡留着并写明原因。
+            states[entry.identity] = .refused(failure.readableDescription)
+            return
+        } catch {
+            // 传输失败 ≠ 未生效：如实转「未知」，等上游结算。
+            states[entry.identity] = .unknown
+            return
+        }
+        states[entry.identity] = nil
+        pruneStates()
+    }
+
+    /// 清掉已不在表里的状态行。
+    private func pruneStates() {
+        let live = Set(table.entries.map(\.identity))
+        states = states.filter { live.contains($0.key) }
+    }
 }

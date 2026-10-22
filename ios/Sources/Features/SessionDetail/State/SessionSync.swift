@@ -90,9 +90,6 @@ final class SessionSync: ObservableObject {
 
     private let client: GatewayClient
     private let sessionId: String
-    /// 待批审批的状态机。事实来源与镜像同一条：窗口事件里的 asked − decided 差集，
-    /// 每次刷新重建。
-    let approvals: ApprovalStore
     /// 内存里的镜像。视图重建会新建一个 `SessionSync`、窗口重取一次 ——
     /// 服务端此刻给的比本地残留可信。
     private var mirror = SessionMirror()
@@ -131,9 +128,6 @@ final class SessionSync: ObservableObject {
     private var usageState = UsageState()
     /// 当前模型的订阅更新。判定全在值类型里，这里只持有并转发结果。
     private var modelState = ModelSelectionState()
-    /// 把嵌套状态机的变化冒泡成自己的 objectWillChange ——
-    /// 不转发的话审批卡的增删不触发视图重算。
-    private var approvalsObservation: AnyCancellable?
     /// 连接阶段变化的转发（`phase` 是它的落地处）。
     private var phaseObservation: AnyCancellable?
     /// 刷新合并闸：事件帧批处理，判定在值类型 `RefreshGate`。
@@ -147,9 +141,6 @@ final class SessionSync: ObservableObject {
         self.client = client
         self.sessionId = sessionId
         self.streams = link
-        self.approvals = ApprovalStore(client: client)
-        approvalsObservation = approvals.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
         // 只订阅、不下手：发布流就地接上，不必留一个属性给下一任读者。
         phaseObservation = link.$phase
             .sink { [weak self] phase in self?.phase = phase }
@@ -472,7 +463,7 @@ final class SessionSync: ObservableObject {
                 fields: ["kind": .text("event"), "devRecv": .number(recv),
                          "devApply": .number(apply), "bytes": .number(Double(bytes))]
             ))
-        case .transient, .usage, .approval, .refused, .ended, .ignored:
+        case .transient, .usage, .refused, .ended, .ignored:
             break
         }
     }
@@ -491,8 +482,6 @@ final class SessionSync: ObservableObject {
             applyTransient(frame)
         case .usage(let snapshot):
             applyUsage(snapshot)
-        case .approval(let payload):
-            approvals.receive(payload)
         case .refused(let failure):
             handleStreamRefusal(failure)
         case .ended:
@@ -695,6 +684,5 @@ final class SessionSync: ObservableObject {
         nodes = assembler.assemble(mirror.events)
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
-        approvals.rebuild(from: mirror.events)
     }
 }

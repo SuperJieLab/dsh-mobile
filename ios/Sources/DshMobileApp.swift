@@ -21,6 +21,8 @@ struct DshMobileApp: App {
     /// 它不是「为了保住监听」才被持有：监听是注册在 `ConnectionEvents` 上的闭包，闭包不引用
     /// 这个实例。持有它只是给这个消费方一个具名、与 App 同寿的落点，删掉它也行为不变。
     private let eventLog: ConnectionEventLog
+    /// 待答审批 —— App 级、唯一实例。不随任何一屏生死：停在会话列表时它照样在收。
+    @StateObject private var approvals: ApprovalStore
 
     init() {
         let node = TailnetNode()
@@ -32,6 +34,9 @@ struct DshMobileApp: App {
         let events = ConnectionEvents()
         self.events = events
         self.eventLog = ConnectionEventLog(events: events)
+        _approvals = StateObject(wrappedValue: ApprovalStore(
+            answerer: GatewayApprovalAnswerer(client: client)
+        ))
     }
 
     var body: some Scene {
@@ -53,6 +58,8 @@ struct DshMobileApp: App {
                     .task {
                         link.activate()
                         events.attach(to: link)
+                        // 三处接线：无编号帧的收货人、换代次清空、源失效清空。
+                        approvals.attach(feed: link, events: events)
                     }
                     // 两个重连点放在根部而不是某一屏：这都是 App 级事件，关掉会话详情
                     // 它们照样该发生。
@@ -74,6 +81,7 @@ struct DshMobileApp: App {
             // （SessionDetailView）在推入那一刻读不到子树注入的环境 —— 根部注入
             // 才覆盖整棵导航树。
             .environmentObject(store)
+            .environmentObject(approvals)
         }
     }
 }

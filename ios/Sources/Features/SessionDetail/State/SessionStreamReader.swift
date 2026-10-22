@@ -20,9 +20,6 @@ struct StreamReading {
         case transient(JSONValue)
         /// 一份占用读数。
         case usage(UsageSnapshot)
-        /// 一条连接级审批帧。`request` 到这一层时已经核过归属（一定是本会话的）；
-        /// `cancel` 与 `sync` 不属于任何会话，原样交给状态层。
-        case approval(JSONValue)
         /// 流通道里的协议内拒绝。
         case refused(GatewayFailure)
         /// 流被服务端正常收尾。
@@ -47,7 +44,7 @@ struct StreamReading {
         case .refused(let failure):
             // 会话级终态再开只会得到同一个结果；其余拒绝值得按这条流自己的退避再试一次。
             return SessionStreamReader.isTerminal(code: failure.code) ? .stop : .retry
-        case .opening, .event, .transient, .usage, .approval, .ignored:
+        case .opening, .event, .transient, .usage, .ignored:
             return .keep
         }
     }
@@ -119,36 +116,6 @@ enum SessionStreamReader {
 
         case "end":
             return StreamReading(content: .ended)
-
-        case "approval":
-            guard let payload = envelope.payload else { return StreamReading(content: .ignored) }
-            // 审批帧是**连接级**的（没有编号），广播又面向所有连接 —— 归属只能由载荷自己说。
-            // 按 kind 分派而不是「只有 request 才核」：后者会让第四种 kind 绕过归属检查，
-            // 而它今天落到状态层是被静默丢掉的，症状要等到有人给它加一个 case 才出现。
-            // 分派写成穷举的 switch，新 kind 从「默认放行」变成「默认丢弃」。
-            switch payload["kind"]?.string {
-            case "request":
-                guard let owner = payload["sessionId"]?.string else {
-                    // 「新客户端 × 旧网关」的形状：旧网关不发这个字段。宁可少一张卡，
-                    // 也不把卡放错会话 —— 这条要看得到，否则现场只有「审批不显示」。
-                    Log.warn(Log.Module.session,
-                             "dropped an approval with no session (older gateway?) for \"\(sessionId)\"")
-                    return StreamReading(content: .ignored)
-                }
-                guard owner == sessionId else {
-                    // 常态而非故障：广播发给了每一条连接，别的会话的那一份注定落在这里。
-                    Log.debug(Log.Module.session, "dropped an approval for \"\(owner)\" on \"\(sessionId)\"")
-                    return StreamReading(content: .ignored)
-                }
-                return StreamReading(content: .approval(payload))
-            case "cancel", "sync":
-                // 两者不带归属，也不该被这条规则误伤：前者按 `eventId` 全局寻址（可能指向
-                // 一条早已不在表里的项），后者是整条连接的名单，都与「哪一屏」无关。
-                return StreamReading(content: .approval(payload))
-            default:
-                // 认不出的审批载荷：不猜，也不交给状态层。
-                return StreamReading(content: .ignored)
-            }
 
         case "usage":
             guard let payload = envelope.payload,

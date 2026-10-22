@@ -1133,6 +1133,56 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(syncHosts, 0, "没有任何宿主认识 SessionSync —— 先怀疑路径推算")
     }
 
+    // MARK: - 待答表的三条结构判据
+
+    /// 补偿逻辑退场：配对、残骸过滤、悬空审计、已收口知识四类东西的符号一个都不剩。
+    ///
+    /// 只扫代码行（注释里解释「为什么不再需要它」是正当的）。活性锚用文件数 ——
+    /// 路径推算错了时，下面的空集会被读成合规。
+    func testTheCompensatingApprovalLogicIsGone() throws {
+        let dead = ["ApprovalInbox", "standingCallIds", "settledCallIds",
+                    "approvals.rebuild", "func pairs("]
+        var hits: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for needle in dead where code.contains(needle) {
+                    hits.append("\(file.lastPathComponent):\(line) \(needle)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, [], "补偿逻辑还在：\(hits)")
+    }
+
+    /// 待答表只有一个实例，且就建在根部 —— 它是 App 级的，多一个就有两张各说各话的表。
+    func testThePendingTableIsBuiltOnceAtTheRoot() throws {
+        var found: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) where code.contains("ApprovalStore(") {
+                found.append("\(file.lastPathComponent):\(line)")
+            }
+        }
+        XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
+        XCTAssertEqual(found.count, 1, "待答表只能有一个实例（App 级）：\(found)")
+        XCTAssertEqual(found.first?.split(separator: ":").first, "DshMobileApp.swift",
+                       "它该建在根部：\(found)")
+    }
+
+    /// 表不认识会话事件 —— 卡片只来自帧，不从日志算。
+    func testThePendingTableDoesNotReadSessionEvents() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/Approval/State/ApprovalTable.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(text.contains("struct ApprovalTable"), "扫错文件了")
+        let hits = codeLines(in: text).filter { $0.1.contains("SessionEvent") }.map(\.0)
+        XCTAssertEqual(hits, [], "表读了会话事件（第 \(hits) 行）—— 卡片只能来自帧")
+    }
+
     // MARK: - 扫描工具
 
     /// 声明名。跳过 `private` / `fileprivate` —— 它们按定义出不了本文件。
