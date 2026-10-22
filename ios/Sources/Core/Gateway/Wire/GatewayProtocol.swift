@@ -40,7 +40,10 @@ struct SessionSummary: Decodable, Identifiable, Hashable {
     /// 既不是 `null` 也不是空串。这是契约的一部分，不是故障。
     let title: String?
     /// 会话创建时间。**客户端当前不读它** —— 留作协议行的完整镜像。
-    let createdAt: Double
+    ///
+    /// **可选**：列表拉取给出的行都带它，而事件推来的行不带（上游 `api-session/added`
+    /// 的 summary 里没有这一格）。合并时事件不得抹掉已知行的那一格。
+    let createdAt: Double?
     /// **最后一次用户发言的时间**，没有则等于 `createdAt`。
     /// ⚠️ 不是「最后一次事件的时间」—— 助手输出与工具调用不推进它。
     let updatedAt: Double
@@ -116,6 +119,13 @@ enum JSONValue: Decodable, Encodable, Equatable {
 
     var bool: Bool? {
         if case .bool(let value) = self { return value }
+        return nil
+    }
+
+    /// 数值。与 `int` 并存而不是取代它：`int` 多一条「非负整数」的约束，
+    /// 读游标一类的地方要那一条；时间戳与长度这类「是数就行」的用它。
+    var number: Double? {
+        if case .number(let value) = self { return value }
         return nil
     }
 
