@@ -17,3 +17,11 @@ extension ApprovalStore {
         allow ? "已投递：允许" : "已投递：拒绝"
     }
 }
+
+extension PendingApprovals {
+
+    /// 应答已投递。`allow` 决定说哪一个动作。
+    static func deliveredNote(allow: Bool) -> String {
+        allow ? "已投递：允许" : "已投递：拒绝"
+    }
+}
