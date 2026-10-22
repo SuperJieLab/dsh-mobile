@@ -12,6 +12,9 @@ struct SessionDetailView: View {
     let client: GatewayClient
     let session: SessionSummary
 
+    /// 到网关的常驻连接（App 级）。本屏只登记 / 注销一条流，连接本身不归它。
+    @ObservedObject var link: GatewayLink
+
     /// 同步编排。视图重建时会新建一个、窗口重取一次 —— 重取的理由见 `SessionSync`。
     @StateObject private var sync: SessionSync
     /// 模型目录。宿主持有：功能条那一格要用目录默认值兜底显示名，两处读的必须是同一份。
@@ -27,15 +30,14 @@ struct SessionDetailView: View {
     @State private var activeSheet: DetailSheet?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
-    /// 回前台立即重连：App 生命周期与详情域的连接点。
-    @Environment(\.scenePhase) private var scenePhase
     /// 根部注入的连接域：功能条的网络格、连接详情与「就绪即重连」都读它。
     @EnvironmentObject private var store: ConnectionStore
 
-    init(client: GatewayClient, session: SessionSummary) {
+    init(client: GatewayClient, session: SessionSummary, link: GatewayLink) {
         self.client = client
         self.session = session
-        _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id))
+        _link = ObservedObject(wrappedValue: link)
+        _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id, link: link))
         _catalog = StateObject(
             wrappedValue: ModelCatalogState { try await fetchCatalog(client) }
         )
@@ -59,8 +61,11 @@ struct SessionDetailView: View {
                 transcript
             }
         }
-        // 进屏即订阅：opening 给首屏，事件与未定稿实时推。
-        // 离屏即停。`sync()`（HTTP 全量对齐）留在「滚到底部」时作兜底。
+        // 进屏即登记一条流：opening 给首屏，事件与未定稿实时推。
+        // 离屏即注销那一条。`sync()`（HTTP 全量对齐）留在「滚到底部」时作兜底。
+        //
+        // 连接不归本屏：回前台与组网就绪的重连点在根部（`DshMobileApp`）—— 那是 App 级
+        // 事件，关掉这一屏它照样该发生。
         .task { sync.startFollowing() }
         // 目录进屏拉一次。挂在格子上的话，功能条每次因键盘收起而重建都会重拉一遍。
         .task { await catalog.reload() }
@@ -71,18 +76,6 @@ struct SessionDetailView: View {
             Task { await commands.reload() }
         }
         .onDisappear { sync.stopFollowing() }
-        // 组网就绪即重连（与列表「就绪即首载」对称）：connecting 期间
-        // 进页时 WS 在退避循环里空转（端点不存在），就绪此刻不必再等下一轮退避。
-        .onChange(of: store.phase) { _, phase in
-            guard case .ready = phase else { return }
-            sync.reconnectNow()
-        }
-        // 回前台立即重连 —— 上游「恢复立即试」在详情域的对应。
-        // 已就绪 / 正在握手时 reconnectNow() 自己无事发生，不会叠加连接。
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            sync.reconnectNow()
-        }
         .safeAreaInset(edge: .bottom) {
             bottomBars
         }        .navigationTitle(session.title ?? "会话")
@@ -264,7 +257,7 @@ struct SessionDetailView: View {
         // 等级名与模型名读同一个 `shown`：两处各取一份会出现「模型是 A、等级是 B 的」。
         let shown = sync.displayedModel ?? catalog.lastKnownDefault
         return ComposerStripModel.make(
-            phase: sync.connectionPhase,
+            phase: link.phase,
             carrier: store.meshPath,
             usage: sync.usage,
             modelName: shown.map { $0.model } ?? "未知",
@@ -368,12 +361,12 @@ struct SessionDetailView: View {
     // MARK: - 详情面
 
     private var networkSheet: some View {
-        NetworkSheet(phase: sync.connectionPhase,
+        NetworkSheet(phase: link.phase,
                      carrier: store.meshPath,
                      lastFrameAt: sync.lastFrameAt,
                      nodeState: store.nodeState,
                      configDamaged: store.storedConfigDamaged,
-                     onRetry: { sync.reconnectNow() },
+                     onRetry: { link.reconnectNow() },
                      onOpenMesh: { activeSheet = .mesh })
     }
 

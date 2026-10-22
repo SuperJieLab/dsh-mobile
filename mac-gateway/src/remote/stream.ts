@@ -30,6 +30,7 @@ import {
   followRequestOf,
   parseClientFrame,
   type FollowOpening,
+  type StreamId,
 } from '../wire/mux.ts'
 import { encodeServerFrame } from '../wire/mux.ts'
 import { fitOpeningToBytes, upstreamWindow } from '../protocol/window.ts'
@@ -50,38 +51,43 @@ const log = createLogger(LogModule.ws)
 /**
  * 路由一条解析好的客户端文本帧：`open` 起泵，`cancel` 停泵。契约的
  * 解析器已拒掉畸形帧，活下来的都过了形状检查。
+ *
+ * @returns `false` = 这条连接上出现了协议违规（同一个编号被第二次 `open`），调用方必须
+ *   关掉它。编号由客户端现造且**约定不复用**，重复意味着客户端坏了 —— 再在这条连接上
+ *   服务，每一条流都不可信。静默忽略更糟：客户端会等到 45 秒就绪超时才走，而那一帧
+ *   到底发生了什么，两端日志都没有。
  */
 export function onClientText(
   socket: Duplex,
   source: FollowSource,
-  streams: Map<number, { abort: AbortController }>,
+  streams: Map<StreamId, { abort: AbortController }>,
   text: string,
   openingCapBytes: number,
-): void {
+): boolean {
   const frame = parseClientFrame(text)
-  if (frame === undefined) return
+  if (frame === undefined) return true
 
   if (frame.type === 'cancel') {
-    const stream = streams.get(frame.streamId)
-    if (stream !== undefined) {
-      stream.abort.abort()
-      streams.delete(frame.streamId)
-    }
-    return
+    // **只停泵，不动表**：条目由泵自己的收尾删（`pump` 的 `done`）。取消即删的话，
+    // 之后同号的 `open` 会落进那个空档，而旧泵退出时的收尾删掉的是**新**条目 ——
+    // 于是后续的 `cancel` 找不到它：流关不掉，同号还能再开一条并行。
+    streams.get(frame.streamId)?.abort.abort()
+    return true
   }
 
   // 以下是 frame.type === 'open'
-  if (streams.has(frame.streamId)) return // 占用中的 id 不重开；id 归客户端所有
+  if (streams.has(frame.streamId)) return false
 
   const request = followRequestOf(frame.payload)
   if (request === undefined) {
     send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'unknown-op', message: 'open payload is not a follow request' } })
-    return
+    return true
   }
 
   const abort = new AbortController()
   streams.set(frame.streamId, { abort })
   void pump(socket, source, frame.streamId, request, abort.signal, () => streams.delete(frame.streamId), openingCapBytes)
+  return true
 }
 
 /**
@@ -91,7 +97,7 @@ export function onClientText(
 async function pump(
   socket: Duplex,
   source: FollowSource,
-  streamId: number,
+  streamId: StreamId,
   request: { sessionId: string; maxMessages?: number },
   signal: AbortSignal,
   done: () => void,

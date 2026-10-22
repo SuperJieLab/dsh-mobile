@@ -72,8 +72,6 @@ final class SessionSync: ObservableObject {
     @Published private(set) var notice: ResyncNotice?
     /// 正在生成的回复（流式输出）；没有进行中的 attempt 就是空串。
     @Published private(set) var transientText = ""
-    /// 订阅流的连接阶段 —— 功能条网络格的数据源，从 `FollowClient` 转发。
-    @Published private(set) var connectionPhase: FollowClient.Phase = .idle
     /// 上一次向后翻页是否还在路上。
     ///
     /// 与 `status` 分开：`status` 是「同步到哪一步」的总述，下拉刷新也会让它进 `.syncing`；
@@ -103,40 +101,12 @@ final class SessionSync: ObservableObject {
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
 
-    /// 订阅流：打开详情页即开启，实时收窗口 / 事件 / 未定稿帧。
+    /// 订阅流：打开会话详情即登记一条流，离屏即注销。
     ///
+    /// **连接归 App**（`GatewayLink`）——这一屏只登记「我要看这个会话」，不再持有连接。
     /// 连接层交来整帧，判读在 `SessionStreamReader`（纯函数），本层只做副作用并把
     /// 「这条流接下来怎么办」回给它 —— 判据在这边、动作在那边，两边都不需要知道对方认识什么。
-    private lazy var follow: FollowClient = {
-        let followClient = FollowClient()
-        followClient.onFrame = { [weak self] envelope, raw in
-            guard let self else { return StreamReply() }
-            let reading = SessionStreamReader.read(envelope: envelope, raw: raw, sessionId: sessionId)
-            // 到达与应用的边界要卡在这一跳的两侧：`devRecv` 是帧到手，`devApply` 是本层
-            // 处理完（镜像合并、状态机吸收、刷新闸标记都在里面）。
-            let recv = PerfRecord.nowMs()
-            handle(reading)
-            let apply = PerfRecord.nowMs()
-            recordPerf(reading, bytes: raw.count, recv: recv, apply: apply)
-            return StreamReply(establishes: reading.establishes, next: reading.next)
-        }
-        // 网络格的唯一来源：不接的话功能条永远停在「连接中…」。
-        followClient.onPhaseChange = { [weak self] phase in self?.connectionPhase = phase }
-        // upgrade 时刻取一张有效的 access —— 经 client 取而不是 `CredentialStore.shared`：
-        // HTTP 那条也走 client 注入的 store，两条路径必须同源，否则换掉注入实例之后它们
-        // 会各自为政。
-        followClient.authorizationProvider = { [weak self] in self?.client.validAccessToken() }
-        // 换票只是「给一个能力」：换到之后该重连、换不到该等还是该停，由 `FollowClient`
-        // 自己按结果决定（见 `renewThenRetry`）—— 那是连接编排，不是本层的事。
-        followClient.ticketRenewer = { [weak self] in
-            guard let self else { return .unavailable }
-            return await self.client.ticket()
-        }
-        // 传输与地址每次建连现取 —— 组网激活（client.activate）后下一轮连接即走 tailnet。
-        followClient.sessionProvider = { [weak self] in self?.client.meshSession ?? .shared }
-        followClient.baseURLProvider = { [weak self] in self?.client.baseURL }
-        return followClient
-    }()
+    private let link: GatewayLink
     private var transient = TransientChannel()
 
     /// 首屏兜底：WS 迟迟不给窗口时用 HTTP 拉一次。
@@ -164,9 +134,10 @@ final class SessionSync: ObservableObject {
     /// 合并窗口 = 一个渲染帧量级。未定稿内容逐帧到达无感知；事件文本晚一帧出现。
     private static let flushWindowNanos: UInt64 = 16_000_000
 
-    init(client: GatewayClient, sessionId: String) {
+    init(client: GatewayClient, sessionId: String, link: GatewayLink) {
         self.client = client
         self.sessionId = sessionId
+        self.link = link
         self.approvals = ApprovalStore(client: client)
         approvalsObservation = approvals.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -405,22 +376,39 @@ final class SessionSync: ObservableObject {
 
     // MARK: - 订阅
 
-    /// 打开详情页即订阅：服务端推 opening（首屏窗口）与后续事件，不再轮询。判定全在状态机
+    /// 进会话详情即登记一条流：服务端推 opening（首屏窗口）与后续事件，不再轮询。判定全在状态机
     /// 里 —— 与 HTTP 路径共用同一台 `SessionMirror`：
     /// - opening → `mirror.realign(with:)`（**重对齐**：本地更早的部分保留、只换尾部；
     ///   手里空着时等价于打开。重连因此不会把已经翻出来的历史还回去）
     /// - 事件帧 → `mirror.apply(.received(SessionSnapshot(asOfSeq: seq + 1, …)))` —— 一条事件就是
     ///   一次「覆盖到 seq+1 的快照」，幂等与缺口判定原样生效。
+    ///
+    /// 开流文本在**这一层**拼（要求：请求只在状态层里拼），编号由连接层给 —— 两者在
+    /// `build` 闭包里对接：本层不知道号从哪来，连接层不认识 `op` 与会话。
     func startFollowing() {
-        // 开流内容在**这一层**拼（要求：请求只在状态层里拼）。编不出就不开始 ——
-        // 编不出来意味着形状自己坏了，那时开一条注定看不懂的流只会让屏幕停在「连接中…」。
-        if let open = try? MuxOpenFrame.following(sessionId: sessionId).encoded() {
-            follow.start(streamId: MuxOpenFrame.streamId, label: sessionId, open: open)
-        } else {
-            // 编不出来意味着形状自己坏了：开一条注定看不懂的流没有意义，但首屏兜底仍要跑 ——
-            // 那条 HTTP 通道是此刻唯一还能把内容送到屏幕上的路。
-            Log.error(Log.Module.session, "open frame encoding failed — not opening the stream")
-        }
+        // `build` 只捕获会话 id（值类型），不拽住整个同步器；`handler` 是 `[weak self]`。
+        // `owner` 反过来**故意**强持有：它是身份，注销时靠它比对（弱了就等于没有身份），
+        // 而它在 `close(owner:)` 里随订阅一起释放 —— 泄漏的边界是这条订阅，不是本屏。
+        let sessionId = self.sessionId
+        link.open(FollowClient.Subscription(
+            owner: self,
+            label: sessionId,
+            build: { id in
+                try MuxOpenFrame.following(sessionId: sessionId, streamId: id).encoded()
+            },
+            handler: { [weak self] envelope, raw in
+                guard let self else { return StreamReply() }
+                let reading = SessionStreamReader.read(envelope: envelope, raw: raw, sessionId: sessionId)
+                // 到达与应用的边界要卡在这一跳的两侧：`devRecv` 是帧到手，`devApply` 是本层
+                // 处理完（镜像合并、状态机吸收、刷新闸标记都在里面）。
+                let recv = PerfRecord.nowMs()
+                self.handle(reading)
+                let apply = PerfRecord.nowMs()
+                self.recordPerf(reading, bytes: raw.count, recv: recv, apply: apply)
+                return StreamReply(establishes: reading.establishes, next: reading.next)
+            }
+        ))
+        // 首屏兜底与开流成败无关：编不出帧时它是唯一还能把内容送到屏幕上的路。
         scheduleFirstScreenFallback()
     }
 
@@ -436,22 +424,13 @@ final class SessionSync: ObservableObject {
         }
     }
 
-    /// 离开详情页：关流、清未定稿。镜像留在内存里（视图销毁时一起消失）。
+    /// 离开会话详情：注销这条流、清未定稿。连接留在原处（App 级），镜像随本对象消失。
     func stopFollowing() {
         firstScreenFallback?.cancel()
         firstScreenFallback = nil
-        follow.stop()
+        link.close(owner: self)
         transient = TransientChannel()
         transientText = ""
-    }
-
-    /// 回前台立即触发重连：上游「恢复立即试」的复现。已就绪或正在握手时无事发生。
-    /// 只动连接编排，不碰镜像 —— 新 opening 会经 `applyOpening` 原路进来。
-    ///
-    /// 票在不在这一层不关心：`FollowClient` 见空票会自己去换（`ticketRenewer`），
-    /// 本层只提供那个能力。
-    func reconnectNow() {
-        follow.reconnectNow()
     }
 
     /// 打开帧与事件帧的到达/应用埋点（`kind=opening` / `kind=event`）。
@@ -609,7 +588,7 @@ final class SessionSync: ObservableObject {
         if verdict == .broken {
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
             Log.warn(Log.Module.session, "TransientChannel broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
-            follow.reopenStream()
+            link.reopenStream()
             return
         }
         transientText = transient.text

@@ -15,19 +15,30 @@
 import type { WireEvent } from './rpc.ts'
 import type { UsageSnapshot } from './usage.ts'
 import type { ModelSelection } from './model.ts'
-import { isIntegral, isPositiveInteger, nonEmptyString } from './fields.ts'
+import { isPositiveInteger, nonEmptyString } from './fields.ts'
+
+/**
+ * 一条逻辑流的编号 —— **开流那一刻由客户端现造，此后不再复用**。
+ *
+ * 类型是字符串而不是数字，是为了让它没有可读含义：编号一旦能被解释（「1 是会话流、
+ * 2 是审批流」），复用就跟着来 —— 而复用编号会让旧流的收尾删到新流的登记、旧流的
+ * 残帧与新流同号。上游同样用不透明的 UUID 字符串（与端点无关的 mux 层）。
+ *
+ * 本层只判「非空」，不判格式：怎么造是客户端的事，网关只保证它非空且在一条连接内唯一。
+ */
+export type StreamId = string
 
 /** 客户端 → 服务端：开始一条逻辑流。 */
 export interface MuxOpenFrame {
   type: 'open'
-  streamId: number
+  streamId: StreamId
   payload: unknown
 }
 
 /** 客户端 → 服务端：停止一条逻辑流。 */
 export interface MuxCancelFrame {
   type: 'cancel'
-  streamId: number
+  streamId: StreamId
 }
 
 /** 客户端能在 mux 连接上发送的一切。 */
@@ -36,20 +47,20 @@ export type MuxClientFrame = MuxOpenFrame | MuxCancelFrame
 /** 服务端 → 客户端：流的一项（打开、事件或 transient 帧）。 */
 export interface MuxItemFrame {
   type: 'item'
-  streamId: number
+  streamId: StreamId
   payload: unknown
 }
 
 /** 服务端 → 客户端：流正常结束。 */
 export interface MuxEndFrame {
   type: 'end'
-  streamId: number
+  streamId: StreamId
 }
 
 /** 服务端 → 客户端：流出错；`payload` 是协议的错误对象。 */
 export interface MuxErrorFrame {
   type: 'error'
-  streamId: number
+  streamId: StreamId
   payload: { code: string; message: string }
 }
 
@@ -67,7 +78,7 @@ export interface MuxApprovalFrame {
  */
 export interface MuxUsageFrame {
   type: 'usage'
-  streamId: number
+  streamId: StreamId
   /** 带 `sessionId`，供客户端核对帧是否属于自己打开的那条流。 */
   payload: { sessionId: string } & UsageSnapshot
 }
@@ -78,7 +89,7 @@ export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApp
 /**
  * 从线上文本解析一条客户端帧。
  *
- * @returns 无法解析的 JSON、未知 `type`、非整数 `streamId`、`open` 载荷不是
+ * @returns 无法解析的 JSON、未知 `type`、空 `streamId`、`open` 载荷不是
  *   follow 请求 —— 一律返回 `undefined`，并以传输层 close 应对：解析不了的
  *   东西不是消息，也没有可拒收它的流。
  */
@@ -91,14 +102,15 @@ export function parseClientFrame(text: string): MuxClientFrame | undefined {
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
   const frame = parsed as Record<string, unknown>
-  if (!isIntegral(frame.streamId)) return undefined
+  const streamId = nonEmptyString(frame.streamId)
+  if (streamId === undefined) return undefined
 
-  if (frame.type === 'cancel') return { type: 'cancel', streamId: frame.streamId }
+  if (frame.type === 'cancel') return { type: 'cancel', streamId }
 
   if (frame.type === 'open') {
     return followRequestOf(frame.payload) === undefined
       ? undefined
-      : { type: 'open', streamId: frame.streamId as number, payload: frame.payload }
+      : { type: 'open', streamId, payload: frame.payload }
   }
 
   return undefined

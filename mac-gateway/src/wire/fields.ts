@@ -7,7 +7,7 @@
  *
  * **这里只判值的形状，不判领域语义。** `isNotFound` / `isPlausiblePairingCode`
  * 那类认识特定错误码或业务格式的判断不进这个文件 —— 它们跟着协议语义变，
- * 而本文件的三条只跟着「什么叫合法值」变。
+ * 而本文件的两条只跟着「什么叫合法值」变。
  *
  * **每条都必须有 codec 在用**：它是 codec 之间重复的零件被提出来共享的结果，
  * 不是「以后可能会用」的收纳盒。没有任何 codec 引用时，判据会红
@@ -25,17 +25,15 @@ export function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-/** 安全整数（含 0、含负数），否则无。 */
-export function isIntegral(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value)
-}
-
 /**
  * 正整数，否则无。
+ *
+ * 「安全整数」那一步写在这条里，不再单独导出：它唯一的消费者就是这里 ——
+ * 单独一条没人引用的规则，会让这张表变成「以后可能会用」的收纳盒。
  *
  * 交出类型谓词而不是布尔：「能不能当循环上界」的调用点收窄之后就不必再写
  * `as number`。布尔语境的调用（`if (isPositiveInteger(x))`）照样成立。
  */
 export function isPositiveInteger(value: unknown): value is number {
-  return isIntegral(value) && value > 0
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }

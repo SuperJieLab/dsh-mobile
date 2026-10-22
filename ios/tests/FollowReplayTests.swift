@@ -85,7 +85,7 @@ final class FollowReplayTests: XCTestCase {
         // MARK: 帧层 typed 解码 —— 对账与容错
 
         let openingText = """
-        {"type":"item","streamId":1,"payload":{"sessionId":"s1","cursor":3,"pageStart":0,"hasOlder":true,
+        {"type":"item","streamId":"s-1","payload":{"sessionId":"s1","cursor":3,"pageStart":0,"hasOlder":true,
           "events":[
             {"type":"user/message","seq":1,"time":1700000000000,"data":{}},
             {"type":"user/message","seq":"oops","time":1700000000001,"data":{}},
@@ -111,7 +111,7 @@ final class FollowReplayTests: XCTestCase {
                       "G2b 好事件保序保留")
 
         // 非 opening 形状（缺 cursor/events）如实返回 nil —— 路由判据不变。
-        let notOpening = Data(#"{"type":"item","streamId":1,"payload":{"type":"user/message","seq":9,"time":1,"data":{}}}"#.utf8)
+        let notOpening = Data(#"{"type":"item","streamId":"s-1","payload":{"type":"user/message","seq":9,"time":1,"data":{}}}"#.utf8)
         XCTAssertTrue(OpeningFrame.decode(notOpening) == nil, "G2c 非 opening 载荷不误判")
 
         // MARK: 合并闸：批内累计，到点收批
@@ -149,7 +149,8 @@ final class FollowReplayTests: XCTestCase {
         follow.baseURLProvider = { nil }
         var lastPhase: FollowClient.Phase?
         follow.onPhaseChange = { lastPhase = $0 }
-        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
+        register(follow, owner: self)
+        follow.activate()
         XCTAssertTrue({
             if case .waiting = lastPhase { return true }
             return false
@@ -165,16 +166,28 @@ final class FollowReplayTests: XCTestCase {
         let follow = FollowClient()
         XCTAssertEqual(follow.established, [], "还没收到任何帧，不该有建成的流")
 
-        follow.noteReply(StreamReply(), streamId: 1)
+        follow.noteReply(StreamReply(), streamId: "s-1")
         XCTAssertEqual(follow.phase, .idle, "非建成答复不得把阶段推到就绪")
         XCTAssertEqual(follow.established, [], "非建成答复不得把流记为建成")
 
-        follow.noteReply(StreamReply(establishes: true), streamId: 1)
+        follow.noteReply(StreamReply(establishes: true), streamId: "s-1")
         XCTAssertEqual(follow.phase, .ready, "建成即就绪")
-        XCTAssertEqual(follow.established, [1], "建成记在流编号上")
+        XCTAssertEqual(follow.established, ["s-1"], "建成记在流编号上")
 
-        follow.noteReply(StreamReply(establishes: true), streamId: 2)
-        XCTAssertEqual(follow.established, [1, 2], "第二条流各自记账，不覆盖第一条")
+        follow.noteReply(StreamReply(establishes: true), streamId: "s-2")
+        XCTAssertEqual(follow.established, ["s-1", "s-2"], "第二条流各自记账，不覆盖第一条")
+    }
+
+    /// 登记一份订阅的最小形状：编号由连接层给，这里只把号写进文本。
+    ///
+    /// 用真的 `open` / `activate` 而不是测试专用入口 —— 这两个是产品入口，判据要落在它们上面。
+    private func register(_ follow: FollowClient, owner: AnyObject, label: String = "s1") {
+        follow.open(FollowClient.Subscription(
+            owner: owner,
+            label: label,
+            build: { id in #"{"type":"open","streamId":"\#(id)"}"# },
+            handler: { _, _ in StreamReply() }
+        ))
     }
 
     /// 让出若干次，让 `FollowClient` 里那些 `Task { }` 真正跑完。
@@ -211,13 +224,14 @@ final class FollowReplayTests: XCTestCase {
             return .granted("fresh")
         }
 
-        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
+        register(follow, owner: self)
+        follow.activate()
         XCTAssertEqual(handshakes, 0, "没有票就不该发握手 —— 那一发必定 401")
 
         await settle()
         XCTAssertEqual(renewals, 1, "应当去换一次票")
         XCTAssertEqual(handshakes, 1, "换到之后应当立刻重连（跳过剩下一整轮退避）")
-        follow.stop()
+        follow.deactivate()
     }
 
     /// 换不到、且**不会自己好**（未配对 / 关系被撤销）→ 停止重试。
@@ -234,12 +248,13 @@ final class FollowReplayTests: XCTestCase {
         }
         follow.ticketRenewer = { .unavailable }
 
-        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
+        register(follow, owner: self)
+        follow.activate()
         await settle()
 
         XCTAssertEqual(handshakes, 0, "始终没有票 → 一次握手都不该发生")
         XCTAssertEqual(follow.phase, .idle, "拿不到且不会自愈 → 停在 idle，而不是留在退避里")
-        follow.stop()
+        follow.deactivate()
     }
 
     /// 换不到但状态没坏（网络不通）→ 继续退避，不停止。
@@ -250,12 +265,13 @@ final class FollowReplayTests: XCTestCase {
         follow.sessionProvider = { .shared }
         follow.ticketRenewer = { .retryLater }
 
-        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
+        register(follow, owner: self)
+        follow.activate()
         await settle()
 
         XCTAssertEqual({ if case .waiting = follow.phase { return true }; return false }(), true,
                        "暂时换不到 → 留在退避等待里，退避自己会再来一轮")
-        follow.stop()
+        follow.deactivate()
     }
 
     /// 有票时照常握手 —— 上面几条不能靠「永远不连」通过。
@@ -270,10 +286,11 @@ final class FollowReplayTests: XCTestCase {
         }
         follow.ticketRenewer = { XCTFail("有票却去换票"); return .granted("x") }
 
-        follow.start(streamId: 1, label: "s1", open: #"{"type":"open","streamId":1}"#)
+        register(follow, owner: self)
+        follow.activate()
 
         XCTAssertEqual(handshakes, 1, "有票就该连")
-        follow.stop()
+        follow.deactivate()
     }
 
     /// 打开帧上限与拒绝的归属。
@@ -306,23 +323,27 @@ final class FollowReplayTests: XCTestCase {
     /// （两端日志第一次同时到齐）逼出第二个成因：心跳的**证据**取得太弱。两处都与尺寸无关，
     /// 但同样让会话进不去 —— 两者都属于「不出现连接反复断开」这条要求。
     func testConnectionLivenessScope() {
-        // ① 心跳只在**已建成的流**上判死。升级后网关**先**发一条 approval 对账帧
+        // ① 心跳只在**没有流在等打开帧**时判死。升级后网关**先**发一条 approval 对账帧
         // （网关升级后先发对账帧），它比 opening 早到；「收到过任何一帧就够格计数」这条规则于是
         // 被它当场激活 —— 而 opening 的 1.25 MB 正堵着这条 TCP，网关的 pong 排在那一大帧
         // **后面**，一拍也到不了 ⇒ 每代连接恰好活 6 秒（3 拍）就被自己判死
         //（真机：`g2 heartbeat: no pong in 3 rounds — closing`，connect 后 6.15 秒）。
-        XCTAssertTrue(FollowClient.livenessTick(established: false, heardFromPeer: true, missed: 0, limit: 2) == .probe(missed: 0),
-                      "O7a 未成流：收到过东西也不计数 —— 先到的 approval 对账帧不该够格激活心跳")
-        XCTAssertTrue(FollowClient.livenessTick(established: false, heardFromPeer: true, missed: 9, limit: 2) == .probe(missed: 0),
-                      "O7b 未成流：连失账一并归零 —— 上一代的欠账不继承（真机里每一代都因此死在第一拍）")
-        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: true, missed: 9, limit: 2) == .probe(missed: 0),
-                      "O7c 已成流但本拍收到过东西：归零 —— 对端在给我们发东西，它就是活的")
-        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: false, missed: 0, limit: 2) == .probe(missed: 1),
-                      "O7d 已成流且本拍什么都没收到：第 1 拍连失 1")
-        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: false, missed: 1, limit: 2) == .probe(missed: 2),
+        XCTAssertTrue(FollowClient.livenessTick(awaitingOpening: true, heardFromPeer: true, missed: 0, limit: 2) == .probe(missed: 0),
+                      "O7a 正在等打开帧 + 收到东西：不计数 —— 先到的那帧只证明线还活着")
+        XCTAssertTrue(FollowClient.livenessTick(awaitingOpening: true, heardFromPeer: false, missed: 9, limit: 2) == .probe(missed: 0),
+                      "O7b 正在等打开帧：再久也不判死 —— 大帧占着 TCP，pong 排在它后面")
+        XCTAssertTrue(FollowClient.livenessTick(awaitingOpening: false, heardFromPeer: true, missed: 9, limit: 2) == .probe(missed: 0),
+                      "O7c 本拍收到过东西：归零 —— 对端在给我们发东西，它就是活的")
+        XCTAssertTrue(FollowClient.livenessTick(awaitingOpening: false, heardFromPeer: false, missed: 0, limit: 2) == .probe(missed: 1),
+                      "O7d 什么都没收到：第 1 拍连失 1")
+        XCTAssertTrue(FollowClient.livenessTick(awaitingOpening: false, heardFromPeer: false, missed: 1, limit: 2) == .probe(missed: 2),
                       "O7e 第 2 拍连失 2，仍在容错内")
-        XCTAssertTrue(FollowClient.livenessTick(established: true, heardFromPeer: false, missed: 2, limit: 2) == .dead,
+        XCTAssertTrue(FollowClient.livenessTick(awaitingOpening: false, heardFromPeer: false, missed: 2, limit: 2) == .dead,
                       "O7f 连失到上限判死 —— 半开连接仍会被发现")
+        // 空闲连接（停在会话列表：一条流都没有）**必须判死**。旧的「未成流不判死」在这
+        // 一格给的是 probe(0)：常驻之后大部分时间都是这个处境，半开连接于是永远发现不了。
+        XCTAssertTrue(FollowClient.livenessTick(awaitingOpening: false, heardFromPeer: false, missed: 9, limit: 2) == .dead,
+                      "O7g 空闲连接连失到上限同样判死 —— 这正是常驻带来的新处境")
 
         // ② 迟到回调：代次或传输任一不等即不适用 —— 它不得关掉当前连接、不得再排重连。
         XCTAssertTrue(FollowClient.callbackApplies(generation: 7, current: 7, sameTask: true),

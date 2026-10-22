@@ -10,6 +10,7 @@
  * 不做自动重连：负载点有效性判据之一就是「一轮内无重连」（决定 6），`gen`
  * 在一轮内恒为 1 是它的脚本侧形态 —— 连接断了对这条 run 就是失败，不遮掩。
  */
+import { randomUUID } from 'node:crypto'
 import { perfNow } from '../../src/log.ts'
 
 /**
@@ -68,6 +69,11 @@ export class BenchClient {
   /** 连接是否还开着（判据③「连接存活覆盖整个 run 窗口」的脚本侧形态）。 */
   private closedEarly = false
   private socket: WebSocket | undefined
+  /**
+   * 这条流的编号 —— 开流那一刻现造，与 iOS 同一条规则（编号不复用，重开换号）。
+   * 脚本不重开，所以一轮里只有这一个；但它不是常量：编号里不读用途。
+   */
+  private streamId = ''
   private gen = 0
   private waiters: Waiter[] = []
   private closed = false
@@ -101,7 +107,12 @@ export class BenchClient {
     socket.addEventListener('error', () => { this.socketFailure = 'socket error' })
     socket.addEventListener('close', () => { this.closedEarly = true })
     socket.addEventListener('message', event => this.onMessage(String((event as { data: unknown }).data)))
-    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: this.options.sessionId } }))
+    this.streamId = randomUUID()
+    socket.send(JSON.stringify({
+      type: 'open',
+      streamId: this.streamId,
+      payload: { op: 'follow', sessionId: this.options.sessionId },
+    }))
   }
 
   /** 等到再收到 n 条事件记录（或超时）。 */
@@ -141,7 +152,7 @@ export class BenchClient {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    this.socket?.send(JSON.stringify({ type: 'cancel', streamId: 1 }))
+    this.socket?.send(JSON.stringify({ type: 'cancel', streamId: this.streamId }))
     this.socket?.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   }

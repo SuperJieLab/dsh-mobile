@@ -567,7 +567,7 @@ final class LayeringTests: XCTestCase {
     /// 盲区：只认 `struct`。写成 `typealias FollowRequest = …` 或包在条件编译分支里认不出
     /// （漏报方向，靠评审）。
     func testWireShapesAreDeclaredOnce() throws {
-        let shapes = ["MuxServerEnvelope", "FollowRequest", "OpeningFrame"]
+        let shapes = ["MuxServerEnvelope", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest", "OpeningFrame"]
         var homes: [String: [String]] = [:]
 
         for file in swiftFiles(under: sourcesRoot) {

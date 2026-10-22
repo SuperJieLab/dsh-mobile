@@ -645,7 +645,6 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
  */
 const WIRE_FIELD_GUARDS: readonly { file: string; name: string }[] = [
   { file: 'fields.ts', name: 'nonEmptyString' },
-  { file: 'fields.ts', name: 'isIntegral' },
   { file: 'fields.ts', name: 'isPositiveInteger' },
 ]
 

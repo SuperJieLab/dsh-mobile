@@ -10,7 +10,7 @@
 
 import type { Duplex } from 'node:stream'
 import type { IncomingMessage } from 'node:http'
-import type { MuxServerFrame } from '../wire/mux.ts'
+import type { MuxServerFrame, StreamId } from '../wire/mux.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../protocol/rpc.ts'
 import { describeError } from '../ports/errors.ts'
 import type { FollowSource } from '../ports/follow.ts'
@@ -192,7 +192,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
   // 非正的上界会让每次打开都被判成「装不下」—— 归一化规则与 HTTP 路径共享
   // 同一实现（`positiveOrDefault`），不在这里重写一遍。
   const openingCapBytes = positiveOrDefault(options.openingCapBytes, DEFAULT_OPENING_BYTES)
-  const streams = new Map<number, { abort: AbortController }>()
+  const streams = new Map<StreamId, { abort: AbortController }>()
   /** 对端是否发过 WebSocket close 帧 —— 收尾日志靠它把「人家自己走的」与「链路掉的」分开。 */
   let peerClosedCleanly = false
 
@@ -226,13 +226,19 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
         case 'close':
           // 对端**明确**说了再见（WebSocket close 帧）。这是「对端主动关」与「链路直接断」
           // 之间唯一可靠的分界 —— 两者在网关侧都表现为一次 socket close，只有这一帧能区分。
-          // 少了它，「the peer went away」这句话分不出「用户切了会话」与「链路掉了」。
+          // 少了它，「the link dropped」这句话就分不出「手机正常关了 App」与「链路掉了」。
           peerClosedCleanly = true
           write(socket, encodeClose())
           socket.end()
           break
         case 'text':
-          onClientText(socket, source, streams, frame.text, openingCapBytes)
+          if (!onClientText(socket, source, streams, frame.text, openingCapBytes)) {
+            // 同一个编号被第二次 open —— 客户端坏了，这条连接上的一切都不再可信。
+            // 关掉而不是静默忽略：忽略的表现是「客户端等 45 秒就绪超时」，两端都看不出原因。
+            log.error('stream protocol violation: duplicate stream id — closing the connection')
+            socket.destroy()
+            return
+          }
           break
       }
     }
@@ -263,8 +269,8 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
 
 /**
  * 一次连接是怎么结束的 —— 四档，且**可判定**。四者在网关侧都只表现为「socket 关了」，
- * 但后续动作完全不同：**我们掐的**要改心跳规则；**对端主动关的**是正常（用户切了会话、
- * 关了 App）；**链路掉的**要查传输/系统；**报错的**直接读错误原文。
+ * 但后续动作完全不同：**我们掐的**要改心跳规则；**对端主动关的**是正常（关了 App、
+ * 手机释放了连接）；**链路掉的**要查传输/系统；**报错的**直接读错误原文。
  *
  * 判据取真实收到的信号，不靠推断：`error` 事件 > 自己心跳留下的标记 > 对端发来的
  * WebSocket close 帧。三者都没有 = 断在半路（FIN 都没来得及）。

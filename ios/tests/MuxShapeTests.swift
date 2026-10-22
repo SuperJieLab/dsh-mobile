@@ -21,10 +21,10 @@ final class MuxShapeTests: XCTestCase {
     /// 键序被 `.sortedKeys` 钉住，所以字面量可以直接断言 —— 不排序的字典编码键序随哈希
     /// （同一进程内连编 5 次会得到不同的几种顺序），那种写法下「两次编码相同」根本不成立。
     func testOpenFrameEncodingIsTheDeclaredBytes() throws {
-        let text = try MuxOpenFrame.following(sessionId: "s-1").encoded()
+        let text = try MuxOpenFrame.following(sessionId: "s-1", streamId: "s-9").encoded()
 
         XCTAssertEqual(text,
-                       #"{"payload":{"op":"follow","sessionId":"s-1"},"streamId":1,"type":"open"}"#,
+                       #"{"payload":{"op":"follow","sessionId":"s-1"},"streamId":"s-9","type":"open"}"#,
                        "开流帧的字节与形状声明不一致 —— 字段名或外壳三层被改动过")
     }
 
@@ -33,11 +33,43 @@ final class MuxShapeTests: XCTestCase {
     /// 用新实例而不是同一实例编 5 次：编码器状态、哈希种子若参与键序，只有重新构造才看得见。
     func testOpenFrameEncodingIsStableAcrossRuns() throws {
         let texts = try (1...5).map { _ in
-            try MuxOpenFrame.following(sessionId: "s-1").encoded()
+            try MuxOpenFrame.following(sessionId: "s-1", streamId: "s-9").encoded()
         }
 
         XCTAssertEqual(Set(texts).count, 1,
                        "同一份输入编出了 \(Set(texts).count) 种字节 —— 键序没有钉住")
+    }
+
+    // MARK: - O1：取消帧是独立的线上形状
+
+    /// 关一条流有自己的帧：`{"streamId":"…","type":"cancel"}`，键序同样被钉住。
+    ///
+    /// 这一条证明的是「取消不是关连接」在协议上的那一半：帧里只有一个编号，没有任何
+    /// 连接级字段 —— 网关收到它只停那一条泵。
+    func testCancelFrameEncodingIsTheDeclaredBytes() throws {
+        XCTAssertEqual(try MuxCancelFrame(streamId: "s-9").encoded(),
+                       #"{"streamId":"s-9","type":"cancel"}"#,
+                       "取消帧的字节与形状声明不一致")
+
+        // 与打开帧同一条纪律：重新构造 5 次，字节不变。
+        let texts = try (1...5).map { _ in try MuxCancelFrame(streamId: "s-9").encoded() }
+        XCTAssertEqual(Set(texts).count, 1, "同一份输入编出了多种字节 —— 键序没有钉住")
+    }
+
+    /// 两种帧的编号都是**字符串** —— 与网关 `wire/mux.ts` 的 `StreamId` 同形。
+    ///
+    /// 这条防的是「编号又变回数字」：数字会让它重新变得可解释（「1 是会话流」），
+    /// 而复用编号正是本期拆掉的那个假设。
+    func testStreamIdIsAStringOnTheWire() throws {
+        let open = try JSONSerialization.jsonObject(
+            with: Data(try MuxOpenFrame.following(sessionId: "s-1", streamId: "s-9").encoded().utf8)
+        ) as? [String: Any]
+        XCTAssertTrue(open?["streamId"] is String, "开流帧的编号必须是字符串")
+
+        let cancel = try JSONSerialization.jsonObject(
+            with: Data(try MuxCancelFrame(streamId: "s-9").encoded().utf8)
+        ) as? [String: Any]
+        XCTAssertTrue(cancel?["streamId"] is String, "取消帧的编号必须是字符串")
     }
 
     // MARK: - U2：线上语义与字典字面量那一版相同
@@ -48,10 +80,10 @@ final class MuxShapeTests: XCTestCase {
     /// 字段名 / 值 / 类型没变，且键序不参与比较。若基线照抄实现的输出，它就只剩「和自己是
     /// 自己」这一句。
     func testOpenFrameKeepsTheWireObjectOfTheDictionaryLiteral() throws {
-        let baseline = #"{"streamId":1,"payload":{"sessionId":"s-1","op":"follow"},"type":"open"}"#
+        let baseline = #"{"streamId":"s-9","payload":{"sessionId":"s-1","op":"follow"},"type":"open"}"#
 
         let baselineObject = try JSONSerialization.jsonObject(with: Data(baseline.utf8))
-        let encoded = try MuxOpenFrame.following(sessionId: "s-1").encoded()
+        let encoded = try MuxOpenFrame.following(sessionId: "s-1", streamId: "s-9").encoded()
         let newObject = try JSONSerialization.jsonObject(with: Data(encoded.utf8))
 
         XCTAssertTrue((baselineObject as? NSDictionary)?.isEqual(newObject) == true,
@@ -61,7 +93,7 @@ final class MuxShapeTests: XCTestCase {
     // MARK: - U3：opening 的判读边界与改造前一致
 
     private func frame(_ payload: String) -> Data {
-        Data(#"{"type":"item","streamId":1,"payload":\#(payload)}"#.utf8)
+        Data(#"{"type":"item","streamId":"s-1","payload":\#(payload)}"#.utf8)
     }
 
     func testOpeningDecodesTheFullSample() throws {

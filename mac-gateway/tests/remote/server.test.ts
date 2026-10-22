@@ -50,9 +50,9 @@ test('broadcast reaches a live client after another one has gone away', { timeou
     }
     assert.equal(broadcaster.clientCount(), 1, 'a closed client is dropped from the set')
 
-    broadcaster.broadcast({ type: 'end', streamId: 99 })
+    broadcaster.broadcast({ type: 'end', streamId: 's99' })
     const frame = await receive(second)
-    assert.deepEqual(frame, { type: 'end', streamId: 99 }, 'the surviving client still receives the broadcast')
+    assert.deepEqual(frame, { type: 'end', streamId: 's99' }, 'the surviving client still receives the broadcast')
 
     second.close()
   } finally {
@@ -68,7 +68,7 @@ test('broadcasting to nobody is a no-op, not a throw', async () => {
   try {
     await once(server, 'listening')
     assert.equal(broadcaster.clientCount(), 0)
-    broadcaster.broadcast({ type: 'end', streamId: 1 })
+    broadcaster.broadcast({ type: 'end', streamId: 's1' })
   } finally {
     server.closeAllConnections()
     server.close()

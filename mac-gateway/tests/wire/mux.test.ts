@@ -10,12 +10,12 @@ import { encodeServerFrame, followRequestOf, parseClientFrame } from '../../src/
 
 test('parseClientFrame: round-trips the client frame shapes', () => {
   const open = parseClientFrame(JSON.stringify({
-    type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' },
+    type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' },
   }))
-  assert.deepEqual(open, { type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } })
+  assert.deepEqual(open, { type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } })
 
-  const cancel = parseClientFrame(JSON.stringify({ type: 'cancel', streamId: 2 }))
-  assert.deepEqual(cancel, { type: 'cancel', streamId: 2 })
+  const cancel = parseClientFrame(JSON.stringify({ type: 'cancel', streamId: 's2' }))
+  assert.deepEqual(cancel, { type: 'cancel', streamId: 's2' })
 })
 
 test('parseClientFrame: refuses everything that is not a well-formed client frame', () => {
@@ -24,14 +24,15 @@ test('parseClientFrame: refuses everything that is not a well-formed client fram
     '{}',
     'null',
     '[1,2]',
-    JSON.stringify({ type: 'open', streamId: 1 }),                       // open without payload
-    JSON.stringify({ type: 'open', streamId: 1, payload: {} }),          // no sessionId
-    JSON.stringify({ type: 'open', streamId: 1, payload: { sessionId: '' } }),
-    JSON.stringify({ type: 'open', streamId: 1, payload: { sessionId: 7 } }),
-    JSON.stringify({ type: 'open', streamId: 1.5, payload: { sessionId: 's1' } }),
-    JSON.stringify({ type: 'open', streamId: '1', payload: { sessionId: 's1' } }),
-    JSON.stringify({ type: 'subscribe', streamId: 1, payload: {} }),     // unknown type
-    JSON.stringify({ type: 'item', streamId: 1, payload: {} }),          // server-only type
+    JSON.stringify({ type: 'open', streamId: 's1' }),                       // open without payload
+    JSON.stringify({ type: 'open', streamId: 's1', payload: {} }),          // no sessionId
+    JSON.stringify({ type: 'open', streamId: 's1', payload: { sessionId: '' } }),
+    JSON.stringify({ type: 'open', streamId: 's1', payload: { sessionId: 7 } }),
+    // 编号只在字符串上有意义：数字会被读成「1 号流」那种用途槽位，正是要拆掉的形态。
+    JSON.stringify({ type: 'open', streamId: 1, payload: { sessionId: 's1' } }),
+    JSON.stringify({ type: 'open', streamId: '', payload: { sessionId: 's1' } }),
+    JSON.stringify({ type: 'subscribe', streamId: 's1', payload: {} }),     // unknown type
+    JSON.stringify({ type: 'item', streamId: 's1', payload: {} }),          // server-only type
     JSON.stringify({ v: 2, op: 'snapshot', sessionId: 's1' }),           // an HTTP message is not a frame
   ]
   for (const text of refusals) assert.equal(parseClientFrame(text), undefined, `should refuse: ${text}`)
@@ -55,12 +56,12 @@ test('followRequestOf: op is part of the request; lenient on maxMessages, strict
 test('encodeServerFrame: every server frame round-trips through JSON', () => {
   // `as const` 保留 `type` 的字面量：宽化后它与 `MuxServerFrame` 的判别式对不上，
   // 而这几个字面量正是「每种帧都过得去」的样本。
-  const item = { type: 'item', streamId: 1, payload: { type: 'event', seq: 0 } } as const
+  const item = { type: 'item', streamId: 's1', payload: { type: 'event', seq: 0 } } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(item)), item)
 
-  const error = { type: 'error', streamId: 1, payload: { code: 'unknown-session', message: 'no stored session' } } as const
+  const error = { type: 'error', streamId: 's1', payload: { code: 'unknown-session', message: 'no stored session' } } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(error)), error)
 
-  const end = { type: 'end', streamId: 3 } as const
+  const end = { type: 'end', streamId: 's3' } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(end)), end)
 })

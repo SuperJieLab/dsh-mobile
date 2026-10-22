@@ -6,14 +6,25 @@
  * - `MuxServerEnvelope` ↔ 服务端帧外壳（`type` / `streamId` / `payload`）；
  * - `FollowRequest` ↔ `FollowRequest`（开一条订阅流的参数）；
  * - `MuxOpenFrame` ↔ 客户端开流帧（`MuxClientFrame` 里 `type: "open"` 那一支）；
+ * - `MuxCancelFrame` ↔ 同一联合里的 `type: "cancel"` 那一支；
  * - `OpeningFrame` ↔ `FollowOpening`（打开帧的载荷）。
  *
- * **只声明客户端真收发的那几条**，不是把网关的全套抄过来：网关还有 `MuxCancelFrame`（流级取消），
- * 客户端不发 —— 抄来就是死代码。
+ * 只声明客户端真收发的那几条，不是把网关的全套抄过来。
  *
  * 这个目录只放形状与编解码，不放「这条打开装哪些事件」那类判断：那属于连接层。
  */
 import Foundation
+
+// MARK: - 流编号
+
+/**
+ * 一条逻辑流的编号 —— **开流那一刻现造，此后不复用**。
+ *
+ * 类型是字符串而不是整数，是为了让它没有可读含义：编号一旦能被解释（「1 是会话流、
+ * 2 是审批流」），复用就跟着来 —— 而复用会让旧流的收尾删到新流的登记、旧流的残帧
+ * 与新流同号。网关只要求它非空，怎么造归客户端（`FollowClient` 是唯一的造号点）。
+ */
+typealias StreamId = String
 
 // MARK: - 帧外壳
 
@@ -25,7 +36,7 @@ import Foundation
 /// `streamId` 可选：连接级审批帧没有它（那条帧不属于任何一条流）。
 struct MuxServerEnvelope: Decodable {
     let type: String
-    let streamId: Int?
+    let streamId: StreamId?
     let payload: JSONValue?
 }
 
@@ -50,23 +61,23 @@ struct FollowRequest: Encodable {
     }
 }
 
-/// 开流帧：`{type: "open", streamId: 1, payload: <FollowRequest>}`。
+/// 开流帧：`{type: "open", streamId: "<编号>", payload: <FollowRequest>}`。
 ///
-/// 构造入口只有一个 —— `following(sessionId:)`。形状自己决定 `op`、流编号与外壳三层，
-/// 调用方只给会话：流编号是这条流的身份，不该由连接层决定。
+/// 构造入口只有一个 —— `following(sessionId:streamId:)`。形状自己决定 `op` 与外壳两层，
+/// 调用方给两样：跟谁（会话）与这条流叫什么号。
 ///
-/// 拼装点只有一处，在会话详情的状态编排里（`SessionSync.startFollowing()`）—— 请求只在状态层
-/// 里拼，连接层拿到的是**编好的文本**，它不认识请求类型，也不认识 op。
+/// 编号由连接层造（它是唯一知道「这条连接上哪些号在用」的地方），文本由状态层拼（`op`
+/// 是协议词，连接层不认识）—— 两者在 `FollowClient.open(_:)` 的拼装闭包处对接。
+///
+/// 拼装点只有一处，在会话详情的状态编排里（`SessionSync.startFollowing()`）。
 struct MuxOpenFrame: Encodable {
 
-    /// 客户端只有一条流。编号由形状定，连接层不决定它 —— 但开流时要把它一并交出去（建成
-    /// 状态按编号记），所以这里不是 `private`。
-    static let streamId = 1
+    let streamId: StreamId
 
     private let request: FollowRequest
 
-    static func following(sessionId: String) -> MuxOpenFrame {
-        MuxOpenFrame(request: FollowRequest(sessionId: sessionId))
+    static func following(sessionId: String, streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, request: FollowRequest(sessionId: sessionId))
     }
 
     private enum CodingKeys: String, CodingKey { case type, streamId, payload }
@@ -74,19 +85,45 @@ struct MuxOpenFrame: Encodable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("open", forKey: .type)
-        try container.encode(Self.streamId, forKey: .streamId)
+        try container.encode(streamId, forKey: .streamId)
         try container.encode(request, forKey: .payload)
     }
 
     /// 编成要发出去的那段文本。
-    ///
-    /// `.sortedKeys` 不是风格问题：字典走 `JSONEncoder` 时键序随哈希，同一份输入连编两次会得到
-    /// 不同字节 —— 排序之后「同一输入两次编码相同」才是一条能常驻的断言。
     func encoded() throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return String(decoding: try encoder.encode(self), as: UTF8.self)
+        try muxText(of: self)
     }
+}
+
+/// 取消帧：`{type: "cancel", streamId: "<本流>"}`。
+///
+/// 关一条流只发这一帧，**不断开连接**。它是单向的：服务端回什么都不代表这条流的状态，
+/// 所以发完即算关（等确认只会多一个会卡住的状态）。
+struct MuxCancelFrame: Encodable {
+
+    let streamId: StreamId
+
+    private enum CodingKeys: String, CodingKey { case type, streamId }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("cancel", forKey: .type)
+        try container.encode(streamId, forKey: .streamId)
+    }
+
+    func encoded() throws -> String {
+        try muxText(of: self)
+    }
+}
+
+/// 把一帧编成线上文本 —— 两种帧共用的那一条纪律。
+///
+/// `.sortedKeys` 不是风格问题：字典走 `JSONEncoder` 时键序随哈希，同一份输入连编两次会得到
+/// 不同字节 —— 排序之后「同一输入两次编码相同」才是一条能常驻的断言。
+private func muxText<Frame: Encodable>(of frame: Frame) throws -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return String(decoding: try encoder.encode(frame), as: UTF8.self)
 }
 
 // MARK: - 打开帧的载荷

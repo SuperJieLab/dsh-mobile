@@ -7,6 +7,8 @@ struct SessionListView: View {
     /// 读它是为了渲染：`isPaired` 决定这一屏让位给配对屏，`baseURL` 显示在页脚。
     /// 取数走 `state`，不经这里。
     @ObservedObject var client: GatewayClient
+    /// 到网关的常驻连接（App 级）。本屏只用它传给会话详情 —— 连接不随哪一屏生死。
+    let link: GatewayLink
 
     /// 取数与三种面。`@StateObject`：视图重建时保留，不随 body 重算重建。
     @StateObject private var state: SessionListState
@@ -19,8 +21,9 @@ struct SessionListView: View {
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @EnvironmentObject private var store: ConnectionStore
 
-    init(client: GatewayClient) {
+    init(client: GatewayClient, link: GatewayLink) {
         self.client = client
+        self.link = link
         _state = StateObject(wrappedValue: SessionListState(client: client))
     }
 
@@ -63,7 +66,7 @@ struct SessionListView: View {
         .navigationDestination(for: SessionSummary.self) { session in
             // 显式再注一次（双保险）：navigationDestination 闭包在容器懒建时求值，
             // 根部注入到不了推入的视图 —— 不补这一句，详情页读不到连接域。
-            SessionDetailView(client: client, session: session)
+            SessionDetailView(client: client, session: session, link: link)
                 .environmentObject(store)
         }
         .overlay {

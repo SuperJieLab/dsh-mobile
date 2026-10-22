@@ -11,6 +11,8 @@ struct DshMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var node: TailnetNode
     @StateObject private var store: ConnectionStore
+    /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
+    @StateObject private var link: GatewayLink
     private let client: GatewayClient
 
     init() {
@@ -18,13 +20,14 @@ struct DshMobileApp: App {
         let client = GatewayClient()
         _node = StateObject(wrappedValue: node)
         _store = StateObject(wrappedValue: ConnectionStore(client: client, node: node))
+        _link = StateObject(wrappedValue: GatewayLink(client: client))
         self.client = client
     }
 
     var body: some Scene {
         WindowGroup {
             NavigationStack {
-                SessionListView(client: client)
+                SessionListView(client: client, link: link)
                     // 启动编排（兜底激活 → 组网 → 激活内化）全在 store.start。
                     // 配置读坏了不交给节点：空配置只会换来一个误导的「不可达」。
                     .task {
@@ -34,12 +37,23 @@ struct DshMobileApp: App {
                             await store.start(config: MeshConfig.load())
                         }
                     }
-                    // 回前台探活走 store；WS 重连仍由列表/详情页各自的
-                    // onChange(scenePhase) 接管 —— 两者关心的不是同一件事：
-                    // 前者是组网链路，后者是订阅流。
+                    // 连接常驻：App 一到前台就要一条。此刻可以一条流都没有 ——
+                    // 停在会话列表时它照样连着（心跳也照样判活）。
+                    .task { link.activate() }
+                    // 两个重连点放在根部而不是某一屏：这都是 App 级事件，关掉会话详情
+                    // 它们照样该发生。
+                    // ① 回前台立即重连 —— 上游「恢复立即试」的复现；已就绪 / 握手中的
+                    //    连接不受影响，不会叠加。
                     .onChange(of: scenePhase) { _, phase in
                         guard phase == .active else { return }
                         Task { await store.sceneActive() }
+                        link.reconnectNow()
+                    }
+                    // ② 组网就绪即重连（与列表「就绪即首载」对称）：connecting 期间连接
+                    //    在退避循环里空转（端点不存在），就绪此刻不必再等下一轮退避。
+                    .onChange(of: store.phase) { _, phase in
+                        guard case .ready = phase else { return }
+                        link.reconnectNow()
                     }
             }
             // 注在 NavigationStack 根部：navigationDestination 推入的视图

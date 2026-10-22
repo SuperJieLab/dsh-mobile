@@ -611,7 +611,7 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
     // No session controller behind the port: the pump must fail as an error frame
     // (the stream channel's "a hostile data source is still a reply"), never as a
     // dead socket.
-    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } }))
     const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
       socket.addEventListener('message', event => {
         const frame = JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>
@@ -903,7 +903,7 @@ test('U6: the opening carries an occupancy baseline and a trigger event pushes a
     const access = await accessTokenFor(port)
     const { socket, frames, waitFor } = await openStream(port, access)
 
-    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } }))
     await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
 
     // The window and the state travel together, each with its own water mark.
@@ -924,7 +924,7 @@ test('U6: the opening carries an occupancy baseline and a trigger event pushes a
     await waitFor(f => f.some(frame => frame.type === 'usage'), 'the occupancy frame')
 
     const usageFrame = frames.find(frame => frame.type === 'usage')!
-    assert.equal(usageFrame['streamId'], 1)
+    assert.equal(usageFrame['streamId'], 's1')
     assert.deepEqual(usageFrame['payload'], {
       sessionId: 's1',
       asOfSeq: 5,
@@ -957,7 +957,7 @@ test('U6: without projections the baseline is absent and no frame is ever pushed
     const access = await accessTokenFor(port)
     const { socket, frames, waitFor } = await openStream(port, access)
 
-    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } }))
     await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
     assert.equal(openingOf(frames)!['occupancy'], undefined, 'nothing displayable means no baseline, not a zero')
 
@@ -1134,7 +1134,7 @@ test('the configured opening cap narrows the window through the real assembly', 
     const access = await accessTokenFor(port)
     const { socket, frames, waitFor } = await openStream(port, access)
 
-    socket.send(JSON.stringify({ type: 'open', streamId: 1, payload: { op: 'follow', sessionId: 's1' } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } }))
     await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
 
     const opening = openingOf(frames)!
