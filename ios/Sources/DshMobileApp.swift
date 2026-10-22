@@ -14,13 +14,9 @@ struct DshMobileApp: App {
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
     @StateObject private var link: GatewayLink
     private let client: GatewayClient
-    /// 连接级事件流的收端 —— App 级，与连接同寿。
+    /// 连接级事件流的收端 —— App 级，与连接同寿。两个消费方：待答表（清空）与
+    /// 会话列表（逐个事件 + 代次重拉）。
     private let events: ConnectionEvents
-    /// 事件流的第一个消费方。
-    ///
-    /// 它不是「为了保住监听」才被持有：监听是注册在 `ConnectionEvents` 上的闭包，闭包不引用
-    /// 这个实例。持有它只是给这个消费方一个具名、与 App 同寿的落点，删掉它也行为不变。
-    private let eventLog: ConnectionEventLog
     /// 待答审批 —— App 级、唯一实例。不随任何一屏生死：停在会话列表时它照样在收。
     @StateObject private var approvals: ApprovalStore
 
@@ -33,7 +29,6 @@ struct DshMobileApp: App {
         self.client = client
         let events = ConnectionEvents()
         self.events = events
-        self.eventLog = ConnectionEventLog(events: events)
         _approvals = StateObject(wrappedValue: ApprovalStore(
             answerer: GatewayApprovalAnswerer(client: client)
         ))
@@ -42,7 +37,7 @@ struct DshMobileApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack {
-                SessionListView(client: client, link: link)
+                SessionListView(client: client, link: link, events: events)
                     // 启动编排（兜底激活 → 组网 → 激活内化）全在 store.start。
                     // 配置读坏了不交给节点：空配置只会换来一个误导的「不可达」。
                     .task {

@@ -9,6 +9,8 @@ struct SessionListView: View {
     @ObservedObject var client: GatewayClient
     /// 到网关的常驻连接（App 级）。本屏只用它传给会话详情 —— 连接不随哪一屏生死。
     let link: GatewayLink
+    /// 连接级事件流。列表是它的消费方之一：逐个事件改一行，代次报到就重拉一次。
+    let events: ConnectionEvents
 
     /// 取数与三种面。`@StateObject`：视图重建时保留，不随 body 重算重建。
     @StateObject private var state: SessionListState
@@ -21,9 +23,10 @@ struct SessionListView: View {
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @EnvironmentObject private var store: ConnectionStore
 
-    init(client: GatewayClient, link: GatewayLink) {
+    init(client: GatewayClient, link: GatewayLink, events: ConnectionEvents) {
         self.client = client
         self.link = link
+        self.events = events
         _state = StateObject(wrappedValue: SessionListState(client: client))
     }
 
@@ -82,6 +85,9 @@ struct SessionListView: View {
         }
         .refreshable { await state.reload() }
         .task { await state.reload() }
+        // 订阅在**视图出现**时接上（取数在状态层，而「什么时候开始听」是平台事件）。
+        // 重复出现时 `attach` 幂等，不会注册第二个听众。
+        .task { state.attach(events: events) }
         // 组网就绪即首载：启动窗口内的请求会 fail-fast（端点还不存在），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
         // 这里的 `guard case .ready` 只是省一次必然失败的请求；「未就绪」该怎么显示由

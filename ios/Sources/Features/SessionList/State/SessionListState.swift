@@ -38,6 +38,8 @@ final class SessionListState: ObservableObject {
     private var inflight: Task<[SessionSummary], Error>?
     /// 这一次在途期间到达的变更，按到达顺序 —— 落地时依次重放。
     private var buffered: [SessionListChange] = []
+    /// 是否已经听过事件流（`attach` 幂等）。
+    private var attached = false
     init(fetch: @escaping () async throws -> [SessionSummary]) {
         self.fetch = fetch
     }
@@ -57,7 +59,11 @@ final class SessionListState: ObservableObject {
     ///
     /// 这条流不重放，所以「两次报到之间的事件」可能已经丢了 —— 而它在客户端唯一
     /// 可观察的形式就是这一次报到。
+    ///
+    /// 幂等：视图重复出现时不该注册第二个听众（一次报到触发两次拉取，第二次是空跑）。
     func attach(events: ConnectionEvents) {
+        guard !attached else { return }
+        attached = true
         events.onGeneration { [weak self] _ in
             Task { await self?.reload() }
         }

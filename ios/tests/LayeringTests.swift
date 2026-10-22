@@ -1185,6 +1185,40 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "表读了会话事件（第 \(hits) 行）—— 卡片只能来自帧")
     }
 
+    // MARK: - 列表读事件的两条结构判据
+
+    /// 列表状态只有一个实例（它在视图的 `@StateObject` 里）。两个实例各持一份行序，
+    /// 事件只喂到其中一个 —— 而另一份会一直显示旧内容，且没有任何判据能看出来。
+    func testTheSessionListStateIsBuiltOnce() throws {
+        var found: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) where code.contains("SessionListState(") {
+                found.append("\(file.lastPathComponent):\(line)")
+            }
+        }
+        XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
+        XCTAssertEqual(found.count, 1, "列表状态只能有一个实例：\(found)")
+    }
+
+    /// 上游的事件名与字段名不出网关。手机端只认 `SessionListChange` 的四支 ——
+    /// 它若也认识 `api-session/added`，上游每改一次形状就要改两处。
+    func testTheClientDoesNotKnowUpstreamEventNames() throws {
+        var hits: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) where code.contains("api-session/") {
+                hits.append("\(file.lastPathComponent):\(line)")
+            }
+        }
+        XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, [], "客户端出现了上游事件名：\(hits)")
+    }
+
     // MARK: - 扫描工具
 
     /// 声明名。跳过 `private` / `fileprivate` —— 它们按定义出不了本文件。
