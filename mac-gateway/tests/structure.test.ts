@@ -1496,3 +1496,31 @@ test('each approval kind is constructed exactly once, where the held set lives',
       `\`kind: '${kind}'\` is declared in ${declarationHome} and constructed in ${constructionHome} — a third home is a second constructor`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// G3：上游的事件名不出适配层
+// ---------------------------------------------------------------------------
+
+/**
+ * `api-session/` 是上游的词汇。它只允许出现在两处：适配层（`upstream/`，那里负责
+ * 把它翻成我们的形状）与 `wire/` 的注释之外 —— 判据扫的是**字符串字面量**，
+ * 所以注释里解释「上游叫什么」不会红。
+ *
+ * 守的是「客户端与传输层都不认识上游事件名」这条立场：一旦 `remote/` 或 `protocol/`
+ * 里出现它，就有人在第二个地方解释上游，而那一处我们控制不了上游的漂移。
+ */
+test('G3: upstream session event names live only in the upstream adapter', () => {
+  const expected = ['upstream/session-events.ts']
+  const homes = new Map<string, number>()
+  for (const file of filesUnder(SRC)) {
+    const code = stripComments(readFileSync(file, 'utf8'))
+    const hits = [...code.matchAll(/'api-session\/[a-z]+'/g)].length
+    if (hits > 0) homes.set(where(file), hits)
+  }
+
+  // 活性锚：一处都没扫到说明路径或正则失效，下面的比较会「通过」。
+  assert.ok(homes.size > 0, 'no `api-session/*` literal found at all — the scan is broken')
+
+  assert.deepEqual([...homes.keys()].sort(), expected,
+    `upstream event names must live in ${expected.join(' + ')} only — got ${JSON.stringify([...homes.keys()])}`)
+})

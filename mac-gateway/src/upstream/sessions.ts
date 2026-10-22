@@ -262,8 +262,11 @@ function metadataOf(values: ProjectionValues | undefined): SessionListMetadataLi
 /**
  * 标题格：凡不是字符串 —— 包括无标题会话携带的 `null` —— 一律视为「无标题」，
  * 字段因此缺席而非空串。
+ *
+ * 导出是因为**事件路径要用同一处**：两条路各写一遍 `values?.title` 时，其中一条
+ * 会把 `null` 当空串，于是同一行在「拉取来的」与「事件推来的」两种情况下长得不一样。
  */
-function titleOf(values: ProjectionValues | undefined): { title?: string } {
+export function titleOf(values: ProjectionValues | undefined): { title?: string } {
   const cell = values?.title
   return typeof cell === 'string' ? { title: cell } : {}
 }

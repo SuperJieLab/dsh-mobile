@@ -927,17 +927,32 @@ test('E2: an events stream opens with ready, then forwards each emit verbatim', 
     assert.equal(ready.streamId, 'ev1', '开口帧属于这条流，不是别的')
     assert.deepEqual(ready.payload, { kind: 'ready' }, '源还没有代次时，ready 不带 generation（缺席，不是 0）')
 
-    feed.emit('api-session/added', ['s9'])
-    const forwarded = await receive(socket)
-    assert.equal(forwarded.streamId, 'ev1')
-    assert.deepEqual(forwarded.payload, { kind: 'emit', event: 'api-session/added', args: ['s9'] },
-      '名字与参数原样 —— 下游不再筛一遍')
+    // 会话列表那四类事件翻成我们的行形状（见 `session-events.test.ts` 的样本）。
+    feed.emit('api-session/added', [{
+      sessionId: 's9', updatedAt: 1_700_000_000_000, running: false, blank: false,
+    }])
+    const translated = await receive(socket)
+    assert.equal(translated.streamId, 'ev1')
+    assert.deepEqual(translated.payload, {
+      kind: 'session-list',
+      change: {
+        kind: 'added',
+        row: { id: 's9', updatedAt: 1_700_000_000_000, running: false, blank: false },
+      },
+    }, '四种事件换一种载荷，字段名是我们的')
+
+    // 不在那四类里的：名字与参数原样 —— 下游不再筛一遍。
+    feed.emit('session/projection', ['s9', { title: 'x' }])
+    assert.deepEqual((await receive(socket)).payload,
+      { kind: 'emit', event: 'session/projection', args: ['s9', { title: 'x' }] },
+      '认不出的照旧原样转发')
 
     // 同一条源上还有审批的帧：它们走自己的 `approval` 广播，不进这条流。
     // 转发它们会让手机在一条「机器上发生了什么」的流里收到待答问题。
     feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'x1', agentId: 'a1', request: {} })
     feed.emit('api-session/removed', ['s1'])
-    assert.deepEqual((await receive(socket)).payload, { kind: 'emit', event: 'api-session/removed', args: ['s1'] },
+    assert.deepEqual((await receive(socket)).payload,
+      { kind: 'session-list', change: { kind: 'removed', id: 's1' } },
       '审批帧没有出现在这条流上（出现的话它会排在这一帧前面）')
 
     // 这条流不自己结束：源停在原地时它也不该收到 `end`。
@@ -1187,8 +1202,10 @@ test('E3: a new generation is another ready on the same stream, never an end', {
     assert.deepEqual((await receive(socket)).payload, { kind: 'ready' },
       '源失效也是 ready（无代次）—— 不是 end，流继续活着')
 
-    feed.emit('api-session/removed', ['s1'])
-    assert.deepEqual((await receive(socket)).payload, { kind: 'emit', event: 'api-session/removed', args: ['s1'] },
+    // 用一条不在列表四类里的事件：这一条测的是「失效之后流还接得上内容」，
+    // 与载荷怎么翻无关。
+    feed.emit('session/event', ['s1'])
+    assert.deepEqual((await receive(socket)).payload, { kind: 'emit', event: 'session/event', args: ['s1'] },
       '失效之后这条流仍然接得上下一代的内容')
 
     socket.close()

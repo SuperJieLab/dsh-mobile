@@ -40,7 +40,7 @@ export function fakeFeed(): ForwardedSource & {
       current = generation
       for (const sink of sinks) sink.generation(generation)
     },
-    emit(event, args) {
+    emit(event, args: readonly unknown[]) {
       for (const sink of sinks) sink.frame({ type: 'emit', event, args })
     },
     push(frame) {

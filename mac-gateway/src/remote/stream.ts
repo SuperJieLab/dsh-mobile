@@ -38,6 +38,7 @@ import { fitOpeningToBytes, upstreamWindow } from '../protocol/window.ts'
 import { usageIsTrigger, usageShouldEmit } from '../protocol/usage.ts'
 import { describeError } from '../ports/errors.ts'
 import { streamErrorOf } from '../protocol/error-codes.ts'
+import { sessionListChangeOf } from '../upstream/session-events.ts'
 import type { WireEvent } from '../wire/rpc.ts'
 import type { UsageSnapshot } from '../wire/usage.ts'
 import type { ModelSelection } from '../wire/model.ts'
@@ -170,7 +171,17 @@ function pumpEvents(
     generation: () => { announce() },
     frame: (frame) => {
       if (frame.type !== 'emit') return
-      send(socket, { type: 'item', streamId, payload: { kind: 'emit', event: frame.event, args: frame.args } })
+      // 会话列表的四类事件在**这里**翻成我们的行形状，其余的按原样转发。
+      // 翻译放在网关而不是手机：客户端若也解一遍上游形状，同一事实就有三个声明
+      // （列表路径、这里、客户端），而只有前两个归我们管。
+      const change = sessionListChangeOf(frame.event, frame.args)
+      send(socket, {
+        type: 'item',
+        streamId,
+        payload: change === undefined
+          ? { kind: 'emit', event: frame.event, args: frame.args }
+          : { kind: 'session-list', change },
+      })
     },
   })
   announce()

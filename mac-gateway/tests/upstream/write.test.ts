@@ -210,7 +210,7 @@ test('relay: non-approval waterfall events, malformed requests and plain emits a
   try {
     feed.push({ type: 'waterfall', event: 'user-questions/request', eventId: 'u1', agentId: 'a', request: { question: 'q' } })
     feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'u2', agentId: 'a', request: {} })
-    feed.push({ type: 'emit', event: 'api-session/status', args: {} })
+    feed.push({ type: 'emit', event: 'api-session/status', args: [] })
     // 让这三帧走完一整个扇出，再断言「什么都没发生」—— 先断言会与上一轮的帧赛跑。
     await new Promise<void>((resolve) => setTimeout(resolve, 50))
     assert.deepEqual(sink.frames, [])

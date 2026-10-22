@@ -14,7 +14,7 @@ export type UpstreamWireFrame =
   | { type: 'ready'; clientId: string; host?: unknown }
   | { type: 'waterfall'; event: string; eventId: string; agentId: string; request: unknown }
   | { type: 'cancel'; eventId: string }
-  | { type: 'emit'; event: string; args: unknown }
+  | { type: 'emit'; event: string; args: readonly unknown[] }
 
 /**
  * 订阅者收到的两种通知。
