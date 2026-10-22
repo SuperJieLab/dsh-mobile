@@ -64,6 +64,11 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
         table.pending(in: sessionId)
     }
 
+    /// 某个会话还挂着的条数。列表行上的「待审批」读它 —— 它们只要一个数，不必拿到条目。
+    func pendingCount(in sessionId: String) -> Int {
+        table.pendingCount(in: sessionId)
+    }
+
     func state(for identity: String) -> AnswerState? {
         states[identity]
     }

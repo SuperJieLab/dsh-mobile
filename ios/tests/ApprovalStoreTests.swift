@@ -71,6 +71,23 @@ final class ApprovalStoreTests: XCTestCase {
     }
 
     /// 取消把那张卡与它的状态一起清掉 —— 状态字典里不该留看不见的旧值。
+    /// 一个会话的条数，不是全表的条数。
+    ///
+    /// 列表上的标记只问这一个数。写成 `pending(in:).count` 在这个用例下也过 ——
+    /// 所以断言要同时看「本会话是 1」与「别处还有一条仍算数」：把实现改成返回全表条数，
+    /// 第一条就红；改成返回 0 或漏掉分组的另一半，第二条红。
+    func testTheCountIsPerSessionNotTheWholeTable() {
+        let store = ApprovalStore(answerer: FakeAnswerer())
+        store.receive(request(session: "s1"))
+        store.receive(request(session: "s2", eventId: "e2", toolName: "write", callId: "c2"))
+
+        XCTAssertEqual(store.pendingCount(in: "s1"), 1, "只数本会话")
+        XCTAssertEqual(store.pendingCount(in: "s2"), 1)
+        XCTAssertEqual(store.pendingCount(in: "s3"), 0, "没有的会话是 0，不是全表条数")
+        XCTAssertEqual(store.pending(in: "s1").count + store.pending(in: "s2").count, 2,
+                       "两条都还在表里 —— 计数没有把它们吞掉一条")
+    }
+
     func testCancelRemovesTheEntryAndItsAnswerState() {
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.receive(request())

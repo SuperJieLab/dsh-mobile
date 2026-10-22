@@ -87,4 +87,13 @@ struct ApprovalTable {
     func pending(in sessionId: String) -> [Entry] {
         entries.filter { $0.sessionId == sessionId }
     }
+
+    /// 某个会话还挂着的条数。列表上的标记只问这个数，而它每重算一次就调一次 ——
+    /// 所以不另分配数组（`pending(in:).count` 会）。
+    ///
+    /// 与 `pending(in:)` 是同一条分组规则的两种读法：将来给表加筛选条件时两处要一起改，
+    /// 判据用「两个会话各一条 ⇒ 各自是 1」把它们钉在一起。
+    func pendingCount(in sessionId: String) -> Int {
+        entries.reduce(0) { $0 + ($1.sessionId == sessionId ? 1 : 0) }
+    }
 }
