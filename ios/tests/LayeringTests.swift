@@ -1210,22 +1210,33 @@ final class LayeringTests: XCTestCase {
     /// 守的是「行有第二个数据源」这件事本身：漏了它，标记永远不出现，而两端的判据
     /// （表的计数、标签的形状）都是绿的。
     ///
-    /// `SessionRow` 的调用行里必须带 `pendingCount(in:`，且那个块的构造里必须出现标签函数
-    /// —— 只断前一半的话，把计数传进去却不画，仍然绿。
+    /// `SessionRow` 的调用必须把**本会话的**计数传进去，且那个块里必须真的把标签画出来。
+    ///
+    /// 三处都在守具体错法，不是守「调过某个函数」：
+    /// - 实参写成整句 `approvals.pendingCount(in: session.id)`：只钉 `pendingCount(in:` 的话，
+    ///   把它改成 `pendingCount(in: "")` 仍然绿，而每一行恒为 0。
+    /// - 渲染点必须有 `ForEach(chips`：只钉 `SessionRowChip.of(` 的话，删掉整个 `ForEach`
+    ///   仍然绿 —— Swift 对没人读的计算属性不发警告，而标记此刻已经不出现了。
+    /// - 扫描面用剥过注释的文本：按原文扫时，注释里一句同样的调用就能把它喂饱。
+    ///
+    /// 判据是**文本**不是行为：把计数先取到局部变量再传是合法重构，那时这一条会红，
+    /// 改它的人要跟着改这句断言（视图这一侧没有行为判据，这是已知的代价）。
     func testTheListRowReadsThePendingTable() throws {
         let file = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
-        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        let source = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: source)
+        let code = lines.map(\.1).joined(separator: "\n")
 
         // 按实参块扫，不按行：实参写完一行是 90 列，换行书写是常态，
         // 而按行扫会把「换行后漏传」读成合规的同时，把「换行后传了」读成不合规。
-        let calls = callArguments(of: "SessionRow", in: try String(contentsOf: file, encoding: .utf8))
+        let calls = callArguments(of: "SessionRow", in: code)
         XCTAssertFalse(calls.isEmpty, "连 `SessionRow(` 都没扫到 —— 先怀疑路径或改名")
-        XCTAssertTrue(calls.contains { $0.contains("pendingCount(in:") },
+        XCTAssertTrue(calls.contains { $0.contains("approvals.pendingCount(in: session.id)") },
                       "行的构造没把本会话的待批条数传进去 —— 标记永远是 0")
 
         let block = try XCTUnwrap(self.block(startingAt: "struct SessionRow", in: lines),
                                   "找不到 `SessionRow` 的定义 —— 先怀疑改名")
-        XCTAssertTrue(block.contains { $0.1.contains("SessionRowChip.of(") },
+        XCTAssertTrue(block.contains { $0.1.contains("ForEach(chips") },
                       "行拿到了计数却没画标签 —— 中间那一跳没人接")
     }
 
@@ -1238,7 +1249,7 @@ final class LayeringTests: XCTestCase {
         let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
         XCTAssertTrue(lines.contains { $0.1.contains("final class SessionListState") },
                       "扫错文件了 —— 先怀疑路径")
-        let hits = lines.filter { $0.1.contains("Approval") }.map(\.0)
+        let hits = lines.filter { $0.1.lowercased().contains("approval") }.map(\.0)
         XCTAssertEqual(hits, [], "列表的取数层出现了审批（第 \(hits) 行）—— 标记应当只读表")
     }
 
@@ -1263,8 +1274,11 @@ final class LayeringTests: XCTestCase {
 
     /// 每一次 `name(...)` 调用的实参原文（不含括号本身），跨行也算一次。
     ///
-    /// 按括号配平取，不按行。盲区：字符串字面量里的括号会被当成结构 —— 本仓的构造调用
-    /// 实参里没有这种串，真出现时会报成「多一次调用」，看得见。
+    /// 按括号配平取，不按行。游标推进到本次调用的块尾（不是推进一个字符）——
+    /// 否则同一文件里 `name(` 出现多次时扫描成本按平方涨。
+    ///
+    /// 盲区：字符串字面量里的括号会被当成结构 —— 本仓的构造调用实参里没有这种串，
+    /// 真出现时会报成「多一次调用」，看得见。
     private func callArguments(of name: String, in text: String) -> [String] {
         var out: [String] = []
         var from = text.startIndex
@@ -1283,12 +1297,17 @@ final class LayeringTests: XCTestCase {
                 cursor = text.index(after: cursor)
             }
             out.append(collected)
-            from = text.index(after: open.lowerBound)
+            from = cursor
         }
         return out
     }
 
-    /// 从 `marker` 那一行起，取到下一个顶格 `}`（含）为止。找不到 marker 返回 `nil`。
+    /// 从 `marker` 那一行起，取到下一个**顶格** `}`（含）为止。找不到 marker 返回 `nil`。
+    ///
+    /// 它截的是「文件里这一段文本」，不是「这个类型」：块内若出现一行以 `}` 起头的多行
+    /// 字符串，块会提前截断。今天没有这种串；真加了多行串，判据要改成按大括号配平。
+    /// 另一个边界更近：把内容抽成子视图之后，这段文本里就没有那一堆手势可查了 ——
+    /// 那时判据要跟着扩到子视图的文件。
     private func block(startingAt marker: String,
                        in lines: [(Int, String)]) -> [(Int, String)]? {
         guard let start = lines.firstIndex(where: { $0.1.contains(marker) }) else { return nil }

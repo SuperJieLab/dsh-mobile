@@ -154,10 +154,14 @@ private struct SessionRow: View {
                     .lineLimit(2)
 
                 // 两件事不同（在做 / 等你），所以并列、各自着色，谁也不顶掉谁。
+                // 标签不参与压缩：标题先占两行、剩下的宽度再由标签分，被挤时它会被截成
+                // 「待审…」，而「待审批 3」里的那个 3 正是「多条与一条要能区分」的全部。
                 ForEach(chips, id: \.self) { chip in
                     Text(chip.text)
                         .font(.caption2)
                         .foregroundStyle(tint(for: chip))
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
 
