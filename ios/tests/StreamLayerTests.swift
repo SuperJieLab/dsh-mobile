@@ -44,13 +44,11 @@ final class StreamLayerTests: XCTestCase {
     private func subscription(
         _ subscriber: Subscriber,
         label: String = "s1",
-        takesUnscoped: Bool = false,
         verdict: @escaping (MuxServerEnvelope) -> StreamReply = { _ in StreamReply() }
     ) -> FollowClient.Subscription {
         FollowClient.Subscription(
             owner: subscriber,
             label: label,
-            takesUnscoped: takesUnscoped,
             build: { id in
                 subscriber.built.append(id)
                 return #"{"type":"open","streamId":"\#(id)"}"#
@@ -173,7 +171,7 @@ final class StreamLayerTests: XCTestCase {
     func testFramesForAnotherStreamNeverReachTheSubscriber() throws {
         let follow = connected()
         let subscriber = Subscriber()
-        follow.open(subscription(subscriber, takesUnscoped: true))
+        follow.open(subscription(subscriber))
         follow.activate()
         let mine = try XCTUnwrap(follow.streamId(of: subscriber), "登记之后应当有一个编号")
 
@@ -190,9 +188,81 @@ final class StreamLayerTests: XCTestCase {
         follow.handleMessage(frame(mine), generation: 1)
         XCTAssertEqual(subscriber.handled, 1, "本流的帧照常投递")
 
-        // 连接级帧（审批）没有编号：交给声明了 `takesUnscoped` 的那一条。
+        // 连接级帧（审批）没有编号：走投递口，不进任何一条流。
         follow.handleMessage(.string(#"{"type":"approval"}"#), generation: 1)
-        XCTAssertEqual(subscriber.handled, 2, "连接级帧交给声明了的那条流")
+        XCTAssertEqual(subscriber.handled, 1, "无编号帧不属于任何流")
+
+        follow.deactivate()
+    }
+
+    // MARK: - 无编号帧的归属
+
+    /// 投递口的替身：只记收到哪几帧。
+    private final class Sink: UnscopedFrameSink {
+        var frames: [MuxServerEnvelope] = []
+        func accept(_ frame: MuxServerEnvelope) { frames.append(frame) }
+    }
+
+    /// 没有编号的帧走投递口，**不进任何一条流**：它不属于流，属于连接。
+    ///
+    /// 三种帧各一次，三个方向缺一不可 —— 只断「sink 收到了」的话，「同时也给了某条流」
+    /// 会漏过去，而那种错法的症状是审批被两条路各处理一遍。
+    func testUnscopedFramesGoToTheSinkAndNeverToAStream() throws {
+        let follow = connected()
+        let subscriber = Subscriber()
+        let sink = Sink()
+        follow.open(subscription(subscriber))
+        follow.unscopedSink = sink
+        follow.activate()
+        let mine = try XCTUnwrap(follow.streamId(of: subscriber))
+
+        follow.handleMessage(.string(#"{"type":"approval","payload":{"kind":"cancel"}}"#),
+                             generation: 1)
+        XCTAssertEqual(sink.frames.map(\.type), ["approval"], "无编号帧该进投递口")
+        XCTAssertEqual(subscriber.handled, 0, "它不属于任何流 —— 一条都不该看见")
+
+        follow.handleMessage(frame(mine), generation: 1)
+        XCTAssertEqual(subscriber.handled, 1, "有编号的帧照常归流")
+        XCTAssertEqual(sink.frames.count, 1, "有编号的帧不进投递口")
+
+        follow.handleMessage(frame("nobody"), generation: 1)
+        XCTAssertEqual(sink.frames.count, 1, "编号不认识的帧两处都不去")
+        XCTAssertEqual(subscriber.handled, 1)
+
+        follow.deactivate()
+    }
+
+    /// 没有收货人时，无编号帧被丢掉 —— 不崩、也不退回去找一条流代收。
+    func testWithoutASinkUnscopedFramesAreDropped() {
+        let follow = connected()
+        let subscriber = Subscriber()
+        follow.open(subscription(subscriber))
+        follow.activate()
+
+        follow.handleMessage(.string(#"{"type":"approval"}"#), generation: 1)
+        XCTAssertEqual(subscriber.handled, 0, "退回给某条流代收正是这一版要消掉的那条规则")
+    }
+
+    // MARK: - 换代次的通知
+
+    /// 每次 `connect` 都通知一次代次：清空要赶在新连接的第一帧重投之前。
+    ///
+    /// 同一代里开流不算换代次 —— 否则每开一屏就清一次表，卡片会闪。
+    func testEveryNewConnectionGenerationIsAnnouncedOnce() {
+        let follow = connected()
+        var generations: [Int] = []
+        follow.onConnectionGeneration = { generations.append($0) }
+
+        follow.activate()
+        XCTAssertEqual(generations.count, 1, "要一条连接就是新代次")
+
+        let subscriber = Subscriber()
+        follow.open(subscription(subscriber))
+        XCTAssertEqual(generations.count, 1, "在同一条连接上开流不是换代次")
+
+        follow.connect()
+        XCTAssertEqual(generations.count, 2, "重连是新代次")
+        XCTAssertNotEqual(generations[0], generations[1], "代次只增")
 
         follow.deactivate()
     }
@@ -235,8 +305,7 @@ final class StreamLayerTests: XCTestCase {
         let session = Subscriber()
         let events = Subscriber()
         follow.open(subscription(events, label: "events"))
-        follow.open(subscription(session, label: "s1", takesUnscoped: true,
-                                 verdict: establishesOnItem))
+        follow.open(subscription(session, label: "s1", verdict: establishesOnItem))
         follow.activate()
 
         let sessionId = try XCTUnwrap(follow.streamId(of: session))
@@ -263,10 +332,10 @@ final class StreamLayerTests: XCTestCase {
         XCTAssertEqual(session.handled, 2)
         XCTAssertEqual(events.handled, 1)
 
-        // 无编号帧（审批）只进声明了 `takesUnscoped` 的那一条。
+        // 无编号帧（审批）走投递口：两条流都不该看见它。
         follow.handleMessage(.string(#"{"type":"approval"}"#), generation: 1)
-        XCTAssertEqual(session.handled, 3, "会话流声明了它，收到")
-        XCTAssertEqual(events.handled, 1, "事件流没声明，不该看见连接级审批帧")
+        XCTAssertEqual(session.handled, 2, "无编号帧不属于任何流")
+        XCTAssertEqual(events.handled, 1)
 
         follow.deactivate()
     }
@@ -304,8 +373,7 @@ final class StreamLayerTests: XCTestCase {
         let follow = connected()
         let session = Subscriber()
         let events = Subscriber()
-        follow.open(subscription(session, label: "s1", takesUnscoped: true,
-                                 verdict: establishesOnItem))
+        follow.open(subscription(session, label: "s1", verdict: establishesOnItem))
         follow.open(subscription(events, label: "events", verdict: verdicts(["error": .stop])))
         follow.activate()
 
@@ -369,7 +437,7 @@ final class StreamLayerTests: XCTestCase {
         let follow = connected()
         let session = Subscriber()
         let events = Subscriber()
-        follow.open(subscription(session, label: "s1", takesUnscoped: true) { [self] envelope in
+        follow.open(subscription(session, label: "s1") { [self] envelope in
             envelope.type == "error" ? StreamReply(next: .retry) : establishesOnItem(envelope)
         })
         follow.open(subscription(events, label: "events"))
@@ -402,7 +470,7 @@ final class StreamLayerTests: XCTestCase {
     func testReopeningDuringBackoffOpensImmediately() throws {
         let follow = connected()
         let session = Subscriber()
-        follow.open(subscription(session, label: "s1", takesUnscoped: true) { [self] envelope in
+        follow.open(subscription(session, label: "s1") { [self] envelope in
             envelope.type == "error" ? StreamReply(next: .retry) : establishesOnItem(envelope)
         })
         follow.activate()
@@ -432,7 +500,7 @@ final class StreamLayerTests: XCTestCase {
         let follow = connected()
         let session = Subscriber()
         let events = Subscriber()
-        follow.open(subscription(session, label: "s1", takesUnscoped: true,
+        follow.open(subscription(session, label: "s1",
                                  verdict: verdicts(["error": .stop])))
         follow.open(subscription(events, label: "events"))
         follow.activate()
@@ -480,7 +548,7 @@ final class StreamLayerTests: XCTestCase {
         let follow = connected()
         let session = Subscriber()
         let other = Subscriber()
-        follow.open(subscription(session, label: "s1", takesUnscoped: true) { [self] envelope in
+        follow.open(subscription(session, label: "s1") { [self] envelope in
             envelope.type == "error" ? StreamReply(next: .retry) : establishesOnItem(envelope)
         })
         follow.open(subscription(other, label: "s2"))

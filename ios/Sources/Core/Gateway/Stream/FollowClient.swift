@@ -39,9 +39,9 @@ final class FollowClient: NSObject {
         case waiting(ms: Int)
     }
 
-    /// 一份订阅：谁在看、日志里叫什么、开流文本怎么拼、帧怎么判，以及要不要没有编号的帧。
+    /// 一份订阅：谁在看、日志里叫什么、开流文本怎么拼、帧怎么判。
     ///
-    /// 五样**一起**交进来（而不是先登记、再设一个 `onFrame`）：两个入口会让「谁的回调」
+    /// 四样**一起**交进来（而不是先登记、再设一个 `onFrame`）：两个入口会让「谁的回调」
     /// 在注销之后仍然挂着 —— 那时新订阅者已经就位，旧回调却还在收帧。
     struct Subscription {
         /// 订阅者身份。注销时比对：不是当前订阅者就什么都不做。
@@ -51,12 +51,6 @@ final class FollowClient: NSObject {
         let owner: AnyObject
         /// 日志里用来区分实例的标识（会话 id）。本类不解释它。
         let label: String
-        /// 没有流编号的帧（连接级审批）要不要交给它。**默认不要** —— 这类帧属于会话流，
-        /// 一条连接级事件流拿到它只会多一次「认不出的载荷」。
-        ///
-        /// `let` 带初值会让合成的初始化器不再接受这个参数，所以默认值写在自定义 `init` 上：
-        /// 它是这个类型唯一的「有后果的默认」，值得占那几行。
-        let takesUnscoped: Bool
         /// 凭刚造好的编号拼出开流文本 —— 连接层不认识 `op` 与会话，拼装归订阅方。
         let build: (StreamId) throws -> String
         /// 收到一帧：外壳 + 原始字节。返回值决定这条流下一步怎么办。
@@ -65,13 +59,11 @@ final class FollowClient: NSObject {
         init(
             owner: AnyObject,
             label: String,
-            takesUnscoped: Bool = false,
             build: @escaping (StreamId) throws -> String,
             handler: @escaping (MuxServerEnvelope, Data) -> StreamReply
         ) {
             self.owner = owner
             self.label = label
-            self.takesUnscoped = takesUnscoped
             self.build = build
             self.handler = handler
         }
@@ -83,8 +75,8 @@ final class FollowClient: NSObject {
     /// （重开换号、建立后清档位、注销时取消定时器），值语义会让每一处都变成一次回写。
     private final class OpenStream {
         let subscription: Subscription
-        /// 登记顺序。无编号帧只交给声明了 `takesUnscoped` 的那一条；有第二个声明者时，
-        /// 先登记者拿 —— 这件事需要一个确定的次序，而字典的次序不是。
+        /// 登记顺序。只用于「谁先开的」这类诊断与稳定排序 —— 帧的归属按编号，
+        /// 无编号帧按收货人，都不看它。
         let sequence: Int
         var id: StreamId
         var text: String
@@ -108,6 +100,13 @@ final class FollowClient: NSObject {
 
     /// 连接阶段变化（连接态指示器的数据源）。
     var onPhaseChange: ((Phase) -> Void)?
+    /// 没有流编号的帧的收货人。这类帧不属于任何一条流，属于这条连接。
+    ///
+    /// 一个成员而不是一条「谁代收」的规则：帧没有编号时，「归谁」不该取决于谁先登记 ——
+    /// 那条规则既没有判据，也随屏幕开关漂。收货人与连接同寿，由根部接上。
+    var unscopedSink: (any UnscopedFrameSink)?
+    /// 新连接代次开始。消费方据此清空手里的基线 —— 换代次之前的每一帧都属于上一代。
+    var onConnectionGeneration: ((Int) -> Void)?
     /// 取一张有效的访问凭证 —— upgrade 请求带上它。**没有就说明现在不该连**：
     /// 见 `connect` 里对空票的处理。
     var authorizationProvider: (() -> String?)?
@@ -233,7 +232,6 @@ final class FollowClient: NSObject {
             subscription: subscription, sequence: registrations, id: fresh.id, text: fresh.text
         )
         streams[key] = stream
-        noteUnscopedClaimants()
         guard active else { return }
         if task != nil {
             // 连接已经在（或在握手）：只发开流帧，**不重建连接** —— 这正是常驻连接的收益。
@@ -303,6 +301,12 @@ final class FollowClient: NSObject {
         // 否则握手持续失败时会退化成每秒一次的疯狂循环。
         generation += 1
         let current = generation
+        // 新代次的第一帧到达之前通知：消费方要在这之前把上一代的基线清掉，
+        // 否则重投进来的项会与旧项混在一起。
+        onConnectionGeneration?(current)
+        // 新代次的第一帧到达之前通知：消费方要在这之前把上一代的基线清掉，
+        // 否则重投进来的项会与旧项混在一起。
+
         // 心跳的判据随代次清零：连失数与「活过」的证据都不继承。上一代的欠账算到这一代
         // 头上会自锁 —— 一次没建成的连接把连失数攒到上限之后，此后每一代都在第一个心跳
         // 节拍就被判死，2 秒一转、永不恢复。
@@ -580,12 +584,6 @@ final class FollowClient: NSObject {
 
     /// 有两个订阅者同时声明要无编号帧时，只有先登记者拿 —— 记一条错误日志，
     /// 别让第二份「声明了却永远收不到」静默存在。
-    private func noteUnscopedClaimants() {
-        guard claimants.count > 1 else { return }
-        Log.error(Log.Module.session,
-                  "\(claimants.count) streams claim unscoped frames — only the earliest registrant receives them")
-    }
-
     /// 按编号找流。表很小（一条连接上几条），线性扫比维护第二张反查表便宜。
     private func stream(withId id: StreamId) -> (key: ObjectIdentifier, stream: OpenStream)? {
         for (key, stream) in streams where stream.id == id { return (key, stream) }
@@ -657,13 +655,12 @@ final class FollowClient: NSObject {
         }
     }
 
-    /// 投递口：编号属于哪条流就交给哪条，其余丢弃；没有编号的帧只交给声明了
-    /// `takesUnscoped` 的那一条。
+    /// 投递口：编号属于哪条流就交给哪条；没有编号的帧交给连接级收货人，不进任何一条流。
     ///
     /// 编号不复用之后，唯一还会带着**别的**编号到达的帧，是上一条流的尾巴（取消之后仍在
     /// 路上的事件帧）。放它们进判读器，最轻是一次没必要的「跳号重开」，最重是用上一个
-    /// 会话的窗口覆盖这一屏。连接级帧没有编号（审批），它属于声明了的那一条 ——
-    /// 一条连接级事件流拿到它只会多一次「认不出的载荷」。
+    /// 会话的窗口覆盖这一屏。无编号的帧不属于流 —— 让某条流代收时，「归谁」就变成了
+    /// 登记顺序的问题，而屏幕一关那条流就没了。
     ///
     /// 单独成方法（而不是摊在 `handleMessage` 里）是为了它能被单独断言：它只回答
     /// 「这一帧归不归这条流」，不掺「线还在不在」的那一半（那一半在 `handleMessage`）。
@@ -672,20 +669,8 @@ final class FollowClient: NSObject {
             guard let found = stream(withId: id) else { return StreamReply() }
             return found.stream.subscription.handler(frame, raw)
         }
-        guard let claimant = unscopedStream() else { return StreamReply() }
-        return claimant.subscription.handler(frame, raw)
-    }
-
-    /// 声明了要无编号帧的那几条，按登记顺序。
-    private var claimants: [OpenStream] {
-        streams.values
-            .filter { $0.subscription.takesUnscoped }
-            .sorted { $0.sequence < $1.sequence }
-    }
-
-    /// 无编号帧的归属：声明了 `takesUnscoped` 且**登记最早**的那一条。
-    private func unscopedStream() -> OpenStream? {
-        claimants.first
+        unscopedSink?.accept(frame)
+        return StreamReply()
     }
 
     /// 按订阅方的答复更新本层状态 —— 「建成判据由订阅方给、时机在连接层」的可执行版本。

@@ -167,14 +167,14 @@ final class ConnectionEventTests: XCTestCase {
 
     // MARK: - O13：代次门槛
 
-    /// 消费方只在「源带着代次说了一声」时被叫醒；`emit` 与「源失效」都不叫醒它。
+    /// 消费方只在「源说了一声」时被叫醒 —— `emit` 不算，`ready` 算，失效（不带代次）也算。
     ///
-    /// 代次是消费方判断「我手里这份基线还新不新」的唯一依据。三条边界缺一不可：没代次的
-    /// 东西不算（`emit`）、新的代次算（`ready(4)`）、失效只置空不通知（`ready(nil)`）——
-    /// 少守一条，实现就会退化成「每帧都重读一遍基线」或「失效之后再也不会重读」。
-    func testGenerationHandlersFirePerReadyAndNeverOnSourceLoss() {
+    /// 代次是消费方判断「我手里这份基线还新不新」的唯一依据。三条边界缺一不可：`emit`
+    /// 不带代次（当它叫醒人就会变成「每帧重读一遍基线」）、新的代次算（去重读）、
+    /// **失效也要通知**（此时能做的只有清空 —— 手里那些一条都答不了）。
+    func testGenerationHandlersFirePerReadyIncludingSourceLoss() {
         let events = ConnectionEvents()
-        var seen: [Int] = []
+        var seen: [Int?] = []
         events.onGeneration { seen.append($0) }
 
         events.handle(ConnectionEventReading(content: .emit(
@@ -189,7 +189,8 @@ final class ConnectionEventTests: XCTestCase {
         XCTAssertEqual(seen, [3, 4], "源重建之后是新的代次，再通知一次")
 
         events.handle(ConnectionEventReading(content: .ready(generation: nil)))
-        XCTAssertEqual(seen, [3, 4], "源失效只把代次置空，不通知 —— 没有可重读的基线")
+        XCTAssertEqual(seen.count, 3, "源失效也要通知 —— 消费方据此清空手里的基线")
+        XCTAssertNil(seen.last ?? 0, "失效那一次不带代次")
         XCTAssertNil(events.generation, "失效之后手里不能还留着一个看着有效的代次")
     }
 
@@ -255,7 +256,6 @@ final class ConnectionEventTests: XCTestCase {
         XCTAssertEqual(opener.opened.count, 1, "attach 登记一条，不多不少")
         let subscription = try XCTUnwrap(opener.opened.first)
         XCTAssertEqual(subscription.label, "connection-events")
-        XCTAssertFalse(subscription.takesUnscoped, "没有编号的帧属于会话流，这条流不声明")
 
         XCTAssertEqual(try subscription.build("e1"),
                        #"{"payload":{"op":"events"},"streamId":"e1","type":"open"}"#,

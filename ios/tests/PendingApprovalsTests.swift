@@ -163,6 +163,55 @@ final class PendingApprovalsTests: XCTestCase {
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "放行之后照常收口")
     }
 
+    // MARK: - 接线
+
+    /// 投递口的替身：连接层只认识它这两个成员。
+    @MainActor
+    private final class FakeFeed: UnscopedFrameFeed {
+        var unscopedSink: (any UnscopedFrameSink)?
+        private var generationHandlers: [(Int) -> Void] = []
+
+        func onConnectionGeneration(_ handler: @escaping (Int) -> Void) {
+            generationHandlers.append(handler)
+        }
+
+        /// 连接层换代次时叫这一下。
+        func announce(_ generation: Int) {
+            for handler in generationHandlers { handler(generation) }
+        }
+
+        /// `/rpc/stream` 上到达的一帧无编号帧。
+        func push(_ frame: MuxServerEnvelope) {
+            unscopedSink?.accept(frame)
+        }
+    }
+
+    private func envelope(_ payload: JSONValue) -> MuxServerEnvelope {
+        MuxServerEnvelope(type: "approval", streamId: nil, payload: payload)
+    }
+
+    /// 三处接线一次断完：帧进表、新代次清空、源失效清空。
+    ///
+    /// 三处各自能单独坏（而且坏了都不编译失败），所以三处各一条断言。
+    func testAttachWiresTheFramePathAndBothClearingTriggers() {
+        let events = ConnectionEvents()
+        let feed = FakeFeed()
+        let store = PendingApprovals(answerer: FakeAnswerer())
+        store.attach(feed: feed, events: events)
+
+        XCTAssertTrue(feed.unscopedSink === store, "连接层收到的无编号帧该交给这张表")
+
+        feed.push(envelope(request()))
+        XCTAssertEqual(store.pending(in: "s1").count, 1, "帧从投递口进来就成了一条")
+
+        feed.announce(2)
+        XCTAssertTrue(store.pending(in: "s1").isEmpty, "新连接代次清空：重投会重建")
+
+        feed.push(envelope(request()))
+        events.handle(ConnectionEventReading(content: .ready(generation: nil)))
+        XCTAssertTrue(store.pending(in: "s1").isEmpty, "源失效清空：网关的上游没了，手里这些答不了")
+    }
+
     // MARK: - 清空
 
     /// 换代清空：卡与状态一起没了，之后重投一条就回来一条。

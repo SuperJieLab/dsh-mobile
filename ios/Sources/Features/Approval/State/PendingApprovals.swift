@@ -27,7 +27,7 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 }
 
 @MainActor
-final class PendingApprovals: ObservableObject {
+final class PendingApprovals: ObservableObject, UnscopedFrameSink {
 
     /// 一张卡的应答进展。没有这一项 = 还没动过（也就可以按）。
     enum AnswerState: Equatable {
@@ -66,6 +66,27 @@ final class PendingApprovals: ObservableObject {
 
     func notice(for sessionId: String) -> String? {
         notices[sessionId]
+    }
+
+    /// 三处接线一次接完：无编号帧的收货人、新代次清空、源失效清空。
+    ///
+    /// 三处各自能单独坏，而且坏了都不编译失败 —— 症状分别是「审批永不显示」「重连后卡
+    /// 不回来」「断了上游之后留着一张按不动的卡」。
+    func attach(feed: any UnscopedFrameFeed, events: ConnectionEvents) {
+        feed.unscopedSink = self
+        feed.onConnectionGeneration { [weak self] _ in self?.clear() }
+        events.onGeneration { [weak self] generation in
+            guard generation == nil else { return }
+            self?.clear()
+        }
+
+    }
+
+    /// 连接层送来的无编号帧。只认审批，其余一概不看 —— 连接层不认识帧类型，
+    /// 分类在这一层做。
+    func accept(_ frame: MuxServerEnvelope) {
+        guard frame.type == "approval", let payload = frame.payload else { return }
+        receive(payload)
     }
 
     /// 网关推来的一条 `approval` 载荷。

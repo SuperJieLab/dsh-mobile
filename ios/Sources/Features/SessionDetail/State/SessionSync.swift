@@ -401,14 +401,10 @@ final class SessionSync: ObservableObject {
         // `build` 只捕获会话 id（值类型），不拽住整个同步器；`handler` 是 `[weak self]`。
         // `owner` 反过来**故意**强持有：它是身份，注销时靠它比对（弱了就等于没有身份），
         // 而它在 `close(owner:)` 里随订阅一起释放 —— 泄漏的边界是这条订阅，不是本屏。
-        //
-        // `takesUnscoped`：审批帧是连接级的（没有流编号），它归会话流消费 ——
-        // 那条流说的是「这个会话里发生了什么」，而审批属于会话。
         let sessionId = self.sessionId
         streams.open(FollowClient.Subscription(
             owner: self,
             label: sessionId,
-            takesUnscoped: true,
             build: { id in
                 try MuxOpenFrame.following(sessionId: sessionId, streamId: id).encoded()
             },

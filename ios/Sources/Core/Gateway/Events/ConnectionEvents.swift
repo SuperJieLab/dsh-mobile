@@ -39,16 +39,15 @@ final class ConnectionEvents {
     /// 单看这一个值会得出「断线期间还新」。
     private(set) var generation: Int?
 
-    /// 代次变化时的听众，按注册顺序调用。
-    private var generationHandlers: [(Int) -> Void] = []
+    /// 代次变化的听众，按注册顺序调用。失效那一次带 `nil`。
+    private var generationHandlers: [(Int?) -> Void] = []
 
     /// 按事件名分派的听众。名字原样来自上游，本类不解释。
     private var handlers: [String: [(JSONValue) -> Void]] = [:]
 
     /// 登记这条流 —— 与当前会话流平级，先登记后登记都一样。
     ///
-    /// `takesUnscoped` 不声明：没有编号的帧（连接级审批）属于会话流，这条流拿到它只会
-    /// 多一次「认不出的载荷」。
+    /// 没有编号的帧不进这里：它们由连接层的投递口交给 App 级的那张表。
     func attach(to opener: any ConnectionStreamOpening) {
         opener.open(FollowClient.Subscription(
             owner: self,
@@ -64,7 +63,9 @@ final class ConnectionEvents {
     }
 
     /// 源换代次时叫醒。消费方在这里重读基线 —— 断线期间的事件永不补发，重读是唯一手段。
-    func onGeneration(_ handler: @escaping (Int) -> Void) {
+    ///
+    /// 失效（源没了）也叫一次，带 `nil`：那时能做的只有清空 —— 手里的项一条都答不了。
+    func onGeneration(_ handler: @escaping (Int?) -> Void) {
         generationHandlers.append(handler)
     }
 
@@ -82,10 +83,8 @@ final class ConnectionEvents {
         switch reading.content {
         case let .ready(reported):
             generation = reported
-            // 不带代次 = 源失效：只置空，不通知 —— 没有可重读的基线。
-            guard let reported else { return }
-            // 每个带代次的 ready 都通知，不比较新旧：网关只在源换代次时发它，同一个值
-            // 不会出现两次。比较能省一次基线重读，却换来一条没有判据的判定。
+            // 每个 ready 都通知，不比较新旧：网关只在源换代次时发它，同一个值不会出现
+            // 两次 —— 而「失效」那一次必须通知，否则消费方不知道该清空。
             for handler in generationHandlers { handler(reported) }
         case let .emit(name, args):
             for handler in handlers[name] ?? [] { handler(args) }

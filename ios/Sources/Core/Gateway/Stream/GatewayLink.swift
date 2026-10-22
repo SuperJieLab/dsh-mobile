@@ -17,7 +17,8 @@ import Foundation
  * 屏幕那一侧拿到的不是这个类型，而是 `SessionStreamHandle` —— 它没有连接级动作。
  */
 @MainActor
-final class GatewayLink: ObservableObject, SessionStreamHandle, ConnectionStreamOpening {
+final class GatewayLink: ObservableObject, SessionStreamHandle, ConnectionStreamOpening,
+                         UnscopedFrameFeed {
 
     /// 连接阶段 —— 功能条网络格与连接详情的数据源。
     @Published private(set) var phase: FollowClient.Phase = .idle
@@ -74,5 +75,18 @@ final class GatewayLink: ObservableObject, SessionStreamHandle, ConnectionStream
     /// 屏幕手里没有这个成员。
     func reconnectNow() {
         follow.reconnectNow()
+    }
+
+    // MARK: - 无编号帧与代次
+
+    /// 无编号帧的收货人 —— App 级，与连接同寿。
+    var unscopedSink: (any UnscopedFrameSink)? {
+        get { follow.unscopedSink }
+        set { follow.unscopedSink = newValue }
+    }
+
+    /// 新连接代次开始。持有者是 App 级的那张表 —— 它据此清空上一代的基线。
+    func onConnectionGeneration(_ handler: @escaping (Int) -> Void) {
+        follow.onConnectionGeneration = handler
     }
 }
