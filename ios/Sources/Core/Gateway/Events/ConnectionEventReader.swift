@@ -4,17 +4,19 @@ import Foundation
  * 一帧的判读结论：它是什么，以及这条流接下来怎么办。
  *
  * 形状与 `StreamReading` 同构（同样是「内容 + 建成 + 动作」三件），但**值域更窄**：这条流只有
- * `ready` 与 `emit` 两种内容。窄是它的判据 —— 事件流不重放，没有窗口、水位、未定稿帧，
- * 判读器若「顺手」认识它们，那些分支就永远不会被上游走过，只会成为下一次误判的入口。
+ * `ready` / `emit` / `session-list` 三种内容。窄是它的判据 —— 事件流不重放，没有窗口、水位、
+ * 未定稿帧，判读器若「顺手」认识它们，那些分支就永远不会被上游走过，只会成为下一次误判的入口。
  */
 struct ConnectionEventReading {
 
     /// 这一帧是什么。
-    enum Content {
+    enum Content: Equatable {
         /// 源此刻的代次：每次上游重建后加一；`nil` = 源此刻没有活的代次。
         case ready(generation: Int?)
         /// 一条转发事件：名字与参数原样。
         case emit(name: String, args: JSONValue)
+        /// 会话列表的一条增量。网关把上游那四类事件翻成它，所以这里只认自己的形状。
+        case sessionList(SessionListChange)
         /// 流通道里的协议内拒绝。
         case refused(GatewayFailure)
         /// 流被服务端正常收尾。
@@ -45,7 +47,7 @@ struct ConnectionEventReading {
             // `internal-error` 是网关装配漏了源 —— 再开一条只会再收一次同样的拒绝。
             // 注意 `.stop` 在连接层的含义是**收起这一条流**，连接不动。
             return .stop
-        case .ready, .emit, .ignored:
+        case .ready, .emit, .sessionList, .ignored:
             return .keep
         }
     }
@@ -54,8 +56,9 @@ struct ConnectionEventReading {
 /**
  * 把一帧线上文本判成 `ConnectionEventReading` —— 纯函数，不碰 socket、不持状态。
  *
- * 两种流的内容不同：会话流一帧可以是打开帧、事件、未定稿帧、占用读数；这条流只有 `ready`
- * 与 `emit`。窄值域是判据的一部分 —— 不认识的形状在这里一律丢弃，而不是猜一个近似的分支。
+ * 两种流的内容不同：会话流一帧可以是打开帧、事件、未定稿帧、占用读数；这条流只有 `ready`、
+ * `emit` 与 `session-list`。窄值域是判据的一部分 —— 不认识的形状在这里一律丢弃，而不是猜
+ * 一个近似的分支。
  *
  * 判据与网关 `remote/stream.ts` 的 `pumpEvents` 逐条对齐（两端协定的订阅流一节）：
  *
@@ -63,6 +66,7 @@ struct ConnectionEventReading {
  * |---|---|---|
  * | `item`，载荷 `kind` 是 `ready` | 代次 | `generation` 读得出就带上，读不出就是 `nil`（不补数） |
  * | `item`，载荷 `kind` 是 `emit` | 一条事件 | `event` 必须是字符串；`args` 原样，缺席即空列表 |
+ * | `item`，`kind` 是 `session-list` | 列表增量 | 交给 `SessionListChange.decode`，认不出丢弃 |
  * | `item`，别的 `kind` / 没有 `kind` | 认不出 | 丢弃 —— 这条流不重放，只有读不出才丢 |
  * | `error` | 拒绝 | 载荷是 `{code, message}` |
  * | `end` | 收尾 | —— |
@@ -92,6 +96,13 @@ enum ConnectionEventReader {
                 // `args` 整段缺席是正常的：上游 `emit(event)` 不带参数时，网关那份
                 // `JSON.stringify` 会把 `undefined` 字段丢掉。事件名已经说得清发生了什么。
                 return ConnectionEventReading(content: .emit(name: name, args: payload["args"] ?? .array([])))
+            case "session-list":
+                // 形状判定的正身在 `SessionListChange.decode`（那里有它自己的判据）——
+                // 这一跳只把「这条流的一种货物」接到那个类型上，不复制任何一条规则。
+                guard let change = payload["change"].flatMap(SessionListChange.decode) else {
+                    return ConnectionEventReading(content: .ignored)
+                }
+                return ConnectionEventReading(content: .sessionList(change))
             default:
                 return ConnectionEventReading(content: .ignored)
             }

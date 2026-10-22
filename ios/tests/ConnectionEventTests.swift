@@ -2,8 +2,9 @@
  * 事件流判读的判据 —— `ConnectionEventReader`（`Core/Gateway/Events/`）。
  *
  * 与 `SessionStreamReaderTests` 同一件事：给一段帧文本，判成什么、这条流接下来怎么办，
- * 不需要连接。差别在**这条流只有两种内容**：`ready`（源此刻的代次）与 `emit`（一条转发事件）。
- * 它不重放，所以没有窗口、没有水位、没有未定稿帧 —— 判读器也不该假装认识它们。
+ * 不需要连接。差别在**这条流只有三种内容**：`ready`（源此刻的代次）、`emit`（一条转发
+ * 事件）、`session-list`（列表的一条增量）。它不重放，所以没有窗口、没有水位、没有
+ * 未定稿帧 —— 判读器也不该假装认识它们。
  *
  * 判据的来历是「认错了不会编译失败，也不会有哪条测试红」：认的是网关的 item 形状，一份会
  * 漂移的东西。样本按「读得出 / 读不出」两侧各给几个，别只给正向那半。
@@ -163,6 +164,48 @@ final class ConnectionEventTests: XCTestCase {
             """)
             XCTAssertEqual(reading.next, .stop, "\(code) 之后重开只会再收一次 —— 停这条流")
         }
+    }
+
+    // MARK: - 列表增量：判读与分派
+
+    /// 第三种载荷：`session-list` 判成一条列表增量；它的形状读不出就丢弃。
+    ///
+    /// 这一条守的是整条链路的**中段** —— 网关已经把它发出来了，判读器若不认识，
+    /// 列表永远收不到事件，而两端各自的判据都还是绿的。
+    func testSessionListPayloadsAreReadAndMalformedOnesDropped() throws {
+        let reading = try read("""
+        {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
+          "kind":"activity","id":"s1","updatedAt":42}}}
+        """)
+        XCTAssertEqual(reading.content, .sessionList(.activity("s1", updatedAt: 42)))
+        XCTAssertFalse(reading.establishes, "列表增量不建成这条流 —— 建成只由 ready 说")
+        XCTAssertEqual(reading.next, .keep)
+
+        for text in [
+            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list"}}"#,
+            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{"kind":"question"}}}"#,
+        ] {
+            XCTAssertEqual(try read(text).content, .ignored, "「\(text)」该丢弃")
+        }
+    }
+
+    /// 变更是按「收到一条推一条」分派的，与按名字分派的那一组并列：它不是「某个事件名
+    /// 的载荷」，而是这条流自己的第三种货物。
+    func testListChangesReachTheirListener() throws {
+        let events = ConnectionEvents()
+        var seen: [SessionListChange] = []
+        events.onSessionList { seen.append($0) }
+
+        events.handle(try read("""
+        {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
+          "kind":"status","id":"s2","running":true}}}
+        """))
+        XCTAssertEqual(seen, [.status("s2", running: true)])
+
+        // 别的三种内容都不该进这个听众。
+        events.handle(ConnectionEventReading(content: .ready(generation: 1)))
+        events.handle(ConnectionEventReading(content: .emit(name: "x", args: .array([]))))
+        XCTAssertEqual(seen.count, 1)
     }
 
     // MARK: - O13：代次门槛

@@ -159,6 +159,28 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(state.sessions[0].id, "b")
     }
 
+    // MARK: - 装配：一帧从事件流走到列表
+
+    /// 一整跳：事件流上收到一帧列表增量，列表就变了。
+    ///
+    /// 这一条守的是**接线**，不是任何一端的行为 —— 判读器认识它、`apply` 也会改行，
+    /// 但没人把两者接起来时，前两组判据全绿而列表一动不动。两端各守一半、中间那一跳
+    /// 没人守，是这个仓库反复踩到的一种缺口。
+    func testAFrameOnTheEventStreamReachesTheList() throws {
+        let state = make(FakeFetch())
+        let events = ConnectionEvents()
+        state.attach(events: events)
+
+        let data = Data("""
+        {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
+          "kind":"added","row":{"id":"s1","updatedAt":100}}}}
+        """.utf8)
+        let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: data)
+        events.handle(ConnectionEventReader.read(envelope: envelope))
+
+        XCTAssertEqual(state.sessions.map(\.id), ["s1"], "这一帧该一路走到列表上")
+    }
+
     // MARK: - L8 失败不清空
 
     /// 拉取失败：列表保留原样，事件带来的变化也仍在，失败面照常报。

@@ -64,6 +64,9 @@ final class SessionListState: ObservableObject {
     func attach(events: ConnectionEvents) {
         guard !attached else { return }
         attached = true
+        // 两件都接：逐条的增量（改一行），与每一次报到（重拉基线）。少接一条的症状是
+        // 「列表不自己动」或「断线之后再也不对齐」—— 都不编译失败。
+        events.onSessionList { [weak self] change in self?.apply(change) }
         events.onGeneration { [weak self] _ in
             Task { await self?.reload() }
         }

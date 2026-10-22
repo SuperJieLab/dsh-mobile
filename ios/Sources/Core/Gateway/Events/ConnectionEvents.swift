@@ -45,6 +45,10 @@ final class ConnectionEvents {
     /// 按事件名分派的听众。名字原样来自上游，本类不解释。
     private var handlers: [String: [(JSONValue) -> Void]] = [:]
 
+    /// 会话列表增量的听众。与按名分派并列而不是其中一支：它不是「某个事件名的载荷」，
+    /// 而是这条流自己的第三种货物 —— 上游那四类名字在网关就被翻掉了。
+    private var listHandlers: [(SessionListChange) -> Void] = []
+
     /// 登记这条流 —— 与当前会话流平级，先登记后登记都一样。
     ///
     /// 没有编号的帧不进这里：它们由连接层的投递口交给 App 级的那张表。
@@ -74,6 +78,11 @@ final class ConnectionEvents {
         handlers[event, default: []].append(handler)
     }
 
+    /// 订阅会话列表的增量。
+    func onSessionList(_ handler: @escaping (SessionListChange) -> Void) {
+        listHandlers.append(handler)
+    }
+
     /// 判读之后的那一跳 —— 本类唯一的入口。
     ///
     /// 对内可见（不 `private`）与 `FollowClient.handleMessage` 同理：这里有一条只有在
@@ -88,6 +97,8 @@ final class ConnectionEvents {
             for handler in generationHandlers { handler(reported) }
         case let .emit(name, args):
             for handler in handlers[name] ?? [] { handler(args) }
+        case let .sessionList(change):
+            for handler in listHandlers { handler(change) }
         case let .refused(failure):
             // 不进消费方（拒绝讲的是「这条流接下来怎么办」，由 `StreamReply` 说），但**要留痕**：
             // 这条流不会重开，屏幕上也不会出现任何东西 —— 「网关版本旧」与「网关装配漏了源」
