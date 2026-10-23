@@ -894,6 +894,36 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(mux.contains("static func newStreamId()"), "新造号点没扫到 —— 判据可能扫错了树")
     }
 
+    /// 列表行的待审批标记撤干净了：类型、计数、渲染三样都不许留。
+    ///
+    /// 「这个会话有几条在等」不再是产品概念 —— 上游每个会话只有一条待交互投影，也没有计数。
+    /// 留一个孤儿类型或一条没人读的计数，就是留一个「以后再接个消费者」的口子；接上之后
+    /// 同一件事就有两处各说一遍。
+    ///
+    /// 正控：列表行的「进行中」必须还在 —— 否则说明扫描面取错了，空集会被读成合规。
+    func testTheListRowMarkerIsGone() throws {
+        let retired = ["SessionRowChip", "pendingCount"]
+        var hits: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for name in retired where code.contains(name) {
+                    hits.append("\(file.lastPathComponent):\(line) \(name)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 40, "只扫到 \(scanned) 个文件 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, [], "列表标记还有残留：\(hits)")
+
+        let listView = try String(
+            contentsOf: sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(listView.contains("struct SessionRow"), "行的定义没扫到 —— 判据可能扫错了树")
+    }
+
     /// 阶段类型提出去了：业务与视图读的是顶层 `StreamPhase`，没有谁还写 `FollowClient.Phase`。
     ///
     /// 断言按**文件名单**，不按出现次数：流层内部自己就有四处写这个名字（声明、传输层两个
@@ -1468,71 +1498,18 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 待审批标记的三条结构判据
 
-    /// 列表行真的读了待答表。视图不在测试覆盖里，这一跳只能靠结构判据守。
+    /// 列表的取数不认识审批 —— 它不看审批的任何事实。
     ///
-    /// 守的是「行有第二个数据源」这件事本身：漏了它，标记永远不出现，而两端的判据
-    /// （表的计数、标签的形状）都是绿的。
-    ///
-    /// `SessionRow` 的调用必须把**本会话的**计数传进去，且那个块里必须真的把标签画出来。
-    ///
-    /// 三处都在守具体错法，不是守「调过某个函数」：
-    /// - 实参写成整句 `approvals.pendingCount(in: session.id)`：只钉 `pendingCount(in:` 的话，
-    ///   把它改成 `pendingCount(in: "")` 仍然绿，而每一行恒为 0。
-    /// - 渲染点必须有 `ForEach(chips`：只钉 `SessionRowChip.of(` 的话，删掉整个 `ForEach`
-    ///   仍然绿 —— Swift 对没人读的计算属性不发警告，而标记此刻已经不出现了。
-    /// - 扫描面用剥过注释的文本：按原文扫时，注释里一句同样的调用就能把它喂饱。
-    ///
-    /// 判据是**文本**不是行为：把计数先取到局部变量再传是合法重构，那时这一条会红，
-    /// 改它的人要跟着改这句断言（视图这一侧没有行为判据，这是已知的代价）。
-    func testTheListRowReadsThePendingTable() throws {
-        let file = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
-        let source = try String(contentsOf: file, encoding: .utf8)
-        let lines = codeLines(in: source)
-        let code = lines.map(\.1).joined(separator: "\n")
-
-        // 按实参块扫，不按行：实参写完一行是 90 列，换行书写是常态，
-        // 而按行扫会把「换行后漏传」读成合规的同时，把「换行后传了」读成不合规。
-        let calls = callArguments(of: "SessionRow", in: code)
-        XCTAssertFalse(calls.isEmpty, "连 `SessionRow(` 都没扫到 —— 先怀疑路径或改名")
-        XCTAssertTrue(calls.contains { $0.contains("approvals.pendingCount(in: session.id)") },
-                      "行的构造没把本会话的待批条数传进去 —— 标记永远是 0")
-
-        let block = try XCTUnwrap(self.block(startingAt: "struct SessionRow", in: lines),
-                                  "找不到 `SessionRow` 的定义 —— 先怀疑改名")
-        XCTAssertTrue(block.contains { $0.1.contains("ForEach(chips") },
-                      "行拿到了计数却没画标签 —— 中间那一跳没人接")
-    }
-
-    /// 列表的取数不认识审批 —— 标记不带来任何一次新请求。
-    ///
-    /// 它的反面不是「多一个字段」，而是「列表为了显示标记又拉一次审批」：那是两张表各自
-    /// 维护一份事实的开始。计数只从本机那张 App 级的表读。
+    /// 它的反面不是「多一个字段」，而是「列表为了显示审批又拉一次」：那是两张表各自
+    /// 维护一份事实的开始。列表行上的待审批标记已撤掉（见 `testTheListRowMarkerIsGone`），
+    /// 这条规则于是收得更紧：取数层连审批这个词都不该出现。
     func testTheListStateDoesNotKnowAboutApprovals() throws {
         let file = sourcesRoot.appendingPathComponent("Features/SessionList/State/SessionListState.swift")
         let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
         XCTAssertTrue(lines.contains { $0.1.contains("final class SessionListState") },
                       "扫错文件了 —— 先怀疑路径")
         let hits = lines.filter { $0.1.lowercased().contains("approval") }.map(\.0)
-        XCTAssertEqual(hits, [], "列表的取数层出现了审批（第 \(hits) 行）—— 标记应当只读表")
-    }
-
-    /// 标记不是按钮：那一行里没有任何手势，也没有响应动作。
-    ///
-    /// 只扫 `SessionRow` 那个块 —— 同一屏别处有按钮（工具栏、刷新）是正常的，
-    /// 而这一行里出现按钮或手势，就等于列表页也能应答。
-    func testTheApprovalMarkerIsNotTappable() throws {
-        let file = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
-        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
-        let block = try XCTUnwrap(self.block(startingAt: "struct SessionRow", in: lines),
-                                  "找不到 `SessionRow` 的定义 —— 先怀疑改名")
-        // 活性锚：块里必须有标签函数，否则「零手势」只是因为扫错了地方。
-        XCTAssertTrue(block.contains { $0.1.contains("SessionRowChip") },
-                      "这个块里没有标签 —— 活性锚不成立，下面的空集会被读成合规")
-
-        for needle in ["Button(", "onTapGesture", ".gesture(", "NavigationLink("] {
-            let hits = block.filter { $0.1.contains(needle) }.map(\.0)
-            XCTAssertEqual(hits, [], "行里出现了 `\(needle)`（第 \(hits) 行）—— 标记只承载「看见」")
-        }
+        XCTAssertEqual(hits, [], "列表的取数层出现了审批（第 \(hits) 行）—— 列表不读审批的任何事实")
     }
 
     /// 每一次 `name(...)` 调用的实参原文（不含括号本身），跨行也算一次。

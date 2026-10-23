@@ -106,7 +106,8 @@ final class ApprovalTableTests: XCTestCase {
         table.absorb(request(toolName: nil))
         table.absorb(.object(["kind": .number(1)]))
 
-        XCTAssertEqual(table.count, 1, "四条不完整的载荷一条都不该收 —— 含挂在别处的")
+        // 读全表而不是 `pending(in: "s1")`：错收进**别的会话**的那一条，分组读法看不见。
+        XCTAssertEqual(table.entries.count, 1, "四条不完整的载荷一条都不该收 —— 含挂在别处的")
         XCTAssertEqual(table.pending(in: "s1"), before, "已有的那条原样")
     }
 

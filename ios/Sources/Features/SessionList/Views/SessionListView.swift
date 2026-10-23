@@ -57,9 +57,7 @@ struct SessionListView: View {
 
             ForEach(state.sessions) { session in
                 NavigationLink(value: session) {
-                    // 计数现取：表是唯一来源，不为它备一份镜像（两份事实就有谁先更新的问题）。
-                    SessionRow(session: session,
-                               pendingCount: approvals.pendingCount(in: session.id))
+                    SessionRow(session: session)
                 }
             }
 
@@ -138,13 +136,6 @@ struct SessionListView: View {
 /// 列表里的一行。
 private struct SessionRow: View {
     let session: SessionSummary
-    /// 本会话还挂着的审批条数（来自 App 级的那张待答表）。
-    let pendingCount: Int
-
-    /// 这一行该画哪几枚标签 —— 排序与文字都在 `SessionRowChip` 里，这里不拼条件。
-    private var chips: [SessionRowChip] {
-        SessionRowChip.of(running: session.running, pendingCount: pendingCount)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -153,13 +144,12 @@ private struct SessionRow: View {
                     .font(.headline)
                     .lineLimit(2)
 
-                // 两件事不同（在做 / 等你），所以并列、各自着色，谁也不顶掉谁。
-                // 标签不参与压缩：标题先占两行、剩下的宽度再由标签分，被挤时它会被截成
-                // 「待审…」，而「待审批 3」里的那个 3 正是「多条与一条要能区分」的全部。
-                ForEach(chips, id: \.self) { chip in
-                    Text(chip.text)
+                // 列表不显示任何审批痕迹：有东西等你批时，只有点进那个会话才看得到
+                // —— 与 Web UI 一致（它也不在列表渲染 `pendingInteraction`）。
+                if session.running {
+                    Text("进行中")
                         .font(.caption2)
-                        .foregroundStyle(tint(for: chip))
+                        .foregroundStyle(Color.accentColor)
                         .lineLimit(1)
                         .fixedSize()
                 }
@@ -175,12 +165,5 @@ private struct SessionRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-    }
-
-    private func tint(for chip: SessionRowChip) -> Color {
-        switch chip {
-        case .running: return .accentColor
-        case .pending: return .orange
-        }
     }
 }

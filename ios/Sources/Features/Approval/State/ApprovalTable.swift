@@ -32,10 +32,6 @@ struct ApprovalTable {
     /// 按到达顺序 —— 审批是串行的，先到的那条排在前面。
     private(set) var entries: [Entry] = []
 
-    /// 全部会话的条数。分组的读法看不见「挂在别的会话下的多出来一条」，
-    /// 而形状不全的载荷恰恰会这样漏过去 —— 所以总数的读法是判据要的，不是调试用的。
-    var count: Int { entries.count }
-
     /// 收下一条 `approval` 载荷。`request` 按身份覆盖或追加；`cancel` 按 `eventId` 移除；
     /// 其余（对账名单、认不出的种类）不动表。
     mutating func absorb(_ payload: JSONValue) {
@@ -86,14 +82,5 @@ struct ApprovalTable {
     /// 某个会话还挂着的项，按到达顺序。
     func pending(in sessionId: String) -> [Entry] {
         entries.filter { $0.sessionId == sessionId }
-    }
-
-    /// 某个会话还挂着的条数。列表上的标记只问这个数，而它每重算一次就调一次 ——
-    /// 所以不另分配数组（`pending(in:).count` 会）。
-    ///
-    /// 与 `pending(in:)` 是同一条分组规则的两种读法：将来给表加筛选条件时两处要一起改，
-    /// 判据用「两个会话各一条 ⇒ 各自是 1」把它们钉在一起。
-    func pendingCount(in sessionId: String) -> Int {
-        entries.reduce(0) { $0 + ($1.sessionId == sessionId ? 1 : 0) }
     }
 }
