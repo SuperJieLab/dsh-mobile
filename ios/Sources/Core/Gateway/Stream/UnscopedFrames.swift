@@ -17,7 +17,7 @@ protocol UnscopedFrameSink: AnyObject {
 /**
  * 无编号帧的投递口：收货人可设。
  *
- * 收成协议而不是给一个具体的 `FollowClient`：消费方要能脱离 socket 接线、被断言 ——
+ * 收成协议而不是给一个具体的类：消费方要能脱离 socket 接线、被断言 ——
  * 这一跳坏了不编译失败，症状是「审批永不显示」。
  */
 @MainActor

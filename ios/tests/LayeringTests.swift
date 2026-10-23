@@ -273,7 +273,7 @@ final class LayeringTests: XCTestCase {
     /// 想图省事的人看的。
     ///
     /// 落在**代码行**上而不是文件全文：Core 里有多处注释在解释「谁消费我」（`RefreshGate`
-    /// 写 `SessionSync`、`FollowClient` 写 `SessionSync`），那些提及是必要的说明，不是依赖。
+    /// 写 `SessionSync`、`StreamTransport` 写 `SessionSync`），那些提及是必要的说明，不是依赖。
     func testCoreDoesNotReferenceFeatureTypes() throws {
         let core = sourcesRoot.appendingPathComponent("Core")
         let featureTypes = try declaredTypes(under: try interfaceDirectories(), topLevelOnly: true)
@@ -680,15 +680,15 @@ final class LayeringTests: XCTestCase {
                        "有拼装点没登记在清单里（扫到为空也走这条）：\(found.sorted())")
     }
 
-    /// 连接层不认识业务 —— 它的代码行里数不出 op 名、帧类型取值、协议错误码、会话字段。
+    /// 传输层不认识帧内容 —— 它的代码行里数不出 op 名、帧类型取值、协议错误码、会话字段。
     ///
     /// 判据按**词**扫，注释行不算：注释里可以讲这些词，那是在解释别人的形状。四条一起守，
     /// 因为它们是同一件事的四种写法 —— 少守一条，另一种写法就能把业务知识写进这一层。
     ///
     /// 盲区：只认字面量与裸标识符。用变量间接比较（`let kind = "it" + "em"`）抓不到，那种
     /// 写法靠评审；也可能误判 —— 本层若真需要这些词，说明职责又长回去了。
-    func testConnectionLayerKnowsNoProtocolWords() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/FollowClient.swift")
+    func testTransportKnowsNoFrameContent() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamTransport.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
         let forbidden = [
@@ -704,7 +704,7 @@ final class LayeringTests: XCTestCase {
         }
 
         XCTAssertGreaterThan(lines.count, 100, "扫到的代码行太少 —— 先怀疑路径或切行")
-        XCTAssertEqual(hits, [], "连接层出现了业务词汇（它只该答「线还在不在」）：\(hits)")
+        XCTAssertEqual(hits, [], "传输层出现了帧内容的词汇（它只该答「线还在不在」）：\(hits)")
     }
 
     // MARK: - 断言：流层与传输层的边界
@@ -793,6 +793,111 @@ final class LayeringTests: XCTestCase {
                       "构造入口不是 fileprivate —— 业务侧能造出一个不在表里的流")
     }
 
+    /// 两条业务流都只经**同一个造流口**接上流层：会话详情与连接级事件流平级。
+    ///
+    /// 这一条守的是「平级」这个承诺的形状：任何一条被特殊对待（自己拼开流文本、
+    /// 自己持有传输层、走另一条入口），两者就不再同构，而用户看不出区别。
+    func testBothBusinessStreamsUseTheSameFactory() throws {
+        let session = sourcesRoot
+            .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
+        let events = sourcesRoot
+            .appendingPathComponent("Core/Gateway/Events/ConnectionEventStream.swift")
+
+        for (name, url) in [("会话详情", session), ("事件流", events)] {
+            let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
+            XCTAssertTrue(lines.contains { $0.1.contains("any StreamFactory") },
+                          "\(name) 没有接在 StreamFactory 上 —— 两条流不再同构")
+            XCTAssertTrue(lines.contains { $0.1.contains("makeStream(") },
+                          "\(name) 没有造流 —— 这一屏/这条流永远不会开")
+        }
+    }
+
+    /// 业务侧不持有传输层：重连整条连接的动作在屏幕与订阅方手里都不存在。
+    ///
+    /// 与 `testBothBusinessStreamsUseTheSameFactory` 是同一件事的两半：那一半守「怎么开」，
+    /// 这一半守「不能动什么」。
+    func testBusinessSidesHoldNoTransport() throws {
+        let roots = ["Features", "Core/Gateway/Events"]
+        var scanned = 0
+        for root in roots {
+            let files = swiftFiles(under: sourcesRoot.appendingPathComponent(root))
+            XCTAssertFalse(files.isEmpty, "\(root) 一个文件都没扫到 —— 先怀疑路径推算")
+            for file in files {
+                scanned += 1
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) where code.contains("StreamTransport") {
+                    XCTFail("\(root)/\(file.lastPathComponent):\(line) 出现了传输层 —— 业务只该拿造流口")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 20, "只扫到 \(scanned) 个文件 —— 先怀疑路径推算")
+    }
+
+    /// 传输层对流表只调那四个动作，每个各出现一次。
+    ///
+    /// 数的是「同一件事有没有第二条路径」：多出一处，就说明有一帧能被路由两次、
+    /// 或一次换代次被重开两遍 —— 两种都只在真机上表现为「偶尔断一下」。
+    func testTheTransportTalksToTheMuxThroughFourCallsOnly() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamTransport.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        let calls = ["mux.receive(", "mux.reopenAll()", "mux.closeAll()", "mux.hasPendingOpening"]
+
+        for call in calls {
+            let count = lines.filter { $0.1.contains(call) }.count
+            XCTAssertEqual(count, 1, "\(call) 出现 \(count) 次（该恰好一次）")
+        }
+    }
+
+    /// 改造前的九个旧名在源码里零命中：改名不留残影。
+    ///
+    /// 正控：`StreamMux` 必须命中 —— 否则说明扫描本身没工作（空集会被读成合规）。
+    func testTheOldNamesAreGone() throws {
+        let retired = [
+            "FollowClient", "SessionStreamHandle", "Subscription", "sendAllOpens", "forgetAll",
+            "ConnectionStore", "ConnectionPhase", "ConnectionEvents", "Gateway/Client",
+        ]
+        var hits: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for name in retired where code.contains(name) {
+                    hits.append("\(file.lastPathComponent):\(line) \(name)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 40, "只扫到 \(scanned) 个文件 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, [], "旧名还有残留：\(hits)")
+
+        // 正控：造号点必须在，且它现在的名字是新的。
+        let mux = try String(
+            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(mux.contains("static func newStreamId()"), "新造号点没扫到 —— 判据可能扫错了树")
+    }
+
+    /// 阶段类型提出去了：业务与视图读的是顶层 `StreamPhase`，没有谁还写 `FollowClient.Phase`。
+    ///
+    /// 数一遍消费者（正控）：少于四处说明「提出去」只改了声明，消费点没跟上。
+    func testThePhaseTypeIsTopLevelAndConsumed() throws {
+        var consumers = 0
+        let trees = ["Features", "Core/Gateway/Stream"].map {
+            sourcesRoot.appendingPathComponent($0)
+        }
+        for file in trees.flatMap({ swiftFiles(under: $0) }) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (_, code) in codeLines(in: text) where code.contains("StreamPhase") {
+                consumers += 1
+            }
+            XCTAssertFalse(text.contains("FollowClient"),
+                           "\(file.lastPathComponent) 还在写旧阶段类型的宿主名")
+        }
+        XCTAssertGreaterThanOrEqual(consumers, 4, "StreamPhase 的消费点只有 \(consumers) 处："
+                                    + "提出去只改了声明？")
+    }
+
     /// 一条流的公开面没有连接级动作：「这条流坏了」与「整条连接断了」是两件事。
     ///
     /// 正控：`close` / `restart` 必须在（否则这段文本取错了，零命中是假绿）。
@@ -826,7 +931,7 @@ final class LayeringTests: XCTestCase {
         let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionStreamReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
-        let forbidden = ["FollowClient", "URLSession", "MuxOpenFrame", "GatewayClient"]
+        let forbidden = ["StreamMux", "StreamTransport", "URLSession", "MuxOpenFrame", "GatewayClient"]
 
         XCTAssertTrue(lines.contains { $0.1.contains("static func read(") },
                       "没找到 `static func read(` —— 先怀疑路径或名字")

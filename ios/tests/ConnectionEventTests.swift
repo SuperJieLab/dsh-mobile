@@ -276,15 +276,18 @@ final class ConnectionEventTests: XCTestCase {
 
     // MARK: - 登记这条流：判读结论要真的变成连接层的答复
 
-    /// 连接层的替身：只做「收下这条订阅」，不含任何判定。
+    /// 造流口的替身：只记账，不含任何判定。
     ///
     /// 用它而不是真的 `GatewayLink`：后者要一个 `GatewayClient`（真 `URLSession` 路径），
-    /// 于是「判读结论怎么变成连接层的答复」这一跳就没有任何办法被断言 —— 而它正是
+    /// 于是「判读结论怎么变成流层的答复」这一跳就没有任何办法被断言 —— 而它正是
     /// `read` 与 `handle` 两组判据之间唯一的缝。
     @MainActor
-    private final class StreamOpener: ConnectionStreamOpening {
-        var opened: [FollowClient.Subscription] = []
-        func open(_ subscription: FollowClient.Subscription) { opened.append(subscription) }
+    private final class RecordingFactory: StreamFactory {
+        var behaviors: [any StreamBehavior] = []
+        func makeStream(_ behavior: any StreamBehavior) -> LogicalStream? {
+            behaviors.append(behavior)
+            return nil   // 本组不验流表，只需要「造流被调用了一次」
+        }
     }
 
     /// 登记的那一条流：开流文本是 `{op:"events"}`，答复由判读结论翻译而来。
@@ -293,21 +296,21 @@ final class ConnectionEventTests: XCTestCase {
     /// 还没有代次时开始判死）；`next` 传成常量 `.keep` 会让收尾不重开、被拒不收起。
     func testAttachRegistersOneStreamWhoseBuildAndReplyFollowTheReading() throws {
         let events = ConnectionEventStream()
-        let opener = StreamOpener()
-        events.attach(to: opener)
+        let factory = RecordingFactory()
+        events.attach(to: factory)
 
-        XCTAssertEqual(opener.opened.count, 1, "attach 登记一条，不多不少")
-        let subscription = try XCTUnwrap(opener.opened.first)
-        XCTAssertEqual(subscription.label, "connection-events")
+        XCTAssertEqual(factory.behaviors.count, 1, "attach 造一条，不多不少")
+        let behavior = try XCTUnwrap(factory.behaviors.first)
+        XCTAssertEqual(behavior.label, "connection-events")
 
-        XCTAssertEqual(try subscription.build("e1"),
+        XCTAssertEqual(try behavior.build("e1"),
                        #"{"payload":{"op":"events"},"streamId":"e1","type":"open"}"#,
                        "这条流不绑会话：载荷里只有 op")
 
         func reply(_ frame: String) throws -> StreamReply {
             let data = Data(frame.utf8)
             let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: data)
-            return subscription.handler(envelope, data)
+            return behavior.handle(envelope, raw: data)
         }
 
         let ready = try reply(#"{"type":"item","streamId":"e1","payload":{"kind":"ready","generation":2}}"#)

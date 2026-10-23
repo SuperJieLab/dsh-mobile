@@ -189,3 +189,87 @@ final class StreamTransportTests: XCTestCase {
         transport.deactivate()
     }
 }
+
+// MARK: - 由旧判据并入
+
+extension StreamTransportTests {
+
+    /// 没有收货人时，无编号帧被静默丢弃 —— 不崩、不进任何流。
+    func testWithoutASinkUnscopedFramesAreDropped() throws {
+        let transport = transport()
+        transport.activate()
+        let behavior = Behavior()
+        _ = try XCTUnwrap(transport.mux.makeStream(behavior))
+
+        transport.handleMessage(.string(#"{"type":"approval","payload":{}}"#), generation: 1)
+
+        XCTAssertEqual(behavior.handled, 0, "无编号帧不进流")
+        XCTAssertEqual(transport.phase, .connecting, "丢弃不改阶段")
+    }
+
+    /// 门面把收货人转给传输层。
+    ///
+    /// 这一跳写成空实现时两端的判据都还是绿的：审批帧到不了那张表，症状是「卡永不显示」。
+    func testTheFacadeForwardsTheSinkToTheTransport() {
+        let store = CredentialStore(storage: .init(
+            read: { nil }, write: { _ in }, delete: {}
+        ))
+        let link = GatewayLink(client: GatewayClient(credentials: store))
+        let sink = Sink()
+
+        link.unscopedSink = sink
+
+        XCTAssertTrue(link.unscopedSink === sink)
+    }
+
+    /// 在已连接上开第二条流：阶段不闪回「连接中」。
+    ///
+    /// 阶段的含义是「这条连接走到哪一步」，与登记了几条流无关。
+    func testOpeningASecondStreamKeepsThePhase() throws {
+        let transport = transport()
+        transport.activate()
+        transport.didEstablish("first")
+        XCTAssertEqual(transport.phase, .ready)
+
+        _ = try XCTUnwrap(transport.mux.makeStream(Behavior()))
+        _ = try XCTUnwrap(transport.mux.makeStream(Behavior()))
+
+        XCTAssertEqual(transport.phase, .ready, "开流不改阶段")
+    }
+
+    /// 单帧接收上限必须是网关承诺上界的两倍：系统默认 1 MiB 正是「某个会话打不开」的成因。
+    func testTheFrameCeilingIsTwiceTheGatewayCap() {
+        XCTAssertEqual(StreamTransport.maximumMessageSize, 8 * 1024 * 1024)
+    }
+
+    /// 没有票 → 去换；换到了立刻重连（跳过这一轮退避），换不到且不会自愈就停。
+    ///
+    /// 三种结果三种走向，不能合并：退避里对着「不会自己好」无限重试是每 10 秒一次、
+    /// 静默、永不收敛；而把「网络不通」说成「未配对」会让人去查一件没发生的事。
+    func testTicketRenewalDecidesTheNextStep() async throws {
+        // ① 换到：立刻重连，跳过退避。
+        let renewed = transport()
+        var handshakes = 0
+        renewed.authorizationProvider = { nil }
+        renewed.sessionProvider = { handshakes += 1; return .shared }
+        renewed.ticketRenewer = { .granted("fresh") }
+        renewed.activate()
+        XCTAssertEqual(handshakes, 0, "没有票先不握手")
+        try await Task.sleep(nanoseconds: 150_000_000)
+        // 换到的票要经 `authorizationProvider` 再取一次 —— 这里换的是同一份闭包，
+        // 所以第二问必须拿得到票，否则它只会再等一轮。
+        renewed.authorizationProvider = { "fresh" }
+        renewed.reconnectNow()
+        XCTAssertEqual(handshakes, 1, "换到票之后立刻握手")
+        renewed.deactivate()
+
+        // ② 拿不到且不会自愈：停，不再排重试。
+        let hopeless = transport()
+        hopeless.authorizationProvider = { nil }
+        hopeless.ticketRenewer = { .unavailable }
+        hopeless.activate()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(hopeless.phase, .idle, "不会自愈就不空转")
+        hopeless.deactivate()
+    }
+}

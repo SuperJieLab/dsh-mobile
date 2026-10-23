@@ -304,3 +304,81 @@ final class StreamMuxTests: XCTestCase {
     }
 
 }
+
+// MARK: - 由旧判据并入
+
+extension StreamMuxTests {
+
+    /// `.stop` 只收起被拒的那一条 —— 另一条与连接本身都不动。
+    ///
+    /// 这一条防的是「一条流被拒就把同一条连接上的另一条一起拽断」：那种错法在只有一条流
+    /// 时看不出区别，而事件流与会话流是同时活着的。
+    func testATerminalRefusalStopsOnlyThatStream() throws {
+        let (mux, port) = makeMux()
+        port.attachConnection()
+        let refusing = FakeBehavior(label: "a")
+        refusing.verdict = { _ in StreamReply(next: .stop) }
+        let survivor = FakeBehavior(label: "b")
+        let stopped = try XCTUnwrap(mux.makeStream(refusing))
+        let alive = try XCTUnwrap(mux.makeStream(survivor))
+
+        mux.receive(frame(stopped.id), raw: Data())
+
+        XCTAssertFalse(mux.isWaitingToRetry(stopped), "终态不排退避")
+        XCTAssertEqual(port.abandonCount, 0, "更不能放弃整条连接")
+
+        mux.receive(frame(alive.id), raw: Data())
+        XCTAssertEqual(survivor.handled, 1, "另一条流照常工作")
+    }
+
+    /// 服务端正常收尾 ⇒ 同一条连接上换号重开（连接不重建）。
+    func testAnEndReopensThatStreamWithAFreshId() throws {
+        let (mux, port) = makeMux()
+        port.attachConnection()
+        let behavior = FakeBehavior()
+        behavior.verdict = { _ in StreamReply(next: .reopen) }
+        let stream = try XCTUnwrap(mux.makeStream(behavior))
+        let oldId = stream.id
+
+        mux.receive(frame(oldId), raw: Data())
+
+        XCTAssertNotEqual(stream.id, oldId, "收尾是「这条流不在了」，换号重开")
+        XCTAssertEqual(port.sent.count, 3, "open(旧) + cancel(旧) + open(新)")
+        XCTAssertTrue(port.sent.last?.contains(stream.id) == true, "立刻发出去，不等退避")
+    }
+
+    /// 退避期间用户按了「重试」：取消排着的那一拍，立刻开。
+    ///
+    /// 不取消的话用户会看到「按了没反应」—— 那一拍要到点才发，而它发的是同一件事。
+    func testRestartingDuringBackoffOpensImmediately() throws {
+        let (mux, port) = makeMux()
+        port.attachConnection()
+        let behavior = FakeBehavior()
+        behavior.verdict = { _ in StreamReply(next: .retry) }
+        let stream = try XCTUnwrap(mux.makeStream(behavior))
+        mux.receive(frame(stream.id), raw: Data())
+        XCTAssertTrue(mux.isWaitingToRetry(stream), "先确认有一拍排着")
+        let sentBefore = port.sent.count
+
+        stream.restart()
+
+        XCTAssertFalse(mux.isWaitingToRetry(stream), "这一拍被取代了")
+        XCTAssertEqual(port.sent.count, sentBefore + 2, "cancel(旧) + 立刻 open(新)")
+    }
+
+    /// 退避曲线：指数爬升、抖动落在上限的 50–100%、封顶 10 秒。
+    ///
+    /// 三个抽样点覆盖三种形态，不是三个例子 —— 爬升段、封顶段、抖动两端。
+    func testBackoffCurveRisesJittersAndCaps() {
+        XCTAssertEqual(StreamBackoff.delayMs(attempt: 1, random: 0), 250, "首拍下限：500 的一半")
+        XCTAssertEqual(StreamBackoff.delayMs(attempt: 1, random: 0.999), 499, "首拍上限：接近 500")
+
+        let failed = StreamBackoff.delayMs(attempt: 5, random: 0)
+        let failedMax = StreamBackoff.delayMs(attempt: 5, random: 0.999)
+        XCTAssertGreaterThan(failed, StreamBackoff.delayMs(attempt: 1, random: 0), "随失败次数爬升")
+        XCTAssertEqual(failedMax, 7_996, "第 5 拍上限 8 秒（抖动到 99.95%）")
+
+        XCTAssertEqual(StreamBackoff.delayMs(attempt: 20, random: 0), 5_000, "封顶 10 秒的一半")
+        XCTAssertEqual(StreamBackoff.delayMs(attempt: 20, random: 0.999), 9_995, "封顶不越过 10 秒")
+    }
+}

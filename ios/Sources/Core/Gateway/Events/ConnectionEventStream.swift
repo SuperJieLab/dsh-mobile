@@ -1,19 +1,6 @@
 import Foundation
 
 /**
- * 事件流要的那一件事：登记一条流。
- *
- * 与 `SessionStreamHandle` 同一条理由，受众不同（那里是屏幕，这里是 App 级的事件容器）——
- * 容器只需要 `open`。收一个带 `reconnectNow()` / `deactivate()` 的具体连接宿主，代价是这一跳
- * 不可断言：那个类型要一个真的 `GatewayClient`（真 `URLSession` 路径），于是「判读结论怎么
- * 变成连接层的答复」就只能靠评审看出来。
- */
-@MainActor
-protocol ConnectionStreamOpening {
-    func open(_ subscription: FollowClient.Subscription)
-}
-
-/**
  * 「这台机器上发生了什么」—— 连接级那条事件流的**收端**（这个名字说的就是这一点：
  * 它是这条流在客户端的代表，不是「一堆事件」）。
  *
@@ -50,21 +37,18 @@ final class ConnectionEventStream {
     /// 而是这条流自己的第三种货物 —— 上游那四类名字在网关就被翻掉了。
     private var listHandlers: [(SessionListChange) -> Void] = []
 
+    /// 这条流本身。`close()` / `restart()` 都在它上面 —— 连接级动作一个都不在这里。
+    private var stream: LogicalStream?
+
     /// 登记这条流 —— 与当前会话流平级，先登记后登记都一样。
     ///
-    /// 没有编号的帧不进这里：它们由连接层的投递口交给 App 级的那张表。
-    func attach(to opener: any ConnectionStreamOpening) {
-        opener.open(FollowClient.Subscription(
-            owner: self,
-            label: "connection-events",
-            build: { id in try MuxOpenFrame.events(streamId: id).encoded() },
-            handler: { [weak self] envelope, _ in
-                guard let self else { return StreamReply() }
-                let reading = ConnectionEventReader.read(envelope: envelope)
-                self.handle(reading)
-                return StreamReply(establishes: reading.establishes, next: reading.next)
-            }
-        ))
+    /// 没有编号的帧不进这里：它们由传输层的投递口交给 App 级的那张表。
+    ///
+    /// 一次只造一条：`attach` 在根视图的 `.task` 里调，视图重放时会再来一次，
+    /// 而造流不幂等 —— 闸在这里，不在调用方。
+    func attach(to factory: any StreamFactory) {
+        guard stream == nil else { return }
+        stream = factory.makeStream(self)
     }
 
     /// 源换代次时叫醒。消费方在这里重读基线 —— 断线期间的事件永不补发，重读是唯一手段。
@@ -86,7 +70,7 @@ final class ConnectionEventStream {
 
     /// 判读之后的那一跳 —— 本类唯一的入口。
     ///
-    /// 对内可见（不 `private`）与 `FollowClient.handleMessage` 同理：这里有一条只有在
+    /// 对内可见（不 `private`）与 `StreamTransport.handleMessage` 同理：这里有一条只有在
     /// 此处才断言得到的契约 —— **什么算叫醒消费方**。走一条真连接也看得见它，但那时
     /// 「源的代次」与网络的偶然混在一起。
     func handle(_ reading: ConnectionEventReading) {
@@ -110,5 +94,25 @@ final class ConnectionEventStream {
             // 收尾由 `StreamReply` 变成重开；认不出的载荷连名字都没有，分派无处可去。
             break
         }
+    }
+}
+
+// MARK: - 这条流的两段自定义
+
+/// 连接级事件流：开流文本只有 `{op:"events"}`，帧的判读在 `ConnectionEventReader`。
+/// 流层只问这两件事 —— 它不知道这条流不绑会话，也不认识 `ready` / `emit` 这些货物。
+extension ConnectionEventStream: StreamBehavior {
+
+    /// 日志里认人的标识 —— 与另一条流区分开。
+    var label: String { "connection-events" }
+
+    func build(_ id: StreamId) throws -> String {
+        try MuxOpenFrame.events(streamId: id).encoded()
+    }
+
+    func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
+        let reading = ConnectionEventReader.read(envelope: envelope)
+        handle(reading)
+        return StreamReply(establishes: reading.establishes, next: reading.next)
     }
 }

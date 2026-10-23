@@ -23,7 +23,7 @@ import Foundation
  *
  * 类型是字符串而不是整数，是为了让它没有可读含义：编号一旦能被解释（「1 是会话流、
  * 2 是审批流」），复用就跟着来 —— 而复用会让旧流的收尾删到新流的登记、旧流的残帧
- * 与新流同号。网关只要求它非空，怎么造归客户端（`FollowClient` 是唯一的造号点）。
+ * 与新流同号。网关只要求它非空，怎么造归客户端（`StreamMux` 是唯一的造号点）。
  */
 typealias StreamId = String
 
@@ -88,7 +88,7 @@ struct EventsRequest: Encodable {
 /// 客户端会等到超时。
 ///
 /// 编号由连接层造（它是唯一知道「这条连接上哪些号在用」的地方），文本由状态层拼（`op`
-/// 是协议词，连接层不认识）—— 两者在 `FollowClient.open(_:)` 的拼装闭包处对接。
+/// 是协议词，连接层不认识）—— 两者在 `StreamMux.makeStream(_:)` 的注入处对接。
 struct MuxOpenFrame: Encodable {
 
     let streamId: StreamId

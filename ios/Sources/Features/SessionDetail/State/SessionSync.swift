@@ -97,20 +97,21 @@ final class SessionSync: ObservableObject {
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
 
-    /// 订阅流：打开会话详情即登记一条流，离屏即注销。
+    /// 造流口：打开会话详情即造一条流，离屏即关掉它。
     ///
-    /// **连接归 App**（`GatewayLink`）——这一屏只登记「我要看这个会话」，不再持有连接。
-    /// 连接层交来整帧，判读在 `SessionStreamReader`（纯函数），本层只做副作用并把
-    /// 「这条流接下来怎么办」回给它 —— 判据在这边、动作在那边，两边都不需要知道对方认识什么。
+    /// **连接归 App**（`GatewayLink`）——这一屏只说明「我要看这个会话」。
+    /// 传输层交来整帧，判读在 `SessionStreamReader`（纯函数），本层只做副作用并把
+    /// 「这条流接下来怎么办」回给它 —— 判据在这边、动作在那边。
     ///
     /// 类型是窄接口而不是 `GatewayLink`：连接级动作（重连整条连接）在这个类型上不存在，
     /// 于是「一条流坏了去重连全部」在这里写不出来。
-    private let streams: any SessionStreamHandle
+    private let factory: any StreamFactory
+    /// 本屏那一条流。关它、重开它都是它自己的方法 —— 连接与别的流不动。
+    private var stream: LogicalStream?
     /// 连接阶段 —— 本屏读连接状态的唯一出处（功能条网络格与连接详情都读它）。
     ///
-    /// 它与 `streams` 来自同一个对象，但一个是读一个是做：合成一个成员会让「读连接状态」
-    /// 顺手带上「动连接」的全部能力。发布流的订阅在 `init` 里就地接上，不另存一份属性。
-    @Published private(set) var phase: FollowClient.Phase = .idle
+    /// 它来自宿主而不是流：阶段说的是「这条连接走到哪一步」，与登记了几条流无关。
+    @Published private(set) var phase: StreamPhase = .idle
     private var transient = TransientChannel()
 
     /// 首屏兜底：WS 迟迟不给窗口时用 HTTP 拉一次。
@@ -140,7 +141,7 @@ final class SessionSync: ObservableObject {
     init(client: GatewayClient, sessionId: String, link: GatewayLink) {
         self.client = client
         self.sessionId = sessionId
-        self.streams = link
+        self.factory = link
         // 只订阅、不下手：发布流就地接上，不必留一个属性给下一任读者。
         phaseObservation = link.$phase
             .sink { [weak self] phase in self?.phase = phase }
@@ -389,28 +390,9 @@ final class SessionSync: ObservableObject {
     /// 开流文本在**这一层**拼（要求：请求只在状态层里拼），编号由连接层给 —— 两者在
     /// `build` 闭包里对接：本层不知道号从哪来，连接层不认识 `op` 与会话。
     func startFollowing() {
-        // `build` 只捕获会话 id（值类型），不拽住整个同步器；`handler` 是 `[weak self]`。
-        // `owner` 反过来**故意**强持有：它是身份，注销时靠它比对（弱了就等于没有身份），
-        // 而它在 `close(owner:)` 里随订阅一起释放 —— 泄漏的边界是这条订阅，不是本屏。
-        let sessionId = self.sessionId
-        streams.open(FollowClient.Subscription(
-            owner: self,
-            label: sessionId,
-            build: { id in
-                try MuxOpenFrame.following(sessionId: sessionId, streamId: id).encoded()
-            },
-            handler: { [weak self] envelope, raw in
-                guard let self else { return StreamReply() }
-                let reading = SessionStreamReader.read(envelope: envelope, raw: raw, sessionId: sessionId)
-                // 到达与应用的边界要卡在这一跳的两侧：`devRecv` 是帧到手，`devApply` 是本层
-                // 处理完（镜像合并、状态机吸收、刷新闸标记都在里面）。
-                let recv = PerfRecord.nowMs()
-                self.handle(reading)
-                let apply = PerfRecord.nowMs()
-                self.recordPerf(reading, bytes: raw.count, recv: recv, apply: apply)
-                return StreamReply(establishes: reading.establishes, next: reading.next)
-            }
-        ))
+        // 一次屏幕只造一条：重复调用不换号、也不多一条流（视图重算会让这里被调多次）。
+        guard stream == nil else { return }
+        stream = factory.makeStream(self)
         // 首屏兜底与开流成败无关：编不出帧时它是唯一还能把内容送到屏幕上的路。
         scheduleFirstScreenFallback()
     }
@@ -420,7 +402,7 @@ final class SessionSync: ObservableObject {
     /// 它是流级动作，所以屏幕拿到的是它而不是重连整条连接 —— 后者会把事件流一起拽断，
     /// 而用户按的那个按钮说的是「我这一屏没内容」。
     func retry() {
-        streams.reopen(owner: self)
+        stream?.restart()
     }
 
     /// 2.5 秒是「明显慢了」与「还在正常握手」的分界 —— 正常情况下 opening 一秒内到。
@@ -439,7 +421,8 @@ final class SessionSync: ObservableObject {
     func stopFollowing() {
         firstScreenFallback?.cancel()
         firstScreenFallback = nil
-        streams.close(owner: self)
+        stream?.close()
+        stream = nil
         transient = TransientChannel()
         transientText = ""
     }
@@ -597,7 +580,7 @@ final class SessionSync: ObservableObject {
         if verdict == .broken {
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
             Log.warn(Log.Module.session, "TransientChannel broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
-            streams.reopen(owner: self)
+            stream?.restart()
             return
         }
         transientText = transient.text
@@ -684,5 +667,35 @@ final class SessionSync: ObservableObject {
         nodes = assembler.assemble(mirror.events)
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
+    }
+}
+
+// MARK: - 这条流的两段自定义
+
+/// 会话流：开流文本在这一层拼（请求只在状态层里拼），帧的判读在 `SessionStreamReader`
+/// （纯函数）。流层只问这两件事，别的都不知道。
+extension SessionSync: StreamBehavior {
+
+    /// 日志里认人的标识 —— 会话 id。流层不解释它。
+    var label: String { sessionId }
+
+    /// 凭刚造好的编号拼出开流文本：编号由流表造，`op` 与会话由这一层给。
+    func build(_ id: StreamId) throws -> String {
+        try MuxOpenFrame.following(sessionId: sessionId, streamId: id).encoded()
+    }
+
+    /// 一帧到手：判读 → 副作用 → 回一句话。
+    ///
+    /// 到达与应用的边界卡在这一跳的两侧：`devRecv` 是帧到手，`devApply` 是本层处理完
+    ///（镜像合并、状态机吸收、刷新闸标记都在里面）。
+    func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
+        let reading = SessionStreamReader.read(
+            envelope: envelope, raw: raw, sessionId: sessionId
+        )
+        let recv = PerfRecord.nowMs()
+        handle(reading)
+        let apply = PerfRecord.nowMs()
+        recordPerf(reading, bytes: raw.count, recv: recv, apply: apply)
+        return StreamReply(establishes: reading.establishes, next: reading.next)
     }
 }

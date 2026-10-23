@@ -6,7 +6,7 @@ import SwiftUI
 /// 这样它能在预览与测试里独立成立，接线（谁提供这些值）留在宿主。
 struct NetworkSheet: View {
 
-    let phase: FollowClient.Phase
+    let phase: StreamPhase
     let carrier: CarrierPath?
     /// 进本屏以来收到的最后一帧；`nil` 时这一行整个不出现（不显示「0 秒前」）。
     let lastFrameAt: Date?
