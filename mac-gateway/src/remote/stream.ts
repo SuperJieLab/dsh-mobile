@@ -8,13 +8,16 @@
  * 一条流失败时**只有这条结束**：泵的 catch 把异常折成 error 帧，`finally` 清掉
  * 自己的 streamId；同一条连接上的其它流继续。
  *
- * **本文件出现三条错误码，归属各不相同**（`ISSUES` A13 的分类结果）：
+ * **本文件出现四条错误码，归属各不相同**（`ISSUES` A13 的分类结果）：
  *
  *   window-too-large   传输自有 —— 说的是「这一帧装不下」，由字节上界
  *                      （`StreamOptions.openingCapBytes`）产生，不是会话状态
  *   unknown-op         载荷不是这条流认得的请求 —— 形状判定用 `wire/mux.ts` 的
  *                      `openRequestOf`，这里只决定怎么回：一条带编号的 error 帧，
  *                      **连接与其他流不动**
+ *   source-unavailable 事件源在、但这一代还没就绪 —— 给一份「看起来有、其实不知道」
+ *                      的待答集合比拒绝更坏，所以拒绝；客户端按可重试处理（传输自有，
+ *                      与 `unknown-op` 同族，不进 `protocol/error-codes.ts` 的上游映射）
  *   internal-error     **这一条有三个产生者**：上游失败经映射（那种在
  *                      `protocol/error-codes.ts`）；本层自己发现的「源承诺无缺口、
  *                      实际却跳了 seq」—— 那不是上游抛的错，是传输在见证契约被违反；
@@ -31,6 +34,8 @@ import {
   openRequestOf,
   parseClientFrame,
   type FollowOpening,
+  type MuxApprovalCancel,
+  type MuxApprovalWaterfall,
   type MuxItemFrame,
   type StreamId,
 } from '../wire/mux.ts'
@@ -143,21 +148,6 @@ function excerptOf(text: string): string {
 }
 
 /**
- * 泵一条事件流：订阅进程里那份源，一条流一个订阅者。
- *
- * **开口帧不等源**：订阅那一刻先发一条 `ready`，此后源的每次换代次再发一条。若开口要
- * 等源就绪，一次源的事故会让这条流一直等不到打开帧 —— 而就绪超时判的是**整条连接**，
- * 于是一条流的事故变成所有流反复重开。
- *
- * 这条流**不会自己结束**：源断了只发一条无代次的 `ready`，因为结束流会让手机立刻重开
- * 一条注定拿不到正文的流，而重开没有退避。唯一的收场是客户端取消或连接收尾。
- *
- * 三种载荷是它的全部词汇：`ready`（源的状态，`generation` 缺席 = 没有活的代次）、
- * `emit`（源的内容，名字与参数原样）、`session-list`（会话列表的一条增量 —— 上游那四类
- * `api-session/*` 在发出之前翻成我们的形状，见 `upstream/session-events.ts`）。源上的
- * `waterfall` / `cancel` 是审批的事，同一条源上两类消费方各取所需 —— 这条流不转发它们。
- */
-/**
  * 一条待答调用 → 这条流上的一帧。
  *
  * 重放与实时**共用这一处**：两处各写一遍时，往一处加字段、另一处忘掉，测试看不出差别
@@ -165,13 +155,36 @@ function excerptOf(text: string): string {
  * 在这里补，中继只给数据。
  */
 function waterfallItem(streamId: StreamId, held: HeldApproval): MuxItemFrame {
-  return { type: 'item', streamId, payload: { kind: 'waterfall', ...held } }
+  // 形状由 `wire/mux.ts` 的声明守：少一个字段在这里就编译不过。
+  const payload: MuxApprovalWaterfall = { kind: 'waterfall', ...held }
+  return { type: 'item', streamId, payload }
 }
 
 /** 一条撤回 → 这条流上的一帧。 */
 function cancelItem(streamId: StreamId, eventId: string): MuxItemFrame {
-  return { type: 'item', streamId, payload: { kind: 'cancel', eventId } }
+  const payload: MuxApprovalCancel = { kind: 'cancel', eventId }
+  return { type: 'item', streamId, payload }
 }
+
+/**
+ * 泵一条事件流：订阅进程里那份源，一条流一个订阅者。
+ *
+ * **开口即基线**：`ready` 之后立刻把此刻还待答的全部重放一遍，随后才是增量。客户端因此
+ * 不需要任何「请给我当前集合」的请求 —— 恢复只有一条路径（重开一次流 = 新一份基线）。
+ *
+ * **开口帧不等源**：订阅那一刻先发一条 `ready`，此后源的每次换代次再发一条。若开口要
+ * 等源就绪，一次源的事故会让这条流一直等不到打开帧 —— 而就绪超时判的是**整条连接**，
+ * 于是一条流的事故变成所有流反复重开。唯一的例外是**待答集合不可信**（`approvals.ready`
+ * 为假）：那时拒绝开流（`source-unavailable`），客户端退避重开。
+ *
+ * 这条流**不会自己结束**：源断了只发一条无代次的 `ready`，因为结束流会让手机立刻重开
+ * 一条注定拿不到正文的流，而重开没有退避。唯一的收场是客户端取消或连接收尾。
+ *
+ * 五种载荷是它的全部词汇：`ready`（源的状态，`generation` 缺席 = 没有活的代次）、
+ * `emit`（源的内容，名字与参数原样）、`session-list`（会话列表的一条增量 —— 上游那四类
+ * `api-session/*` 在发出之前翻成我们的形状，见 `upstream/session-events.ts`）、
+ * `waterfall`（一条待答调用）、`cancel`（一条撤回）。
+ */
 
 function pumpEvents(
   socket: Duplex,

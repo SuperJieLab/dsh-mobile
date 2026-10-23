@@ -239,33 +239,17 @@ test('relay: only approval/request waterfalls are announced — the request body
 test('relay: the source dying drops held questions, and the next generation starts clean', async () => {
   // 身份换代 = 宿主会把仍在等待的问题重投一遍。沿用旧集合就是重放已消费的应答，
   // 所以中继必须在「源没了」那一刻把待答表丢掉 —— 这是它跟源一起动的那一半。
-  const { feed, relay, stop } = await liveRelay()
+  // 客户端那张表的清空由每一条 `ready` 触发（`pumpEvents`），不在这里。
+  const { feed, relay, events, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
 
     feed.end()
-    await until(() => relay.held().length === 0, 'the held question goes with the source')
+    await until(() => !events.ready, 'the source is gone')
+    assert.deepEqual(relay.held(), [], 'the previous identity’s questions are not carried over')
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval',
       'and an answer that arrives afterwards cannot be delivered to an identity that is gone')
-  } finally {
-    stop()
-  }
-})
-
-// -- 连接建立时的重投序列 ----------------------------------------------------
-
-test('relay: the held set is dropped when the source identity ends', async () => {
-  const { feed, relay, events, stop } = await liveRelay()
-  try {
-    feed.push(waterfallFrame('e1', 'shell', 's1'))
-    await until(() => relay.held().length === 1, 'the question is held')
-    feed.end()
-    await until(() => !events.ready, 'the source is gone')
-
-    // 换代的身份不持有上一代的问题：宿主会把仍在等待的重投给新一代，沿用旧集合就是
-    // 重放已消费的投递。客户端那张表的清空由每一条 `ready` 触发（`pumpEvents`）。
-    assert.deepEqual(relay.held(), [], 'the previous identity’s questions are not carried over')
   } finally {
     stop()
   }

@@ -1,11 +1,9 @@
 /**
- * 连接集合：upgrade 的分发、持有每一条已认证的 socket、向它们广播。
+ * 连接集合：upgrade 的分发、持有每一条已认证的 socket。
  *
  * 存活范围是**整个进程**。集合自己不做协议协商（那是 `connection.ts` 的事），
- * 也不为每帧重复编码（一次编码、写 N 次；写出与守卫是 `egress.ts` 的事）——
- * 它只回答「现在有谁连着」。
- *
- * 广播时某个 socket 已死不影响其余：写之前检查 `destroyed`，一个死连接只是被跳过。
+ * 也不写字节（写出与守卫是 `egress.ts` 的事）—— 它只回答「现在有谁连着」。
+ * 所以它只有一个成员：`clientCount`，由资源采样读。
  *
  * 这一层不产生协议码 —— 握手拒绝用的是 HTTP 状态行（404 / 401 / 400），那是传输
  * 自己的词汇，不是协议信封。身份类的 `unauthenticated` / `invalid-pairing-code`
@@ -16,12 +14,6 @@ import type { Duplex } from 'node:stream'
 import type { Server } from 'node:http'
 import { handleUpgrade, type StreamOptions } from './connection.ts'
 import type { FollowSource } from '../ports/follow.ts'
-
-/** 接入的客户端集合 —— 资源采样读它的规模，别的都不读。 */
-export interface Broadcaster {
-  /** 当前接入的客户端数 —— 资源采样读它。 */
-  clientCount(): number
-}
 
 /**
  * 把流协议挂上插件自己的监听器：集合自己只持有 socket 与计数，协商与后续的
@@ -35,7 +27,7 @@ export function attachStreamHandler(
   source: FollowSource,
   gate: { authenticate(authorizationHeader: string | undefined): boolean },
   options: StreamOptions = {},
-): Broadcaster {
+): { clientCount(): number } {
   const clients = new Set<Duplex>()
   server.on('upgrade', (request, socket, head) => {
     void handleUpgrade(request, socket, head, source, gate, clients, options)

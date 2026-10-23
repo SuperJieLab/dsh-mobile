@@ -38,12 +38,15 @@ final class ApprovalStoreTests: XCTestCase {
     }
 
     /// 一条待答调用的载荷 —— 上游 waterfall 的四个字段原样，网关只搬不改。
+    ///
+    /// `callId` 与 `eventId` 可以不同值 —— 那是「按错字段建键」唯一能被看见的形状。
     private func waterfall(
         session: String = "s1", eventId: String = "e1", toolName: String = "bash",
-        reason: String? = nil
+        reason: String? = nil, callId: String? = nil
     ) -> JSONValue {
         var body: [String: JSONValue] = ["toolName": .string(toolName)]
         if let reason { body["reason"] = .string(reason) }
+        if let callId { body["callId"] = .string(callId) }
         return .object([
             "event": .string("approval/request"),
             "eventId": .string(eventId),
@@ -77,6 +80,19 @@ final class ApprovalStoreTests: XCTestCase {
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty)
         XCTAssertNil(store.state(for: "e1"))
+    }
+
+    /// 载荷里带 `callId` 也不改变身份：`cancel` 只带 `eventId`，用别的字段建键就删不掉。
+    ///
+    /// 样本必须让两个字段取**不同值** —— 相同时两种建键长得一模一样，改错了也全绿。
+    /// 症状是「别人先答了，我的卡永远留着」。
+    func testACancelStillRemovesTheEntryWhenThePayloadCarriesADifferentCallId() {
+        let store = ApprovalStore(answerer: FakeAnswerer())
+        store.receive(waterfall(eventId: "e1", callId: "call-9"))
+        XCTAssertEqual(store.pending(in: "s1").map(\.eventId), ["e1"], "身份是投递编号，不是 callId")
+
+        store.cancel(eventId: "e1")
+        XCTAssertTrue(store.pending(in: "s1").isEmpty, "cancel 只带 eventId —— 用 callId 建键时这一删落空")
     }
 
     // MARK: - 作答：成功与三种失败

@@ -24,11 +24,8 @@ final class GatewayLink: ObservableObject, StreamFactory {
 
     private let transport: StreamTransport
 
-    /// - Parameter transport: 默认自己造一个（`nil` 而不是默认表达式：跨 actor 的默认值
-    ///   求值不合法）。可注入是为了**这一跳能被断言** —— 转发成员写成空实现时，
-    ///   两端各自的判据都还是绿的。
-    init(client: GatewayClient, transport: StreamTransport? = nil) {
-        let transport = transport ?? StreamTransport()
+    init(client: GatewayClient) {
+        let transport = StreamTransport()
         self.transport = transport
 
         transport.onPhaseChange = { [weak self] phase in self?.phase = phase }

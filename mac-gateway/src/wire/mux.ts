@@ -94,9 +94,6 @@ export interface MuxApprovalCancel {
   eventId: string
 }
 
-/** 审批的两种货物。`kind` 的取值集合与上游 `$events` 的帧类型同构。 */
-export type MuxApprovalItem = MuxApprovalWaterfall | MuxApprovalCancel
-
 /**
  * 服务端 → 客户端：一条流的占用读数 —— 流作用域，与 `approval` 不同：
  * 占用属于这条流所 follow 的会话。⚠️ 水位是投影的切点，不是窗口的

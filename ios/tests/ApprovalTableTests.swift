@@ -12,13 +12,17 @@ import XCTest
 final class ApprovalTableTests: XCTestCase {
 
     /// 网关推来的一条待答调用 —— 上游 waterfall 的四个字段原样。
+    ///
+    /// `callId` 与 `eventId` 可以同时给：上游的 `request` 里就带着前者，而身份是后者 ——
+    /// 两者取不同值时正是「按错字段建键」唯一能被看见的形状。
     private func waterfall(
         session: String? = "s1", eventId: String? = "e1", toolName: String? = "bash",
-        reason: String? = "needs write"
+        reason: String? = "needs write", callId: String? = nil
     ) -> JSONValue {
         var body: [String: JSONValue] = [:]
         if let toolName { body["toolName"] = .string(toolName) }
         if let reason { body["reason"] = .string(reason) }
+        if let callId { body["callId"] = .string(callId) }
         var payload: [String: JSONValue] = [
             "event": .string("approval/request"),
             "request": .object(body),
@@ -107,14 +111,14 @@ final class ApprovalTableTests: XCTestCase {
         XCTAssertEqual(table.pending(in: "s1"), before, "已有的那条原样")
     }
 
-    /// 认不出的载荷什么也不做：对账名单与未来可能加的种类都不该改动表。
+    /// 认不出的载荷什么也不做 —— 未来可能加的种类不该改动这张表。
     func testUnknownPayloadsLeaveTheTableAlone() {
         var table = ApprovalTable()
         table.absorb(waterfall())
         let before = table.pending(in: "s1")
 
-        table.absorb(.object(["kind": .string("sync"), "eventIds": .array([.string("e1")])]))
         table.absorb(.object(["kind": .string("question"), "sessionId": .string("s1")]))
+        table.absorb(.object(["kind": .string("notice"), "eventId": .string("e1")]))
         table.absorb(.object([:]))
         table.absorb(.null)
 
@@ -132,6 +136,20 @@ final class ApprovalTableTests: XCTestCase {
 
         table.remove(eventId: "e1")
         XCTAssertTrue(table.pending(in: "s1").isEmpty)
+    }
+
+    /// 载荷里带 `callId` 也不改变身份：`cancel` 只带 `eventId`，用别的字段建键就删不掉。
+    ///
+    /// 这一条必须用**两个字段取不同值**的样本：`callId == eventId` 时，两种建键方式长得
+    /// 一模一样，改错了也全绿。症状是「别人先答了，我的卡永远留着」。
+    func testACancelStillRemovesTheEntryWhenThePayloadCarriesADifferentCallId() {
+        var table = ApprovalTable()
+        table.absorb(waterfall(eventId: "e1", callId: "call-9"))
+
+        XCTAssertEqual(table.pending(in: "s1").map(\.eventId), ["e1"], "身份是投递编号，不是 callId")
+
+        table.remove(eventId: "e1")
+        XCTAssertTrue(table.pending(in: "s1").isEmpty, "cancel 只带 eventId —— 用 callId 建键时这一删落空")
     }
 
     /// 本地作答成功：手里有编号，直接按它删。

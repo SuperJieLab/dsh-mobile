@@ -1,4 +1,4 @@
-import type { MuxApprovalHeld, MuxApprovalItem } from '../wire/mux.ts'
+import type { MuxApprovalHeld } from '../wire/mux.ts'
 
 /**
  * 一条待答调用，不含 `kind`。

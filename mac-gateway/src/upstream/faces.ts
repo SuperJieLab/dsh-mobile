@@ -12,7 +12,6 @@ import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { CommandPort } from '../ports/command.ts'
 import type { ModelSelection } from '../wire/model.ts'
-import type { MuxApprovalItem } from '../wire/mux.ts'
 
 import { nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
 import type { FollowSource } from '../ports/follow.ts'

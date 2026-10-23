@@ -4,16 +4,15 @@
  * **中继。** `api-remotes` 在 waterfall 中更早，把每个 `approval/request` 挂进
  * `pendingRemoteEvents` 等待*远程客户端*应答，因此宿主侧需要一个远程事件流客户端
  * 在场。那个身份归 `ForwardedEvents`（`remote-events.ts`，进程一份）；中继只是它的
- * 一个订阅者：把每个 `approval/request` 帧作为 `approval` 帧转发给手机，并在点击时
- * 通过 `dispatchRpc("$events/result")` 应答。手机与浏览器是对等方：第一个应答终结
- * waterfall，落败方得到 `unknown-approval`（fail-closed）。
+ * 一个订阅者：把每一条待答调用**通知**给订阅者（外壳由流泵组，中继不碰帧），并在
+ * 点击时通过 `dispatchRpc("$events/result")` 应答。手机与浏览器是对等方：第一个应答
+ * 终结 waterfall，落败方得到 `unknown-approval`（fail-closed）。
  *
- * 手机从未见过的问题，由本层在每条新连接接入时给出要重投的帧序列（`replayFrames`），
- * 适配器只负责逐条送出；中继保持其待答集合直到上游
- * `cancel` 到达 —— 或者身份换代（源断了，宿主会把仍在等待的问题重投一遍，沿用旧
- * 集合就是重放已消费的应答）。构造上即一次性：已交付的应答只在网关接受后才移除
- * 待答项，且每次交付都映射到一次性词汇（`allowed-once` / `rejected`）——
- * 中继绝不推断持久授权。
+ * 手机从未见过的问题由**开流时的重放**补齐：流泵取一次 `held()`，把此刻还待答的全部
+ * 排在 `ready` 之后。中继保持其待答集合直到上游 `cancel` 到达 —— 或者身份换代（源断了，
+ * 宿主会把仍在等待的问题重投一遍，沿用旧集合就是重放已消费的应答）。构造上即一次性：
+ * 已交付的应答只在网关接受后才移除待答项，且每次交付都映射到一次性词汇
+ * （`allowed-once` / `rejected`）—— 中继绝不推断持久授权。
  *
  * 泵把 prompt 转发给 controller 的 `prompt`（web UI 自己的门）；
  * `promptId` 即请求 id，controller 会去重。
@@ -141,6 +140,9 @@ export class ApprovalRelay implements ApprovalSource {
       log.warn(`approval ${frame.eventId} carries no request object — dropped`)
       return
     }
+    // 请求体的内部字段（`toolName` 之类）**不归中继解释**：解释权在客户端那一侧。
+    // 代价是「读不出工具名的那一条会被持有并每次重放，而客户端不显示」——
+    // 那是两端对同一条货物分工的直接后果，不是漏判。
     const held: HeldApproval = {
       event: frame.event,
       eventId: frame.eventId,

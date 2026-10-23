@@ -148,7 +148,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
 
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
-    const broadcaster = attachStreamHandler(server, streamSourceOver(ctx), vault, {
+    const streamHandler = attachStreamHandler(server, streamSourceOver(ctx), vault, {
       // 打开帧的字节上界与 HTTP 路径的上限同源（同一个 `limits`）—— 两端各自
       // 记一个数才是口径不一致的来源。
       openingCapBytes: limits.maxOpeningBytes,
@@ -158,14 +158,13 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       // 投递通道 —— 连接建立时不再预先推一遍（那时还没有流编号可用）。
       approvals: relay,
     })
-    // 中继产出的待答项经这条流投递（`approvals` 选项），连接建立时不再预先推一遍。
 
     // 资源采样（R8 期1 链路 B）：5s 一条 res 记录 —— 事件循环是 dsh 全进程
     // 共享面，读数只做趋势；debug 级默认静默，采集时 DSH_LOG_DEBUG=1。
     const stopSampler = startResourceSampler({
       intervalMs: 5_000,
       module: LogModule.main,
-      clientCount: () => broadcaster.clientCount(),
+      clientCount: () => streamHandler.clientCount(),
     })
 
     // 用我们的 logger（底层是 console）而非 ctx.logger：非 TTY 运行中

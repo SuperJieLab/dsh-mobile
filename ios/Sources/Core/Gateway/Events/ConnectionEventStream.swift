@@ -94,7 +94,7 @@ final class ConnectionEventStream {
     /// 作废当前这条流的登记 —— **只标状态，不重复关**。
     ///
     /// 终态拒绝时流层已经 `forget` 了它，这里把标记置上，下一次 `attach` 才会真的重建。
-    func markDetached() {
+    private func markDetached() {
         detached = true
     }
 

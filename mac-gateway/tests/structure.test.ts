@@ -27,6 +27,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 
+import type { MuxServerFrame, StreamId } from '../src/wire/mux.ts'
+
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../src')
 
 // ---------------------------------------------------------------------------
@@ -1462,14 +1464,14 @@ test('the silent-refusal list only names ops the protocol actually dispatches', 
 // ---------------------------------------------------------------------------
 
 /**
- * 三种审批帧（`request` / `cancel` / `sync`）各自**只有一个构造点**，且都在 `upstream/write.ts`；
+ * 两种审批货物（`waterfall` / `cancel`）各自**只有一个构造点**，且都在 `remote/stream.ts`；
  * `wire/mux.ts` 里的是形状**声明**，不是构造。
  *
- * 守的是「装配层顺手拼一帧」这个真实风险 —— 重投序列曾经写在 `index.ts` 里，往那一处加字段、
- * `write.ts` 的另一处忘掉，两份代码相距很远、长得却几乎一样，评审看不出来。
+ * 守的是「第二处顺手拼一帧」这个真实风险 —— 中继曾经自己组帧，往一处加字段、另一处忘掉，
+ * 两份代码相距很远、长得却几乎一样，评审看不出来。
  *
- * 数的是**次数**不是文件：同一文件里的第二处构造（例如在 stale 分支补一条占位 `request`）
- * 不该因为「文件没变」就放行。判据按期望值断言，不是零命中。
+ * 数的是**次数**不是文件：同一文件里的第二处构造不该因为「文件没变」就放行。
+ * 判据按期望值断言，不是零命中。
  */
 test('each approval kind is constructed exactly once, where the stream pump lives', () => {
   const constructionHome = 'remote/stream.ts'
@@ -1495,6 +1497,82 @@ test('each approval kind is constructed exactly once, where the stream pump live
     assert.deepEqual(declarers.map(home => home.file), [declarationHome],
       `\`kind: '${kind}'\` is declared in ${declarationHome} and constructed in ${constructionHome} — a third home is a second constructor`)
   }
+})
+
+/**
+ * 连接级 `approval` 帧不许回来。
+ *
+ * 它是「同一件事两种投递形态」的另一半：一旦有人加回一条不带 `streamId` 的帧，客户端就得
+ * 再长出第二个消费入口，而两端的判据各自都是绿的 —— 各守自己那半边，中间那一跳没人守。
+ *
+ * 零命中判据必须自带活性锚：扫错目录、正则失效、文件没读到，读出来都是零命中。
+ * 这里的锚是**同一批文件里必须还能看见审批货物**。
+ */
+test('A3: the connection-level approval frame is gone for good', () => {
+  let scanned = 0
+  let cargoes = 0
+  const hits: string[] = []
+  for (const file of filesUnder(SRC)) {
+    scanned += 1
+    const code = stripComments(readFileSync(file, 'utf8'))
+    if (code.includes("kind: 'waterfall'")) cargoes += 1
+    if (code.includes("type: 'approval'")) hits.push(where(file))
+  }
+  assert.ok(scanned > 40, `only scanned ${scanned} source files — the root is wrong`)
+  assert.ok(cargoes > 0, 'no approval cargo found at all — the scan sees nothing, so "zero hits" proves nothing')
+  assert.deepEqual(hits, [], `the connection-level approval frame is back in ${hits.join(', ')}`)
+})
+
+/**
+ * 每条服务端帧都说得出自己属于哪条流。
+ *
+ * 判据的失败形态是 **typecheck 红**，不是断言红：往联合里加一个没有 `streamId` 的成员，
+ * `streamIdOf` 这一行就编译不过（`npm test` 先跑 typecheck，所以它照样挡得住）。
+ * 这也是「第二种投递形态」唯一能在形状层挡住的地方。
+ */
+const streamIdOf = (frame: MuxServerFrame): StreamId => frame.streamId
+
+test('A4: every server frame names the stream it belongs to', () => {
+  assert.equal(streamIdOf({ type: 'end', streamId: 's1' }), 's1')
+  assert.equal(streamIdOf({ type: 'error', streamId: 's2', payload: { code: 'x', message: '' } }), 's2',
+    'if a member ever loses `streamId`, this file stops compiling — that is the judge')
+})
+
+/**
+ * 广播能力删掉了，资源采样没被误伤。
+ *
+ * 两半各守一个方向：`broadcast(` 回来等于又出现「不指定流、发给所有人」的投递；
+ * `clientCount` 没了等于删广播时把采样一起带走（那是另一件事，不该一起死）。
+ */
+test('L2: broadcast is gone and clientCount survived it', () => {
+  const files = filesUnder(SRC)
+  assert.ok(files.length > 40, `only scanned ${files.length} source files`)
+  const hits = files.filter(file => /\bbroadcast\s*\(/.test(stripComments(readFileSync(file, 'utf8'))))
+  assert.deepEqual(hits.map(where), [],
+    'a connection-wide broadcast is back — delivery belongs to a stream, not to whoever is connected')
+
+  const server = stripComments(readFileSync(join(SRC, 'remote/server.ts'), 'utf8'))
+  assert.ok(server.includes('clientCount'), 'clientCount went missing with the broadcast — the sampler lost its input')
+})
+
+/**
+ * 审批应答不借流的上行。
+ *
+ * 上行只有一条路（HTTP 一元 op），流是单向的推。给一条流加一种「应答货物」会让同一次应答
+ * 有两个入口，而两个入口的失败处置至今不同（一元 op 有错误回包，流里没有）。
+ */
+test('L6: approval answers never travel on a stream', () => {
+  const streamFiles = filesUnder(join(SRC, 'remote'))
+  assert.ok(streamFiles.length >= 3, `only scanned ${streamFiles.length} transport files`)
+  for (const file of streamFiles) {
+    const code = stripComments(readFileSync(file, 'utf8'))
+    assert.equal(code.includes('approval-answer'), false,
+      `${where(file)} carries the answer op — answers are one-way ops, not stream cargo`)
+  }
+  // 活性锚：应答确实还在 HTTP 分派那一侧 —— 两边都没有，说明这个名字改了。
+  const dispatch = stripComments(readFileSync(join(SRC, 'protocol/rpc.ts'), 'utf8'))
+  assert.ok(dispatch.includes("case 'approval-answer'"),
+    'the dispatcher no longer owns approval-answer — the judge is looking at the wrong name')
 })
 
 // ---------------------------------------------------------------------------

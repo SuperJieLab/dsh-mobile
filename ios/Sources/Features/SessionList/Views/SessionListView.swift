@@ -22,8 +22,6 @@ struct SessionListView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @EnvironmentObject private var store: MeshStore
-    /// 根部注入的待答表：每一行问它「本会话还挂着几条」。只读，不发请求。
-    @EnvironmentObject private var approvals: ApprovalStore
 
     init(client: GatewayClient, link: GatewayLink, events: ConnectionEventStream) {
         self.client = client

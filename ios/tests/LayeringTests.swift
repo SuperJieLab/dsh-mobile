@@ -905,7 +905,7 @@ final class LayeringTests: XCTestCase {
         for file in swiftFiles(under: sourcesRoot) {
             let text = try String(contentsOf: file, encoding: .utf8)
             for (line, code) in codeLines(in: text) {
-                for name in ["UnscopedFrameSink", "UnscopedFrameFeed", "unscopedSink"]
+                for name in ["UnscopedFrameSink", "UnscopedFrameFeed", "unscopedSink", "streamId == nil"]
                 where code.contains(name) {
                     hits.append("\(file.lastPathComponent):\(line) \(name)")
                 }
@@ -920,16 +920,22 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(link.contains("func makeStream"), "造流入口没扫到 —— 判据可能扫错了树")
     }
 
-    /// 两种新货物在判读器里各有一支 —— 只改类型不加分支时，审批到不了任何地方。
+    /// 两种新货物在判读器里**各有一支**（恰好一次）—— 只改类型不加分支时，审批到不了任何地方；
+    /// 而两支变三支，说明有人在第二个地方又解释了一遍这个 kind。
     ///
     /// 正控：`"emit"` 必须命中，否则说明扫错了文件。
+    ///
+    /// 末尾那条守的是「认不出时留痕要带名字」：不带 `\(kind)` 的那行 warn 现场只剩
+    /// 「丢了一条东西」，而版本错配时最要紧的正是**丢的是哪一种**。
     func testTheApprovalCargoesAreRead() throws {
         let file = sourcesRoot.appendingPathComponent("Core/Gateway/Events/ConnectionEventReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         for kind in ["waterfall", "cancel", "emit"] {
             let hits = text.components(separatedBy: "\"\(kind)\"").count - 1
-            XCTAssertGreaterThanOrEqual(hits, 1, "判读器里没有 \"\(kind)\" 这一支")
+            XCTAssertEqual(hits, 1, "判读器里 \"\(kind)\" 该恰好出现一次，实际 \(hits) 次")
         }
+        XCTAssertTrue(text.contains("does not know: \\(kind)"),
+                      "认不出的 kind 没被写进日志 —— 版本错配时现场分不出丢的是什么")
     }
 
     /// 列表行的待审批标记撤干净了：类型、计数、渲染三样都不许留。

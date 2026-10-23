@@ -74,8 +74,8 @@ struct ConnectionEventReading {
  * 把一帧线上文本判成 `ConnectionEventReading` —— 纯函数，不碰 socket、不持状态。
  *
  * 两种流的内容不同：会话流一帧可以是打开帧、事件、未定稿帧、占用读数；这条流只有 `ready`、
- * `emit` 与 `session-list`。窄值域是判据的一部分 —— 不认识的形状在这里一律丢弃，而不是猜
- * 一个近似的分支。
+ * `emit`、`session-list`、`waterfall`、`cancel` 五种。窄值域是判据的一部分 —— 不认识的形状
+ * 在这里一律丢弃，而不是猜一个近似的分支。
  *
  * 判据与网关 `remote/stream.ts` 的 `pumpEvents` 逐条对齐（两端协定的订阅流一节）：
  *
@@ -84,10 +84,13 @@ struct ConnectionEventReading {
  * | `item`，载荷 `kind` 是 `ready` | 代次 | `generation` 读得出就带上，读不出就是 `nil`（不补数） |
  * | `item`，载荷 `kind` 是 `emit` | 一条事件 | `event` 必须是字符串；`args` 原样，缺席即空列表 |
  * | `item`，`kind` 是 `session-list` | 列表增量 | 交给 `SessionListChange.decode`，认不出丢弃 |
- * | `item`，别的 `kind` / 没有 `kind` | 认不出 | 丢弃 —— 这条流不重放，只有读不出才丢 |
- * | `error` | 拒绝 | 载荷是 `{code, message}` |
+ * | `item`，`kind` 是 `waterfall` | 一条待答调用 | 载荷原样交给审批表；本层不解释它的字段 |
+ * | `item`，`kind` 是 `cancel` | 一条撤回 | `eventId` 必须是非空字符串 —— 没有它删不掉任何东西 |
+ * | `item`，有 `kind` 但认不出 | 认不出 | 丢弃并留一行**带 kind 原值**的 warn —— 版本错配时只靠它 |
+ * | `item`，没有 `kind` / 没有载荷 | 认不出 | 丢弃（形状本身就不完整，没有名字可指认） |
+ * | `error` | 拒绝 | 载荷是 `{code, message}`，动作由码决定（重试会不会变） |
  * | `end` | 收尾 | —— |
- * | 别的（含 `approval`） | 认不出 | 审批不走这条流：它是连接级广播，由无编号帧的收货人接 |
+ * | 别的外壳 | 认不出 | 丢弃 |
  *
  * 只吃外壳、不要原始字节：载荷里没有 typed 结构要直解（`args` 是任意 JSON，`JSONValue`
  * 已原样拿在手上），与 `SessionStreamReader` 需要 `raw` 的理由不同。

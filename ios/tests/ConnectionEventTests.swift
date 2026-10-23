@@ -2,9 +2,9 @@
  * 事件流判读的判据 —— `ConnectionEventReader`（`Core/Gateway/Events/`）。
  *
  * 与 `SessionStreamReaderTests` 同一件事：给一段帧文本，判成什么、这条流接下来怎么办，
- * 不需要连接。差别在**这条流只有三种内容**：`ready`（源此刻的代次）、`emit`（一条转发
- * 事件）、`session-list`（列表的一条增量）。它不重放，所以没有窗口、没有水位、没有
- * 未定稿帧 —— 判读器也不该假装认识它们。
+ * 不需要连接。差别在**这条流只有五种内容**：`ready`（源此刻的代次）、`emit`（一条转发
+ * 事件）、`session-list`（列表的一条增量）、`waterfall`（一条待答调用）、`cancel`（一条
+ * 撤回）。它不重放，所以没有窗口、没有水位、没有未定稿帧 —— 判读器也不该假装认识它们。
  *
  * 判据的来历是「认错了不会编译失败，也不会有哪条测试红」：认的是网关的 item 形状，一份会
  * 漂移的东西。样本按「读得出 / 读不出」两侧各给几个，别只给正向那半。
@@ -94,8 +94,8 @@ final class ConnectionEventTests: XCTestCase {
 
     // MARK: - O9：认不出的不猜
 
-    /// 六种「认不出」：别的 kind、`kind` 缺席、空载荷、缺载荷、`approval`（连接级，不归这条流）、
-    /// 未知的外壳类型。一律 `.ignored` 且不动这条流。
+    /// 五种「认不出」：别的 kind、`kind` 缺席、空载荷、缺载荷、未知的外壳类型。
+    /// 一律 `.ignored` 且不动这条流。
     func testUnrecognizedFramesAreIgnored() throws {
         let cases: [(name: String, text: String)] = [
             ("别的 kind", #"{"type":"item","streamId":"e1","payload":{"kind":"watermark","seq":5}}"#),
@@ -156,13 +156,17 @@ final class ConnectionEventTests: XCTestCase {
         }
     }
 
-    /// 事件流的拒绝都是终态：`unknown-op` 是「这台网关不认 events」（老版本），
-    /// `internal-error` 是网关自己装配漏了源 —— 两种都不会因为再开一条流而变好。
-    /// 注意 `.stop` 在连接层的含义是**收起这一条流**，连接不动。
+    /// 拒绝按「重试之后结果会不会不同」分两支，不按错得多严重分：源没就绪、网关瞬时故障，
+    /// 再开一条就可能好（`.retry`）；`unknown-op` 是「这台网关不认 events」，重开一万次
+    /// 也一样（`.stop`）。两个动作在连接层都只作用于这一条流，连接不动。
     func testNextActionOfEachKind() throws {
         XCTAssertEqual(try read(#"{"type":"item","streamId":"e1","payload":{"kind":"ready","generation":1}}"#).next, .keep)
         XCTAssertEqual(try read(#"{"type":"item","streamId":"e1","payload":{"kind":"emit","event":"x","args":[]}}"#).next, .keep)
         XCTAssertEqual(try read(#"{"type":"item","streamId":"e1","payload":{"kind":"watermark"}}"#).next, .keep)
+        // 两种审批货物是**内容**，不是「这条流该怎么办」：把它们判成 `.reopen` 会让一条
+        // 收到审批的流当场重开，而症状是「卡片出现又消失」。
+        XCTAssertEqual(try read(#"{"type":"item","streamId":"e1","payload":{"kind":"waterfall","eventId":"e1","agentId":"s1","request":{"toolName":"shell"}}}"#).next, .keep)
+        XCTAssertEqual(try read(#"{"type":"item","streamId":"e1","payload":{"kind":"cancel","eventId":"e1"}}"#).next, .keep)
         XCTAssertEqual(try read(#"{"type":"end","streamId":"e1"}"#).next, .reopen)
 
         // 可重试的一类：再开一条可能就好（源刚就绪、网关瞬时故障）。
@@ -217,7 +221,7 @@ final class ConnectionEventTests: XCTestCase {
         """))
         XCTAssertEqual(seen, [.status("s2", running: true)])
 
-        // 别的三种内容都不该进这个听众。
+        // 别的内容都不该进这个听众。
         events.handle(ConnectionEventReading(content: .ready(generation: 1)))
         events.handle(ConnectionEventReading(content: .emit(name: "x", args: .array([]))))
         XCTAssertEqual(seen.count, 1)
