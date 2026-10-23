@@ -10,7 +10,7 @@ import SwiftUI
 struct DshMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var node: TailnetNode
-    @StateObject private var store: ConnectionStore
+    @StateObject private var store: MeshStore
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
     @StateObject private var link: GatewayLink
     private let client: GatewayClient
@@ -24,7 +24,7 @@ struct DshMobileApp: App {
         let node = TailnetNode()
         let client = GatewayClient()
         _node = StateObject(wrappedValue: node)
-        _store = StateObject(wrappedValue: ConnectionStore(client: client, node: node))
+        _store = StateObject(wrappedValue: MeshStore(client: client, node: node))
         _link = StateObject(wrappedValue: GatewayLink(client: client))
         self.client = client
         let events = ConnectionEvents()

@@ -12,7 +12,7 @@ import SwiftUI
 struct PairingView: View {
     @StateObject private var state: PairingState
     /// 组网段的数据源 —— 视图读连接态的唯一出口，节点状态与动作都经 store 转发。
-    @EnvironmentObject private var store: ConnectionStore
+    @EnvironmentObject private var store: MeshStore
 
     @State private var controlURL = MeshConfig.load().controlURLString
     @State private var gatewayURL = MeshConfig.load().gatewayURLString

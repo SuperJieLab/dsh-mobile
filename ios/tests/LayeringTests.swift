@@ -177,8 +177,8 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 2c：Core 内部不反向依赖
 
-    /// `Core/` 内部各域只许向下依赖：编排层在 `Connection`（它编织组网与协议），
-    /// 下面三层不得认识它。
+    /// `Core/` 内部各域只许向下依赖：`MeshNetwork` 是顶层编排（`MeshStore` 编织载体与协议），
+    /// 协议层不得认识它。
     ///
     /// 表只写「谁不许认识谁」，不写允许的方向 —— 允许的边比禁止的多得多，而每写一条
     /// 允许都是一次判断；不写就默认自由，坏了由这条断言抓住。新增一个域时默认不受限，
@@ -187,9 +187,13 @@ final class LayeringTests: XCTestCase {
     /// `Core/` 顶层的四个小值（`CarrierPath` / `Log` / `PerfRecord` / `RefreshGate`）与
     /// `MarkdownParser` 不属于任何域，不在本表的约束内 —— 它们的存在就是为了让三方共用时
     /// 不必互相认识。
+    ///
+    /// **域内那一条边由目录表表达不出来**：载体（`TailnetNode` / `MeshConfig` /
+    /// `TailnetURLSession`）与编排（`MeshStore` / `MeshPhase`）同住 `MeshNetwork`，
+    /// 而「载体不得认识编排」是域内的方向 —— 它落在 `testMeshCarrierDoesNotKnowTheOrchestrator`。
     private static let coreUpwardBans: [String: [String]] = [
-        "MeshNetwork": ["Gateway", "Connection"],
-        "Gateway": ["Connection"],
+        // 协议层只需要一个 URLSession，不需要认识组网这一域的任何类型。
+        "Gateway": ["MeshNetwork"],
     ]
 
     func testCoreDomainsDoNotDependOnUpwardDomains() throws {
@@ -218,6 +222,42 @@ final class LayeringTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(scanned, 100, "只扫到 \(scanned) 行 —— 先怀疑路径推算")
+    }
+
+    // MARK: - 断言 2d：组网域内，载体不认识编排
+
+    /// `MeshNetwork` 里装了两层：**载体**（谁能连上隧道）与**编排**（`MeshStore` 把节点状态、
+    /// 身份、传输收敛成一个阶段）。载体不得认识编排 —— 反过来才是它该有的方向。
+    ///
+    /// 为什么单列一条：这两层的先后关系是**域内的**方向，而上面那张表按目录表达，
+    /// 表达不了同一个目录里的两层。合并两域时如果不补这条，那条禁令就静默消失了。
+    ///
+    /// 豁免编排自己的三个文件（`MeshStore` / `MeshPhase` / `MeshStoreAdapters`）：前两个是
+    /// 编排本身，第三个是「真实类型实现窄面」的一行声明（它必须同时看得见两侧）。
+    /// 它们的依赖方向由 `coreUpwardBans` 里「协议层不认识组网」那条反向兜住。
+    func testMeshCarrierDoesNotKnowTheOrchestrator() throws {
+        let mesh = sourcesRoot.appendingPathComponent("Core/MeshNetwork")
+        let orchestrator = ["MeshStore", "MeshPhase", "GatewayActivating", "MeshNodeControlling"]
+        let exempt: Set<String> = ["MeshStore.swift", "MeshStoreAdapters.swift", "MeshPhase.swift"]
+
+        let files = swiftFiles(under: mesh).filter { !exempt.contains($0.lastPathComponent) }
+        XCTAssertGreaterThanOrEqual(files.count, 4, "只扫到 \(files.count) 个载体文件 —— 先怀疑路径推算")
+        // 正控：豁免名单里的文件必须真的存在，否则「扫了 4 个」可能只是把编排也扫漏了。
+        for name in exempt {
+            XCTAssertTrue(FileManager.default.fileExists(
+                atPath: mesh.appendingPathComponent(name).path), "豁免的 \(name) 不在 —— 先怀疑路径")
+        }
+
+        var hits: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for type in orchestrator where contains(type, in: code) {
+                    hits.append("\(file.lastPathComponent):\(line) \(type)")
+                }
+            }
+        }
+        XCTAssertEqual(hits, [], "载体认识了编排层（方向反了）：\(hits)")
     }
 
     // MARK: - 断言 2c：Core 不认识界面层的类型

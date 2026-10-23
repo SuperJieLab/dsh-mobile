@@ -1,7 +1,7 @@
 /**
- * 真实类型到连接域接缝的适配：`GatewayClient` / `TailnetNode`
- * 各自认识自己的窄面，一行声明即注入 `ConnectionStore`。只进 App target，
- * 不进测试编译面 —— 测试用假件（ConnectionStoreTests.swift）。
+ * 真实类型到组网域接缝的适配：`GatewayClient` / `TailnetNode`
+ * 各自认识自己的窄面，一行声明即注入 `MeshStore`。只进 App target，
+ * 不进测试编译面 —— 测试用假件（`MeshStoreTests.swift`）。
  */
 import Foundation
 

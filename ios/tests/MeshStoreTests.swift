@@ -1,5 +1,5 @@
 /**
- * 连接域投影断言。投影与编排见 `Sources/Core/Connection/ConnectionStore.swift`；
+ * 组网阶段投影的断言。投影与编排见同目录的 `MeshStore.swift` 与 `MeshPhase.swift`；
  * 对外阶段只由「节点状态 + 传输是否建成」两个输入决定。判定逻辑本身在 `TailnetNodeState`
  * （断言在 `tests/MeshNodeStateTests.swift`），这里只断言「投影无漏组合、编排时点不丢」。
  */
@@ -9,34 +9,34 @@ import XCTest
 @testable import DshMobile
 
 @MainActor
-final class ConnectionStoreTests: XCTestCase {
+final class MeshStoreTests: XCTestCase {
 
     func testOrchestration() async {
         // —— 投影的全组合（2 节点态 × 2 组网；`failed` 两半各一次）——
-        // 身份轴不并入连接阶段—— 这件事现在由 `resolve` 的签名表达：签名里没有
+        // 身份轴不并入组网阶段 —— 这件事现在由 `resolve` 的签名表达：签名里没有
         // 身份输入，就不存在「配对与否」这一维组合。
         for session in [true, false] {
-            let noKey = ConnectionPhase.resolve(
+            let noKey = MeshPhase.resolve(
                 nodeState: .noKey, hasGatewaySession: session)
             XCTAssertTrue(noKey == .needsSetup, "N1a noKey（session=\(session)）")
 
-            let registering = ConnectionPhase.resolve(
+            let registering = MeshPhase.resolve(
                 nodeState: .registering, hasGatewaySession: session)
             XCTAssertTrue(registering == .connecting, "N1b registering（session=\(session)）")
 
-            let badKey = ConnectionPhase.resolve(
+            let badKey = MeshPhase.resolve(
                 nodeState: .failed(.badKey), hasGatewaySession: session)
             XCTAssertTrue(badKey == .failed(.badKey), "N1e failed(badKey)（session=\(session)）")
 
-            let unreachable = ConnectionPhase.resolve(
+            let unreachable = MeshPhase.resolve(
                 nodeState: .failed(.unreachable), hasGatewaySession: session)
             XCTAssertTrue(unreachable == .failed(.unreachable),
                           "N1f failed(unreachable)（session=\(session)）")
         }
         // running 的两半：session 未建成的窄窗口 = connecting；建成 = ready
-        let switching = ConnectionPhase.resolve(nodeState: .running, hasGatewaySession: false)
+        let switching = MeshPhase.resolve(nodeState: .running, hasGatewaySession: false)
         XCTAssertTrue(switching == .connecting, "N1c running 但传输未切换 → connecting")
-        let switched = ConnectionPhase.resolve(nodeState: .running, hasGatewaySession: true)
+        let switched = MeshPhase.resolve(nodeState: .running, hasGatewaySession: true)
         XCTAssertTrue(switched == .ready, "N1d running 且传输已切换 → ready")
 
         // —— K4：启动零激活 + VerifiedRunning 唯一激活点——
@@ -45,7 +45,7 @@ final class ConnectionStoreTests: XCTestCase {
                                 gatewayURLString: "http://100.64.0.1:3081")
         let node = FakeNode()
         let client = FakeClient()
-        let store = ConnectionStore(client: client, node: node)
+        let store = MeshStore(client: client, node: node)
         await store.start(config: config)
         XCTAssertTrue(client.activations.isEmpty,
                       "K4a start 不激活：未激活 = 端点不存在，不兜底")

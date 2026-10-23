@@ -28,7 +28,7 @@ struct SessionDetailView: View {
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
     /// 根部注入的连接域：功能条的网络格与连接详情读它（图中转与节点状态）。
-    @EnvironmentObject private var store: ConnectionStore
+    @EnvironmentObject private var store: MeshStore
     /// 根部注入的待答表：App 级，不随本屏生死 —— 停在列表时到达的审批也在里面。
     @EnvironmentObject private var approvals: ApprovalStore
 

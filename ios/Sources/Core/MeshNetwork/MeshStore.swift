@@ -1,12 +1,12 @@
 /**
- * 连接域的唯一宿主：把「组网 × 身份 × 传输」三段收敛为一个对外阶段。
+ * 组网域的唯一宿主：把「节点 × 身份 × 传输」三段收敛为一个对外阶段。
  *
- * 迁移判定仍在纯状态机 `TailnetNodeState`，这里不做第二台 —— `ConnectionPhase.resolve`
+ * 迁移判定仍在纯状态机 `TailnetNodeState`，这里不做第二台 —— `MeshPhase.resolve`
  * 只是它加「组网传输是否建成」这一个输入后的**投影**。启动编排、VerifiedRunning 激活、
  * 回前台探活住在这里。
  *
  * 与 `GatewayClient`：client 是 op 门面 + 身份状态机，由根部创建后传进来；本 store 只在
- * 节点验证 Running 时调一次 `activate` —— 连接域不吞身份域，业务调用面照旧直接消费 client。
+ * 节点验证 Running 时调一次 `activate` —— 组网域不吞身份域，业务调用面照旧直接消费 client。
  * 端点在激活前不存在。
  */
 import Foundation
@@ -14,9 +14,9 @@ import Combine
 
 // MARK: - 注入接缝
 //
-// store 只认这两个协议，不认具体类型 —— 真实类型的适配住在 `ConnectionAdapters.swift`
+// store 只认这两个协议，不认具体类型 —— 真实类型的适配住在 `MeshStoreAdapters.swift`
 // （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
-// TailscaleKit / GatewayClient，见 tests/ConnectionStoreTests.swift）。
+// TailscaleKit / GatewayClient，见 tests/MeshStoreTests.swift）。
 
 /// 组网激活能力：`GatewayClient.activate` 的窄面。
 ///
@@ -47,10 +47,10 @@ import Combine
 }
 
 @MainActor
-final class ConnectionStore: ObservableObject {
+final class MeshStore: ObservableObject {
 
     /// 对外连接阶段 —— 视图读连接态的唯一出处。
-    @Published private(set) var phase: ConnectionPhase
+    @Published private(set) var phase: MeshPhase
     /// 节点层状态的细粒度透传：`phase` 把 registering 与 running-未组网都折进
     /// connecting，组网管理屏要区分这两态，故单独暴露（读取面仍唯一出处）。
     @Published private(set) var nodeState: TailnetNodeState
@@ -77,7 +77,7 @@ final class ConnectionStore: ObservableObject {
         self.client = client
         self.node = node
         self.nodeState = node.nodeState
-        self.phase = ConnectionPhase.resolve(nodeState: node.nodeState,
+        self.phase = MeshPhase.resolve(nodeState: node.nodeState,
                                              hasGatewaySession: false)
     }
 
@@ -151,40 +151,7 @@ final class ConnectionStore: ObservableObject {
         // 投影的输入由 `resolve` 的签名定死：节点状态 + 传输是否建成。身份不进来 ——
         // 离线也可能已配对，两件事互不决定。
         nodeState = node.nodeState
-        phase = ConnectionPhase.resolve(nodeState: node.nodeState,
+        phase = MeshPhase.resolve(nodeState: node.nodeState,
                                         hasGatewaySession: tailnetActivated)
-    }
-}
-
-/// 对外连接阶段：`TailnetNodeState` 的投影，不自建迁移表。
-///
-/// **身份不进这个枚举。** 连接阶段回答「此刻能不能发请求」，身份回答「谁配看」——
-/// 两者正交：凭证可以存在而链路断开（离线也可已配对），链路可以通而凭证已失效。
-/// 混进来会让「连接中」与「未配对」互相遮蔽，界面上分不清该修哪一边。
-/// 所以投影只吃节点状态与「组网传输是否建成」两个输入，签名里没有身份参数。
-enum ConnectionPhase: Equatable {
-    /// 无 key：引导去设置页。
-    case needsSetup
-    /// 注册中，或已 running 但传输尚未切换（`gatewaySession` 建成前的窄窗口）。
-    case connecting
-    /// 组网已就绪。连接方式（直连 / 中继）单独走 `meshPath` —— 它随链路质量变，
-    /// 与「能不能连」是两个变化原因。
-    case ready
-    /// 节点失败，原因可区分（badKey 引导重输 / unreachable 如实显示）。
-    case failed(TailnetNodeFailure)
-
-    /// 纯投影：两个输入定一个阶段。断言在 `tests/ConnectionStoreTests.swift`。
-    static func resolve(nodeState: TailnetNodeState,
-                        hasGatewaySession: Bool) -> ConnectionPhase {
-        switch nodeState {
-        case .noKey:
-            return .needsSetup
-        case .registering:
-            return .connecting
-        case .running:
-            return hasGatewaySession ? .ready : .connecting
-        case .failed(let reason):
-            return .failed(reason)
-        }
     }
 }

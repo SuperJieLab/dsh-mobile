@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 连接详情：路径、状态、最后收到数据的时刻、组网节点。
 ///
-/// 只吃值加两个闭包 —— 不认识 `SessionSync`，也不认识 `ConnectionStore`。
+/// 只吃值加两个闭包 —— 不认识 `SessionSync`，也不认识 `MeshStore`。
 /// 这样它能在预览与测试里独立成立，接线（谁提供这些值）留在宿主。
 struct NetworkSheet: View {
 
