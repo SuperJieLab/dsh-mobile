@@ -25,7 +25,7 @@ import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
-import { broadcasterOver, commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver, type HostContext } from './upstream/faces.ts'
+import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
@@ -128,10 +128,9 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // 会把它们挂起，直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`
   // （M5 §四）。手机侧的事件流是同一个源的第二类订阅者，不开第二条身份。
   const relayLifetime = new AbortController()
-  const approvalFace = broadcasterOver()
   const gatewayFace = gatewayOver(ctx)
   const forwardedEvents = new ForwardedEvents(gatewayFace)
-  const relay = new ApprovalRelay(forwardedEvents, gatewayFace, approvalFace, relayLifetime.signal)
+  const relay = new ApprovalRelay(forwardedEvents, gatewayFace, relayLifetime.signal)
   forwardedEvents.start(relayLifetime.signal)
   const writePort = writePortOver(ctx, relay)
   // 模型通道：声明式 face 调用中继与泵所用的同一控制器；服务缺席
@@ -155,14 +154,11 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       openingCapBytes: limits.maxOpeningBytes,
       // `{op:'events'}` 的流订阅这份源：身份是网关进程的，流是这条连接的。
       events: forwardedEvents,
-      // 新接入的手机先拿到对账帧、再逐条收到仍挂起的问题 —— 它因此可以丢掉那些在其
-      // 离线期间 `cancel` 已触发的卡片（缺席的 id 是权威的）。序列由中继给出。
-      onClientConnected: (send) => {
-        for (const frame of relay.replayFrames()) send(frame)
-      },
+      // 待答项随这条流走：开流时重放当前集合、之后随变化增量。它是审批唯一的
+      // 投递通道 —— 连接建立时不再预先推一遍（那时还没有流编号可用）。
+      approvals: relay,
     })
-    // 中继产出的帧经广播切面推给每条连接（含连接建立之后才到达的那些）。
-    approvalFace.connect((frame) => broadcaster.broadcast(frame))
+    // 中继产出的待答项经这条流投递（`approvals` 选项），连接建立时不再预先推一遍。
 
     // 资源采样（R8 期1 链路 B）：5s 一条 res 记录 —— 事件循环是 dsh 全进程
     // 共享面，读数只做趋势；debug 级默认静默，采集时 DSH_LOG_DEBUG=1。

@@ -13,11 +13,27 @@ import { once } from 'node:events'
 import { attachStreamHandler } from '../../src/remote/server.ts'
 import { setPerfSink } from '../../src/log.ts'
 import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
+import type { ApprovalSource } from '../../src/ports/approval.ts'
 import type { WireEvent } from '../../src/wire/rpc.ts'
 import {
   connect, event, fakeFeed, fakeSource, filler, receive, send, snapshotFrame, turn,
 } from './harness.ts'
 import { until } from '../upstream/fake-events.ts'
+
+/**
+ * 审批的空实现：这些用例只关心源的事件。
+ *
+ * 事件流装配时 `events` 与 `approvals` 必须成对（缺一个就按装配错误拒绝），
+ * 而待答项的形状由 `remote/approval.test.ts` 与 `upstream/write.test.ts` 各自守。
+ */
+function noApprovals(): ApprovalSource {
+  return {
+    ready: true,
+    held: () => [],
+    onHeld: () => () => {},
+    onCancelled: () => () => {},
+  }
+}
 
 test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 }, async () => {
   const log = [0, 1, 2].map(event)
@@ -908,7 +924,7 @@ test('E1b: a frame that cannot be attributed to any stream closes the connection
 async function eventsServer() {
   const feed = fakeFeed()
   const server = createServer()
-  attachStreamHandler(server, fakeSource([]), { authenticate: () => true }, { events: feed })
+  attachStreamHandler(server, fakeSource([]), { authenticate: () => true }, { events: feed, approvals: noApprovals() })
   server.listen(0)
   await once(server, 'listening')
   return { feed, server }
@@ -1072,7 +1088,7 @@ test('E4: a follow stream and an events stream coexist — cancelling one leaves
   const feed = fakeFeed()
   const source = tickSource()
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true }, { events: feed })
+  attachStreamHandler(server, source, { authenticate: () => true }, { events: feed, approvals: noApprovals() })
   server.listen(0)
   try {
     await once(server, 'listening')

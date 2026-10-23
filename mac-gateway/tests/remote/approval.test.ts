@@ -20,11 +20,10 @@ import { once } from 'node:events'
 import { test } from 'node:test'
 
 import { attachStreamHandler } from '../../src/remote/server.ts'
-import { broadcasterOver } from '../../src/upstream/faces.ts'
 import { ForwardedEvents } from '../../src/upstream/remote-events.ts'
 import { ApprovalRelay, type RemoteEventAnswerLike } from '../../src/upstream/write.ts'
 import type { UpstreamWireFrame } from '../../src/ports/events.ts'
-import { connect, fakeSource, receive } from './harness.ts'
+import { connect, fakeSource, receive, send } from './harness.ts'
 import { fakeEventStream, until } from '../upstream/fake-events.ts'
 
 /** 结果门：这一条不关心应答，只要能构造出中继要的那个对象。 */
@@ -37,18 +36,15 @@ const door: RemoteEventAnswerLike = {
 async function harness() {
   const feed = fakeEventStream()
   const events = new ForwardedEvents(feed.source)
-  const face = broadcasterOver()
-  const relay = new ApprovalRelay(events, door, face, AbortSignal.timeout(20_000))
+  const relay = new ApprovalRelay(events, door, AbortSignal.timeout(20_000))
   events.start(AbortSignal.timeout(20_000))
 
   const server = createServer()
-  const broadcaster = attachStreamHandler(server, fakeSource([]), { authenticate: () => true }, {
+  attachStreamHandler(server, fakeSource([]), { authenticate: () => true }, {
+    // 审批的投递通道只有这一条：待答项随 `{op:'events'}` 的流走。
     events,
-    onClientConnected: (send) => {
-      for (const frame of relay.replayFrames()) send(frame)
-    },
+    approvals: relay,
   })
-  face.connect((frame) => broadcaster.broadcast(frame))
   server.listen(0)
   await once(server, 'listening')
   await feed.started
@@ -73,22 +69,24 @@ function approvalRequest(eventId: string, sessionId: string): UpstreamWireFrame 
   }
 }
 
-test('approval: a live request reaches the socket with its session, as bytes', { timeout: 20_000 }, async () => {
+test('approval: a live request reaches the socket as a stream item', { timeout: 20_000 }, async () => {
   const h = await harness()
   try {
     const socket = await connect(h.server)
-    // 每条连接一接上就先收一份对账名单（此刻是空的）—— 既有行为，不是本期的。
-    const ledger = await receive(socket)
-    assert.equal((ledger.payload as { kind?: string }).kind, 'sync')
+    // 开口即基线：先一条 ready。此刻集合为空，所以它后面没有 waterfall。
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    const ready = await receive(socket)
+    assert.equal((ready.payload as { kind?: string }).kind, 'ready')
 
     h.feed.push(approvalRequest('e1', 'session-7'))
 
     const frame = await receive(socket)
     assert.deepEqual(frame, {
-      type: 'approval',
+      type: 'item',
+      streamId: 'ev',
       payload: {
-        kind: 'request', eventId: 'e1', sessionId: 'session-7',
-        toolName: 'shell', reason: 'needs write',
+        kind: 'waterfall', event: 'approval/request', eventId: 'e1',
+        agentId: 'session-7', request: { toolName: 'shell', reason: 'needs write' },
       },
     })
     socket.close()
@@ -97,25 +95,25 @@ test('approval: a live request reaches the socket with its session, as bytes', {
   }
 })
 
-test('approval: a client that connects later gets the ledger first, then the question', { timeout: 20_000 }, async () => {
+test('approval: a client that opens later gets the question with the opening baseline', { timeout: 20_000 }, async () => {
   const h = await harness()
   try {
-    // 先挂上一条，再让客户端接入 —— 这正是「手机离线期间到达的审批」那个处境。
+    // 先挂上待答项，再让客户端开流 —— 这正是「手机离线期间到达的审批」那个处境。
     // 等 `held()` 而不是等墙钟：推送进了源的队列，由泵下一拍才交到中继。
     h.feed.push(approvalRequest('e1', 'session-7'))
     await until(() => h.relay.held().length === 1, 'the question is held before the client arrives')
 
     const socket = await connect(h.server)
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
 
-    const ledger = await receive(socket)
-    assert.deepEqual(ledger, {
-      type: 'approval',
-      payload: { kind: 'sync', eventIds: ['e1'], callIds: [] },
-    }, 'the ledger comes first: a request before it would be swept away by it')
+    // ready 之后紧跟当前集合 —— 没有单独的名单帧，「基线与这条流从哪里开始」是同一件事。
+    const ready = await receive(socket)
+    assert.equal((ready.payload as { kind?: string }).kind, 'ready')
 
-    const request = await receive(socket)
-    assert.equal((request.payload as { kind?: string }).kind, 'request')
-    assert.equal((request.payload as { sessionId?: string }).sessionId, 'session-7',
+    const replay = await receive(socket)
+    const payload = replay.payload as { kind?: string; agentId?: string }
+    assert.equal(payload.kind, 'waterfall')
+    assert.equal(payload.agentId, 'session-7',
       'the replay carries the identity — this is the half a live-only field would silently miss')
     socket.close()
   } finally {

@@ -10,7 +10,8 @@
 
 import type { Duplex } from 'node:stream'
 import type { IncomingMessage } from 'node:http'
-import type { MuxServerFrame, StreamId } from '../wire/mux.ts'
+import type { StreamId } from '../wire/mux.ts'
+import type { ApprovalSource } from '../ports/approval.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../protocol/rpc.ts'
 import { describeError } from '../ports/errors.ts'
 import type { FollowSource } from '../ports/follow.ts'
@@ -118,9 +119,6 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
   }
 }
 
-/** 每个接入的客户端调用一次，附带限定于该 socket 的发送器。 */
-export type ClientHook = (send: (frame: MuxServerFrame) => void) => void
-
 /**
  * 打开帧的默认字节上界 —— 与 HTTP 路径的上限同处一族，定义在
  * `protocol/rpc.ts` 的 `DEFAULT_LIMITS`（那里有取值来由）。做成可传参而非常量，
@@ -131,8 +129,6 @@ export const DEFAULT_OPENING_BYTES = DEFAULT_LIMITS.maxOpeningBytes
 
 /** 流适配器的可调项。 */
 export interface StreamOptions {
-  /** 每个接入的客户端调用一次，附带限定于该 socket 的发送器。 */
-  onClientConnected?: ClientHook
   /**
    * 进程里那份转发事件源（`{op:'events'}` 的流订阅它）。
    *
@@ -140,6 +136,13 @@ export interface StreamOptions {
    * 永远等不到正文的流。只在「这台网关不提供事件流」的测试里才该缺席。
    */
   events?: ForwardedSource
+  /**
+   * 审批的当前集合与变化 —— 与 `events` 成对出现：事件流是它唯一的投递通道。
+   *
+   * 与 `events` 分开声明是因为它们回答两件事：`events` 说"有没有源"，它说"待答项
+   * 现在是什么"。缺了它，`{op:'events'}` 同样要被拒绝（装配错误）。
+   */
+  approvals?: ApprovalSource
   /** 打开帧的字节上界；缺省即 {@link DEFAULT_OPENING_BYTES}。 */
   openingCapBytes?: number
   /**
@@ -189,8 +192,6 @@ export async function handleUpgrade(
   perfRecord(LogModule.ws, { seg: 'gw', t: Date.now(), conn: 'upgrade-accepted' })
   socket.on('close', () => clients.delete(socket))
   runSocket(socket, source, head, options)
-  // 在客户端开口之前，重放当前挂起之物（持有的 approval）。
-  options.onClientConnected?.((frame) => send(socket, frame))
 }
 
 /** 每连接的状态与循环。 */
@@ -240,7 +241,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
           socket.end()
           break
         case 'text': {
-          const outcome = onClientText(socket, source, options.events, streams, frame.text, openingCapBytes)
+          const outcome = onClientText(socket, source, options.events, options.approvals, streams, frame.text, openingCapBytes)
           if (outcome.ok) break
           // 两档都在这里关连接，但原因不同，日志必须分得开：
           //   重复编号 —— 客户端坏了，这条连接上的一切都不再可信；

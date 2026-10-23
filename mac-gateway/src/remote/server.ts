@@ -14,17 +14,11 @@
 
 import type { Duplex } from 'node:stream'
 import type { Server } from 'node:http'
-import type { MuxServerFrame } from '../wire/mux.ts'
-import { encodeServerFrame } from '../wire/mux.ts'
 import { handleUpgrade, type StreamOptions } from './connection.ts'
 import type { FollowSource } from '../ports/follow.ts'
-import { encodeTextFrame } from './frames.ts'
-import { write } from './egress.ts'
 
-/** approval 中继向已连接手机推送所用的接口。 */
+/** 接入的客户端集合 —— 资源采样读它的规模，别的都不读。 */
 export interface Broadcaster {
-  /** 向每个存活且已认证的客户端发送一条连接级帧。 */
-  broadcast(frame: MuxServerFrame): void
   /** 当前接入的客户端数 —— 资源采样读它。 */
   clientCount(): number
 }
@@ -47,10 +41,6 @@ export function attachStreamHandler(
     void handleUpgrade(request, socket, head, source, gate, clients, options)
   })
   return {
-    broadcast(frame) {
-      const text = encodeTextFrame(encodeServerFrame(frame))
-      for (const socket of clients) write(socket, text)
-    },
     clientCount: () => clients.size,
   }
 }

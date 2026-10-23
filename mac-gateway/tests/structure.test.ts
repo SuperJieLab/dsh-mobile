@@ -1471,13 +1471,13 @@ test('the silent-refusal list only names ops the protocol actually dispatches', 
  * 数的是**次数**不是文件：同一文件里的第二处构造（例如在 stale 分支补一条占位 `request`）
  * 不该因为「文件没变」就放行。判据按期望值断言，不是零命中。
  */
-test('each approval kind is constructed exactly once, where the held set lives', () => {
-  const constructionHome = 'upstream/write.ts'
+test('each approval kind is constructed exactly once, where the stream pump lives', () => {
+  const constructionHome = 'remote/stream.ts'
   const declarationHome = 'wire/mux.ts'
   const seen = new Map<string, { file: string; count: number }[]>()
   for (const file of filesUnder(SRC)) {
     const code = stripComments(readFileSync(file, 'utf8'))
-    for (const kind of ['request', 'cancel', 'sync'] as const) {
+    for (const kind of ['waterfall', 'cancel'] as const) {
       const hits = [...code.matchAll(new RegExp(`kind:\\s*'${kind}'`, 'g'))].length
       if (hits === 0) continue
       seen.set(kind, [...(seen.get(kind) ?? []), { file: where(file), count: hits }])
@@ -1485,7 +1485,7 @@ test('each approval kind is constructed exactly once, where the held set lives',
   }
 
   // 活性锚：一份都没扫到说明路径或正则失效，下面的比较会「通过」。
-  assert.equal(seen.size, 3, `the scan found no approval kinds at all — got ${JSON.stringify([...seen.keys()])}`)
+  assert.equal(seen.size, 2, `the scan found no approval kinds at all — got ${JSON.stringify([...seen.keys()])}`)
 
   for (const [kind, homes] of seen) {
     const constructors = homes.filter(home => home.file === constructionHome)

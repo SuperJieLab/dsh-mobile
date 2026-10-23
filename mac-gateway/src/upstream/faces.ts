@@ -12,7 +12,8 @@ import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { CommandPort } from '../ports/command.ts'
 import type { ModelSelection } from '../wire/model.ts'
-import type { MuxApprovalFrame } from '../wire/mux.ts'
+import type { MuxApprovalItem } from '../wire/mux.ts'
+
 import { nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
@@ -374,24 +375,6 @@ export function peerShapeProblem(peer: unknown): string | undefined {
   if (!(record.signal instanceof AbortSignal)) return 'missing an AbortSignal signal'
   if (record.interactions !== 'answer') return 'missing interactions=answer'
   return undefined
-}
-
-/**
- * 中继的广播切面：WS 适配器的 socket 集合要等监听 effect 运行才存在，
- * 所以中继立刻拿到一个可广播的切面，适配器稍后自行接入。
- *
- * 收的是**审批帧**而不是任意帧 —— 与 `write.ts` 的 `BroadcasterLike` 同一个类型：
- * 中继只推这一种，收宽了就等于放弃「构造漏字段」的编译期检查。
- */
-export function broadcasterOver(): {
-  broadcast(frame: MuxApprovalFrame): void
-  connect(sink: (frame: MuxApprovalFrame) => void): void
-} {
-  let sink: ((frame: MuxApprovalFrame) => void) | undefined
-  return {
-    broadcast: (frame) => sink?.(frame),
-    connect: (fn) => { sink = fn },
-  }
 }
 
 /** prompt 泵调用的 `ctx.sessionController` 部分。 */

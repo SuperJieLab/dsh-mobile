@@ -20,9 +20,9 @@
  */
 
 import { isNotFound } from '../ports/errors.ts'
+import type { ApprovalSource, HeldApproval } from '../ports/approval.ts'
 import type { ApprovalOutcome } from '../ports/write.ts'
 import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
-import type { MuxApprovalFrame, MuxApprovalPayload, MuxApprovalRequest } from '../wire/mux.ts'
 import { nonEmptyString } from '../wire/fields.ts'
 import type { UpstreamWireFrame } from '../ports/events.ts'
 import type { ForwardedEvents } from './remote-events.ts'
@@ -39,31 +39,15 @@ export interface RemoteEventAnswerLike {
   dispatchRpc(endpoint: string, payload: { args: unknown }, signal: AbortSignal): Promise<unknown>
 }
 
-/**
- * 中继推向已连接手机的帧 —— WS 适配器的广播切面。
- *
- * 收的是**审批帧**而不是任意帧：中继只推这一种，收宽了就等于放弃「构造漏字段」的
- * 编译期检查（`sessionId` 这种必填项只能在类型上守）。
- */
-export interface BroadcasterLike {
-  broadcast(frame: MuxApprovalFrame): void
-}
-
-/**
- * 中继为手机暂存的一个 `approval/request` 帧。
- *
- * 直接取线上形的 `request` 支去掉 `kind`：暂存的字段集合与要发出去的**必须是同一份**。
- * 抄一遍的话，「暂存里有、帧上没有」这种漏字段在评审里看不出来（两份声明相隔几十行、
- * 长得几乎一样），而症状只有重连重投之后才出现。
- */
-type HeldRequest = Omit<MuxApprovalRequest, 'kind'>
-
-export class ApprovalRelay {
+export class ApprovalRelay implements ApprovalSource {
   /** 应答要带上的身份由它给出（身份属于源，不属于中继）。 */
   readonly #events: ForwardedEvents
   readonly #door: RemoteEventAnswerLike
-  readonly #broadcaster: BroadcasterLike
-  readonly #pending = new Map<string, HeldRequest>()
+  readonly #pending = new Map<string, HeldApproval>()
+  /** 一条待答调用进来的听众 —— 每条开着的事件流各订一次。 */
+  readonly #heldListeners = new Set<(held: HeldApproval) => void>()
+  /** 一条被撤回的听众。 */
+  readonly #cancelListeners = new Set<(eventId: string) => void>()
   /** 存的是**这一次交付**（一个 Promise），不是它的结局 —— 重试的 `answerId` 因此共用同一次交付。 */
   readonly #replay = new ReplayTable<Promise<ApprovalOutcome>>()
   /** 应答门与中继同寿：插件拆除时一并取消在途交付。 */
@@ -78,12 +62,10 @@ export class ApprovalRelay {
   constructor(
     events: ForwardedEvents,
     door: RemoteEventAnswerLike,
-    broadcaster: BroadcasterLike,
     lifetime: AbortSignal,
   ) {
     this.#events = events
     this.#door = door
-    this.#broadcaster = broadcaster
     this.#lifetime = lifetime
     events.subscribe({
       generation: (generation) => {
@@ -93,6 +75,32 @@ export class ApprovalRelay {
     })
   }
 
+  /**
+   * 源这一代是否还活着。
+   *
+   * 没活着的身份，上游不认识我们的应答，也给不出一份可信的当前集合 —— 此时开流应当
+   * 被拒绝（`source-unavailable`），而不是给一份「看起来有、其实不知道」的集合。
+   */
+  get ready(): boolean {
+    return this.#events.clientId !== undefined
+  }
+
+  /** 订阅「一条待答调用进来了」。返回退订函数 —— 一条流关掉时它必须被调用。 */
+  onHeld(listener: (held: HeldApproval) => void): () => void {
+    this.#heldListeners.add(listener)
+    return () => {
+      this.#heldListeners.delete(listener)
+    }
+  }
+
+  /** 订阅「一条被撤回了」。 */
+  onCancelled(listener: (eventId: string) => void): () => void {
+    this.#cancelListeners.add(listener)
+    return () => {
+      this.#cancelListeners.delete(listener)
+    }
+  }
+
   /** 上游来的一帧中，中继认得的那两种。 */
   #onFrame(frame: UpstreamWireFrame): void {
     if (frame.type === 'waterfall' && frame.event === 'approval/request') {
@@ -100,26 +108,18 @@ export class ApprovalRelay {
       return
     }
     if (frame.type === 'cancel') {
-      this.#pending.delete(frame.eventId)
       // 上游自己结算了这个问题（别处先答、或它被撤回）—— 这是「卡为什么消失」的唯一线索。
-      log.info(`approval ${frame.eventId} was cancelled upstream`)
-      this.#broadcaster.broadcast({ type: 'approval', payload: { kind: 'cancel', eventId: frame.eventId } })
+      if (this.#pending.delete(frame.eventId)) {
+        log.info(`approval ${frame.eventId} was cancelled upstream`)
+        for (const listener of this.#cancelListeners) listener(frame.eventId)
+      }
     }
   }
 
   /**
-   * 一个待答问题编码成线上那一帧 —— 实时与重投**共用这一处**。
-   *
-   * 两处各写一遍时，往一处加字段、另一处忘掉，测试看不出差别（两份代码长得几乎一样），
-   * 而症状只有重连后才有。字段集合由 `HeldRequest` 与线上形同源保证，这里只补 `kind`。
-   */
-  #requestFrame(held: HeldRequest): MuxApprovalFrame {
-    return { type: 'approval', payload: { kind: 'request', ...held } }
-  }
-
-  /**
    * 身份换代 = 待答表不再有效。宿主会把仍在等待的问题重投给下一代，所以这里只丢，
-   * 不补发、也不通知手机（下一代的问题会作为新帧到达）。
+   * 不补发、也不通知手机 —— 每一条 `ready` 后面都跟着一份当前集合（新代重投的那些），
+   * 客户端的表因此按代重建，不需要一条"集合空了"的帧。
    */
   #dropHeld(): void {
     const dropped = this.#pending.size
@@ -127,61 +127,34 @@ export class ApprovalRelay {
     if (dropped > 0) log.info(`${dropped} held approval(s) dropped with the $events identity`)
   }
 
-  /** 为手机暂存一个问题，并推给每个已连接的客户端。 */
+  /** 为手机暂存一个问题，并通知每条开着的流。 */
   #hold(frame: Extract<UpstreamWireFrame, { type: 'waterfall' }>): void {
-    const request = frame.request as { toolName?: unknown; callId?: unknown; reason?: unknown } | undefined
-    const toolName = typeof request?.toolName === 'string' ? request.toolName : undefined
-    if (toolName === undefined) return // 不是审批形状的请求；不归我们解释
     // 归属只有产生处知道。读不出就不收 —— 转发一条不知道属于谁的审批，等于让下游二选一：
     // 丢掉（等于没收到）或放进某一屏（等于串会话）。后者更坏，所以这里 fail closed。
-    const sessionId = nonEmptyString(frame.agentId)
-    if (sessionId === undefined) {
+    const agentId = nonEmptyString(frame.agentId)
+    if (agentId === undefined) {
       log.warn(`approval ${frame.eventId} carries no session (agentId ${JSON.stringify(frame.agentId)}) — dropped`)
       return
     }
-    const held: HeldRequest = {
+    const request = frame.request
+    if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+      log.warn(`approval ${frame.eventId} carries no request object — dropped`)
+      return
+    }
+    const held: HeldApproval = {
+      event: frame.event,
       eventId: frame.eventId,
-      sessionId,
-      toolName,
-      ...(typeof request?.callId === 'string' ? { callId: request.callId } : {}),
-      ...(typeof request?.reason === 'string' ? { reason: request.reason } : {}),
+      agentId,
+      request: request as Record<string, unknown>,
     }
     this.#pending.set(frame.eventId, held)
-    log.info(`approval relay holding "${held.toolName}" (${held.eventId}) for "${held.sessionId}"`)
-    this.#broadcaster.broadcast(this.#requestFrame(held))
+    log.info(`approval relay holding "${frame.event}" (${held.eventId}) for "${held.agentId}"`)
+    for (const listener of this.#heldListeners) listener(held)
   }
 
-  /** 仍在等待的问题 —— 新连接手机会被重放的内容。 */
-  held(): HeldRequest[] {
+  /** 仍在等待的问题 —— 每条流的 `ready` 之后要重放的内容。 */
+  held(): HeldApproval[] {
     return [...this.#pending.values()]
-  }
-
-  /**
-   * 一条新连接该收到的整段帧序列 —— 先对账、再逐条重投。
-   *
-   * 顺序是承诺：客户端先按 `sync` 把不在名单里的卡剪掉，再按 `request` 建卡。反过来
-   * 送达的话，先建出来的卡会被紧随其后的名单剪掉，屏幕上闪一下。
-   *
-   * `stale` 的含义是「这份名单证明不了什么」：此刻没有存活的 `$events` 身份，我们不知道
-   * 上游还挂着什么。那时只发一条标记为 stale 的空名单，**不重投** —— 宿主会把仍在等待
-   * 的问题投给下一代，硬发一份旧集合就是在重放已经作废的投递。
-   */
-  replayFrames(): MuxApprovalFrame[] {
-    // 没有存活的身份时待答表已被清空（源换代就丢），所以这一支的名单恒空。
-    const live = this.#events.clientId !== undefined
-    const held = this.held()
-    const ledger: MuxApprovalPayload = {
-      kind: 'sync',
-      eventIds: held.map(item => item.eventId),
-      // callIds 随行：客户端要靠它判断由日志重建的那些卡是不是悬空审计
-      //（asked 之后宿主在询问中途死掉，decided 永远等不到）。
-      callIds: held.flatMap(item => item.callId === undefined ? [] : [item.callId]),
-      ...(live ? {} : { stale: true as const }),
-    }
-    return [
-      { type: 'approval', payload: ledger },
-      ...held.map(item => this.#requestFrame(item)),
-    ]
   }
 
   /**

@@ -65,37 +65,37 @@ export interface MuxErrorFrame {
 }
 
 /**
- * 一条待答问题的载荷 —— 连接级 `approval` 帧的第一支。
+ * 一条待答调用的字段，**不含 `kind`**。
  *
- * `sessionId` 是**必填**：这条帧没有流编号，属于哪一屏只能由它自己说。缺了就无法归位，
- * 客户端不会显示它（宁可少一张卡，也不把卡放错会话）。
+ * 单独一个名字让「暂存的字段」与「线上的字段」同源：中继存它、流泵给它补 `kind` 再发。
+ * 它还解决另一件事 —— 判据按 `kind: '...'` 数构造点时，`Extract<T, …>` 这类**类型位置**
+ * 会被算成第二个作者，给形状起个名字就不会。
  */
-export interface MuxApprovalRequest {
-  kind: 'request'
+export interface MuxApprovalHeld {
+  event: string
   eventId: string
-  /** 属于哪个会话 —— 上游 waterfall 帧的 `agentId`。 */
-  sessionId: string
-  toolName: string
-  callId?: string
-  reason?: string
+  agentId: string
+  request: Record<string, unknown>
 }
 
 /**
- * 连接级 `approval` 推送的载荷 —— 三种，按 `kind` 分。
+ * 一条待答调用 —— `{op:'events'}` 流的一种货物。
  *
- * 只有 `request` 带归属。`cancel` 按 `eventId` 全局寻址（它可能指向一条早已不在表里的项，
- * 那时归属无从说起）；`sync` 是整条连接的名单，不属于任何会话。
+ * 四个字段与上游 waterfall 帧逐字相同：这一层不解释载荷，只搬。`agentId` 就是会话身份，
+ * 客户端按它入栏 —— 与它在上游的含义一致（`Agent.id` 即 `SessionId`）。
  */
-export type MuxApprovalPayload =
-  | MuxApprovalRequest
-  | { kind: 'cancel'; eventId: string }
-  | { kind: 'sync'; eventIds: string[]; callIds: string[]; stale?: true }
-
-/** 服务端 → 客户端：连接级 approval 推送。 */
-export interface MuxApprovalFrame {
-  type: 'approval'
-  payload: MuxApprovalPayload
+export interface MuxApprovalWaterfall extends MuxApprovalHeld {
+  kind: 'waterfall'
 }
+
+/** 撤回一条待答调用 —— 唯一携带的寻址信息是 `eventId`。 */
+export interface MuxApprovalCancel {
+  kind: 'cancel'
+  eventId: string
+}
+
+/** 审批的两种货物。`kind` 的取值集合与上游 `$events` 的帧类型同构。 */
+export type MuxApprovalItem = MuxApprovalWaterfall | MuxApprovalCancel
 
 /**
  * 服务端 → 客户端：一条流的占用读数 —— 流作用域，与 `approval` 不同：
@@ -110,7 +110,7 @@ export interface MuxUsageFrame {
 }
 
 /** 服务端能在 mux 连接上发送的一切。 */
-export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxApprovalFrame | MuxUsageFrame
+export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxUsageFrame
 
 /**
  * 从线上文本解析一条客户端帧的**信封**：`type` 与非空 `streamId`。

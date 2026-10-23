@@ -704,7 +704,7 @@ test('a real HTTP approval-answer settles a held waterfall frame; the consumed q
   }
 })
 
-test('a freshly connected phone is reconciled first: sync frame names the standing ids, then replay', { timeout: 10_000 }, async () => {
+test('opening the events stream replays the standing question after ready', { timeout: 10_000 }, async () => {
   const port = freshPort(43_300)
   const credentialsPath = tempCredentialsPath()
   const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
@@ -729,22 +729,23 @@ test('a freshly connected phone is reconciled first: sync frame names the standi
       setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
     })
 
-    const approvalFrames: Array<Record<string, unknown>> = []
+    const items: Array<Record<string, unknown>> = []
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener('message', event => {
         const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; payload?: Record<string, unknown> }
-        if (frame.type !== 'approval' || frame.payload === undefined) return
-        approvalFrames.push(frame.payload)
-        if (approvalFrames.length >= 2) resolve()
+        if (frame.type !== 'item' || frame.payload === undefined) return
+        items.push(frame.payload)
+        if (items.length >= 2) resolve()
       })
-      setTimeout(() => reject(new Error(`expected sync + request, got ${JSON.stringify(approvalFrames)}`)), 5_000)
+      socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'events' } }))
+      setTimeout(() => reject(new Error(`expected ready + waterfall, got ${JSON.stringify(items)}`)), 5_000)
     })
 
-    assert.deepEqual(approvalFrames[0], { kind: 'sync', eventIds: ['wire-1'], callIds: [] },
-      'the first approval frame must be the reconciliation list, so the client can drop stale cards')
-    assert.equal((approvalFrames[1] as { kind?: string }).kind, 'request')
-    assert.equal((approvalFrames[1] as { sessionId?: string }).sessionId, 'agent-1',
-      'the replayed request carries the identity too — a live-only field would look right here and fail on reconnect')
+    assert.equal(items[0]?.kind, 'ready', 'the opening item is the source generation, as always')
+    assert.equal(items[1]?.kind, 'waterfall',
+      'the standing question follows ready — the baseline is the batch of frames itself, not a list')
+    assert.equal((items[1] as { agentId?: string }).agentId, 'agent-1',
+      'the replay carries the identity too — a live-only field would look right here and fail on reconnect')
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
@@ -752,10 +753,10 @@ test('a freshly connected phone is reconciled first: sync frame names the standi
   }
 })
 
-test('a request that arrives while the phone is already connected reaches it live', { timeout: 10_000 }, async () => {
-  // 这条与上一条分开：上一条守重投（推送在连接之前），这一条守**实时那一支**的接线。
-  // 两处代码在 `index.ts` 里相邻，但走的是两条路 —— 只守重投的话，`face.connect` 那一行
-  // 删掉也全绿，而症状是「连着的时候到达的审批永远不显示，只有重连那一刻才出现」。
+test('a request that arrives while the events stream is open reaches it live', { timeout: 10_000 }, async () => {
+  // 这条与上一条分开：上一条守重放（推送在开流之前），这一条守**实时那一支**的接线。
+  // 只守重放的话，`relay.subscribe` 那一行删掉也全绿，而症状是「连着的时候到达的审批
+  // 永远不显示，只有重连那一刻才出现」。
   const port = freshPort(43_200)
   const credentialsPath = tempCredentialsPath()
   const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
@@ -771,13 +772,20 @@ test('a request that arrives while the phone is already connected reaches it liv
       setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
     })
 
-    const requests: Array<Record<string, unknown>> = []
+    const waterfalls: Array<Record<string, unknown>> = []
+    let ready = false
     socket.addEventListener('message', event => {
       const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; payload?: Record<string, unknown> }
-      if (frame.type === 'approval' && frame.payload?.kind === 'request') requests.push(frame.payload)
+      if (frame.type !== 'item') return
+      if (frame.payload?.kind === 'ready') { ready = true; return }
+      if (frame.payload?.kind === 'waterfall') waterfalls.push(frame.payload)
     })
+    socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'events' } }))
+    for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
 
-    // 连接建好之后再让宿主提出问题 —— 这正是「用户正看着这一屏」的那一刻。
+    // 开流之后才让宿主提出问题 —— 这正是「用户正看着这一屏」的那一刻。
     gateway.push({
       type: 'waterfall',
       event: 'approval/request',
@@ -786,12 +794,13 @@ test('a request that arrives while the phone is already connected reaches it liv
       request: { toolName: 'shell', reason: 'needs write' },
     })
 
-    for (let attempt = 0; attempt < 100 && requests.length === 0; attempt += 1) {
+    for (let attempt = 0; attempt < 100 && waterfalls.length === 0; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 20))
     }
-    assert.deepEqual(requests, [{
-      kind: 'request', eventId: 'live-1', sessionId: 'agent-1', toolName: 'shell', reason: 'needs write',
-    }], 'a question raised while the phone is connected must be pushed, not left until the next reconnect')
+    assert.deepEqual(waterfalls, [{
+      kind: 'waterfall', event: 'approval/request', eventId: 'live-1',
+      agentId: 'agent-1', request: { toolName: 'shell', reason: 'needs write' },
+    }], 'a question raised while the stream is open must be pushed, not left until the next reconnect')
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {

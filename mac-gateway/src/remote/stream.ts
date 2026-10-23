@@ -31,12 +31,14 @@ import {
   openRequestOf,
   parseClientFrame,
   type FollowOpening,
+  type MuxItemFrame,
   type StreamId,
 } from '../wire/mux.ts'
 import { encodeServerFrame } from '../wire/mux.ts'
 import { fitOpeningToBytes, upstreamWindow } from '../protocol/window.ts'
 import { usageIsTrigger, usageShouldEmit } from '../protocol/usage.ts'
 import { describeError } from '../ports/errors.ts'
+import type { ApprovalSource, HeldApproval } from '../ports/approval.ts'
 import { streamErrorOf } from '../protocol/error-codes.ts'
 import { sessionListChangeOf } from '../upstream/session-events.ts'
 import type { WireEvent } from '../wire/rpc.ts'
@@ -84,6 +86,7 @@ export function onClientText(
   socket: Duplex,
   source: FollowSource,
   feed: ForwardedSource | undefined,
+  approvals: ApprovalSource | undefined,
   streams: Map<StreamId, { abort: AbortController }>,
   text: string,
   openingCapBytes: number,
@@ -113,7 +116,7 @@ export function onClientText(
   const done = (): void => { streams.delete(frame.streamId) }
 
   if (request.kind === 'events') {
-    if (feed === undefined) {
+    if (feed === undefined || approvals === undefined) {
       // 装配错误，不是客户端错误：这条流在这里没有被接上。拒绝要响 —— 静默的表现是
       // 客户端等 45 秒就绪超时，而就绪超时判的是**整条连接**（两条流一起被关）。
       log.error(`events stream ${frame.streamId} was opened, but this gateway wires no forwarded-event source — refused`)
@@ -121,7 +124,7 @@ export function onClientText(
       send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'internal-error', message: 'this gateway has no forwarded-event source' } })
       return { ok: true }
     }
-    pumpEvents(socket, feed, frame.streamId, abort.signal, done)
+    pumpEvents(socket, feed, approvals, frame.streamId, abort.signal, done)
     return { ok: true }
   }
 
@@ -154,16 +157,56 @@ function excerptOf(text: string): string {
  * `api-session/*` 在发出之前翻成我们的形状，见 `upstream/session-events.ts`）。源上的
  * `waterfall` / `cancel` 是审批的事，同一条源上两类消费方各取所需 —— 这条流不转发它们。
  */
+/**
+ * 一条待答调用 → 这条流上的一帧。
+ *
+ * 重放与实时**共用这一处**：两处各写一遍时，往一处加字段、另一处忘掉，测试看不出差别
+ * （两份代码长得几乎一样），而症状只有重连重放那一次才有。外壳（`streamId` 与 `kind`）
+ * 在这里补，中继只给数据。
+ */
+function waterfallItem(streamId: StreamId, held: HeldApproval): MuxItemFrame {
+  return { type: 'item', streamId, payload: { kind: 'waterfall', ...held } }
+}
+
+/** 一条撤回 → 这条流上的一帧。 */
+function cancelItem(streamId: StreamId, eventId: string): MuxItemFrame {
+  return { type: 'item', streamId, payload: { kind: 'cancel', eventId } }
+}
+
 function pumpEvents(
   socket: Duplex,
   feed: ForwardedSource,
+  approvals: ApprovalSource,
   streamId: StreamId,
   signal: AbortSignal,
   done: () => void,
 ): void {
+  // 源这一代没活着就不给集合。一份「看起来有、其实不知道」的集合比拒绝更坏：客户端会
+  // 把它当成可信基线，而中继此刻根本不知道上游还挂着什么。拒绝之后客户端按可重试处理、
+  // 退避重开 —— 那时源通常已经就绪。
+  if (!approvals.ready) {
+    log.error(`events stream ${streamId} was opened before the $events source was ready — refused`)
+    send(socket, {
+      type: 'error',
+      streamId,
+      payload: { code: 'source-unavailable', message: 'the forwarded-event source is not ready yet' },
+    })
+    done()
+    return
+  }
+
   const announce = (): void => {
     const generation = feed.generation
     send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
+    // 每一条 `ready` 后面紧跟一份当前集合。`ready` 的语义是「从这一刻起你看到的都是新的」，
+    // 客户端据此把表重建一次 —— 它不需要一条单独的「清空」帧：没有集契约的帧就没有
+    // 「这份名单可信吗」这类要判的事。
+    //
+    // 集合必须在**中继清空之后**取：中继比本泵先订阅同一份源（装配时构造即订阅），
+    // 源的换代通知因此先到中继、后到这里 —— 顺序由订阅序保证，代码里看不出来。
+    for (const held of approvals.held()) {
+      send(socket, waterfallItem(streamId, held))
+    }
   }
   // 先订阅、再发开口帧：两句之间没有 `await`，源不可能插进来一帧 —— 于是「第一条 item
   // 一定是 ready」与「订阅之后一帧都不漏」同时成立。反过来（先发后订阅）会丢掉夹在
@@ -188,8 +231,15 @@ function pumpEvents(
   announce()
   log.info(`events stream opened — source ${feed.generation === undefined ? 'has no generation' : `generation ${feed.generation}`}`)
 
+  // 订阅排在重放之后：两句之间没有 `await`，源插不进来（单线程 + 同步循环），
+  // 于是「重放的这一份」与「之后的增量」既不重也不漏。
+  const offHeld = approvals.onHeld((held) => { send(socket, waterfallItem(streamId, held)) })
+  const offCancelled = approvals.onCancelled((eventId) => { send(socket, cancelItem(streamId, eventId)) })
+
   signal.addEventListener('abort', () => {
     unsubscribe()
+    offHeld()
+    offCancelled()
     done()
   }, { once: true })
 }

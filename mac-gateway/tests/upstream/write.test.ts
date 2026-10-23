@@ -1,16 +1,18 @@
 /**
- * The approval relay's behaviour: waterfall frames held and broadcast with their session,
- * one-shot delivery through the result door, the replay sequence, and the cancel path.
+ * The approval relay's behaviour: waterfall frames held with their session and announced
+ * as changes, one-shot delivery through the result door, and the cancel path.
  *
- * The relay no longer opens `$events` itself: it subscribes to `ForwardedEvents`
- * (judged on its own in `remote-events.test.ts`). Here the source is a fake stream and
- * the door is a fake recorder — the two things the relay actually talks to.
+ * The relay no longer opens `$events` itself, and it no longer builds frames: it subscribes
+ * to `ForwardedEvents` (judged on its own in `remote-events.test.ts`) and tells listeners
+ * what changed — the frame's shell belongs to the stream pump (`remote/stream.ts`).
+ * Here the source is a fake stream and the door is a fake recorder.
  */
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { ForwardedEvents } from '../../src/upstream/remote-events.ts'
+import type { HeldApproval } from '../../src/ports/approval.ts'
 import type { UpstreamWireFrame } from '../../src/ports/events.ts'
 import {
   ApprovalRelay, ReplayTable, outcomeOfDecision, pumpPrompt, refusalOf,
@@ -33,17 +35,25 @@ function fakeDoor(options: { refuse?: unknown } = {}) {
   return { door, results }
 }
 
-function broadcaster() {
-  const frames: unknown[] = []
-  return { frames, broadcast(frame: unknown): void { frames.push(frame) } }
+/** 收集中继的变更 —— 帧的外壳由流泵组，中继只产出数据。 */
+function collector() {
+  const changes: Array<{ kind: 'waterfall'; held: HeldApproval } | { kind: 'cancel'; eventId: string }> = []
+  return {
+    changes,
+    attach(relay: ApprovalRelay): void {
+      relay.onHeld((held) => { changes.push({ kind: 'waterfall', held }) })
+      relay.onCancelled((eventId) => { changes.push({ kind: 'cancel', eventId }) })
+    },
+  }
 }
 
 async function liveRelay(options: { refuse?: unknown } = {}) {
   const feed = fakeEventStream()
   const { door, results } = fakeDoor(options)
-  const sink = broadcaster()
+  const sink = collector()
   const events = new ForwardedEvents(feed.source)
-  const relay = new ApprovalRelay(events, door, sink, AbortSignal.timeout(10_000))
+  const relay = new ApprovalRelay(events, door, AbortSignal.timeout(10_000))
+  sink.attach(relay)
   events.start(AbortSignal.timeout(10_000))
   await feed.started
   await until(() => events.ready, 'the source is ready')
@@ -81,23 +91,26 @@ test('relay: the frame says which session the question belongs to, and it is hel
     feed.push(waterfallFrame('e1', 'shell', 'session-7'))
     await until(() => relay.held().length === 1, 'the question is held')
 
-    assert.equal(relay.held()[0]?.sessionId, 'session-7',
+    assert.equal(relay.held()[0]?.agentId, 'session-7',
       'the identity reaches the held set — a frame that only carries it downstream would lose it on replay')
   } finally {
     stop()
   }
 })
 
-test('relay: the broadcast request carries the session too', async () => {
+test('relay: the change says which session the question belongs to, with the upstream fields intact', async () => {
   const { feed, sink, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1', 'shell', 'session-7'))
-    await until(() => sink.frames.length === 1, 'the request is broadcast')
-    assert.deepEqual(sink.frames, [{
-      type: 'approval',
-      payload: {
-        kind: 'request', eventId: 'e1', sessionId: 'session-7',
-        toolName: 'shell', reason: 'needs write',
+    await until(() => sink.changes.length === 1, 'the change is announced')
+    // 四个字段与上游帧逐字相同：这一层不解释载荷，只搬。
+    assert.deepEqual(sink.changes, [{
+      kind: 'waterfall',
+      held: {
+        event: 'approval/request',
+        eventId: 'e1',
+        agentId: 'session-7',
+        request: { toolName: 'shell', reason: 'needs write' },
       },
     }])
   } finally {
@@ -116,7 +129,7 @@ test('relay: a request with no session is neither held nor broadcast, and the lo
     })
 
     assert.deepEqual(relay.held(), [], 'an unattributable question must not be held — it would be replayed forever')
-    assert.deepEqual(sink.frames, [], 'and it must not be shown to anyone: a card in the wrong session is worse than no card')
+    assert.deepEqual(sink.changes, [], 'and it must not be shown to anyone: a card in the wrong session is worse than no card')
     assert.ok(lines.some(line => line.includes('no session') && line.includes('e1')),
       `the drop must leave a trace — got ${JSON.stringify(lines)}`)
   } finally {
@@ -196,24 +209,28 @@ test('relay: a cancel frame clears the question; late answer meets unknown-appro
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
     feed.push({ type: 'cancel', eventId: 'e1' })
-    await until(() => sink.frames.length === 2, 'the cancel is broadcast')
+    await until(() => sink.changes.length === 2, 'the cancel is announced')
 
-    assert.deepEqual(sink.frames.at(-1), { type: 'approval', payload: { kind: 'cancel', eventId: 'e1' } })
+    assert.deepEqual(sink.changes.at(-1), { kind: 'cancel', eventId: 'e1' })
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval')
   } finally {
     stop()
   }
 })
 
-test('relay: non-approval waterfall events, malformed requests and plain emits are ignored', async () => {
+test('relay: only approval/request waterfalls are announced — the request body is not interpreted', async () => {
   const { feed, sink, stop } = await liveRelay()
   try {
     feed.push({ type: 'waterfall', event: 'user-questions/request', eventId: 'u1', agentId: 'a', request: { question: 'q' } })
     feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'u2', agentId: 'a', request: {} })
     feed.push({ type: 'emit', event: 'api-session/status', args: [] })
-    // 让这三帧走完一整个扇出，再断言「什么都没发生」—— 先断言会与上一轮的帧赛跑。
+    // 让这三帧走完一整个扇出，再断言 —— 先断言会与上一轮的帧赛跑。
     await new Promise<void>((resolve) => setTimeout(resolve, 50))
-    assert.deepEqual(sink.frames, [])
+    assert.deepEqual(
+      sink.changes.map(change => change.kind === 'waterfall' ? change.held.eventId : 'cancel'),
+      ['u2'],
+      '按事件名筛选：别的 waterfall 与 emit 不进来；而空 request 照收 —— 载荷的内部字段不归中继解释',
+    )
   } finally {
     stop()
   }
@@ -238,39 +255,7 @@ test('relay: the source dying drops held questions, and the next generation star
 
 // -- 连接建立时的重投序列 ----------------------------------------------------
 
-test('relay: the replay puts the ledger first and carries the same identity as the live broadcast', async () => {
-  const { feed, relay, stop } = await liveRelay()
-  try {
-    feed.push(waterfallFrame('e1', 'shell', 's1'))
-    // 第二条带 callId：对账名单里的 `callIds` 是客户端判「悬空审计」的唯一依据
-    // （日志里有 asked、上游却没有它 —— 重建出来的卡按不动）。不带一条的话，
-    // `callIds: []` 与「这个字段根本没算」在断言上完全一样。
-    feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'e2', agentId: 's2', request: { toolName: 'write', callId: 'call-1' } })
-    await until(() => relay.held().length === 2, 'both questions are held')
-
-    const frames = relay.replayFrames()
-    assert.deepEqual(frames.map(frame => frame.payload.kind), ['sync', 'request', 'request'],
-      'the ledger comes first — a request that arrives before it would be swept away by the sweep')
-
-    const ledger = frames[0]!.payload
-    assert.equal(ledger.kind, 'sync')
-    if (ledger.kind !== 'sync') return
-    assert.deepEqual(ledger.eventIds, ['e1', 'e2'])
-    assert.deepEqual(ledger.callIds, ['call-1'], 'a standing callId must reach the client, or the dangling-audit sweep loses its input')
-    assert.equal(ledger.stale, undefined, 'a live source speaks authoritatively — only a dead one says stale')
-
-    const requests = frames.slice(1).map(frame => frame.payload)
-    assert.deepEqual(
-      requests.map(payload => payload.kind === 'request' ? [payload.eventId, payload.sessionId] : undefined),
-      [['e1', 's1'], ['e2', 's2']],
-      'the replay must carry the identity: a client that only gets it on the live path loses it after a reconnect',
-    )
-  } finally {
-    stop()
-  }
-})
-
-test('relay: with no live source the replay is one stale ledger and no requests', async () => {
+test('relay: the held set is dropped when the source identity ends', async () => {
   const { feed, relay, events, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1', 'shell', 's1'))
@@ -278,12 +263,9 @@ test('relay: with no live source the replay is one stale ledger and no requests'
     feed.end()
     await until(() => !events.ready, 'the source is gone')
 
-    // 空名单 + stale：客户端据此保留卡片。写成非 stale 的空名单就是一句谎话 ——
-    // 它会把这期间别人答掉的卡当成「上游没有」，然后剪掉。
-    assert.deepEqual(relay.replayFrames(), [{
-      type: 'approval',
-      payload: { kind: 'sync', eventIds: [], callIds: [], stale: true },
-    }])
+    // 换代的身份不持有上一代的问题：宿主会把仍在等待的重投给新一代，沿用旧集合就是
+    // 重放已消费的投递。客户端那张表的清空由每一条 `ready` 触发（`pumpEvents`）。
+    assert.deepEqual(relay.held(), [], 'the previous identity’s questions are not carried over')
   } finally {
     stop()
   }
