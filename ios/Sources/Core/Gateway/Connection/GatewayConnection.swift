@@ -13,7 +13,7 @@
 import Foundation
 
 @MainActor
-final class StreamTransport: StreamPort {
+final class GatewayConnection: StreamPort {
 
     /// 本网关提供流协议的精确路径。
     static let streamPath = "/rpc/stream"
@@ -30,7 +30,7 @@ final class StreamTransport: StreamPort {
     // MARK: - 注入
 
     /// 阶段变化（连接态指示器的数据源）。
-    var onPhaseChange: ((StreamPhase) -> Void)?
+    var onPhaseChange: ((ConnectionPhase) -> Void)?
     /// 取一张有效的访问凭证（升级请求带上它）。**没有就说明现在不该连。**
     var authorizationProvider: (() -> String?)?
     /// 换一张票。见 `renewThenRetry`：换到之后该重连、换不到该等还是该停，由本类决定。
@@ -44,7 +44,7 @@ final class StreamTransport: StreamPort {
     /// 连接阶段。通知挂在 setter 上：`connect`、收到开口帧、退避等待、`deactivate`
     /// 四处都会改它，手写必定漏接一处。**开流不改它** —— 在已就绪的连接上开第二条流，
     /// 屏幕不该闪「连接中」。
-    private(set) var phase: StreamPhase = .idle {
+    private(set) var phase: ConnectionPhase = .idle {
         didSet {
             guard phase != oldValue else { return }
             onPhaseChange?(phase)

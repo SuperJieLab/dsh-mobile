@@ -4,12 +4,12 @@
  * 四个取值的含义是「这条连接走到哪一步」，与这条连接上登记了几条流无关：在已就绪的
  * 连接上开第二条流，屏幕不该闪一下「连接中」。
  *
- * 它是顶层类型而不是嵌套在传输层里：界面要读它，而界面一旦写 `StreamTransport.Phase`
+ * 它是顶层类型而不是嵌套在传输层里：界面要读它，而界面一旦写 `GatewayConnection.Phase`
  * 就等于持有了传输层 —— 那是另一条判据禁止的。
  *
  * 与组网的 `MeshPhase` 不是同一件事：那一层说隧道通不通，这一层说 socket 连没连上。
  */
-enum StreamPhase: Equatable {
+enum ConnectionPhase: Equatable {
     /// 没有连接，也没有排定的重试。
     case idle
     /// 正在握手，或已发出开流帧、在等开口帧。

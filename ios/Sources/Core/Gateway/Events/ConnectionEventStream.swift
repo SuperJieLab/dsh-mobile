@@ -85,7 +85,7 @@ final class ConnectionEventStream {
 
     /// 判读之后的那一跳 —— 本类唯一的入口。
     ///
-    /// 对内可见（不 `private`）与 `StreamTransport.handleMessage` 同理：这里有一条只有在
+    /// 对内可见（不 `private`）与 `GatewayConnection.handleMessage` 同理：这里有一条只有在
     /// 此处才断言得到的契约 —— **什么算叫醒消费方**。走一条真连接也看得见它，但那时
     /// 「源的代次」与网络的偶然混在一起。
     func handle(_ reading: ConnectionEventReading) {

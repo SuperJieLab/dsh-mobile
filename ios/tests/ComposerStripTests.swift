@@ -18,7 +18,7 @@ final class ComposerStripTests: XCTestCase {
     /// 四条 `phase` × 三条路径 = 十二条，列全表。手写枚举追不上组合数 ——
     /// 少列一条，那种组合就永远没人管。
     func testNetworkCellForEveryShape() {
-        let cases: [(StreamPhase, CarrierPath?, String, String, ComposerStripModel.Tone)] = [
+        let cases: [(ConnectionPhase, CarrierPath?, String, String, ComposerStripModel.Tone)] = [
             (.idle, .direct, "连接中…", "arrow.triangle.2.circlepath", .normal),
             (.idle, .relay, "连接中…", "arrow.triangle.2.circlepath", .normal),
             (.idle, nil, "连接中…", "arrow.triangle.2.circlepath", .normal),

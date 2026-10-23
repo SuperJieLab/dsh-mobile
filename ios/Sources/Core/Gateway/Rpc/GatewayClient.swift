@@ -33,7 +33,7 @@ final class GatewayClient: ObservableObject {
     private(set) var baseURL: URL?
 
     /// 组网激活后换上的传输：激活前 = `.shared`（但端点不存在，请求不会发出）。
-    /// `StreamTransport` 的建连源每次现取，激活后下一轮连接即走隧道。
+    /// `GatewayConnection` 的建连源每次现取，激活后下一轮连接即走隧道。
     private(set) var meshSession: URLSession = .shared
 
     /// 设备凭证在手机侧的家。默认共享单例：全 App 一个身份。

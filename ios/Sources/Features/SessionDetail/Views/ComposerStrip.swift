@@ -108,7 +108,7 @@ struct ComposerStripModel: Equatable {
 extension ComposerStripModel {
 
     /// 三格的**唯一**映射入口 —— 视图与测试都从这里拿值。
-    static func make(phase: StreamPhase,
+    static func make(phase: ConnectionPhase,
                      carrier: CarrierPath?,
                      usage: UsagePayload?,
                      modelName: String,
@@ -126,7 +126,7 @@ extension ComposerStripModel {
     ///
     /// 内部而非私有：连接详情里「状态」那一行也要它（传 `carrier: nil` 拿到的正是状态说法），
     /// 一份映射两个消费者，不另写第二份 case。
-    static func network(phase: StreamPhase,
+    static func network(phase: ConnectionPhase,
                                 carrier: CarrierPath?) -> Network {
         switch phase {
         case .waiting:

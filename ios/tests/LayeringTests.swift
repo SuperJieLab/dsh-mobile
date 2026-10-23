@@ -49,7 +49,7 @@ final class LayeringTests: XCTestCase {
     /// ⚠️ 这三个目录名是**字面量**：改名（如 `Client/` → `Rpc/`）时这里不会编译失败，
     /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。改名后必须回扫这一处。
     private var gatewayImplementationDirectories: [URL] {
-        ["Rpc", "Stream", "Events"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
+        ["Connection", "Rpc", "Stream", "Events"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
 
     /// 界面目录 = `Features/` 的直接子目录。
@@ -320,7 +320,7 @@ final class LayeringTests: XCTestCase {
     /// 想图省事的人看的。
     ///
     /// 落在**代码行**上而不是文件全文：Core 里有多处注释在解释「谁消费我」（`RefreshGate`
-    /// 写 `SessionSync`、`StreamTransport` 写 `SessionSync`），那些提及是必要的说明，不是依赖。
+    /// 写 `SessionSync`、`GatewayConnection` 写 `SessionSync`），那些提及是必要的说明，不是依赖。
     func testCoreDoesNotReferenceFeatureTypes() throws {
         let core = sourcesRoot.appendingPathComponent("Core")
         let featureTypes = try declaredTypes(under: try interfaceDirectories(), topLevelOnly: true)
@@ -749,7 +749,7 @@ final class LayeringTests: XCTestCase {
     /// 盲区：只认字面量与裸标识符。用变量间接比较（`let kind = "it" + "em"`）抓不到，那种
     /// 写法靠评审；也可能误判 —— 本层若真需要这些词，说明职责又长回去了。
     func testTransportKnowsNoFrameContent() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamTransport.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Connection/GatewayConnection.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
         let forbidden = [
@@ -781,7 +781,7 @@ final class LayeringTests: XCTestCase {
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
         let forbidden = [
-            "URLSession", "StreamTransport", "Unscoped", "GatewayErrorCode",
+            "URLSession", "GatewayConnection", "Unscoped", "GatewayErrorCode",
             "\"follow\"", "\"events\"",
         ]
 
@@ -802,10 +802,10 @@ final class LayeringTests: XCTestCase {
     ///
     /// 正控：文件里必须有流通道的路径常量，否则说明扫错了文件。
     func testTransportMintsNoIdsAndKeepsNoTable() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamTransport.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Connection/GatewayConnection.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
-        let forbidden = ["newStreamId", "[StreamId:", "Map<StreamId", "openInFlight"]
+        let forbidden = ["newStreamId", "[StreamId:", "Map<StreamId", "openInFlight", "byId"]
 
         XCTAssertTrue(lines.contains { $0.1.contains("\"/rpc/stream\"") },
                       "没找到流通道路径 —— 先怀疑路径或改名")
@@ -886,7 +886,7 @@ final class LayeringTests: XCTestCase {
             for file in files {
                 scanned += 1
                 let text = try String(contentsOf: file, encoding: .utf8)
-                for (line, code) in codeLines(in: text) where code.contains("StreamTransport") {
+                for (line, code) in codeLines(in: text) where code.contains("GatewayConnection") {
                     XCTFail("\(root)/\(file.lastPathComponent):\(line) 出现了传输层 —— 业务只该拿造流口")
                 }
             }
@@ -899,7 +899,7 @@ final class LayeringTests: XCTestCase {
     /// 数的是「同一件事有没有第二条路径」：多出一处，就说明有一帧能被路由两次、
     /// 或一次换代次被重开两遍 —— 两种都只在真机上表现为「偶尔断一下」。
     func testTheTransportTalksToTheMuxThroughFourCallsOnly() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamTransport.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Connection/GatewayConnection.swift")
         let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
         let calls = ["mux.receive(", "mux.reopenAll()", "mux.closeAll()", "mux.hasPendingOpening"]
 
@@ -909,13 +909,13 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 改造前的十个旧名在源码里零命中：改名不留残影。
+    /// 改造前的旧名在源码里零命中：改名不留残影。
     ///
     /// 正控：`StreamMux` 必须命中 —— 否则说明扫描本身没工作（空集会被读成合规）。
     func testTheOldNamesAreGone() throws {
         let retired = [
             "FollowClient", "SessionStreamHandle", "Subscription", "sendAllOpens", "forgetAll",
-            "ConnectionStore", "ConnectionPhase", "ConnectionEvents",
+            "ConnectionStore", "ConnectionEvents", "StreamTransport", "StreamPhase",
             "Gateway/Client", "Core/Connection",
         ]
         var hits: [String] = []
@@ -1012,7 +1012,7 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(listView.contains("struct SessionRow"), "行的定义没扫到 —— 判据可能扫错了树")
     }
 
-    /// 阶段类型提出去了：业务与视图读的是顶层 `StreamPhase`，没有谁还写 `FollowClient.Phase`。
+    /// 阶段类型提出去了：业务与视图读的是顶层 `ConnectionPhase`，没有谁还写 `FollowClient.Phase`。
     ///
     /// 断言按**文件名单**，不按出现次数：流层内部自己就有四处写这个名字（声明、传输层两个
     /// 字段、门面的 `phase`），数次数时那四处正好凑够阈值 —— 四屏消费点一个都没跟进也照样绿。
@@ -1027,8 +1027,8 @@ final class LayeringTests: XCTestCase {
             let file = sourcesRoot.appendingPathComponent(path)
             let text = try XCTUnwrap(try? String(contentsOf: file, encoding: .utf8),
                                      "\(path) 打不开 —— 名单要跟着挪文件改")
-            XCTAssertTrue(codeLines(in: text).contains { $0.1.contains("StreamPhase") },
-                          "\(path) 没读 StreamPhase —— 「提出去」只改了声明？")
+            XCTAssertTrue(codeLines(in: text).contains { $0.1.contains("ConnectionPhase") },
+                          "\(path) 没读 ConnectionPhase —— 「提出去」只改了声明？")
         }
         // 旧宿主名不在这里守：`testTheOldNamesAreGone` 已扫全仓，重复一遍只会让失败信息更差。
     }
@@ -1066,7 +1066,7 @@ final class LayeringTests: XCTestCase {
         let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionStreamReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
-        let forbidden = ["StreamMux", "StreamTransport", "URLSession", "MuxOpenFrame", "GatewayClient"]
+        let forbidden = ["StreamMux", "GatewayConnection", "URLSession", "MuxOpenFrame", "GatewayClient"]
 
         XCTAssertTrue(lines.contains { $0.1.contains("static func read(") },
                       "没找到 `static func read(` —— 先怀疑路径或名字")

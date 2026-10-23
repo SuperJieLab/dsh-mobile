@@ -7,7 +7,7 @@ import Foundation
  * 它只装一件事：连接的生命周期归谁。归 App —— 前台期间要一条传输，会话详情只在这条
  * 传输上**造一条流**。屏幕那一侧永远看不到「进屏重新握手、离屏丢掉整窗」这件事。
  *
- * 为什么需要这一层而不是在根部直接拿 `StreamTransport`：阶段要能被 SwiftUI 观察
+ * 为什么需要这一层而不是在根部直接拿 `GatewayConnection`：阶段要能被 SwiftUI 观察
  *（功能条的网络格），而传输层不碰 Combine 的发布机制。这一层只搬运阶段与转发造流，
  * 不判断任何东西 —— 判据仍在传输层与流表，屏幕上的事仍在状态层。
  *
@@ -20,12 +20,12 @@ import Foundation
 final class GatewayLink: ObservableObject, StreamFactory {
 
     /// 连接阶段 —— 功能条网络格与连接详情的数据源。
-    @Published private(set) var phase: StreamPhase = .idle
+    @Published private(set) var phase: ConnectionPhase = .idle
 
-    private let transport: StreamTransport
+    private let transport: GatewayConnection
 
     init(client: GatewayClient) {
-        let transport = StreamTransport()
+        let transport = GatewayConnection()
         self.transport = transport
 
         transport.onPhaseChange = { [weak self] phase in self?.phase = phase }

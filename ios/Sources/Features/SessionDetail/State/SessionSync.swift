@@ -111,7 +111,7 @@ final class SessionSync: ObservableObject {
     /// 连接阶段 —— 本屏读连接状态的唯一出处（功能条网络格与连接详情都读它）。
     ///
     /// 它来自宿主而不是流：阶段说的是「这条连接走到哪一步」，与登记了几条流无关。
-    @Published private(set) var phase: StreamPhase = .idle
+    @Published private(set) var phase: ConnectionPhase = .idle
     private var transient = TransientChannel()
 
     /// 首屏兜底：WS 迟迟不给窗口时用 HTTP 拉一次。

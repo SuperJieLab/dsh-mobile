@@ -1,7 +1,7 @@
 /**
  * 传输层的判据：心跳判定、迟到的回调、坏帧不带走连接、帧只进流表、就绪只由建成触发。
  *
- * 这一组用**真的 `StreamTransport`** 加一个连不上的端点（`127.0.0.1:1`）来验编排，
+ * 这一组用**真的 `GatewayConnection`** 加一个连不上的端点（`127.0.0.1:1`）来验编排，
  * 纯判定（心跳、迟到回调）直接调静态函数。不构造假 socket：`URLSessionWebSocketTask`
  * 没有可替换的公开接口，为它造替身只会测到替身。
  *
@@ -15,14 +15,14 @@ import XCTest
 @testable import DshMobile
 
 @MainActor
-final class StreamTransportTests: XCTestCase {
+final class GatewayConnectionTests: XCTestCase {
 
     /// 连不上的端点：握手会真发起（必定失败），但**发帧是同步的**，断言紧跟在动作之后。
     ///
     /// ⚠️ 握手失败之后传输层会按退避换届次（250–500ms 一拍），每一代都重开所有流。
     /// 所以只写不跨越退避窗口的断言；要等编排跑起来的地方显式等够一拍。
-    private func transport() -> StreamTransport {
-        let transport = StreamTransport()
+    private func transport() -> GatewayConnection {
+        let transport = GatewayConnection()
         transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
         transport.authorizationProvider = { "ticket" }
         transport.sessionProvider = { .shared }
@@ -50,27 +50,27 @@ final class StreamTransportTests: XCTestCase {
     /// 我们的 pong 排在它后面，一拍也到不了。
     func testLivenessTickBranches() {
         // 有流在等打开帧：无论收到过什么、连失多少，都继续探活且归零。
-        XCTAssertEqual(StreamTransport.livenessTick(
+        XCTAssertEqual(GatewayConnection.livenessTick(
             awaitingOpening: true, heardFromPeer: false, missed: 2, limit: 2), .probe(missed: 0))
-        XCTAssertEqual(StreamTransport.livenessTick(
+        XCTAssertEqual(GatewayConnection.livenessTick(
             awaitingOpening: true, heardFromPeer: true, missed: 1, limit: 2), .probe(missed: 0))
 
         // 没在等：收到过东西 ⇒ 归零。
-        XCTAssertEqual(StreamTransport.livenessTick(
+        XCTAssertEqual(GatewayConnection.livenessTick(
             awaitingOpening: false, heardFromPeer: true, missed: 2, limit: 2), .probe(missed: 0))
 
         // 没在等、也没收到：连失数累加，到上限之上判死。
-        XCTAssertEqual(StreamTransport.livenessTick(
+        XCTAssertEqual(GatewayConnection.livenessTick(
             awaitingOpening: false, heardFromPeer: false, missed: 0, limit: 2), .probe(missed: 1))
         // `next == limit` 这一格单独钉住：把判死条件写成 `>=` 时，上下两格（1 与 3）都还在
         // 边界两侧不动，只有它会红 —— 少了它，「容错两拍」实际只剩一拍。
-        XCTAssertEqual(StreamTransport.livenessTick(
+        XCTAssertEqual(GatewayConnection.livenessTick(
             awaitingOpening: false, heardFromPeer: false, missed: 1, limit: 2), .probe(missed: 2),
             "第 2 拍连失 2，仍在容错内")
-        XCTAssertEqual(StreamTransport.livenessTick(
+        XCTAssertEqual(GatewayConnection.livenessTick(
             awaitingOpening: false, heardFromPeer: false, missed: 2, limit: 2), .dead)
         // 空闲连接（停在会话列表：一条流都没有）同样要判死：常驻之后大部分时间是这个处境。
-        XCTAssertEqual(StreamTransport.livenessTick(
+        XCTAssertEqual(GatewayConnection.livenessTick(
             awaitingOpening: false, heardFromPeer: false, missed: 9, limit: 2), .dead,
             "连失数早已越过上限，不该因为「没有流」而继续 probe")
     }
@@ -80,13 +80,13 @@ final class StreamTransportTests: XCTestCase {
     /// 代次与传输**双重相等**才算「本代当前的那条连接」。松一格，一个被取代的发送回调
     /// 就会把刚建好的连接掐掉、再排一次重连 —— 每 2 秒一转、永不恢复。
     func testLateCallbacksOnlyApplyToTheSameGenerationAndTransport() {
-        XCTAssertTrue(StreamTransport.callbackApplies(
+        XCTAssertTrue(GatewayConnection.callbackApplies(
             generation: 3, current: 3, sameTask: true))
-        XCTAssertFalse(StreamTransport.callbackApplies(
+        XCTAssertFalse(GatewayConnection.callbackApplies(
             generation: 2, current: 3, sameTask: true), "旧代次的回调不作数")
-        XCTAssertFalse(StreamTransport.callbackApplies(
+        XCTAssertFalse(GatewayConnection.callbackApplies(
             generation: 3, current: 3, sameTask: false), "同代但换了传输，也不作数")
-        XCTAssertFalse(StreamTransport.callbackApplies(
+        XCTAssertFalse(GatewayConnection.callbackApplies(
             generation: 2, current: 3, sameTask: false))
     }
 
@@ -156,7 +156,7 @@ final class StreamTransportTests: XCTestCase {
     /// 于是「代次在递增」有了一个不依赖内部字段的观测点。
     func testAFailingEndpointKeepsCyclingPhaseWithoutLeavingIdle() async throws {
         let transport = transport()
-        var phases: [StreamPhase] = []
+        var phases: [ConnectionPhase] = []
         transport.onPhaseChange = { phases.append($0) }
 
         transport.activate()
@@ -177,7 +177,7 @@ final class StreamTransportTests: XCTestCase {
 
     /// 没有票不裸连：那一发必定被 401 拒，先去换票。
     func testWithoutATicketNoHandshakeIsAttempted() async throws {
-        let transport = StreamTransport()
+        let transport = GatewayConnection()
         var handshakes = 0
         transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
         transport.authorizationProvider = { nil }
@@ -195,14 +195,14 @@ final class StreamTransportTests: XCTestCase {
 
 // MARK: - 由旧判据并入
 
-extension StreamTransportTests {
+extension GatewayConnectionTests {
 
     /// 一条流都没有也要连 —— 「常驻」的字面含义就是这句。
     ///
     /// 停在会话列表时正是这个处境：没有流，连接仍在；也正因为如此，半开连接才会被发现。
     func testTheConnectionIsResidentWithoutAnyStream() {
         var handshakes = 0
-        let transport = StreamTransport()
+        let transport = GatewayConnection()
         transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
         transport.authorizationProvider = { "ticket" }
         transport.sessionProvider = {
@@ -240,7 +240,7 @@ extension StreamTransportTests {
 
     /// 单帧接收上限必须是网关承诺上界的两倍：系统默认 1 MiB 正是「某个会话打不开」的成因。
     func testTheFrameCeilingIsTwiceTheGatewayCap() {
-        XCTAssertEqual(StreamTransport.maximumMessageSize, 8 * 1024 * 1024)
+        XCTAssertEqual(GatewayConnection.maximumMessageSize, 8 * 1024 * 1024)
     }
 
     /// 没有票 → 去换；换到了立刻重连（跳过这一轮退避），换不到且不会自愈就停。
