@@ -13,7 +13,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && node --test 'tests/**/*.test.ts'"
+    "test": "npm run typecheck && node --test --test-timeout=30000 'tests/**/*.test.ts'"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
