@@ -81,8 +81,16 @@ final class ApprovalStore: ObservableObject {
     /// 两者在同一个帧序列里相邻、客户端同步处理，界面上看不到中间态。这样表就没有跨代
     /// 状态 —— 与上游「句柄表是局部变量、代际更替随函数消失」同一个形态。
     func attach(events: ConnectionEventStream) {
-        events.onApprovalRequest { [weak self] payload in self?.receive(payload) }
-        events.onApprovalCancelled { [weak self] eventId in self?.cancel(eventId: eventId) }
+        events.onCargo("waterfall") { [weak self] payload in self?.receive(payload) }
+        // 撤回的解释在这里：`eventId` 是唯一的寻址信息。没有它删不掉任何东西 —— 留着这张卡
+        // 比误删别人的强。
+        events.onCargo("cancel") { [weak self] payload in
+            guard let eventId = payload["eventId"]?.string, !eventId.isEmpty else {
+                Log.warn(Log.Module.session, "dropped a cancel without an eventId")
+                return
+            }
+            self?.cancel(eventId: eventId)
+        }
         events.onGeneration { [weak self] _ in self?.clear() }
     }
 

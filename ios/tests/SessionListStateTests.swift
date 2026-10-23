@@ -240,6 +240,24 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(state.sessions.map(\.id), ["s1"], "这一帧该一路走到列表上")
     }
 
+    /// 认不出的列表增量在消费方丢弃：坏形状不进合并器，列表不动。
+    ///
+    /// 丢弃口径归消费方 —— 「认不出怎么办」是读法的一部分：列表的口径是跳过这一条继续。
+    func testMalformedListChangeIsDroppedAtTheConsumer() throws {
+        let state = make(FakeFetch())
+        let events = ConnectionEventStream()
+        state.attach(events: events)
+
+        for text in [
+            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list"}}"#,
+            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{"kind":"question"}}}"#,
+        ] {
+            let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: Data(text.utf8))
+            events.handle(ConnectionEventReader.read(envelope: envelope))
+        }
+        XCTAssertTrue(state.sessions.isEmpty, "认不出的增量一条都不该进列表")
+    }
+
     // MARK: - L8 失败不清空
 
     /// 拉取失败：列表保留原样，事件带来的变化也仍在，失败面照常报。

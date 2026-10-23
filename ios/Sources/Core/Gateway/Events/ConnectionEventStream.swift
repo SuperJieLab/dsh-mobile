@@ -7,8 +7,9 @@ import Foundation
  * 两件东西，一件都不能少：
  * - **代次**：源每次重建加一，失效时缺席。它是「我手里这份基线还新不新」的唯一依据，
  *   所以消费方要的不是「第几条事件」，而是「源换代了，去重读一次」这个信号。
- * - **按名字注册**：事件名是上游的词汇（`api-session/added` 等），本类不认识其中任何一个
- *   —— 加一类事件只多一次 `on`，不碰这里的任何一行。
+ * - **按名字注册**：两个命名空间各一个口 —— 上游事件名（`on`）与流通道的货物名
+ *   （`onCargo`，`session-list` / `waterfall` / `cancel`）。名字原样来自协议，本类不解释
+ *   其中任何一个 —— 加一类事件或货物只多一次注册，不碰这里的任何一行。
  *
  * 它不持有连接：「登记这条流」是唯一一次调用（`attach`），此后帧从连接层进来。这条流
  * 的失败与重开由连接层按 `StreamReply` 处置，本类只回答「这一帧说了什么」。
@@ -33,16 +34,10 @@ final class ConnectionEventStream {
     /// 按事件名分派的听众。名字原样来自上游，本类不解释。
     private var handlers: [String: [(JSONValue) -> Void]] = [:]
 
-    /// 会话列表增量的听众。与按名分派并列而不是其中一支：它不是「某个事件名的载荷」，
-    /// 而是这条流自己的第三种货物 —— 上游那四类名字在网关就被翻掉了。
-    private var listHandlers: [(SessionListChange) -> Void] = []
-
-    /// 待答调用的听众。与 `listHandlers` 并列：它也是这条流自己的货物，
-    /// 而且它的载荷不归按名分派那一支（那是上游事件的名字空间）。
-    private var approvalHandlers: [(JSONValue) -> Void] = []
-
-    /// 待答调用被撤回的听众。
-    private var cancelHandlers: [(String) -> Void] = []
+    /// 按货物名分派的听众。名字是流通道的 kind 词汇（`session-list` / `waterfall` / `cancel`），
+    /// 与上面那个口是**两个命名空间**（emit 的名字在载荷里、kind 是外壳字段）—— 分开注册，
+    /// 将来上游真有一条叫 `cancel` 的事件也不会串。载荷原样交出，解释住消费方。
+    private var cargoHandlers: [String: [(JSONValue) -> Void]] = [:]
 
     /// 这条流本身。`close()` / `restart()` 都在它上面 —— 连接级动作一个都不在这里。
     private var stream: LogicalStream?
@@ -76,19 +71,9 @@ final class ConnectionEventStream {
         handlers[event, default: []].append(handler)
     }
 
-    /// 订阅会话列表的增量。
-    func onSessionList(_ handler: @escaping (SessionListChange) -> Void) {
-        listHandlers.append(handler)
-    }
-
-    /// 订阅「有一条待答调用」。载荷是上游 waterfall 的四个字段，本类不看内容。
-    func onApprovalRequest(_ handler: @escaping (JSONValue) -> Void) {
-        approvalHandlers.append(handler)
-    }
-
-    /// 订阅「有一条待答调用被撤回」。
-    func onApprovalCancelled(_ handler: @escaping (String) -> Void) {
-        cancelHandlers.append(handler)
+    /// 订阅一种具名货物。同一个 kind 可以有两个听众。
+    func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) {
+        cargoHandlers[type, default: []].append(handler)
     }
 
     /// 作废当前这条流的登记 —— **只标状态，不重复关**。
@@ -113,12 +98,8 @@ final class ConnectionEventStream {
             for handler in generationHandlers { handler(reported) }
         case let .emit(name, args):
             for handler in handlers[name] ?? [] { handler(args) }
-        case let .sessionList(change):
-            for handler in listHandlers { handler(change) }
-        case let .waterfall(payload):
-            for handler in approvalHandlers { handler(payload) }
-        case let .cancel(eventId):
-            for handler in cancelHandlers { handler(eventId) }
+        case let .cargo(type, payload):
+            for handler in cargoHandlers[type] ?? [] { handler(payload) }
         case let .refused(failure):
             // 不进消费方（拒绝讲的是「这条流接下来怎么办」，由 `StreamReply` 说），但**要留痕**：
             // 屏幕上不会出现任何东西 —— 「网关版本旧」与「网关装配漏了源」只在这一行里分得开。

@@ -185,46 +185,59 @@ final class ConnectionEventTests: XCTestCase {
         }
     }
 
-    // MARK: - 列表增量：判读与分派
+    // MARK: - 列表增量：具名货物与分派
 
-    /// 第三种载荷：`session-list` 判成一条列表增量；它的形状读不出就丢弃。
+    /// 第三种载荷：`session-list` 归成具名货物 —— kind 名与整段载荷原样交出。
     ///
     /// 这一条守的是整条链路的**中段** —— 网关已经把它发出来了，判读器若不认识，
-    /// 列表永远收不到事件，而两端各自的判据都还是绿的。
-    func testSessionListPayloadsAreReadAndMalformedOnesDropped() throws {
+    /// 列表永远收不到事件，而两端各自的判据都还是绿的。认不出的形状不在这里丢：
+    /// 解释与丢弃住消费方（那边有自己的判据）。
+    func testSessionListCargoIsHandedOverVerbatim() throws {
         let reading = try read("""
         {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
           "kind":"activity","id":"s1","updatedAt":42}}}
         """)
-        XCTAssertEqual(reading.content, .sessionList(.activity("s1", updatedAt: 42)))
-        XCTAssertFalse(reading.establishes, "列表增量不建成这条流 —— 建成只由 ready 说")
+        XCTAssertEqual(reading.content, .cargo(type: "session-list", payload: .object([
+            "kind": .string("session-list"),
+            "change": .object([
+                "kind": .string("activity"), "id": .string("s1"), "updatedAt": .number(42),
+            ]),
+        ])))
+        XCTAssertFalse(reading.establishes, "货物不建成这条流 —— 建成只由 ready 说")
         XCTAssertEqual(reading.next, .keep)
 
-        for text in [
-            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list"}}"#,
-            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{"kind":"question"}}}"#,
-        ] {
-            XCTAssertEqual(try read(text).content, .ignored, "「\(text)」该丢弃")
-        }
+        // 载荷缺 `change` 也原样交出 —— 那是消费方要判的事。
+        let bare = try read(#"{"type":"item","streamId":"e1","payload":{"kind":"session-list"}}"#)
+        XCTAssertEqual(bare.content, .cargo(type: "session-list",
+                                            payload: .object(["kind": .string("session-list")])))
     }
 
-    /// 变更是按「收到一条推一条」分派的，与按名字分派的那一组并列：它不是「某个事件名
-    /// 的载荷」，而是这条流自己的第三种货物。
-    func testListChangesReachTheirListener() throws {
+    /// 货物按 kind 名分派，与按事件名分派的那一组并列 —— 两个命名空间互不串。
+    ///
+    /// 撞名不是假想：将来上游真有一条叫 `cancel` 的事件时，它的 `emit` 进事件名口，
+    /// 货物口的 `cancel` 听众不该被叫醒。
+    func testCargoIsDispatchedByNameWithoutCrossingNamespaces() throws {
         let events = ConnectionEventStream()
-        var seen: [SessionListChange] = []
-        events.onSessionList { seen.append($0) }
+        var seen: [JSONValue] = []
+        events.onCargo("session-list") { seen.append($0) }
 
-        events.handle(try read("""
-        {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
-          "kind":"status","id":"s2","running":true}}}
-        """))
-        XCTAssertEqual(seen, [.status("s2", running: true)])
+        events.handle(ConnectionEventReading(content: .cargo(
+            type: "session-list", payload: .object(["change": .string("x")])
+        )))
+        XCTAssertEqual(seen.count, 1, "kind 名匹配才进这个听众")
 
-        // 别的内容都不该进这个听众。
         events.handle(ConnectionEventReading(content: .ready(generation: 1)))
-        events.handle(ConnectionEventReading(content: .emit(name: "x", args: .array([]))))
-        XCTAssertEqual(seen.count, 1)
+        events.handle(ConnectionEventReading(content: .emit(name: "session-list", args: .array([]))))
+        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: .object([:]))))
+        XCTAssertEqual(seen.count, 1, "别的内容与别的 kind 都不该进来 —— emit 名字同名也不串")
+
+        var second = 0
+        events.onCargo("session-list") { _ in second += 1 }
+        events.handle(ConnectionEventReading(content: .cargo(
+            type: "session-list", payload: .object(["change": .string("y")])
+        )))
+        XCTAssertEqual(seen.count, 2)
+        XCTAssertEqual(second, 1, "同一 kind 可以有两个听众 —— 注册表是复数")
     }
 
     // MARK: - O13：代次门槛

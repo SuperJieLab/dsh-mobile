@@ -4,9 +4,9 @@ import Foundation
  * 一帧的判读结论：它是什么，以及这条流接下来怎么办。
  *
  * 形状与 `StreamReading` 同构（同样是「内容 + 建成 + 动作」三件），但**值域更窄**：这条流只有
- * `ready` / `emit` / `session-list` / `waterfall` / `cancel` 五种内容。窄是它的判据 —— 事件流
- * 不重放，没有窗口、水位、未定稿帧，判读器若「顺手」认识它们，那些分支就永远不会被上游走过，
- * 只会成为下一次误判的入口。
+ * 控制结局（`ready` / `refused` / `ended` / `ignored`）、转发事件（`emit`）与具名货物三类。
+ * 窄是它的判据 —— 事件流不重放，没有窗口、水位、未定稿帧，判读器若「顺手」认识它们，
+ * 那些分支就永远不会被上游走过，只会成为下一次误判的入口。
  */
 struct ConnectionEventReading {
 
@@ -16,12 +16,8 @@ struct ConnectionEventReading {
         case ready(generation: Int?)
         /// 一条转发事件：名字与参数原样。
         case emit(name: String, args: JSONValue)
-        /// 会话列表的一条增量。网关把上游那四类事件翻成它，所以这里只认自己的形状。
-        case sessionList(SessionListChange)
-        /// 一条待答调用。载荷原样带着上游 waterfall 的四个字段，本层不解释。
-        case waterfall(payload: JSONValue)
-        /// 一条待答调用被撤回 —— 唯一携带的寻址信息是 `eventId`。
-        case cancel(eventId: String)
+        /// 一条具名货物：kind 名与整段载荷原样（含 `kind` 字段）。内容归各消费方解释。
+        case cargo(type: String, payload: JSONValue)
         /// 流通道里的协议内拒绝。
         case refused(GatewayFailure)
         /// 流被服务端正常收尾。
@@ -53,7 +49,7 @@ struct ConnectionEventReading {
             // `.retry` 在连接层的含义是**按流退避重开**，`.stop` 是收起这一条流 ——
             // 两者都不动连接。
             return Self.retryableCodes.contains(failure.code) ? .retry : .stop
-        case .ready, .emit, .sessionList, .waterfall, .cancel, .ignored:
+        case .ready, .emit, .cargo, .ignored:
             return .keep
         }
     }
@@ -73,9 +69,9 @@ struct ConnectionEventReading {
 /**
  * 把一帧线上文本判成 `ConnectionEventReading` —— 纯函数，不碰 socket、不持状态。
  *
- * 两种流的内容不同：会话流一帧可以是打开帧、事件、未定稿帧、占用读数；这条流只有 `ready`、
- * `emit`、`session-list`、`waterfall`、`cancel` 五种。窄值域是判据的一部分 —— 不认识的形状
- * 在这里一律丢弃，而不是猜一个近似的分支。
+ * 两种流的内容不同：会话流一帧可以是打开帧、事件、未定稿帧、占用读数；这条流只有控制结局、
+ * 转发事件与具名货物。窄值域是判据的一部分 —— 不认识的形状在这里一律丢弃，而不是猜一个
+ * 近似的分支。
  *
  * 判据与网关 `remote/stream.ts` 的 `pumpEvents` 逐条对齐（两端协定的订阅流一节）：
  *
@@ -83,10 +79,8 @@ struct ConnectionEventReading {
  * |---|---|---|
  * | `item`，载荷 `kind` 是 `ready` | 代次 | `generation` 读得出就带上，读不出就是 `nil`（不补数） |
  * | `item`，载荷 `kind` 是 `emit` | 一条事件 | `event` 必须是字符串；`args` 原样，缺席即空列表 |
- * | `item`，`kind` 是 `session-list` | 列表增量 | 交给 `SessionListChange.decode`，认不出丢弃 |
- * | `item`，`kind` 是 `waterfall` | 一条待答调用 | 载荷原样交给审批表；本层不解释它的字段 |
- * | `item`，`kind` 是 `cancel` | 一条撤回 | `eventId` 必须是非空字符串 —— 没有它删不掉任何东西 |
- * | `item`，有 `kind` 但认不出 | 认不出 | 丢弃并留一行**带 kind 原值**的 warn —— 版本错配时只靠它 |
+ * | `item`，`kind` 是三条货物名之一 | 具名货物 | kind 与载荷原样交出，解释住消费方 |
+ * | `item`，有 `kind` 但词表里没有 | 认不出 | 丢弃并留带原值的 warn —— 版本错配的现场 |
  * | `item`，没有 `kind` / 没有载荷 | 认不出 | 丢弃（形状本身就不完整，没有名字可指认） |
  * | `error` | 拒绝 | 载荷是 `{code, message}`，动作由码决定（重试会不会变） |
  * | `end` | 收尾 | —— |
@@ -116,27 +110,10 @@ enum ConnectionEventReader {
                 // `args` 整段缺席是正常的：上游 `emit(event)` 不带参数时，网关那份
                 // `JSON.stringify` 会把 `undefined` 字段丢掉。事件名已经说得清发生了什么。
                 return ConnectionEventReading(content: .emit(name: name, args: payload["args"] ?? .array([])))
-            case "session-list":
-                // 形状判定的正身在 `SessionListChange.decode`（那里有它自己的判据）——
-                // 这一跳只把「这条流的一种货物」接到那个类型上，不复制任何一条规则。
-                guard let change = payload["change"].flatMap(SessionListChange.decode) else {
-                    // 留痕：网关加了第五种 kind 时，这里没有分支可走，现场只剩这一行。
-                    Log.warn(Log.Module.session,
-                             "dropped a session-list change this build does not know")
-                    return ConnectionEventReading(content: .ignored)
-                }
-                return ConnectionEventReading(content: .sessionList(change))
-            case "waterfall":
-                // 一条待答调用：载荷原样往下交给审批表，这一层不解释它的字段 ——
-                // 「谁在等批、等的是什么」是业务那一侧的事。
-                return ConnectionEventReading(content: .waterfall(payload: payload))
-            case "cancel":
-                guard let eventId = payload["eventId"]?.string, !eventId.isEmpty else {
-                    // 没有寻址信息的撤回删不掉任何东西：留着这张卡比误删别人的强。
-                    Log.warn(Log.Module.session, "dropped a cancel without an eventId")
-                    return ConnectionEventReading(content: .ignored)
-                }
-                return ConnectionEventReading(content: .cancel(eventId: eventId))
+            case "session-list", "waterfall", "cancel":
+                // 三条具名货物：kind 名与载荷原样交出。这一层只分类，不解释货物内容 ——
+                // 怎么读、认不出怎么办（含无寻址的撤回），都住各自消费方。
+                return ConnectionEventReading(content: .cargo(type: kind, payload: payload))
             default:
                 // 留痕要带**名字**：手机与网关可能不同版本，新货物被这一版丢弃时现场只剩这一行
                 // —— 不带名字就分不出「网关加了货物」与「这条流坏了」。

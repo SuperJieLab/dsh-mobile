@@ -69,7 +69,17 @@ final class SessionListState: ObservableObject {
         attached = true
         // 两件都接：逐条的增量（改一行），与每一次报到（重拉基线）。少接一条的症状是
         // 「列表不自己动」或「断线之后再也不对齐」—— 都不编译失败。
-        events.onSessionList { [weak self] change in self?.apply(change) }
+        //
+        // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。与判读器的「未知 kind」是
+        // 两种事 —— 这里说的是「这一条坏了」，那一处说的是「这一版不认识它」。
+        events.onCargo("session-list") { [weak self] payload in
+            guard let change = payload["change"].flatMap(SessionListChange.decode) else {
+                Log.warn(Log.Module.session,
+                         "dropped a session-list change this build does not know")
+                return
+            }
+            self?.apply(change)
+        }
         events.onGeneration { [weak self] _ in
             Task { await self?.reload() }
         }

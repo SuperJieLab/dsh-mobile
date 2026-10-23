@@ -192,17 +192,37 @@ final class ApprovalStoreTests: XCTestCase {
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(events: events)
 
-        events.handle(ConnectionEventReading(content: .waterfall(payload: waterfall())))
+        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "货物从流里进来就成了一条")
 
-        events.handle(ConnectionEventReading(content: .cancel(eventId: "e1")))
+        events.handle(ConnectionEventReading(content: .cargo(type: "cancel", payload: .object(["eventId": .string("e1")]))))
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "撤回那条货物把卡带走")
 
-        events.handle(ConnectionEventReading(content: .waterfall(payload: waterfall())))
+        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").count, 1)
         events.handle(ConnectionEventReading(content: .ready(generation: nil)))
         XCTAssertTrue(store.pending(in: "s1").isEmpty,
                       "源失效清空：网关的上游没了，手里这些一条也答不了")
+    }
+
+    /// 无寻址的撤回删不掉任何东西：`eventId` 缺失或空串时留着卡。
+    ///
+    /// 寻址校验归消费方 —— 「认不出怎么办」是读法的一部分：审批的口径是留卡比误删强。
+    func testACancelWithoutAnEventIdKeepsTheCard() {
+        let events = ConnectionEventStream()
+        let store = ApprovalStore(answerer: FakeAnswerer())
+        store.attach(events: events)
+
+        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
+        XCTAssertEqual(store.pending(in: "s1").count, 1)
+
+        events.handle(ConnectionEventReading(content: .cargo(type: "cancel", payload: .object([:]))))
+        XCTAssertEqual(store.pending(in: "s1").count, 1, "没带 eventId 的撤回删不掉任何东西")
+
+        events.handle(ConnectionEventReading(content: .cargo(
+            type: "cancel", payload: .object(["eventId": .string("")])
+        )))
+        XCTAssertEqual(store.pending(in: "s1").count, 1, "空串同理 —— 留着这张卡比误删别人的强")
     }
 
     /// 每一条 `ready` 都整表替换 —— 网关在它之后紧跟着重放当前集合。
@@ -221,7 +241,7 @@ final class ApprovalStoreTests: XCTestCase {
         events.handle(ConnectionEventReading(content: .ready(generation: 7)))
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "ready 是重建的界线")
 
-        events.handle(ConnectionEventReading(content: .waterfall(payload: waterfall())))
+        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").map(\.eventId), ["e1"], "重放重建")
     }
 

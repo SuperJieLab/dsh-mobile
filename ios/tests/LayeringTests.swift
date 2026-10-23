@@ -190,6 +190,38 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(found, [], "Core 下又出现了 State/ —— 纯判定归消费方：\(found)")
     }
 
+    // MARK: - 断言：通信域的订阅面不出现业务概念
+
+    /// 注册口只认「名字 + 载荷 + 代次」：方法名与参数里出现会话列表增量、待答调用、撤回
+    /// 这一族词，就是「加一种业务货物要改通信域」的开始，「无产品行为」的承诺随之失守。
+    ///
+    /// 判据落在**注册口的声明行**（`func on…`）上：名字不许命中业务词表，参数不许是业务
+    /// 形状。词表手维护 —— 新增业务词汇时加一行。
+    /// 正控：通用货物口 `onCargo` 必须真的被扫到 —— 扫描失效时词表零命中会被读成合规。
+    ///
+    /// 盲区：只认声明行；用变量间接注册的写法靠评审。
+    private static let businessSubscriptionWords = [
+        "SessionList", "Approval", "Waterfall", "Cancel",
+    ]
+
+    func testCoreHasNoBusinessSubscriptions() throws {
+        let root = sourcesRoot.appendingPathComponent("Core/Gateway")
+        var genericHits = 0
+        var hits: [String] = []
+        for file in swiftFiles(under: root) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                guard code.contains("func on") else { continue }
+                if code.contains("func onCargo(") { genericHits += 1 }
+                for word in Self.businessSubscriptionWords where code.contains(word) {
+                    hits.append("Core/Gateway/\(file.lastPathComponent):\(line) \(word)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(genericHits, 0, "onCargo 一处都没扫到 —— 先怀疑扫描面")
+        XCTAssertEqual(hits, [], "Core 的注册口出现了业务概念：\(hits)")
+    }
+
     // MARK: - 断言 2c：Core 内部不反向依赖
 
     /// `Core/` 内部各域只许向下依赖：`MeshNetwork` 是顶层编排（`MeshStore` 编织载体与协议），
