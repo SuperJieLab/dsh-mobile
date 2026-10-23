@@ -277,7 +277,7 @@ struct SessionDetailView: View {
     @ViewBuilder
     private var approvalSection: some View {
         if let first = pendingApprovals.first {
-            ApprovalCard(approval: first, state: approvals.state(for: first.identity)) { allow in
+            ApprovalCard(approval: first, state: approvals.state(for: first.eventId)) { allow in
                 Task { await approvals.answer(first, allow: allow) }
             }
             .padding(.horizontal, 4)
@@ -391,7 +391,7 @@ struct SessionDetailView: View {
                         VStack(spacing: 8) {
                             ForEach(rest) { approval in
                                 ApprovalCard(approval: approval,
-                                             state: approvals.state(for: approval.identity)) { allow in
+                                             state: approvals.state(for: approval.eventId)) { allow in
                                     Task { await approvals.answer(approval, allow: allow) }
                                 }
                             }

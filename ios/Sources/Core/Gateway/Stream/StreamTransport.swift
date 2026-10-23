@@ -13,7 +13,7 @@
 import Foundation
 
 @MainActor
-final class StreamTransport: StreamPort, UnscopedFrameFeed {
+final class StreamTransport: StreamPort {
 
     /// 本网关提供流协议的精确路径。
     static let streamPath = "/rpc/stream"
@@ -31,8 +31,6 @@ final class StreamTransport: StreamPort, UnscopedFrameFeed {
 
     /// 阶段变化（连接态指示器的数据源）。
     var onPhaseChange: ((StreamPhase) -> Void)?
-    /// 无编号帧的收货人，与连接同寿。
-    var unscopedSink: (any UnscopedFrameSink)?
     /// 取一张有效的访问凭证（升级请求带上它）。**没有就说明现在不该连。**
     var authorizationProvider: (() -> String?)?
     /// 换一张票。见 `renewThenRetry`：换到之后该重连、换不到该等还是该停，由本类决定。
@@ -302,13 +300,8 @@ final class StreamTransport: StreamPort, UnscopedFrameFeed {
         }
         Log.debug(Log.Module.session, "g\(current) frame: \(frame.type)")
 
-        // 没有编号的帧不属于任何一条流，交给连接级收货人；有编号的整帧交给流表。
-        // 本层不判编号的含义，只判它在不在。
-        if frame.streamId == nil {
-            unscopedSink?.accept(frame)
-        } else {
-            mux.receive(frame, raw: rawData)
-        }
+        // 每个帧都有编号（协议如此），整帧交给流表 —— 本层不判编号的含义。
+        mux.receive(frame, raw: rawData)
     }
 
     // MARK: - 心跳与退避

@@ -37,20 +37,19 @@ final class ApprovalStoreTests: XCTestCase {
         }
     }
 
-    private func request(
+    /// 一条待答调用的载荷 —— 上游 waterfall 的四个字段原样，网关只搬不改。
+    private func waterfall(
         session: String = "s1", eventId: String = "e1", toolName: String = "bash",
-        callId: String? = "c1"
+        reason: String? = nil
     ) -> JSONValue {
-        var payload: [String: JSONValue] = [
-            "kind": .string("request"), "sessionId": .string(session),
-            "eventId": .string(eventId), "toolName": .string(toolName),
-        ]
-        if let callId { payload["callId"] = .string(callId) }
-        return .object(payload)
-    }
-
-    private func cancel(_ eventId: String) -> JSONValue {
-        .object(["kind": .string("cancel"), "eventId": .string(eventId)])
+        var body: [String: JSONValue] = ["toolName": .string(toolName)]
+        if let reason { body["reason"] = .string(reason) }
+        return .object([
+            "event": .string("approval/request"),
+            "eventId": .string(eventId),
+            "agentId": .string(session),
+            "request": .object(body),
+        ])
     }
 
     private func refused(_ code: String) -> GatewayClientError {
@@ -62,22 +61,22 @@ final class ApprovalStoreTests: XCTestCase {
     /// 帧进来就按会话分组 —— 别的会话读不到。
     func testReceivedFramesAreGroupedBySession() {
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.receive(request(session: "s1"))
-        store.receive(request(session: "s2", eventId: "e2", callId: "c2"))
+        store.receive(waterfall(session: "s1"))
+        store.receive(waterfall(session: "s2", eventId: "e2"))
 
-        XCTAssertEqual(store.pending(in: "s1").map(\.identity), ["c1"])
-        XCTAssertEqual(store.pending(in: "s2").map(\.identity), ["c2"])
+        XCTAssertEqual(store.pending(in: "s1").map(\.eventId), ["e1"])
+        XCTAssertEqual(store.pending(in: "s2").map(\.eventId), ["e2"])
         XCTAssertTrue(store.pending(in: "s3").isEmpty)
     }
 
     /// 取消把那张卡与它的状态一起清掉 —— 状态字典里不该留看不见的旧值。
     func testCancelRemovesTheEntryAndItsAnswerState() {
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.receive(request())
-        store.receive(.object(["kind": .string("cancel"), "eventId": .string("e1")]))
+        store.receive(waterfall())
+        store.cancel(eventId: "e1")
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty)
-        XCTAssertNil(store.state(for: "c1"))
+        XCTAssertNil(store.state(for: "e1"))
     }
 
     // MARK: - 作答：成功与三种失败
@@ -85,12 +84,12 @@ final class ApprovalStoreTests: XCTestCase {
     /// 成功即移除，不等任何回流帧：上游先摘掉自己的投递再广播取消，应答者收不到自己的收口帧。
     func testASuccessfulAnswerRemovesTheEntryWithoutWaitingForAFrame() async {
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.receive(request())
+        store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "答完即走 —— 没有任何帧参与")
-        XCTAssertNil(store.state(for: "c1"))
+        XCTAssertNil(store.state(for: "e1"))
         // 同源断言：守的是「成功分支有没有说话」，不守文案 —— 文案坏了由 Display 那一侧的事管。
         XCTAssertEqual(store.notice(for: "s1"), ApprovalStore.deliveredNote(allow: true))
     }
@@ -100,12 +99,12 @@ final class ApprovalStoreTests: XCTestCase {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(refused("unknown-approval"))
         let store = ApprovalStore(answerer: answerer)
-        store.receive(request())
+        store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: false)
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty)
-        XCTAssertNil(store.state(for: "c1"))
+        XCTAssertNil(store.state(for: "e1"))
         XCTAssertEqual(store.notice(for: "s1"),
                        GatewayFailure(code: "unknown-approval", message: "")
                         .readableDescription)
@@ -117,12 +116,12 @@ final class ApprovalStoreTests: XCTestCase {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(GatewayClientError.notActivated)
         let store = ApprovalStore(answerer: answerer)
-        store.receive(request())
+        store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
 
         XCTAssertEqual(store.pending(in: "s1").count, 1)
-        XCTAssertEqual(store.state(for: "c1"), .unknown)
+        XCTAssertEqual(store.state(for: "e1"), .unknown)
     }
 
     /// 服务端拒了这次投递：卡留着并写明原因 —— 那个问题仍挂在网关的暂存里。
@@ -130,12 +129,12 @@ final class ApprovalStoreTests: XCTestCase {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(refused("internal-error"))
         let store = ApprovalStore(answerer: answerer)
-        store.receive(request())
+        store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
 
         XCTAssertEqual(store.pending(in: "s1").count, 1)
-        XCTAssertEqual(store.state(for: "c1"), .refused("网关自身出错 —— 进程还活着，只是这次请求失败了。"))
+        XCTAssertEqual(store.state(for: "e1"), .refused("网关自身出错 —— 进程还活着，只是这次请求失败了。"))
     }
 
     // MARK: - 在途
@@ -148,7 +147,7 @@ final class ApprovalStoreTests: XCTestCase {
         let answerer = FakeAnswerer()
         answerer.holdsFirstCall = true
         let store = ApprovalStore(answerer: answerer)
-        store.receive(request())
+        store.receive(waterfall())
         let entry = store.pending(in: "s1")[0]
 
         let first = Task { await store.answer(entry, allow: true) }
@@ -157,7 +156,7 @@ final class ApprovalStoreTests: XCTestCase {
             await Task.yield()
         }
         XCTAssertEqual(answerer.calls, ["e1"], "第一次该已经发出")
-        XCTAssertEqual(store.state(for: "c1"), .sending, "往返期间卡上说的是「正在发送」")
+        XCTAssertEqual(store.state(for: "e1"), .sending, "往返期间卡上说的是「正在发送」")
 
         await store.answer(entry, allow: true)
         XCTAssertEqual(answerer.calls, ["e1"], "第二次不该再发一次")
@@ -169,65 +168,45 @@ final class ApprovalStoreTests: XCTestCase {
 
     // MARK: - 接线
 
-    /// 投递口的替身：连接层只认识这一个成员。
-    @MainActor
-    private final class FakeFeed: UnscopedFrameFeed {
-        var unscopedSink: (any UnscopedFrameSink)?
-
-        /// `/rpc/stream` 上到达的一帧无编号帧。
-        func push(_ frame: MuxServerEnvelope) {
-            unscopedSink?.accept(frame)
-        }
-    }
-
-    private func envelope(_ payload: JSONValue) -> MuxServerEnvelope {
-        MuxServerEnvelope(type: "approval", streamId: nil, payload: payload)
-    }
-
-    /// 两处接线一次断完：帧进表、源失效清空。
+    /// 三处接线一次断完：待答调用进表、撤回带走它、源失效清空。
     ///
-    /// 两处各自能单独坏（而且坏了都不编译失败），所以两处各一条断言。
-    func testAttachWiresTheFramePathAndSourceLoss() {
+    /// 三处各自能单独坏（而且坏了都不编译失败），所以各一条断言。
+    func testAttachWiresTheApprovalPathAndSourceLoss() {
         let events = ConnectionEventStream()
-        let feed = FakeFeed()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(feed: feed, events: events)
+        store.attach(events: events)
 
-        XCTAssertTrue(feed.unscopedSink === store, "连接层收到的无编号帧该交给这张表")
+        events.handle(ConnectionEventReading(content: .waterfall(payload: waterfall())))
+        XCTAssertEqual(store.pending(in: "s1").count, 1, "货物从流里进来就成了一条")
 
-        feed.push(envelope(request()))
-        XCTAssertEqual(store.pending(in: "s1").count, 1, "帧从投递口进来就成了一条")
+        events.handle(ConnectionEventReading(content: .cancel(eventId: "e1")))
+        XCTAssertTrue(store.pending(in: "s1").isEmpty, "撤回那条货物把卡带走")
 
+        events.handle(ConnectionEventReading(content: .waterfall(payload: waterfall())))
+        XCTAssertEqual(store.pending(in: "s1").count, 1)
         events.handle(ConnectionEventReading(content: .ready(generation: nil)))
-        XCTAssertTrue(store.pending(in: "s1").isEmpty, "源失效清空：网关的上游没了，手里这些答不了")
+        XCTAssertTrue(store.pending(in: "s1").isEmpty,
+                      "源失效清空：网关的上游没了，手里这些一条也答不了")
     }
 
-    /// 名单帧是重建的界线：它到达时表清空，随后的重投重建 —— 断线期间不动，
-    /// 因为那时根本收不到它。
-    func testTheLedgerFrameMarksAReconnectAndRestartsTheTable() {
+    /// 每一条 `ready` 都整表替换 —— 网关在它之后紧跟着重放当前集合。
+    ///
+    /// 这条守的是「表没有跨代状态」：不做这一步，重连之后宿主已经不持有的卡会一直留着
+    /// （重放只会覆盖仍存活的那些）。
+    func testEveryReadyRebuildsTheTableFromTheReplay() {
+        let events = ConnectionEventStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.receive(request(eventId: "e9", callId: "c9"))
+        store.attach(events: events)
+
+        store.receive(waterfall(eventId: "e9"))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "断线之前收到的那一条还在")
 
-        // 重连：服务端先发名单（只有一条仍挂着），再逐条重投。
-        store.receive(.object(["kind": .string("sync"),
-                               "eventIds": .array([.string("e1")]),
-                               "callIds": .array([.string("c1")])]))
-        XCTAssertTrue(store.pending(in: "s1").isEmpty,
-                      "名单是界线：断线期间别人答掉的那些不该留到这时")
+        // 重连：先 ready（清表），再重放当前集合。
+        events.handle(ConnectionEventReading(content: .ready(generation: 7)))
+        XCTAssertTrue(store.pending(in: "s1").isEmpty, "ready 是重建的界线")
 
-        store.receive(request())
-        XCTAssertEqual(store.pending(in: "s1").map(\.identity), ["c1"], "重投重建")
-    }
-
-    /// 名单的 `stale` 标记不影响这条界线 —— 源没就绪时手里那些同样一条都答不了。
-    func testAStaleLedgerAlsoClears() {
-        let store = ApprovalStore(answerer: FakeAnswerer())
-        store.receive(request())
-
-        store.receive(.object(["kind": .string("sync"), "eventIds": .array([]),
-                               "callIds": .array([]), "stale": .bool(true)]))
-        XCTAssertTrue(store.pending(in: "s1").isEmpty)
+        events.handle(ConnectionEventReading(content: .waterfall(payload: waterfall())))
+        XCTAssertEqual(store.pending(in: "s1").map(\.eventId), ["e1"], "重放重建")
     }
 
     /// 在途期间被上游撤回：卡没了，也不该留下「已投递」这句没有指代的话。
@@ -238,7 +217,7 @@ final class ApprovalStoreTests: XCTestCase {
         let answerer = FakeAnswerer()
         answerer.holdsFirstCall = true
         let store = ApprovalStore(answerer: answerer)
-        store.receive(request())
+        store.receive(waterfall())
         let entry = store.pending(in: "s1")[0]
 
         let answer = Task { await store.answer(entry, allow: true) }
@@ -246,12 +225,12 @@ final class ApprovalStoreTests: XCTestCase {
             if !answerer.calls.isEmpty { break }
             await Task.yield()
         }
-        store.receive(cancel("e1"))
+        store.cancel(eventId: "e1")
         answerer.release()
         await answer.value
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty)
-        XCTAssertNil(store.state(for: "c1"))
+        XCTAssertNil(store.state(for: "e1"))
         XCTAssertNil(store.notice(for: "s1"), "卡都不在了，那句话没有指代")
     }
 
@@ -260,14 +239,14 @@ final class ApprovalStoreTests: XCTestCase {
     /// 换代清空：卡与状态一起没了，之后重投一条就回来一条。
     func testClearDropsEveryEntryAndEveryState() {
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.receive(request(session: "s1", eventId: "e1", callId: "c1"))
-        store.receive(request(session: "s2", eventId: "e2", callId: "c2"))
+        store.receive(waterfall(session: "s1", eventId: "e1"))
+        store.receive(waterfall(session: "s2", eventId: "e2"))
 
         store.clear()
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty)
         XCTAssertTrue(store.pending(in: "s2").isEmpty)
-        XCTAssertNil(store.state(for: "c1"))
+        XCTAssertNil(store.state(for: "e1"))
         XCTAssertNil(store.state(for: "c2"))
         XCTAssertNil(store.notice(for: "s1"), "上一代的说明也过时了")
     }

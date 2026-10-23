@@ -17,7 +17,7 @@ import Foundation
  * 屏幕那一侧拿到的不是这个类型，而是 `StreamFactory` —— 它没有连接级动作。
  */
 @MainActor
-final class GatewayLink: ObservableObject, StreamFactory, UnscopedFrameFeed {
+final class GatewayLink: ObservableObject, StreamFactory {
 
     /// 连接阶段 —— 功能条网络格与连接详情的数据源。
     @Published private(set) var phase: StreamPhase = .idle
@@ -62,13 +62,5 @@ final class GatewayLink: ObservableObject, StreamFactory, UnscopedFrameFeed {
     @discardableResult
     func makeStream(_ behavior: any StreamBehavior) -> LogicalStream? {
         transport.mux.makeStream(behavior)
-    }
-
-    // MARK: - 无编号帧
-
-    /// 无编号帧的收货人 —— App 级，与连接同寿。
-    var unscopedSink: (any UnscopedFrameSink)? {
-        get { transport.unscopedSink }
-        set { transport.unscopedSink = newValue }
     }
 }

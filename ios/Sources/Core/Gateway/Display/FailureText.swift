@@ -25,6 +25,8 @@ extension GatewayErrorCode {
             return "会话存在，但这个版本的 DSH 读不懂它的日志。"
         case .internalError:
             return "网关自身出错 —— 进程还活着，只是这次请求失败了。"
+        case .sourceUnavailable:
+            return "Mac 上的上游还没接好 —— 这条流等一会儿会自动重开。"
         case .resyncRequired:
             return "本机记的位置在 Mac 上不存在了 —— 正在从头发起一次同步。"
         case .unauthenticated:

@@ -14,6 +14,9 @@ enum GatewayErrorCode: String, CaseIterable {
     case unknownSession = "unknown-session"
     case unreadableSession = "unreadable-session"
     case internalError = "internal-error"
+    /// 这条流要的源还没就绪 —— 网关没有它此刻的集合，于是拒绝开流而不是给一份旧的。
+    /// 客户端按**可重试**处理：源接上之后再开一条就好了。
+    case sourceUnavailable = "source-unavailable"
     case resyncRequired = "resync-required"
     case unauthenticated = "unauthenticated"
     case unknownApproval = "unknown-approval"

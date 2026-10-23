@@ -4,8 +4,9 @@ import Foundation
  * 一帧的判读结论：它是什么，以及这条流接下来怎么办。
  *
  * 形状与 `StreamReading` 同构（同样是「内容 + 建成 + 动作」三件），但**值域更窄**：这条流只有
- * `ready` / `emit` / `session-list` 三种内容。窄是它的判据 —— 事件流不重放，没有窗口、水位、
- * 未定稿帧，判读器若「顺手」认识它们，那些分支就永远不会被上游走过，只会成为下一次误判的入口。
+ * `ready` / `emit` / `session-list` / `waterfall` / `cancel` 五种内容。窄是它的判据 —— 事件流
+ * 不重放，没有窗口、水位、未定稿帧，判读器若「顺手」认识它们，那些分支就永远不会被上游走过，
+ * 只会成为下一次误判的入口。
  */
 struct ConnectionEventReading {
 
@@ -17,6 +18,10 @@ struct ConnectionEventReading {
         case emit(name: String, args: JSONValue)
         /// 会话列表的一条增量。网关把上游那四类事件翻成它，所以这里只认自己的形状。
         case sessionList(SessionListChange)
+        /// 一条待答调用。载荷原样带着上游 waterfall 的四个字段，本层不解释。
+        case waterfall(payload: JSONValue)
+        /// 一条待答调用被撤回 —— 唯一携带的寻址信息是 `eventId`。
+        case cancel(eventId: String)
         /// 流通道里的协议内拒绝。
         case refused(GatewayFailure)
         /// 流被服务端正常收尾。
@@ -42,15 +47,27 @@ struct ConnectionEventReading {
         case .ended:
             // 服务端正常收尾：流还在、但不在工作了 ⇒ 同一条连接上换号重开。
             return .reopen
-        case .refused:
-            // 事件流的拒绝都是终态：`unknown-op` 是这台网关不认 events（版本旧），
-            // `internal-error` 是网关装配漏了源 —— 再开一条只会再收一次同样的拒绝。
-            // 注意 `.stop` 在连接层的含义是**收起这一条流**，连接不动。
-            return .stop
-        case .ready, .emit, .sessionList, .ignored:
+        case let .refused(failure):
+            // 按「重试之后结果会不会不同」分，不按错得多严重分：源没就绪、网关内部错，
+            // 都是一次重开就可能好；而「这台网关不认 events」重试一万次也一样。
+            // `.retry` 在连接层的含义是**按流退避重开**，`.stop` 是收起这一条流 ——
+            // 两者都不动连接。
+            return Self.retryableCodes.contains(failure.code) ? .retry : .stop
+        case .ready, .emit, .sessionList, .waterfall, .cancel, .ignored:
             return .keep
         }
     }
+
+    /// 重试之后结果**可能不同**的拒绝码。
+    ///
+    /// 归类依据只有一句：再开一条同样的流，上游的答复会不会变。
+    ///   - `source-unavailable`：这批待答项等源接上就能给 —— 会变
+    ///   - `internal-error`：网关自己坏了，可能是瞬时的 —— 会变
+    ///   - `unknown-op`（网关版本不认 events）、`unauthorized`：重开一万次也一样
+    static let retryableCodes: Set<String> = [
+        GatewayErrorCode.sourceUnavailable.rawValue,
+        GatewayErrorCode.internalError.rawValue,
+    ]
 }
 
 /**
@@ -106,7 +123,22 @@ enum ConnectionEventReader {
                     return ConnectionEventReading(content: .ignored)
                 }
                 return ConnectionEventReading(content: .sessionList(change))
+            case "waterfall":
+                // 一条待答调用：载荷原样往下交给审批表，这一层不解释它的字段 ——
+                // 「谁在等批、等的是什么」是业务那一侧的事。
+                return ConnectionEventReading(content: .waterfall(payload: payload))
+            case "cancel":
+                guard let eventId = payload["eventId"]?.string, !eventId.isEmpty else {
+                    // 没有寻址信息的撤回删不掉任何东西：留着这张卡比误删别人的强。
+                    Log.warn(Log.Module.session, "dropped a cancel without an eventId")
+                    return ConnectionEventReading(content: .ignored)
+                }
+                return ConnectionEventReading(content: .cancel(eventId: eventId))
             default:
+                // 留痕要带**名字**：手机与网关可能不同版本，新货物被这一版丢弃时现场只剩这一行
+                // —— 不带名字就分不出「网关加了货物」与「这条流坏了」。
+                Log.warn(Log.Module.session,
+                         "dropped an item kind this build does not know: \(kind)")
                 return ConnectionEventReading(content: .ignored)
             }
 

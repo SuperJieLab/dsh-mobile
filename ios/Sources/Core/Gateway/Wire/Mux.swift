@@ -32,12 +32,13 @@ typealias StreamId = String
 /// 服务端帧的外壳：`{type, streamId, payload?}`。
 ///
 /// 三个字段都声明，但**谁都不解释它们**：`type` 只被原样转发给订阅方，`streamId` 只作为
-/// 「这条流建成与否」的键，`payload` 是内容本身。
+/// 「这条帧属于哪条流」的键，`payload` 是内容本身。
 ///
-/// `streamId` 可选：连接级审批帧没有它（那条帧不属于任何一条流）。
+/// `streamId` **必填**：协议里没有不带编号的帧。这一条是契约的一半 —— 帧只有一种形态，
+/// 客户端因此只需要一套消费入口（`StreamMux`）。
 struct MuxServerEnvelope: Decodable {
     let type: String
-    let streamId: StreamId?
+    let streamId: StreamId
     let payload: JSONValue?
 }
 

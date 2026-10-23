@@ -34,7 +34,7 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 }
 
 @MainActor
-final class ApprovalStore: ObservableObject, UnscopedFrameSink {
+final class ApprovalStore: ObservableObject {
 
     /// 一张卡的应答进展。没有这一项 = 还没动过（也就可以按）。
     enum AnswerState: Equatable {
@@ -72,45 +72,36 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
         notices[sessionId]
     }
 
-    /// 两处接线一次接完：无编号帧的收货人、源失效清空。
+    /// 两处接线一次接完：待答调用的两条货物、源失效清空。
     ///
     /// 两处各自能单独坏，而且坏了都不编译失败 —— 症状分别是「审批永不显示」与
     /// 「网关的上游没了之后留着一张按不动的卡」。
     ///
-    /// 这里没有「换连接代次清空」这一条：清空由服务端的名单帧触发（见 `receive`）。
-    /// 挂在客户端「开始连」上是错的 —— 一次连不上的重试会把卡片清掉，而那正是离线
-    /// 期间用户唯一能看见的东西。
-    func attach(feed: any UnscopedFrameFeed, events: ConnectionEventStream) {
-        feed.unscopedSink = self
-        events.onGeneration { [weak self] generation in
-            guard generation == nil else { return }
-            self?.clear()
-        }
+    /// **每一条 `ready` 都清空**（不论代次值）：网关在 `ready` 之后紧跟着重放当前集合，
+    /// 两者在同一个帧序列里相邻、客户端同步处理，界面上看不到中间态。这样表就没有跨代
+    /// 状态 —— 与上游「句柄表是局部变量、代际更替随函数消失」同一个形态。
+    func attach(events: ConnectionEventStream) {
+        events.onApprovalRequest { [weak self] payload in self?.receive(payload) }
+        events.onApprovalCancelled { [weak self] eventId in self?.cancel(eventId: eventId) }
+        events.onGeneration { [weak self] _ in self?.clear() }
     }
 
-    /// 连接层送来的无编号帧。只认审批，其余一概不看 —— 连接层不认识帧类型，
-    /// 分类在这一层做。
-    func accept(_ frame: MuxServerEnvelope) {
-        guard frame.type == "approval", let payload = frame.payload else { return }
-        receive(payload)
-    }
-
-    /// 网关推来的一条 `approval` 载荷。
+    /// 网关推来的一条待答调用。
     ///
-    /// 名单帧（`sync`）是**重建的界线**：服务端每次连接都先发它、再逐条重投，所以收到
-    /// 它就说明「手里这份到此为止，接下来这份是完整的」。名单内容本身不读 —— 谁的卡
-    /// 该留着，由「清空 + 重投」回答，不由客户端比对两份名单回答。
+    /// 载荷是上游 waterfall 的四个字段原样；卡上要显示的字段由表自己从 `request` 里取。
     func receive(_ payload: JSONValue) {
-        if payload["kind"]?.string == "sync" {
-            clear()
-            return
-        }
         table.absorb(payload)
-        if payload["kind"]?.string == "request", let sessionId = payload["sessionId"]?.string {
+        if let sessionId = payload["agentId"]?.string {
             // 新的一问来了，上一句说明（「已投递」/「已经不在了」）讲的是别的事。
             notices[sessionId] = nil
         }
         pruneStates()
+    }
+
+    /// 一条撤回：表里删掉它，它的应答状态一起清（状态字典里不该留看不见的旧值）。
+    func cancel(eventId: String) {
+        table.remove(eventId: eventId)
+        states[eventId] = nil
     }
 
     /// 网关的上游没了：手里的项一条都答不了。之后由网关重投重建。
@@ -122,9 +113,9 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
 
     /// 应答一张卡。守卫只看「有没有状态」—— 在途、未知、被拒的那一张都不再发第二次。
     func answer(_ entry: ApprovalTable.Entry, allow: Bool) async {
-        guard states[entry.identity] == nil else { return }
+        guard states[entry.eventId] == nil else { return }
         // 发出之前就置位：写在回包之后的话，等待期间守卫是空的，连点两次会发两次。
-        states[entry.identity] = .sending
+        states[entry.eventId] = .sending
         // 收尾统一在这一处：三个出口都要清掉已不在表里的状态行，早退的那两个
         // 漏掉时，下一张同身份的卡会因为「已经有状态」而按不动。
         defer { pruneStates() }
@@ -140,10 +131,10 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
             settle(entry, notice: failure.readableDescription)
         } catch GatewayClientError.refused(let failure) {
             // 服务端拒了这次投递，问题仍挂着 —— 卡留着并写明原因。
-            states[entry.identity] = .refused(failure.readableDescription)
+            states[entry.eventId] = .refused(failure.readableDescription)
         } catch {
             // 传输失败 ≠ 未生效：如实转「未知」，等上游结算。
-            states[entry.identity] = .unknown
+            states[entry.eventId] = .unknown
         }
     }
 
@@ -152,15 +143,15 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
     /// 等待期间这一条可能已被上游的 `cancel` 撤掉（那时状态行也跟着清空了）——
     /// 卡都不在了，这句话就成了没有指代的一句，所以只在它仍是自己那一张时才写。
     private func settle(_ entry: ApprovalTable.Entry, notice: String) {
-        table.remove(identity: entry.identity)
-        guard states[entry.identity] == .sending else { return }
-        states[entry.identity] = nil
+        table.remove(eventId: entry.eventId)
+        guard states[entry.eventId] == .sending else { return }
+        states[entry.eventId] = nil
         notices[entry.sessionId] = notice
     }
 
     /// 清掉已不在表里的状态行。
     private func pruneStates() {
-        let live = Set(table.entries.map(\.identity))
+        let live = Set(table.entries.map(\.eventId))
         states = states.filter { live.contains($0.key) }
     }
 }

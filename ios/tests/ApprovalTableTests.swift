@@ -11,63 +11,59 @@ import XCTest
 
 final class ApprovalTableTests: XCTestCase {
 
-    /// 网关推来的一条 `approval` 载荷（`request` 那一支）。
-    private func request(
+    /// 网关推来的一条待答调用 —— 上游 waterfall 的四个字段原样。
+    private func waterfall(
         session: String? = "s1", eventId: String? = "e1", toolName: String? = "bash",
-        reason: String? = "needs write", callId: String? = nil
+        reason: String? = "needs write"
     ) -> JSONValue {
-        var payload: [String: JSONValue] = ["kind": .string("request")]
-        if let session { payload["sessionId"] = .string(session) }
+        var body: [String: JSONValue] = [:]
+        if let toolName { body["toolName"] = .string(toolName) }
+        if let reason { body["reason"] = .string(reason) }
+        var payload: [String: JSONValue] = [
+            "event": .string("approval/request"),
+            "request": .object(body),
+        ]
+        if let session { payload["agentId"] = .string(session) }
         if let eventId { payload["eventId"] = .string(eventId) }
-        if let toolName { payload["toolName"] = .string(toolName) }
-        if let reason { payload["reason"] = .string(reason) }
-        if let callId { payload["callId"] = .string(callId) }
         return .object(payload)
-    }
-
-    private func cancel(_ eventId: String) -> JSONValue {
-        .object(["kind": .string("cancel"), "eventId": .string(eventId)])
     }
 
     // MARK: - 收下
 
-    /// 一条完整的请求落进表，四个字段原样 —— 卡上的每个字都来自这条帧。
-    func testARequestLandsWithItsFourFields() {
+    /// 一条完整的请求落进表，卡上要的三个字段原样。
+    func testARequestLandsWithItsFields() {
         var table = ApprovalTable()
-        table.absorb(request())
+        table.absorb(waterfall())
 
         XCTAssertEqual(table.pending(in: "s1"), [
             ApprovalTable.Entry(
-                identity: "e1", sessionId: "s1", eventId: "e1",
+                eventId: "e1", sessionId: "s1",
                 toolName: "bash", reason: "needs write"
             ),
         ])
     }
 
-    /// 身份优先取 `callId`：上游换代后同一问会被重投，那一次带的是新的 `eventId`，
-    /// 而 `callId` 不变 —— 按 `eventId` 建卡的话一次重连就让一张卡变两张。
-    func testIdentityPrefersCallIdAndSurvivesANewDeliveryId() {
+    /// 身份就是投递编号：同一个 `eventId` 重投一次是覆盖，换一个编号就是新的一条。
+    ///
+    /// 上游重放同一批待答项时用的是**同一个** `eventId`，所以覆盖就够了；`callId` 不再
+    /// 参与身份 —— 用它当键的话，`cancel`（只带 `eventId`）就删不掉以它建的那一条。
+    func testTheDeliveryIdIsTheIdentity() {
         var table = ApprovalTable()
-        table.absorb(request(eventId: "e1", callId: "c1"))
-        table.absorb(request(eventId: "e9", callId: "c1"))
+        table.absorb(waterfall(eventId: "e1"))
+        table.absorb(waterfall(eventId: "e1"))
+        XCTAssertEqual(table.pending(in: "s1").count, 1, "同一个编号重投只该有一条")
 
-        XCTAssertEqual(table.pending(in: "s1").count, 1, "同一问重投只该有一条")
-        XCTAssertEqual(table.pending(in: "s1").first?.eventId, "e9", "寻址键要换成新的那一个")
-    }
-
-    /// 没有 `callId` 的请求按 `eventId` 认 —— 那是它唯一的身份。
-    func testWithoutCallIdTheDeliveryIdIsTheIdentity() {
-        var table = ApprovalTable()
-        table.absorb(request(callId: nil))
-        XCTAssertEqual(table.pending(in: "s1").first?.identity, "e1")
+        table.absorb(waterfall(eventId: "e2"))
+        XCTAssertEqual(table.pending(in: "s1").map(\.eventId), ["e1", "e2"],
+                       "换了编号就是另一条 —— 上游不会为重投换号")
     }
 
     /// 同一条投递重复到达（重连重投）覆盖成一条，不长第二张。
     func testTheSameDeliveryArrivingThreeTimesIsOneEntry() {
         var table = ApprovalTable()
-        table.absorb(request())
-        table.absorb(request())
-        table.absorb(request())
+        table.absorb(waterfall())
+        table.absorb(waterfall())
+        table.absorb(waterfall())
         XCTAssertEqual(table.pending(in: "s1").count, 1)
     }
 
@@ -75,7 +71,7 @@ final class ApprovalTableTests: XCTestCase {
     func testTwentyDistinctQuestionsMakeTwentyEntries() {
         var table = ApprovalTable()
         for index in 0..<20 {
-            table.absorb(request(eventId: "e\(index)", callId: "c\(index)"))
+            table.absorb(waterfall(eventId: "e\(index)"))
         }
         XCTAssertEqual(table.pending(in: "s1").count, 20)
     }
@@ -85,8 +81,8 @@ final class ApprovalTableTests: XCTestCase {
     /// 分组键是帧自己说的会话，不是「当前打开的是哪一屏」。
     func testEntriesAreGroupedByTheSessionTheyCarry() {
         var table = ApprovalTable()
-        table.absorb(request(session: "s1", eventId: "e1"))
-        table.absorb(request(session: "s2", eventId: "e2"))
+        table.absorb(waterfall(session: "s1", eventId: "e1"))
+        table.absorb(waterfall(session: "s2", eventId: "e2"))
 
         XCTAssertEqual(table.pending(in: "s1").map(\.eventId), ["e1"])
         XCTAssertEqual(table.pending(in: "s2").map(\.eventId), ["e2"])
@@ -98,12 +94,12 @@ final class ApprovalTableTests: XCTestCase {
     /// 读不出归属或地址的不建项。四个字段各缺一次，每次表都不变。
     func testMalformedPayloadsAreDroppedOneByOne() {
         var table = ApprovalTable()
-        table.absorb(request())
+        table.absorb(waterfall())
         let before = table.pending(in: "s1")
 
-        table.absorb(request(session: nil))
-        table.absorb(request(eventId: nil))
-        table.absorb(request(toolName: nil))
+        table.absorb(waterfall(session: nil))
+        table.absorb(waterfall(eventId: nil))
+        table.absorb(waterfall(toolName: nil))
         table.absorb(.object(["kind": .number(1)]))
 
         // 读全表而不是 `pending(in: "s1")`：错收进**别的会话**的那一条，分组读法看不见。
@@ -114,7 +110,7 @@ final class ApprovalTableTests: XCTestCase {
     /// 认不出的载荷什么也不做：对账名单与未来可能加的种类都不该改动表。
     func testUnknownPayloadsLeaveTheTableAlone() {
         var table = ApprovalTable()
-        table.absorb(request())
+        table.absorb(waterfall())
         let before = table.pending(in: "s1")
 
         table.absorb(.object(["kind": .string("sync"), "eventIds": .array([.string("e1")])]))
@@ -130,33 +126,33 @@ final class ApprovalTableTests: XCTestCase {
     /// 取消按 `eventId` 寻址：它可能指向一条早已不在表里的项，那时什么都不发生。
     func testCancelRemovesByEventIdAndToleratesAnUnknownOne() {
         var table = ApprovalTable()
-        table.absorb(request(eventId: "e1", callId: "c1"))
-        table.absorb(cancel("e9"))
+        table.absorb(waterfall(eventId: "e1"))
+        table.remove(eventId: "e9")
         XCTAssertEqual(table.pending(in: "s1").count, 1, "不认识的 eventId 不该误删")
 
-        table.absorb(cancel("e1"))
+        table.remove(eventId: "e1")
         XCTAssertTrue(table.pending(in: "s1").isEmpty)
     }
 
-    /// 本地作答成功时用的是身份（`callId` 优先），与取消的寻址键不同。
-    func testRemovingByIdentityDoesNotNeedTheDeliveryId() {
+    /// 本地作答成功：手里有编号，直接按它删。
+    func testRemovingByEventIdNeedsNothingElse() {
         var table = ApprovalTable()
-        table.absorb(request(eventId: "e1", callId: "c1"))
-        table.remove(identity: "c1")
+        table.absorb(waterfall(eventId: "e1"))
+        table.remove(eventId: "e1")
         XCTAssertTrue(table.pending(in: "s1").isEmpty)
     }
 
     /// 换代清空：之后重投一条就回来一条，没有残留。
     func testClearEmptiesEverySessionAndTheNextDeliveryRebuilds() {
         var table = ApprovalTable()
-        table.absorb(request(session: "s1", eventId: "e1", callId: "c1"))
-        table.absorb(request(session: "s2", eventId: "e2", callId: "c2"))
+        table.absorb(waterfall(session: "s1", eventId: "e1"))
+        table.absorb(waterfall(session: "s2", eventId: "e2"))
 
         table.clear()
         XCTAssertTrue(table.pending(in: "s1").isEmpty)
         XCTAssertTrue(table.pending(in: "s2").isEmpty)
 
-        table.absorb(request(session: "s1", eventId: "e1", callId: "c1"))
+        table.absorb(waterfall(session: "s1", eventId: "e1"))
         XCTAssertEqual(table.pending(in: "s1").count, 1)
         XCTAssertTrue(table.pending(in: "s2").isEmpty, "重投只带仍挂着的那几条")
     }

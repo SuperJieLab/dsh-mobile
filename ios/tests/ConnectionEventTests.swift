@@ -22,6 +22,14 @@ final class ConnectionEventTests: XCTestCase {
         return ConnectionEventReader.read(envelope: envelope)
     }
 
+    /// 可重试码恰好两个 —— 多一个或少一个，都要有人重新判一次「重试会不会变」。
+    func testTheRetryableCodesAreExactlyTheTwoThatCanHeal() {
+        XCTAssertEqual(ConnectionEventReading.retryableCodes, [
+            GatewayErrorCode.sourceUnavailable.rawValue,
+            GatewayErrorCode.internalError.rawValue,
+        ])
+    }
+
     // MARK: - O9：ready 带代次，缺席就是「源此刻没有活的代次」
 
     /// 两种 ready 都是合法状态，**不许把缺席补成 0 或 1**：代次是消费方判断「我这份基线还新不新」
@@ -94,7 +102,6 @@ final class ConnectionEventTests: XCTestCase {
             ("kind 缺席", #"{"type":"item","streamId":"e1","payload":{"event":"x","args":[]}}"#),
             ("空载荷", #"{"type":"item","streamId":"e1","payload":{}}"#),
             ("缺载荷", #"{"type":"item","streamId":"e1"}"#),
-            ("审批帧", #"{"type":"approval","payload":{"kind":"request","callId":"c1"}}"#),
             ("未知外壳", #"{"type":"future-thing","streamId":"e1","payload":{"kind":"ready"}}"#),
         ]
 
@@ -158,7 +165,15 @@ final class ConnectionEventTests: XCTestCase {
         XCTAssertEqual(try read(#"{"type":"item","streamId":"e1","payload":{"kind":"watermark"}}"#).next, .keep)
         XCTAssertEqual(try read(#"{"type":"end","streamId":"e1"}"#).next, .reopen)
 
-        for code in ["unknown-op", "internal-error", "some-future-code"] {
+        // 可重试的一类：再开一条可能就好（源刚就绪、网关瞬时故障）。
+        for code in ["source-unavailable", "internal-error"] {
+            let reading = try read("""
+            {"type":"error","streamId":"e1","payload":{"code":"\(code)","message":""}}
+            """)
+            XCTAssertEqual(reading.next, .retry, "\(code)：退避重开这条流，别放弃")
+        }
+        // 真终态：重开一万次也一样。
+        for code in ["unknown-op", "some-future-code"] {
             let reading = try read("""
             {"type":"error","streamId":"e1","payload":{"code":"\(code)","message":""}}
             """)

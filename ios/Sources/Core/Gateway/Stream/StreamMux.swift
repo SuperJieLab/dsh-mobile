@@ -189,7 +189,7 @@ final class StreamMux {
     /// 编号不在表里的帧什么都不做 —— 那是上一条流的尾巴，放它进判读器最轻是一次没必要的
     /// 跳号重开，最重是用上一个会话的窗口覆盖这一屏。
     func receive(_ envelope: MuxServerEnvelope, raw: Data) {
-        guard let id = envelope.streamId, let stream = byId[id] else { return }
+        guard let stream = byId[envelope.streamId] else { return }
         apply(stream.behavior.handle(envelope, raw: raw), to: stream)
     }
 

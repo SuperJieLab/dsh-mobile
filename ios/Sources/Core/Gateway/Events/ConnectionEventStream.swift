@@ -37,17 +37,30 @@ final class ConnectionEventStream {
     /// 而是这条流自己的第三种货物 —— 上游那四类名字在网关就被翻掉了。
     private var listHandlers: [(SessionListChange) -> Void] = []
 
+    /// 待答调用的听众。与 `listHandlers` 并列：它也是这条流自己的货物，
+    /// 而且它的载荷不归按名分派那一支（那是上游事件的名字空间）。
+    private var approvalHandlers: [(JSONValue) -> Void] = []
+
+    /// 待答调用被撤回的听众。
+    private var cancelHandlers: [(String) -> Void] = []
+
     /// 这条流本身。`close()` / `restart()` 都在它上面 —— 连接级动作一个都不在这里。
     private var stream: LogicalStream?
 
+    /// 这条流被**终态**拒绝收起了（流层 `forget` 了它，业务侧收不到通知）。
+    ///
+    /// 它让 `attach` 可以再入一次：没有这个标记，`stream != nil` 会把重挂挡掉，而那条流
+    /// 早就不在表里了 —— 一次终态拒绝之后，审批再也到不了。
+    private var detached = false
+
     /// 登记这条流 —— 与当前会话流平级，先登记后登记都一样。
     ///
-    /// 没有编号的帧不进这里：它们由传输层的投递口交给 App 级的那张表。
-    ///
     /// 一次只造一条：`attach` 在根视图的 `.task` 里调，视图重放时会再来一次，
-    /// 而造流不幂等 —— 闸在这里，不在调用方。
+    /// 而造流不幂等 —— 闸在这里，不在调用方。**被终态拒绝之后可以再挂**（`detached`）：
+    /// 那是「重来一次」的唯一入口，回前台时根部会调它。
     func attach(to factory: any StreamFactory) {
-        guard stream == nil else { return }
+        guard stream == nil || detached else { return }
+        detached = false
         stream = factory.makeStream(self)
     }
 
@@ -68,6 +81,23 @@ final class ConnectionEventStream {
         listHandlers.append(handler)
     }
 
+    /// 订阅「有一条待答调用」。载荷是上游 waterfall 的四个字段，本类不看内容。
+    func onApprovalRequest(_ handler: @escaping (JSONValue) -> Void) {
+        approvalHandlers.append(handler)
+    }
+
+    /// 订阅「有一条待答调用被撤回」。
+    func onApprovalCancelled(_ handler: @escaping (String) -> Void) {
+        cancelHandlers.append(handler)
+    }
+
+    /// 作废当前这条流的登记 —— **只标状态，不重复关**。
+    ///
+    /// 终态拒绝时流层已经 `forget` 了它，这里把标记置上，下一次 `attach` 才会真的重建。
+    func markDetached() {
+        detached = true
+    }
+
     /// 判读之后的那一跳 —— 本类唯一的入口。
     ///
     /// 对内可见（不 `private`）与 `StreamTransport.handleMessage` 同理：这里有一条只有在
@@ -85,11 +115,19 @@ final class ConnectionEventStream {
             for handler in handlers[name] ?? [] { handler(args) }
         case let .sessionList(change):
             for handler in listHandlers { handler(change) }
+        case let .waterfall(payload):
+            for handler in approvalHandlers { handler(payload) }
+        case let .cancel(eventId):
+            for handler in cancelHandlers { handler(eventId) }
         case let .refused(failure):
             // 不进消费方（拒绝讲的是「这条流接下来怎么办」，由 `StreamReply` 说），但**要留痕**：
-            // 这条流不会重开，屏幕上也不会出现任何东西 —— 「网关版本旧」与「网关装配漏了源」
-            // 只在这一行里分得开。
+            // 屏幕上不会出现任何东西 —— 「网关版本旧」与「网关装配漏了源」只在这一行里分得开。
             Log.warn(Log.Module.gateway, "event stream refused: \(failure.code) \(failure.message)")
+            // 重试也不会变的那一类：流层会把它收起（`.stop`），而业务侧的 `stream` 字段还非空。
+            // 标上，回前台时 `attach` 才能真的重建一条。
+            if !ConnectionEventReading.retryableCodes.contains(failure.code) {
+                markDetached()
+            }
         case .ended, .ignored:
             // 收尾由 `StreamReply` 变成重开；认不出的载荷连名字都没有，分派无处可去。
             break

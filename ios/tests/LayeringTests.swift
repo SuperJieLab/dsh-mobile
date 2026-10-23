@@ -393,7 +393,9 @@ final class LayeringTests: XCTestCase {
     /// 排除 `URLRequest(` —— 那是 Foundation 的载体，不是协议的 op。这条排除写在这里而不是
     /// 每次判断：它是个固定的事实，散在判据里迟早会有一处漏掉。
     private static func builtRequests(in code: String) -> [String] {
-        guard let pattern = try? NSRegularExpression(pattern: #"([A-Z][A-Za-z]*Request)\("#) else { return [] }
+        // 左边界排除 `onApprovalRequest(` 这类方法名 —— 它含 `ApprovalRequest(`，但没有
+        // 构造任何东西。没有这个边界时，给端口加一个 `onXxxRequest` 回调就会变成一条假红。
+        guard let pattern = try? NSRegularExpression(pattern: #"(?<![A-Za-z])([A-Z][A-Za-z]*Request)\("#) else { return [] }
         let range = NSRange(code.startIndex..., in: code)
         return pattern.matches(in: code, range: range).compactMap { match in
             guard let r = Range(match.range(at: 1), in: code) else { return nil }
@@ -892,6 +894,42 @@ final class LayeringTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(mux.contains("static func newStreamId()"), "新造号点没扫到 —— 判据可能扫错了树")
+    }
+
+    /// 一条投递通道：无编号帧那条路整条没了，客户端收到的帧只有「进流表」一种去处。
+    ///
+    /// 正控：`GatewayLink` 的 `makeStream` 必须命中 —— 否则说明扫描面取错了，
+    /// 空集会被读成合规。
+    func testTheSecondDeliveryPathIsGone() throws {
+        var hits: [String] = []
+        for file in swiftFiles(under: sourcesRoot) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for name in ["UnscopedFrameSink", "UnscopedFrameFeed", "unscopedSink"]
+                where code.contains(name) {
+                    hits.append("\(file.lastPathComponent):\(line) \(name)")
+                }
+            }
+        }
+        XCTAssertEqual(hits, [], "无编号帧那条路的残留：\(hits)")
+
+        let link = try String(
+            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/Stream/GatewayLink.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(link.contains("func makeStream"), "造流入口没扫到 —— 判据可能扫错了树")
+    }
+
+    /// 两种新货物在判读器里各有一支 —— 只改类型不加分支时，审批到不了任何地方。
+    ///
+    /// 正控：`"emit"` 必须命中，否则说明扫错了文件。
+    func testTheApprovalCargoesAreRead() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Events/ConnectionEventReader.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        for kind in ["waterfall", "cancel", "emit"] {
+            let hits = text.components(separatedBy: "\"\(kind)\"").count - 1
+            XCTAssertGreaterThanOrEqual(hits, 1, "判读器里没有 \"\(kind)\" 这一支")
+        }
     }
 
     /// 列表行的待审批标记撤干净了：类型、计数、渲染三样都不许留。

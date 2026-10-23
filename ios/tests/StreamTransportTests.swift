@@ -29,12 +29,6 @@ final class StreamTransportTests: XCTestCase {
         return transport
     }
 
-    /// 一个只记事的收货人。
-    private final class Sink: UnscopedFrameSink {
-        var frames: [MuxServerEnvelope] = []
-        func accept(_ frame: MuxServerEnvelope) { frames.append(frame) }
-    }
-
     /// 一个只记事的判读：收到帧就算一条，答复可配。
     private final class Behavior: StreamBehavior {
         let label = "s1"
@@ -98,19 +92,16 @@ final class StreamTransportTests: XCTestCase {
 
     // MARK: - U7：`.ready` 只由「某条流建成」触发
 
-    /// 收到任何一帧都算「对端活着」，但**不等于就绪**：升级之后网关先发对账帧，
+    /// 收到任何一帧都算「对端活着」，但**不等于就绪**：升级之后网关先发 `ready`，
     /// 打开帧的大帧还在路上，此刻置就绪会让心跳立刻激活、再在几拍之后把连接判死。
     func testFramesDoNotMakeTheConnectionReadyOnlyEstablishmentDoes() throws {
         let transport = transport()
-        let sink = Sink()
-        transport.unscopedSink = sink
         transport.activate()
         XCTAssertEqual(transport.phase, .connecting, "刚发起连接是握手中")
 
-        // 一帧无编号的（审批对账帧就是这种）：进收货人，阶段不动。
-        let ledger = #"{"type":"approval","payload":{"kind":"sync","eventIds":[]}}"#
-        transport.handleMessage(.string(ledger), generation: 1)
-        XCTAssertEqual(sink.frames.count, 1, "无编号帧交给收货人")
+        // 一帧谁都不要的（编号不在流表里）：落进流表后被丢掉，阶段不动。
+        let stray = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
+        transport.handleMessage(.string(stray), generation: 1)
         XCTAssertEqual(transport.phase, .connecting, "收到东西不等于就绪")
 
         // 某条流报「建成了」：这才是就绪。
@@ -121,28 +112,26 @@ final class StreamTransportTests: XCTestCase {
         transport.deactivate()
     }
 
-    // MARK: - U4：无编号帧只到收货人
+    // MARK: - U4：帧按编号归流
 
-    /// 没有编号的帧不属于任何流：它不进流表，也不被某条流代收。
-    /// 「归谁」若取决于谁先登记，屏幕一关那条流就没了 —— 审批因此永远收不到。
-    func testUnscopedFramesReachTheSinkAndNeverAStream() throws {
+    /// 编号在表里就交给那条流，不在就丢弃 —— 「归谁」只由编号决定。
+    ///
+    /// 守的是「剩下的这一条路还在」：协议里的每个帧都有编号，收货人只有一个。
+    func testFramesReachOnlyTheStreamTheirIdNames() throws {
         let transport = transport()
-        let sink = Sink()
-        transport.unscopedSink = sink
         let behavior = Behavior()
+        let other = Behavior()
         let stream = try XCTUnwrap(transport.mux.makeStream(behavior))
+        _ = try XCTUnwrap(transport.mux.makeStream(other))
 
-        let unscoped = #"{"type":"approval","payload":{"kind":"cancel","eventId":"e1"}}"#
-        transport.handleMessage(.string(unscoped), generation: 1)
+        let mine = #"{"type":"item","streamId":"\#(stream.id)","payload":{"kind":"ready"}}"#
+        transport.handleMessage(.string(mine), generation: 1)
+        XCTAssertEqual(behavior.handled, 1, "编号在表里：交给那条流")
 
-        XCTAssertEqual(sink.frames.count, 1)
-        XCTAssertEqual(behavior.handled, 0, "无编号帧不进任何一条流")
-
-        // 有编号的帧走流表。
-        let scoped = #"{"type":"item","streamId":"\#(stream.id)"}"#
-        transport.handleMessage(.string(scoped), generation: 1)
-        XCTAssertEqual(behavior.handled, 1, "有编号的帧交给那条流")
-        XCTAssertEqual(sink.frames.count, 1, "有编号的帧不进收货人")
+        let stranger = #"{"type":"item","streamId":"not-in-the-table","payload":{"kind":"ready"}}"#
+        transport.handleMessage(.string(stranger), generation: 1)
+        XCTAssertEqual(behavior.handled, 1, "编号不在表里：谁都收不到")
+        XCTAssertEqual(other.handled, 0, "更不会转给别的流")
         transport.deactivate()
     }
 
@@ -207,38 +196,6 @@ final class StreamTransportTests: XCTestCase {
 // MARK: - 由旧判据并入
 
 extension StreamTransportTests {
-
-    /// 没有收货人时，无编号帧被静默丢弃 —— 不崩、不进任何流。
-    func testWithoutASinkUnscopedFramesAreDropped() throws {
-        let transport = transport()
-        transport.activate()
-        let behavior = Behavior()
-        _ = try XCTUnwrap(transport.mux.makeStream(behavior))
-
-        transport.handleMessage(.string(#"{"type":"approval","payload":{}}"#), generation: 1)
-
-        XCTAssertEqual(behavior.handled, 0, "无编号帧不进流")
-        XCTAssertEqual(transport.phase, .connecting, "丢弃不改阶段")
-        transport.deactivate()
-    }
-
-    /// 门面把收货人转给传输层 —— 断言落在**被转发的那一端**。
-    ///
-    /// 这一跳写成空实现（门面自己存一个属性、不再问传输层）时，若只在门面上读回刚写进去
-    /// 的值，断言照样绿，而症状是「审批卡永不显示」。所以注入一条真的传输层，问它拿到了没有。
-    func testTheFacadeForwardsTheSinkToTheTransport() {
-        let store = CredentialStore(storage: .init(
-            read: { nil }, write: { _ in }, delete: {}
-        ))
-        let transport = self.transport()
-        let link = GatewayLink(client: GatewayClient(credentials: store), transport: transport)
-        let sink = Sink()
-
-        link.unscopedSink = sink
-
-        XCTAssertTrue(transport.unscopedSink === sink,
-                      "门面没把收货人转给传输层 —— 无编号帧会停在门面上")
-    }
 
     /// 一条流都没有也要连 —— 「常驻」的字面含义就是这句。
     ///

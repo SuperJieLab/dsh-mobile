@@ -53,8 +53,8 @@ struct DshMobileApp: App {
                     .task {
                         link.activate()
                         events.attach(to: link)
-                        // 两处接线：无编号帧的收货人、源失效清空。
-                        approvals.attach(feed: link, events: events)
+                        // 两处接线：待答调用的两条货物、源失效清空。
+                        approvals.attach(events: events)
                     }
                     // 两个重连点放在根部而不是某一屏：这都是 App 级事件，关掉会话详情
                     // 它们照样该发生。
@@ -64,6 +64,9 @@ struct DshMobileApp: App {
                         guard phase == .active else { return }
                         Task { await store.sceneActive() }
                         link.reconnectNow()
+                        // 被终态拒绝收起的那条流只在这一刻重建：重试同一个拒绝没有意义。
+                        // 它幂等 —— 正常情况 `attach` 的闸会直接放行。
+                        events.attach(to: link)
                     }
                     // ② 组网就绪即重连（与列表「就绪即首载」对称）：connecting 期间连接
                     //    在退避循环里空转（端点不存在），就绪此刻不必再等下一轮退避。
