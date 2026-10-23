@@ -256,6 +256,14 @@ final class SessionListStateTests: XCTestCase {
             events.handle(ConnectionEventReader.read(envelope: envelope))
         }
         XCTAssertTrue(state.sessions.isEmpty, "认不出的增量一条都不该进列表")
+
+        // 丢弃要有留痕：没有它，「列表没动」与「这两条被丢了」在屏幕上分不出来。
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/Features/SessionList/State/SessionListState.swift"),
+            encoding: .utf8)
+        XCTAssertTrue(source.contains("dropped a session-list change this build does not know"),
+                      "留痕句不在了 —— 坏增量被丢弃时现场只剩这一行")
     }
 
     // MARK: - L8 失败不清空

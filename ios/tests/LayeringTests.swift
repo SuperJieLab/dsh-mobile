@@ -437,7 +437,7 @@ final class LayeringTests: XCTestCase {
     /// 排除 `URLRequest(` —— 那是 Foundation 的载体，不是协议的 op。这条排除写在这里而不是
     /// 每次判断：它是个固定的事实，散在判据里迟早会有一处漏掉。
     private static func builtRequests(in code: String) -> [String] {
-        // 左边界排除 `onApprovalRequest(` 这类方法名 —— 它含 `ApprovalRequest(`，但没有
+        // 左边界排除 `onXxxRequest(` 这类方法名 —— 它含 `XxxRequest(`，但没有
         // 构造任何东西。没有这个边界时，给端口加一个 `onXxxRequest` 回调就会变成一条假红。
         guard let pattern = try? NSRegularExpression(pattern: #"(?<![A-Za-z])([A-Z][A-Za-z]*Request)\("#) else { return [] }
         let range = NSRange(code.startIndex..., in: code)
@@ -566,7 +566,7 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 线上形状目录里不出现 `Rpc/`、`Stream/`、`State/` 声明的类型。
+    /// 线上形状目录里不出现 `Rpc/`、`Stream/`、`Events/` 声明的类型。
     ///
     /// 只查**代码行**：注释里提到实现层不算违反；字符串里出现同名算命中（误报方向，接受）。
     func testWireDoesNotReferenceImplementationTypes() throws {
