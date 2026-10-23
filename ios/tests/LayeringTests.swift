@@ -707,6 +707,115 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "连接层出现了业务词汇（它只该答「线还在不在」）：\(hits)")
     }
 
+    // MARK: - 断言：流层与传输层的边界
+
+    /// 流层既不向上认识传输层，也不向外认识业务的词汇与协议错误码。
+    ///
+    /// 四条一起守，因为它们是同一件事的四种写法：认识 socket 原语、认识具体传输类型、
+    /// 认识协议错误码、按 op 名分支 —— 少守一条，另一种写法就能把上层或外层的知识带到这里。
+    ///
+    /// 正控：文件里必须仍有 `func makeStream(`，否则说明扫错了文件（零命中读成合规）。
+    func testStreamLayerLooksNeitherUpNorOut() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        let forbidden = [
+            "URLSession", "StreamTransport", "Unscoped", "GatewayErrorCode",
+            "\"follow\"", "\"events\"",
+        ]
+
+        XCTAssertTrue(lines.contains { $0.1.contains("func makeStream(") },
+                      "没找到 `func makeStream(` —— 先怀疑路径或改名")
+        XCTAssertGreaterThan(lines.count, 80, "扫到的代码行太少 —— 先怀疑路径或切行")
+
+        var hits: [String] = []
+        for (number, code) in lines {
+            for word in forbidden where code.contains(word) {
+                hits.append(":\(number) \(word)")
+            }
+        }
+        XCTAssertEqual(hits, [], "流层出现了它不该认识的东西（它只该认编号与答复）：\(hits)")
+    }
+
+    /// 传输层不造编号、不建表 —— 它不认识「一条流」这个概念，只把整帧交出去。
+    ///
+    /// 正控：文件里必须有流通道的路径常量，否则说明扫错了文件。
+    func testTransportMintsNoIdsAndKeepsNoTable() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamTransport.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        let forbidden = ["newStreamId", "[StreamId:", "Map<StreamId", "openInFlight"]
+
+        XCTAssertTrue(lines.contains { $0.1.contains("\"/rpc/stream\"") },
+                      "没找到流通道路径 —— 先怀疑路径或改名")
+        XCTAssertGreaterThan(lines.count, 100, "扫到的代码行太少 —— 先怀疑路径或切行")
+
+        var hits: [String] = []
+        for (number, code) in lines {
+            for word in forbidden where code.contains(word) {
+                hits.append(":\(number) \(word)")
+            }
+        }
+        XCTAssertEqual(hits, [], "传输层开始管流了（它只该答「线还在不在」）：\(hits)")
+    }
+
+    /// 无编号帧的收货人不进流层的签名：它不属于任何一条流。
+    ///
+    /// 这一条单独守，因为它与上面那张单元表方向相反 —— 收货人是「连接级」的，
+    /// 一旦它出现在流层，就会有人给某条流代收，而「归谁」随之变成登记顺序的函数。
+    func testUnscopedFramesNeverEnterTheStreamLayer() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+
+        XCTAssertTrue(text.contains("final class StreamMux"), "先怀疑路径或改名")
+        XCTAssertFalse(text.contains("Unscoped"), "流层出现了无编号帧的收货人")
+    }
+
+    /// 一条流的可变状态只有流表能写：四个字段声明成 `fileprivate(set)`，构造入口
+    /// 是 `fileprivate init` —— 于是「业务侧改不到编号 / 档位 / 在途标记」由编译器守，
+    /// 而不是靠一条 grep 判据。
+    ///
+    /// 这条判据守的是**声明的形状**：有人把 `fileprivate(set)` 放宽成 `internal(set)`，
+    /// 编译器就不再拦，而这行字是唯一会红的信号。
+    func testStreamStateIsOnlyWritableByTheStreamTable() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        let body = try XCTUnwrap(block(startingAt: "final class LogicalStream", in: lines),
+                                 "没找到 LogicalStream 的类型体 —— 先怀疑路径或改名")
+
+        for field in ["var id: StreamId", "var text: String", "var retryAttempt",
+                      "var openInFlight", "var attempt: StreamAttempt?"] {
+            XCTAssertTrue(body.contains { $0.1.contains("fileprivate(set) \(field)") },
+                          "\(field) 不是 fileprivate(set) —— 业务侧就能改它")
+        }
+        XCTAssertTrue(body.contains { $0.1.contains("fileprivate init(") },
+                      "构造入口不是 fileprivate —— 业务侧能造出一个不在表里的流")
+    }
+
+    /// 一条流的公开面没有连接级动作：「这条流坏了」与「整条连接断了」是两件事。
+    ///
+    /// 正控：`close` / `restart` 必须在（否则这段文本取错了，零命中是假绿）。
+    func testLogicalStreamHasNoConnectionLevelActions() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        let body = try XCTUnwrap(block(startingAt: "final class LogicalStream", in: lines),
+                                 "没找到 LogicalStream 的类型体 —— 先怀疑路径或改名")
+
+        XCTAssertTrue(body.contains { $0.1.contains("func close()") }, "少了 close() —— 取错块了？")
+        XCTAssertTrue(body.contains { $0.1.contains("func restart()") }, "少了 restart() —— 取错块了？")
+
+        let forbidden = ["func reconnect", "func deactivate", "func abandon"]
+        var hits: [String] = []
+        for (number, code) in body {
+            for word in forbidden where code.contains(word) {
+                hits.append(":\(number) \(word)")
+            }
+        }
+        XCTAssertEqual(hits, [], "一条流上出现了连接级动作：\(hits)")
+    }
+
     /// 判读不需要连接 —— 判读器不引用连接层，也不碰网络。
     ///
     /// 这是「判读能脱离 socket 单独回答」在代码结构上的那一半：功能上它可以被单测调用，
