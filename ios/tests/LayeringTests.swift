@@ -44,12 +44,12 @@ final class LayeringTests: XCTestCase {
         sourcesRoot.appendingPathComponent("SharedUI")
     }
 
-    /// 线上形状不许认识的三层：一元调用、流、状态。
+    /// 线上形状不许认识的实现层：一元调用、流、事件流收端。纯判定不在此列 —— 它住消费方。
     ///
     /// ⚠️ 这三个目录名是**字面量**：改名（如 `Client/` → `Rpc/`）时这里不会编译失败，
     /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。改名后必须回扫这一处。
     private var gatewayImplementationDirectories: [URL] {
-        ["Rpc", "Stream", "State"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
+        ["Rpc", "Stream", "Events"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
 
     /// 界面目录 = `Features/` 的直接子目录。
@@ -129,12 +129,14 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0, "一个 State 文件都没扫到 —— 先怀疑路径推算")
     }
 
-    // MARK: - 断言 2b：Core 侧的 State/ 只装值类型
+    // MARK: - 断言 2b：会话视图的纯判定只装值类型
 
-    /// `Core/**/State/` 只装 `struct` 与 `enum` —— 有状态持有者归 `Features/*/State/`。
+    /// 会话视图的三件纯判定（会话镜像、未定稿帧通道、消息取舍）只装 `struct` 与 `enum` ——
+    /// 判定层出现引用型可变状态，就是「持有并发布」混进了纯判定。
     ///
-    /// 两处同名不同义是刻意的：通信域的 `State/` 是纯判定（值语义、可比较、不认识界面框架），
-    /// 界面域的 `State/` 是「持有并发布」。这条断言把差别钉成可判的事实。
+    /// **按文件名单点名，不按目录扫**：三件的家 `Features/SessionDetail/State/` 里同住
+    /// `SessionSync` 等持有者 —— 整目录扫会误伤。名单就是「这几件是纯判定」这个决定的可判
+    /// 形式；名单自带存在性正控：文件改名或删掉时先红，防扫描面静默缩水。
     ///
     /// 认三类标志，覆盖同一种失败的不同写法（只查协议名会漏掉最常见的那个）：
     /// - `class` / `actor` —— 引用型，可能有可变状态。这是最根本的一条：一个不遵任何协议的
@@ -144,38 +146,48 @@ final class LayeringTests: XCTestCase {
     ///   开始认识界面或响应式框架。
     ///
     /// 盲区：`@Observable` 宏展开后的形态认不出（它要宏插件，本项目的验证环境不用）；
-    /// 行内注释里出现上述词会误报 —— 误报方向，接受。
-    func testCoreStateHoldsOnlyValueTypes() throws {
+    /// 行内注释里出现上述词会误报 —— 误报方向，接受。第四件同型判定加进来时要记得进名单。
+    private static let sessionViewJudgments = [
+        "SessionMirror.swift", "TransientChannel.swift", "MessageDisplay.swift",
+    ]
+
+    func testSessionViewJudgmentsHoldOnlyValueTypes() throws {
+        let home = sourcesRoot.appendingPathComponent("Features/SessionDetail/State")
+        let banned = ["class ", "actor ", "ObservableObject", "@Published",
+                      "import SwiftUI", "import UIKit", "import Combine"]
+        var checked = 0
+        for name in Self.sessionViewJudgments {
+            let file = home.appendingPathComponent(name)
+            // 存在性正控：名单里的文件必须在 —— 没了就红。少了它，名单少一行只是少扫一个文件。
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else {
+                XCTFail("名单里的 \(name) 不在 Features/SessionDetail/State/ —— 改名或删除后必须同轮改名单")
+                continue
+            }
+            checked += 1
+            for (line, code) in codeLines(in: text) {
+                guard let hit = banned.first(where: { code.contains($0) }) else { continue }
+                XCTFail("Features/SessionDetail/State/\(name):\(line) 出现「\(hit.trimmingCharacters(in: .whitespaces))」"
+                        + " —— 这三件是纯判定（struct / enum），有状态持有者归 Features/*/State/ 的持有者们")
+            }
+        }
+        XCTAssertEqual(checked, Self.sessionViewJudgments.count,
+                       "名单有 \(Self.sessionViewJudgments.count - checked) 件没扫到 —— 先看上面的 XCTFail")
+    }
+
+    /// `Core/` 下不许有 `State/` —— 通信域的承诺是「无产品行为」：纯判定住消费方，
+    /// 通信域里出现判定目录就是这条承诺失守。
+    func testCoreHasNoStateDirectory() throws {
         let root = sourcesRoot.appendingPathComponent("Core")
-        var directories: [URL] = []
+        var found: [String] = []
         guard let walker = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
         else { return XCTFail("Core 目录没扫到：\(root.path)") }
         for case let url as URL in walker where url.lastPathComponent == "State" {
             if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                directories.append(url)
+                found.append(url.path.replacingOccurrences(of: sourcesRoot.path + "/", with: ""))
             }
         }
-        // 身份正控：Core 侧至少有一个 State/ —— 目录被改名时这一条先红。
-        XCTAssertFalse(directories.isEmpty, "Core 下一个 State/ 都没扫到：\(root.path)")
-
-        let banned = ["class ", "actor ", "ObservableObject", "@Published",
-                      "import SwiftUI", "import UIKit", "import Combine"]
-        var checked = 0
-        for directory in directories {
-            for file in swiftFiles(under: directory) {
-                checked += 1
-                let text = try String(contentsOf: file, encoding: .utf8)
-                for (line, code) in codeLines(in: text) {
-                    guard let hit = banned.first(where: { code.contains($0) }) else { continue }
-                    let relative = file.path
-                        .replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-                    XCTFail("\(relative):\(line) 出现「\(hit.trimmingCharacters(in: .whitespaces))」"
-                            + " —— Core 侧的 State/ 只装 struct 与 enum，有状态持有者归 Features/")
-                }
-            }
-        }
-        XCTAssertGreaterThan(checked, 0, "一个文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertEqual(found, [], "Core 下又出现了 State/ —— 纯判定归消费方：\(found)")
     }
 
     // MARK: - 断言 2c：Core 内部不反向依赖
@@ -1373,7 +1385,7 @@ final class LayeringTests: XCTestCase {
     /// 若叫 `Snapshot` / `Window`（前身），前半红；若换个名字，它就是一个**新造的同形类型**，
     /// 而那正是评审要看的东西 —— 这类判断写不成文本判据，写进注释比写成假绿好。
     func testMirrorUsesProtocolShapes() throws {
-        let mirror = sourcesRoot.appendingPathComponent("Core/Gateway/State/SessionMirror.swift")
+        let mirror = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionMirror.swift")
         let text = try String(contentsOf: mirror, encoding: .utf8)
         XCTAssertTrue(text.contains("struct SessionMirror"), "读到的不是状态机 —— 先怀疑路径推算")
 
