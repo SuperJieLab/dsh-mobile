@@ -335,7 +335,7 @@ final class LayeringTests: XCTestCase {
                        "访问票的过期比较应当只有一处（TicketKeeper），实际："
                        + comparisons.map { "\($0.file):\($0.line)" }.joined(separator: " / "))
         XCTAssertEqual(comparisons.first?.file,
-                       "Core/Gateway/Client/TicketKeeper.swift",
+                       "Core/Gateway/Rpc/TicketKeeper.swift",
                        "过期判定该住在票那一层，不是别处")
     }
 
@@ -407,7 +407,7 @@ final class LayeringTests: XCTestCase {
     /// （身份的另一半是「建立关系」，那一步不发请求，只收 `adopt` 的一个字符串）；
     /// 正控保证正则没失灵（换票请求必须真的被扫到）。
     func testGatewayClientConstructsOnlyTheRenewalRequest() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Client/GatewayClient.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Rpc/GatewayClient.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let built = codeLines(in: text).flatMap { Self.builtRequests(in: $0.1) }
 
@@ -419,14 +419,14 @@ final class LayeringTests: XCTestCase {
 
     /// 请求只在 `State/` 里拼：视图不直接把一条协议请求交给网关。
     ///
-    /// `Wire/` 是形状的出处、`Client/` 收身份那两个，两处都排除；其余的构造点全仓都在
+    /// `Wire/` 是形状的出处、`Rpc/` 收身份那两个，两处都排除；其余的构造点全仓都在
     /// `*/State/` 下。判据同时数一遍构造点（正控），免得路径或正则坏了之后变成「零违规」。
     func testRequestsAreBuiltInStateLayersOnly() throws {
         var offenders: [String] = []
         var built = 0
         for file in swiftFiles(under: sourcesRoot) {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-            if relative.hasPrefix("Core/Gateway/Wire/") || relative.hasPrefix("Core/Gateway/Client/") {
+            if relative.hasPrefix("Core/Gateway/Wire/") || relative.hasPrefix("Core/Gateway/Rpc/") {
                 continue
             }
             let text = try String(contentsOf: file, encoding: .utf8)

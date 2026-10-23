@@ -5,7 +5,7 @@ import Foundation
  *
  * 只管字节怎么落地 —— 路径、目录创建、原子写、`complete` 文件保护、失败留痕。**不认识
  * 任何一个具体的凭证**：哪个名字、内容什么语义、什么时候该删，由各自的业务包装决定
- * （设备凭证在 `Core/Gateway/Client/CredentialStore.swift`，组网接入 key 在
+ * （设备凭证在 `Core/Gateway/Rpc/CredentialStore.swift`，组网接入 key 在
  * `MeshNetwork/TailnetNode.swift`）。正因为两边都要用，它才落在 `Core/` 顶层 ——
  * 不属于任何一方，也就没有哪个域能在这里继续长出自己的概念。
  *
