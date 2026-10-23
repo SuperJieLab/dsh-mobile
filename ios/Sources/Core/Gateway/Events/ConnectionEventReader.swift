@@ -70,7 +70,7 @@ struct ConnectionEventReading {
  * | `item`，别的 `kind` / 没有 `kind` | 认不出 | 丢弃 —— 这条流不重放，只有读不出才丢 |
  * | `error` | 拒绝 | 载荷是 `{code, message}` |
  * | `end` | 收尾 | —— |
- * | 别的（含 `approval`） | 认不出 | 审批是连接级的，由会话流消费；这条流不猜 |
+ * | 别的（含 `approval`） | 认不出 | 审批不走这条流：它是连接级广播，由无编号帧的收货人接 |
  *
  * 只吃外壳、不要原始字节：载荷里没有 typed 结构要直解（`args` 是任意 JSON，`JSONValue`
  * 已原样拿在手上），与 `SessionStreamReader` 需要 `raw` 的理由不同。

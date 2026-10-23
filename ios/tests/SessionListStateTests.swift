@@ -227,7 +227,7 @@ final class SessionListStateTests: XCTestCase {
     /// 没人守，是这个仓库反复踩到的一种缺口。
     func testAFrameOnTheEventStreamReachesTheList() throws {
         let state = make(FakeFetch())
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         state.attach(events: events)
 
         let data = Data("""
@@ -273,7 +273,7 @@ final class SessionListStateTests: XCTestCase {
         let fetch = FakeFetch()
         fetch.holds = false
         let state = make(fetch)
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         state.attach(events: events)
 
         events.handle(ConnectionEventReading(content: .ready(generation: 3)))

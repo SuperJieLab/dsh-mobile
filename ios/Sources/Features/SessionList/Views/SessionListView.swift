@@ -10,7 +10,7 @@ struct SessionListView: View {
     /// 到网关的常驻连接（App 级）。本屏只用它传给会话详情 —— 连接不随哪一屏生死。
     let link: GatewayLink
     /// 连接级事件流。列表是它的消费方之一：逐个事件改一行，代次报到就重拉一次。
-    let events: ConnectionEvents
+    let events: ConnectionEventStream
 
     /// 取数与三种面。`@StateObject`：视图重建时保留，不随 body 重算重建。
     @StateObject private var state: SessionListState
@@ -25,7 +25,7 @@ struct SessionListView: View {
     /// 根部注入的待答表：每一行问它「本会话还挂着几条」。只读，不发请求。
     @EnvironmentObject private var approvals: ApprovalStore
 
-    init(client: GatewayClient, link: GatewayLink, events: ConnectionEvents) {
+    init(client: GatewayClient, link: GatewayLink, events: ConnectionEventStream) {
         self.client = client
         self.link = link
         self.events = events

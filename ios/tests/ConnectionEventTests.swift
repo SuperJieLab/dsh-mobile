@@ -192,7 +192,7 @@ final class ConnectionEventTests: XCTestCase {
     /// 变更是按「收到一条推一条」分派的，与按名字分派的那一组并列：它不是「某个事件名
     /// 的载荷」，而是这条流自己的第三种货物。
     func testListChangesReachTheirListener() throws {
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         var seen: [SessionListChange] = []
         events.onSessionList { seen.append($0) }
 
@@ -216,7 +216,7 @@ final class ConnectionEventTests: XCTestCase {
     /// 不带代次（当它叫醒人就会变成「每帧重读一遍基线」）、新的代次算（去重读）、
     /// **失效也要通知**（此时能做的只有清空 —— 手里那些一条都答不了）。
     func testGenerationHandlersFirePerReadyIncludingSourceLoss() {
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         var seen: [Int?] = []
         events.onGeneration { seen.append($0) }
 
@@ -245,7 +245,7 @@ final class ConnectionEventTests: XCTestCase {
     /// 第三个说明「新增一类事件」在消费方这一侧零成本 —— 谁把分派写成 switch，第三个名字
     /// 就没有分支可走，那时红的是这条。
     func testConsumersAreMatchedByNameWithoutADispatchTable() {
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         var added = 0
         var removed: [JSONValue] = []
         events.on("api-session/added") { _ in added += 1 }
@@ -292,7 +292,7 @@ final class ConnectionEventTests: XCTestCase {
     /// 这一跳改错的方向全是静默的：`establishes: true` 恒真会让 `emit` 也叫建成（心跳在源
     /// 还没有代次时开始判死）；`next` 传成常量 `.keep` 会让收尾不重开、被拒不收起。
     func testAttachRegistersOneStreamWhoseBuildAndReplyFollowTheReading() throws {
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         let opener = StreamOpener()
         events.attach(to: opener)
 

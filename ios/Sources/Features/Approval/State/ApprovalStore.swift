@@ -85,7 +85,7 @@ final class ApprovalStore: ObservableObject, UnscopedFrameSink {
     /// 这里没有「换连接代次清空」这一条：清空由服务端的名单帧触发（见 `receive`）。
     /// 挂在客户端「开始连」上是错的 —— 一次连不上的重试会把卡片清掉，而那正是离线
     /// 期间用户唯一能看见的东西。
-    func attach(feed: any UnscopedFrameFeed, events: ConnectionEvents) {
+    func attach(feed: any UnscopedFrameFeed, events: ConnectionEventStream) {
         feed.unscopedSink = self
         events.onGeneration { [weak self] generation in
             guard generation == nil else { return }

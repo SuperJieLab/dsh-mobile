@@ -14,7 +14,8 @@ protocol ConnectionStreamOpening {
 }
 
 /**
- * 「这台机器上发生了什么」—— App 级那条事件流的收端。
+ * 「这台机器上发生了什么」—— 连接级那条事件流的**收端**（这个名字说的就是这一点：
+ * 它是这条流在客户端的代表，不是「一堆事件」）。
  *
  * 两件东西，一件都不能少：
  * - **代次**：源每次重建加一，失效时缺席。它是「我手里这份基线还新不新」的唯一依据，
@@ -29,7 +30,7 @@ protocol ConnectionStreamOpening {
  * 观察是那个消费方的需求，不该提前让容器带上发布机制。
  */
 @MainActor
-final class ConnectionEvents {
+final class ConnectionEventStream {
 
     /// 最后一次从源收到的代次。网关发一条**不带代次**的 `ready` 时置空 —— 那一刻源没有活的
     /// 代次，手里一切基线都算旧的。

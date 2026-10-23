@@ -64,7 +64,7 @@ final class SessionListState: ObservableObject {
     /// 可观察的形式就是这一次报到。
     ///
     /// 幂等：视图重复出现时不该注册第二个听众（一次报到触发两次拉取，第二次是空跑）。
-    func attach(events: ConnectionEvents) {
+    func attach(events: ConnectionEventStream) {
         guard !attached else { return }
         attached = true
         // 两件都接：逐条的增量（改一行），与每一次报到（重拉基线）。少接一条的症状是

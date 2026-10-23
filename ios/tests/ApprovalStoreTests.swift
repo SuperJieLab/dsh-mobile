@@ -207,7 +207,7 @@ final class ApprovalStoreTests: XCTestCase {
     ///
     /// 两处各自能单独坏（而且坏了都不编译失败），所以两处各一条断言。
     func testAttachWiresTheFramePathAndSourceLoss() {
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         let feed = FakeFeed()
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(feed: feed, events: events)

@@ -639,7 +639,7 @@ final class LayeringTests: XCTestCase {
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
             ("following", "Features/SessionDetail/State/SessionSync.swift"),
-            ("events", "Core/Gateway/Events/ConnectionEvents.swift"),
+            ("events", "Core/Gateway/Events/ConnectionEventStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {

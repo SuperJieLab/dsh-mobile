@@ -16,7 +16,7 @@ struct DshMobileApp: App {
     private let client: GatewayClient
     /// 连接级事件流的收端 —— App 级，与连接同寿。两个消费方：待答表（清空）与
     /// 会话列表（逐个事件 + 代次重拉）。
-    private let events: ConnectionEvents
+    private let events: ConnectionEventStream
     /// 待答审批 —— App 级、唯一实例。不随任何一屏生死：停在会话列表时它照样在收。
     @StateObject private var approvals: ApprovalStore
 
@@ -27,7 +27,7 @@ struct DshMobileApp: App {
         _store = StateObject(wrappedValue: MeshStore(client: client, node: node))
         _link = StateObject(wrappedValue: GatewayLink(client: client))
         self.client = client
-        let events = ConnectionEvents()
+        let events = ConnectionEventStream()
         self.events = events
         _approvals = StateObject(wrappedValue: ApprovalStore(
             answerer: GatewayApprovalAnswerer(client: client)
