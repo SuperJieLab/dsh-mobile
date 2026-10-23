@@ -18,7 +18,7 @@ struct PairingView: View {
     @State private var gatewayURL = MeshConfig.load().gatewayURLString
     @State private var tailnetKey = ""
 
-    init(client: GatewayClient) {
+    init(client: RpcClient) {
         _state = StateObject(wrappedValue: PairingState(client: client))
     }
 

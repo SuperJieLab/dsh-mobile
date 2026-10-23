@@ -2,7 +2,7 @@
  * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
  * 只做「上游调用 + 结果归类成状态机事件」，迁移决策全部在纯状态机 `TailnetNodeState`。
- * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession`，`GatewayClient` 注入它之后
+ * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession`，`RpcClient` 注入它之后
  * 流量全部进 tailnet。
  *
  * 上游形状（libtailscale，`TailscaleNode.swift` 实读）：
@@ -28,7 +28,7 @@ final class TailnetNode: ObservableObject {
     /// 状态机当前状态（界面据此渲染；迁移判定全在 `TailnetNodeState.handle`）。
     @Published private(set) var state: TailnetNodeState = .noKey
 
-    /// Running 后可用：全部流量进 tailnet 的 session，给 `GatewayClient` 注入。
+    /// Running 后可用：全部流量进 tailnet 的 session，给 `RpcClient` 注入。
     private(set) var gatewaySession: URLSession?
 
     /// 当前到网关对端的路径：Running 期间轮询刷新，其余状态为 nil。

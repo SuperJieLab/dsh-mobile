@@ -24,7 +24,7 @@ final class GatewayHost: ObservableObject, StreamFactory {
 
     private let transport: GatewayConnection
 
-    init(client: GatewayClient) {
+    init(client: RpcClient) {
         let transport = GatewayConnection()
         self.transport = transport
 

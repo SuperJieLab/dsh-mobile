@@ -13,7 +13,7 @@ import Foundation
 /// 下发一条指令（发消息进会话）。`ok` 意味着**已受理**——回答本身从流里来。
 @MainActor
 func promptSession(
-    _ client: GatewayClient,
+    _ client: RpcClient,
     sessionId: String,
     text: String,
     promptId: String
@@ -30,7 +30,7 @@ func promptSession(
 /// 上游可能补上默认档或改掉名字，所以不要把发出去的那份当成答案。
 @MainActor
 func installModelSelection(
-    _ client: GatewayClient,
+    _ client: RpcClient,
     sessionId: String,
     selection: ModelSelection
 ) async throws -> ModelSelection {
@@ -43,7 +43,7 @@ func installModelSelection(
         )
     )
     guard let selected = response.selected else {
-        throw GatewayClientError.malformedResponse(detail: "selected")
+        throw RpcClientError.malformedResponse(detail: "selected")
     }
     return selected
 }

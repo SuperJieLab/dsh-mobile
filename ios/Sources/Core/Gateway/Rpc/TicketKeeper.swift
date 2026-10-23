@@ -78,7 +78,7 @@ final class TicketKeeper {
 
     /// 换票：拿设备凭证去换一张。由网关门面提供 —— 它才知道线路与协议。
     ///
-    /// 返回 `Renewal` 而不是抛错：`GatewayClientError` 里的那些词汇（怎么读 401、什么算传输
+    /// 返回 `Renewal` 而不是抛错：`RpcClientError` 里的那些词汇（怎么读 401、什么算传输
     /// 失败）属于那一层，本类不该认识。
     private let renew: (String) async -> Renewal
 

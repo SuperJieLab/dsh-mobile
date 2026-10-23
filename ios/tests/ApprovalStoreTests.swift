@@ -55,7 +55,7 @@ final class ApprovalStoreTests: XCTestCase {
         ])
     }
 
-    private func refused(_ code: String) -> GatewayClientError {
+    private func refused(_ code: String) -> RpcClientError {
         .refused(GatewayFailure(code: code, message: "gateway said so"))
     }
 
@@ -130,7 +130,7 @@ final class ApprovalStoreTests: XCTestCase {
     /// 移除了用户会以为答过，标成失败又抹掉了「可能已经到了」。
     func testATransportFailureLeavesTheCardAndMarksItUnknown() async {
         let answerer = FakeAnswerer()
-        answerer.outcome = .failure(GatewayClientError.notActivated)
+        answerer.outcome = .failure(RpcClientError.notActivated)
         let store = ApprovalStore(answerer: answerer)
         store.receive(waterfall())
 

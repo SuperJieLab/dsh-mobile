@@ -9,7 +9,7 @@ import SwiftUI
 /// 对话流 = 消息气泡 + **折起的过程行**（工具调用与轮次边界进流，默认收起成一行摘要，
 /// 点开才是工具行与思考行）；流式输出、占位行与审批卡另占各自的位置。
 struct SessionDetailView: View {
-    let client: GatewayClient
+    let client: RpcClient
     let session: SessionSummary
 
     /// 同步编排。视图重建时会新建一个、窗口重取一次 —— 重取的理由见 `SessionSync`。
@@ -34,7 +34,7 @@ struct SessionDetailView: View {
 
     /// - Parameter link: 只在这里交给 `SessionSync`，本视图不保留 —— 屏幕能对连接做的
     ///   只有流级动作（`SessionSync.retry()`），连接级动作在它的类型上不存在。
-    init(client: GatewayClient, session: SessionSummary, link: GatewayHost) {
+    init(client: RpcClient, session: SessionSummary, link: GatewayHost) {
         self.client = client
         self.session = session
         _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id, link: link))

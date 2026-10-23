@@ -47,7 +47,7 @@ final class SessionListState: ObservableObject {
         self.fetch = fetch
     }
 
-    convenience init(client: GatewayClient) {
+    convenience init(client: RpcClient) {
         self.init { try await fetchSessions(client) }
     }
 
@@ -126,7 +126,7 @@ final class SessionListState: ObservableObject {
             outcome = .ready
         } catch {
             // 列表保留（事件带来的变化已经生效），只换失败面。
-            if let gatewayError = error as? GatewayClientError, case .notActivated = gatewayError {
+            if let gatewayError = error as? RpcClientError, case .notActivated = gatewayError {
                 outcome = .waitingForMesh
             } else {
                 outcome = .failed(error.localizedDescription)
@@ -137,7 +137,7 @@ final class SessionListState: ObservableObject {
 
 /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
 @MainActor
-func fetchSessions(_ client: GatewayClient) async throws -> [SessionSummary] {
+func fetchSessions(_ client: RpcClient) async throws -> [SessionSummary] {
     let response: ListSessionsResponse = try await client.perform(ListSessionsRequest())
     // clock 采样：服务端时钟与本地收到时刻的一对。两端 offset 由这一对估出来，
     // 才能修正跨机的 t3 段与端到端 —— 直接相减会把这个 offset 算进延迟里。

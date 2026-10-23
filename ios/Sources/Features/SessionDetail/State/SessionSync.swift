@@ -41,7 +41,7 @@ final class SessionSync: ObservableObject {
         case streaming
     }
 
-    /// 失败属于哪一类。四档按**谁说的**分，不按 `GatewayClientError` 的 case 分 ——
+    /// 失败属于哪一类。四档按**谁说的**分，不按 `RpcClientError` 的 case 分 ——
     /// 后者有七个，重新分类一次就多一份会漂移的对照表。
     enum Cause {
         /// 镜像只说「没成」：取窗口 / 追新增 / 往回翻的传输失败都没有错误对象。
@@ -88,7 +88,7 @@ final class SessionSync: ObservableObject {
     /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
     @Published private(set) var displayedModel: ModelSelection? = nil
 
-    private let client: GatewayClient
+    private let client: RpcClient
     private let sessionId: String
     /// 内存里的镜像。视图重建会新建一个 `SessionSync`、窗口重取一次 ——
     /// 服务端此刻给的比本地残留可信。
@@ -138,7 +138,7 @@ final class SessionSync: ObservableObject {
     /// 合并窗口 = 一个渲染帧量级。未定稿内容逐帧到达无感知；事件文本晚一帧出现。
     private static let flushWindowNanos: UInt64 = 16_000_000
 
-    init(client: GatewayClient, sessionId: String, link: GatewayHost) {
+    init(client: RpcClient, sessionId: String, link: GatewayHost) {
         self.client = client
         self.sessionId = sessionId
         self.factory = link
@@ -368,7 +368,7 @@ final class SessionSync: ObservableObject {
         do {
             let page = try await readPage(client, sessionId: sessionId, beforeSeq: mirror.pageStart)
             return mirror.prepend(page)
-        } catch let error as GatewayClientError {
+        } catch let error as RpcClientError {
             mirror.abandonRequest()
             if case .refused(let failure) = error { return .refused(code: failure.code) }
             return .failed
@@ -589,7 +589,7 @@ final class SessionSync: ObservableObject {
     private func handleStreamRefusal(_ failure: GatewayFailure) {
         // 它天然是一个「抛出来的错误」：包一层比多一个 `Cause` 档便宜 —— 显示层把
         // `localizedDescription` 解释成「订阅流被拒绝：…」，与用户已知的说法一致。
-        status = .failed(step: .streaming, cause: .thrown(GatewayClientError.refused(failure)))
+        status = .failed(step: .streaming, cause: .thrown(RpcClientError.refused(failure)))
         refreshView()
     }
 
@@ -622,7 +622,7 @@ final class SessionSync: ObservableObject {
         do {
             let page = try await readPage(client, sessionId: sessionId)
             return mirror.open(with: page)
-        } catch let error as GatewayClientError {
+        } catch let error as RpcClientError {
             mirror.abandonRequest()
             if case .refused(let failure) = error { return .refused(code: failure.code) }
             return .failed
@@ -642,7 +642,7 @@ final class SessionSync: ObservableObject {
             displayedModel = modelState.displayed
             // 协议回应就是状态机的输入形状 —— 同形的东西只有一份，不在此逐字段搬。
             return .received(snapshot)
-        } catch let error as GatewayClientError {
+        } catch let error as RpcClientError {
             mirror.abandonRequest()
             if case .refused(let failure) = error {
                 return .refused(Refusal(code: failure.code, message: failure.message))

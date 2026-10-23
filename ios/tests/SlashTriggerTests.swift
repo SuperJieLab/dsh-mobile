@@ -138,7 +138,7 @@ final class SlashTriggerTests: XCTestCase {
         await empty.reload()
         XCTAssertEqual(empty.outcome, .ready([]), "空数组是成功面，不是等待")
 
-        let refused = CommandDirectory(fetch: { throw GatewayClientError.notActivated })
+        let refused = CommandDirectory(fetch: { throw RpcClientError.notActivated })
         await refused.reload()
         XCTAssertEqual(refused.outcome, .failed(.offline), "传输失败 → 离线面")
     }

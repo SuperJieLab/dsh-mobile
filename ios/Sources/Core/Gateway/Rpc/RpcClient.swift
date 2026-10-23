@@ -26,7 +26,7 @@ import Foundation
 /// `struct` 改 `class` 是因为票与已配对状态是**可变共享状态** —— 值语义会在视图间复制出
 /// 各自为政的凭证；仍 `@MainActor`，因为调用方本就在主线程。
 @MainActor
-final class GatewayClient: ObservableObject {
+final class RpcClient: ObservableObject {
 
     /// 网关端点 —— **激活前不存在**：App 在节点验证 Running 之前不持有
     /// 任何网关地址，`activate` 是它从无到有的唯一时刻。
@@ -146,7 +146,7 @@ final class GatewayClient: ObservableObject {
             return .issued(
                 .init(token: token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
             )
-        } catch GatewayClientError.unauthenticated {
+        } catch RpcClientError.unauthenticated {
             // 服务端不认这段关系了：撤销或凭证被替换。重试没有意义。
             sever()
             return .unavailable
@@ -172,7 +172,7 @@ final class GatewayClient: ObservableObject {
         authenticated: Bool = true
     ) async throws -> Response {
         // 未激活 = 没有地址可打：fail-fast，不猜地址。
-        guard let baseURL else { throw GatewayClientError.notActivated }
+        guard let baseURL else { throw RpcClientError.notActivated }
         // 手上有票才发。没有票照样发出去，换来的是一次注定被拒的往返 —— 服务端记一条
         // 「没有有效票」，客户端再换票重试，同一件事花两次。先换再发只多一次 wait，
         // 而在票还在的场景里（15 分钟内）它一次都不等。
@@ -187,7 +187,7 @@ final class GatewayClient: ObservableObject {
         //
         // 票换不到时按处境说不通的话：`.unavailable` 是「未配对 / 关系被撤销」，
         // 而 `.retryLater` 是「这次没连上」—— 后者说成前者，用户会去查一件没发生的事。
-        guard authenticated else { throw GatewayClientError.unauthenticated }
+        guard authenticated else { throw RpcClientError.unauthenticated }
         // 调 `renewAnyway` 而不是 `ticket()`：本地那张被服务端否认了，读缓存只会把同一枚
         // 死票再发一遍。设备凭证在这里现取 —— 它是这一刻的事实，不缓存在票那一层。
         switch await tickets.renewAnyway(deviceToken: credentials.deviceToken) {
@@ -196,11 +196,11 @@ final class GatewayClient: ObservableObject {
                 request, at: baseURL, authorization: fresh, treat401AsRefusal: false
             )
             if let retried { return retried }
-            throw GatewayClientError.unauthenticated
+            throw RpcClientError.unauthenticated
         case .unavailable:
-            throw GatewayClientError.unauthenticated
+            throw RpcClientError.unauthenticated
         case .retryLater:
-            throw GatewayClientError.transport(url: baseURL, underlying: TicketUnavailable())
+            throw RpcClientError.transport(url: baseURL, underlying: TicketUnavailable())
         }
     }
 
@@ -235,7 +235,7 @@ final class GatewayClient: ObservableObject {
                 Log.Module.gateway,
                 "transport: \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
             )
-            throw GatewayClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
+            throw RpcClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }
 
         if let http = urlResponse as? HTTPURLResponse {
@@ -252,15 +252,15 @@ final class GatewayClient: ObservableObject {
                             Log.Module.gateway,
                             "auth op refused: \(failure.code) — \(failure.message)"
                         )
-                        throw GatewayClientError.unauthenticated
+                        throw RpcClientError.unauthenticated
                     }
-                    throw GatewayClientError.refused(failure)
+                    throw RpcClientError.refused(failure)
                 }
-                throw GatewayClientError.unauthenticated
+                throw RpcClientError.unauthenticated
             }
             if http.statusCode != 200 {
                 Log.warn(Log.Module.gateway, "HTTP \(http.statusCode) from \(baseURL.host ?? "?")")
-                throw GatewayClientError.badStatus(http.statusCode)
+                throw RpcClientError.badStatus(http.statusCode)
             }
         }
 
@@ -272,10 +272,10 @@ final class GatewayClient: ObservableObject {
             // 比解码器的报错信息有用得多。
             if let failure = envelopeFailure(in: payload) {
                 Log.warn(Log.Module.gateway, "op refused: \(failure.code) — \(failure.message)")
-                throw GatewayClientError.refused(failure)
+                throw RpcClientError.refused(failure)
             }
             Log.warn(Log.Module.gateway, "malformed response: \(String(describing: error))")
-            throw GatewayClientError.malformedResponse(detail: String(describing: error))
+            throw RpcClientError.malformedResponse(detail: String(describing: error))
         }
         try response.validate()
         return response

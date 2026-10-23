@@ -5,7 +5,7 @@
  * 重试成功），只有「第一发业务请求上有没有票」能分开它们。所以桩记录的是**收到的请求序列**，
  * 断言第一条业务请求已带 `Bearer`，且 `refresh` 排在它之前。
  *
- * 用真 `URLSession` + `URLProtocol` 桩，而不是给 `GatewayClient` 开一个口子：被测的正是
+ * 用真 `URLSession` + `URLProtocol` 桩，而不是给 `RpcClient` 开一个口子：被测的正是
  * 「它自己怎么用传输」，替身放在传输边界之外才不预设答案。
  */
 import Foundation
@@ -107,7 +107,7 @@ final class ScriptedURLProtocol: URLProtocol {
 }
 
 @MainActor
-final class GatewayClientAuthTests: XCTestCase {
+final class RpcClientAuthTests: XCTestCase {
 
     /// 一句续期应答。抽成构造器是为了让断言那一屏读得下去 —— 内联的 JSON 有 120 列。
     private static func ticket(_ token: String, expiresAt: Double = 9_999_999_999_999) -> ScriptedURLProtocol.Reply {
@@ -138,7 +138,7 @@ final class GatewayClientAuthTests: XCTestCase {
         return URLSession(configuration: configuration)
     }
 
-    private func client() -> GatewayClient {
+    private func client() -> RpcClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ScriptedURLProtocol.self]
         var stored: String? = "device-token"
@@ -147,7 +147,7 @@ final class GatewayClientAuthTests: XCTestCase {
             write: { stored = $0 },
             delete: { stored = nil }
         ))
-        let client = GatewayClient(credentials: store)
+        let client = RpcClient(credentials: store)
         client.activate(
             session: URLSession(configuration: configuration),
             baseURL: URL(string: "http://127.0.0.1:3081")!
@@ -201,7 +201,7 @@ final class GatewayClientAuthTests: XCTestCase {
         let store = CredentialStore(storage: .init(
             read: { stored }, write: { stored = $0 }, delete: { stored = nil }
         ))
-        let client = GatewayClient(credentials: store)
+        let client = RpcClient(credentials: store)
         client.activate(
             session: Self.stubbedSession(),
             baseURL: URL(string: "http://127.0.0.1:3081")!
@@ -221,7 +221,7 @@ final class GatewayClientAuthTests: XCTestCase {
         let store = CredentialStore(storage: .init(
             read: { stored }, write: { stored = $0 }, delete: { stored = nil }
         ))
-        let client = GatewayClient(credentials: store)
+        let client = RpcClient(credentials: store)
         client.activate(
             session: Self.stubbedSession(),
             baseURL: URL(string: "http://127.0.0.1:3081")!

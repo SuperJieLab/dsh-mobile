@@ -13,7 +13,7 @@ struct DshMobileApp: App {
     @StateObject private var store: MeshStore
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
     @StateObject private var link: GatewayHost
-    private let client: GatewayClient
+    private let client: RpcClient
     /// 连接级事件流的收端 —— App 级，与连接同寿。两个消费方：待答表（清空）与
     /// 会话列表（逐个事件 + 代次重拉）。
     private let events: ConnectionEventStream
@@ -22,7 +22,7 @@ struct DshMobileApp: App {
 
     init() {
         let node = TailnetNode()
-        let client = GatewayClient()
+        let client = RpcClient()
         _node = StateObject(wrappedValue: node)
         _store = StateObject(wrappedValue: MeshStore(client: client, node: node))
         _link = StateObject(wrappedValue: GatewayHost(client: client))

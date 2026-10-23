@@ -357,7 +357,7 @@ final class LayeringTests: XCTestCase {
     /// 是 `Menu` 与 `Picker` 各算一遍选中项，屏幕上勾与值对不上。
     ///
     /// 判据落在**比较表达式**上而不是字段名：`GatewayProtocol` 里那个 `expiresAt: Double?`
-    /// 是协议字段（解码必须还在），`GatewayClient` 里那行把它换成 `Date` 也是必要的一步
+    /// 是协议字段（解码必须还在），`RpcClient` 里那行把它换成 `Date` 也是必要的一步
     /// —— 两者都不做比较。
     func testOnlyOnePlaceComparesTicketExpiry() throws {
         let core = sourcesRoot.appendingPathComponent("Core")
@@ -449,21 +449,21 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// `GatewayClient` 只许构造**换票**这一个请求。
+    /// `RpcClient` 只许构造**换票**这一个请求。
     ///
     /// 失败模式是「图省事把某个 op 加回出口」—— 同一个 op 于是有两个入口，而调用方不知道
     /// 哪个才是现在用的那个。判据落在这一份文件里出现的请求构造上，白名单只有换票一条
     /// （身份的另一半是「建立关系」，那一步不发请求，只收 `adopt` 的一个字符串）；
     /// 正控保证正则没失灵（换票请求必须真的被扫到）。
-    func testGatewayClientConstructsOnlyTheRenewalRequest() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Rpc/GatewayClient.swift")
+    func testRpcClientConstructsOnlyTheRenewalRequest() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Rpc/RpcClient.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let built = codeLines(in: text).flatMap { Self.builtRequests(in: $0.1) }
 
         XCTAssertTrue(built.contains("RefreshRequest"), "没扫到 RefreshRequest —— 先怀疑正则：\(built)")
 
         XCTAssertEqual(Set(built).subtracting(["RefreshRequest"]), [],
-                       "GatewayClient 里出现了业务请求 —— op 归用到它的那个功能，加回出口就有了两个入口")
+                       "RpcClient 里出现了业务请求 —— op 归用到它的那个功能，加回出口就有了两个入口")
     }
 
     /// 请求只在 `State/` 里拼：视图不直接把一条协议请求交给网关。
@@ -941,7 +941,7 @@ final class LayeringTests: XCTestCase {
         let retired = [
             "FollowClient", "SessionStreamHandle", "Subscription", "sendAllOpens", "forgetAll",
             "ConnectionStore", "ConnectionEvents", "StreamTransport", "StreamPhase",
-            "StreamBackoff", "GatewayLink",
+            "StreamBackoff", "GatewayLink", "GatewayClient", "GatewayClientError",
             "Gateway/Client", "Core/Connection",
         ]
         var hits: [String] = []
@@ -1092,7 +1092,7 @@ final class LayeringTests: XCTestCase {
         let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionStreamReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
-        let forbidden = ["StreamMux", "GatewayConnection", "URLSession", "MuxOpenFrame", "GatewayClient"]
+        let forbidden = ["StreamMux", "GatewayConnection", "URLSession", "MuxOpenFrame", "RpcClient"]
 
         XCTAssertTrue(lines.contains { $0.1.contains("static func read(") },
                       "没找到 `static func read(` —— 先怀疑路径或名字")
@@ -1135,8 +1135,12 @@ final class LayeringTests: XCTestCase {
     }
 
     /// `Display/` 不引用实现层的类型 —— 它要能被状态层与视图复用的前提。
+    ///
+    /// 唯一豁免是失败词汇 `RpcClientError`（一次请求怎么失败）：它是本层翻译的输入，
+    /// 与 `GatewayErrorCode` 同性质，方向是呈现 → 通信、向下合法。
     func testDisplayDoesNotReferenceImplementationTypes() throws {
         let forbidden = try declaredTypes(under: gatewayImplementationDirectories, topLevelOnly: true)
+            .filter { $0 != "RpcClientError" }
         XCTAssertFalse(forbidden.isEmpty, "实现层一个类型都没扫到")
         let files = swiftFiles(under: sourcesRoot.appendingPathComponent("Core/Gateway/Display"))
         XCTAssertFalse(files.isEmpty, "Display 一个文件都没扫到")

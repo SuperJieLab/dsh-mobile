@@ -22,7 +22,7 @@ protocol ApprovalAnswering {
 /// `unknown-approval` 表示这条审批已经不在了。
 @MainActor
 struct GatewayApprovalAnswerer: ApprovalAnswering {
-    let client: GatewayClient
+    let client: RpcClient
 
     func answer(eventId: String, allow: Bool, answerId: String) async throws {
         let _: ApprovalAnswerResponse = try await client.perform(
@@ -133,11 +133,11 @@ final class ApprovalStore: ObservableObject {
             )
             // 上游先摘掉自己的投递再广播取消 —— 应答者收不到自己的收口帧，等就是永远等。
             settle(entry, notice: ApprovalStore.deliveredNote(allow: allow))
-        } catch GatewayClientError.refused(let failure)
+        } catch RpcClientError.refused(let failure)
             where failure.code == GatewayErrorCode.unknownApproval.rawValue {
             // 这条已经不在了：留着就是一张永远按不动的卡。
             settle(entry, notice: failure.readableDescription)
-        } catch GatewayClientError.refused(let failure) {
+        } catch RpcClientError.refused(let failure) {
             // 服务端拒了这次投递，问题仍挂着 —— 卡留着并写明原因。
             states[entry.eventId] = .refused(failure.readableDescription)
         } catch {

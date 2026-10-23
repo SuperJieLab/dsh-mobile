@@ -2,7 +2,7 @@
  * 真的那条作答路径：请求体里的三个字段。
  *
  * 三种结局的**分支**由假门守（`ApprovalStoreTests`）；这里守的是假门替不掉的那一半 ——
- * 真 `GatewayClient` 发出去的那一发。「允许」写成常量 `allow` 时用户的拒绝会变成批准，
+ * 真 `RpcClient` 发出去的那一发。「允许」写成常量 `allow` 时用户的拒绝会变成批准，
  * 而任何一条既有判据都不会红：假门只记「门被叫了一次」。
  */
 import Foundation
@@ -13,7 +13,7 @@ import XCTest
 @MainActor
 final class ApprovalAnswererTests: XCTestCase {
 
-    private func client() -> GatewayClient {
+    private func client() -> RpcClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ScriptedURLProtocol.self]
         var stored: String? = "device-token"
@@ -22,7 +22,7 @@ final class ApprovalAnswererTests: XCTestCase {
             write: { stored = $0 },
             delete: { stored = nil }
         ))
-        let client = GatewayClient(credentials: store)
+        let client = RpcClient(credentials: store)
         client.activate(
             session: URLSession(configuration: configuration),
             baseURL: URL(string: "http://127.0.0.1:3081")!

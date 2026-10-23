@@ -52,7 +52,7 @@ final class StreamMuxTests: XCTestCase {
         init(label: String = "s1") { self.label = label }
 
         func build(_ id: StreamId) throws -> String {
-            if buildFails { throw GatewayClientError.malformedResponse(detail: "test") }
+            if buildFails { throw RpcClientError.malformedResponse(detail: "test") }
             built.append(id)
             return #"{"type":"open","streamId":"\#(id)"}"#
         }

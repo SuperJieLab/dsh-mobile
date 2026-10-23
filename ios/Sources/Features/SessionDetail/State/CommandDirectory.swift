@@ -52,7 +52,7 @@ final class CommandDirectory: ObservableObject {
             let commands = try await fetch()
             guard mine == generation else { return }
             outcome = .ready(commands)
-        } catch let error as GatewayClientError {
+        } catch let error as RpcClientError {
             guard mine == generation else { return }
             if case .refused(let failure) = error {
                 outcome = .failed(.refused(failure))
@@ -84,14 +84,14 @@ final class CommandDirectory: ObservableObject {
 /// 列该会话此刻能用的命令。**每次打开面板都拉**：命令集是 per-agent 的，
 /// 随插件装卸与作用域变，不缓存成常量。
 @MainActor
-func fetchCommands(_ client: GatewayClient, sessionId: String) async throws -> [CommandInfo] {
+func fetchCommands(_ client: RpcClient, sessionId: String) async throws -> [CommandInfo] {
     let response: CommandCatalogResponse = try await client.perform(
         CommandCatalogRequest(sessionId: sessionId)
     )
     // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去 —— 那会把一次应答异常
     // 显示成「这个会话没有可用的命令」（成功面），用户以为真没有。
     guard let commands = response.commands else {
-        throw GatewayClientError.malformedResponse(detail: "commands")
+        throw RpcClientError.malformedResponse(detail: "commands")
     }
     return commands
 }
@@ -103,11 +103,11 @@ func fetchCommands(_ client: GatewayClient, sessionId: String) async throws -> [
 /// `commandId` 与 `runCommand` 的 `command/run` 配对）。但它**必须有** ——
 /// `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
 @MainActor
-func runCommand(_ client: GatewayClient, sessionId: String, line: String) async throws {
+func runCommand(_ client: RpcClient, sessionId: String, line: String) async throws {
     let response: CommandExecuteResponse = try await client.perform(
         CommandExecuteRequest(sessionId: sessionId, line: line)
     )
     guard response.commandId != nil else {
-        throw GatewayClientError.malformedResponse(detail: "commandId")
+        throw RpcClientError.malformedResponse(detail: "commandId")
     }
 }

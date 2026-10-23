@@ -278,7 +278,7 @@ final class SessionListStateTests: XCTestCase {
 
         // 第二发要真的停在在途：不这样的话，`apply` 落在失败之后，这条就退化成
         // 「失败不清空 + apply 会改行」，而后半是 apply 的定义。
-        fetch.result = .failure(GatewayClientError.notActivated)
+        fetch.result = .failure(RpcClientError.notActivated)
         fetch.holds = true
         let pull = Task { await state.reload() }
         await settle()

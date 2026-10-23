@@ -20,16 +20,16 @@ final class PairingState: ObservableObject {
     @Published private(set) var isPairing = false
     @Published private(set) var failure: String?
 
-    private let client: GatewayClient
+    private let client: RpcClient
 
-    init(client: GatewayClient) {
+    init(client: RpcClient) {
         self.client = client
     }
 
     /// 可点吗 —— 一行转发到 `PairingRules`。按钮的内容与 `disabled` 都读它。
     ///
     /// 规则不写在这里：它要能在没有界面、没有网关的条件下被断言，而本类型的构造要一个
-    /// `GatewayClient`（`final class`、没有协议）。输入仍归这里 —— `code` 与 `isPairing`。
+    /// `RpcClient`（`final class`、没有协议）。输入仍归这里 —— `code` 与 `isPairing`。
     var canPair: Bool {
         PairingRules.canSubmitCode(code, isSubmitting: isPairing)
     }
@@ -51,14 +51,14 @@ final class PairingState: ObservableObject {
 /// 用 Mac 屏幕上的一次性配对码换设备凭证，换到就把关系落下。
 ///
 /// 请求在这里拼、回包在这里读；**「关系成立」那一步不在这里** —— 它只把凭证交给
-/// `GatewayClient.adopt`，因为身份状态的唯一写者是那一层。
+/// `RpcClient.adopt`，因为身份状态的唯一写者是那一层。
 @MainActor
-func pairDevice(_ client: GatewayClient, code: String) async throws {
+func pairDevice(_ client: RpcClient, code: String) async throws {
     let response: PairResponse = try await client.perform(
         PairRequest(code: code), authenticated: false
     )
     guard let deviceToken = response.deviceToken else {
-        throw GatewayClientError.malformedResponse(detail: "deviceToken")
+        throw RpcClientError.malformedResponse(detail: "deviceToken")
     }
     client.adopt(deviceToken: deviceToken)
 }

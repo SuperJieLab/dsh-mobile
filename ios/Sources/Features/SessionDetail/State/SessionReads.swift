@@ -13,7 +13,7 @@ import Foundation
 /// - Parameter since: 客户端**下一个期望的 seq** —— 由本地镜像记着，不是每次传 0。
 @MainActor
 func readSnapshot(
-    _ client: GatewayClient,
+    _ client: RpcClient,
     sessionId: String,
     since: Int
 ) async throws -> SessionSnapshot {
@@ -24,7 +24,7 @@ func readSnapshot(
     // 报的是**缺了哪些字段**（不是一句拼好的话）：句子由 `Display/FailureText` 拼，
     // 而字段名属于协议词汇，不随产品措辞变。
     guard let asOfSeq = response.asOfSeq, let events = response.events else {
-        throw GatewayClientError.malformedResponse(detail: "asOfSeq / events")
+        throw RpcClientError.malformedResponse(detail: "asOfSeq / events")
     }
     return SessionSnapshot(
         asOfSeq: asOfSeq,
@@ -43,7 +43,7 @@ func readSnapshot(
 
 @MainActor
 func readPage(
-    _ client: GatewayClient,
+    _ client: RpcClient,
     sessionId: String,
     beforeSeq: Int? = nil,
 ) async throws -> SessionPage {
@@ -55,7 +55,7 @@ func readPage(
           let asOfSeq = response.asOfSeq,
           let hasOlder = response.hasOlder,
           let events = response.events else {
-        throw GatewayClientError.malformedResponse(
+        throw RpcClientError.malformedResponse(
             detail: "pageStart / asOfSeq / hasOlder / events"
         )
     }

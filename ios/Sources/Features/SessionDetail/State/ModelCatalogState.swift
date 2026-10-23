@@ -5,7 +5,7 @@
  * `GatewayFailure`，句子在 `Display/CatalogText.swift`），不是一句拼好的话 —— 说法随产品
  * 决定变，原因随协议变，两者不同源。
  *
- * 取数入口是注入的闭包而不是 `GatewayClient`：这条链上没有一条断言需要起网关，
+ * 取数入口是注入的闭包而不是 `RpcClient`：这条链上没有一条断言需要起网关，
  * 而「三面怎么映射」正是唯一要钉住的判定。
  *
  * 触发点不在这里：打开菜单时现拉一次、不订阅刷新 —— 目录只在凭证 / 适配器变更时才变。
@@ -60,7 +60,7 @@ final class ModelCatalogState: ObservableObject {
             guard mine == generation else { return }
             lastKnownDefault = list.default
             outcome = .ready(list)
-        } catch let error as GatewayClientError {
+        } catch let error as RpcClientError {
             guard mine == generation else { return }
             if case .refused(let failure) = error {
                 outcome = .failed(.refused(failure))
@@ -79,7 +79,7 @@ final class ModelCatalogState: ObservableObject {
 /// 它是 `ModelCatalogState` 的取数入口（构造时作为闭包注入），所以与它同住一个文件：
 /// 「取回来什么」与「取回来落成哪三面」是同一件事的上下游。
 @MainActor
-func fetchCatalog(_ client: GatewayClient) async throws -> ModelCatalog {
+func fetchCatalog(_ client: RpcClient) async throws -> ModelCatalog {
     let response: ModelCatalogResponse = try await client.perform(ModelCatalogRequest())
     // 协议里的分组与命名原样交给上层 —— 这里不改写、不补默认。
     return ModelCatalog(

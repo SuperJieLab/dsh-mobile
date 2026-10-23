@@ -5,7 +5,7 @@
  * 只是它加「组网传输是否建成」这一个输入后的**投影**。启动编排、VerifiedRunning 激活、
  * 回前台探活住在这里。
  *
- * 与 `GatewayClient`：client 是 op 门面 + 身份状态机，由根部创建后传进来；本 store 只在
+ * 与 `RpcClient`：client 是 op 门面 + 身份状态机，由根部创建后传进来；本 store 只在
  * 节点验证 Running 时调一次 `activate` —— 组网域不吞身份域，业务调用面照旧直接消费 client。
  * 端点在激活前不存在。
  */
@@ -16,9 +16,9 @@ import Combine
 //
 // store 只认这两个协议，不认具体类型 —— 真实类型的适配住在 `MeshStoreAdapters.swift`
 // （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
-// TailscaleKit / GatewayClient，见 tests/MeshStoreTests.swift）。
+// TailscaleKit / RpcClient，见 tests/MeshStoreTests.swift）。
 
-/// 组网激活能力：`GatewayClient.activate` 的窄面。
+/// 组网激活能力：`RpcClient.activate` 的窄面。
 ///
 /// 只放 store 真正读的成员 —— 投影不读身份，签名里也就没有它：连接阶段只由节点状态
 /// 与「组网传输是否建成」这两个输入决定。

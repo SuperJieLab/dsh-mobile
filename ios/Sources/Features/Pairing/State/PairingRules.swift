@@ -3,7 +3,7 @@
  *
  * 纯判定：入参就是全部输入，不读全局状态、不 import SwiftUI。
  *
- * 独立成类型而不是 `PairingState` 上的属性：`PairingState` 的构造要一个 `GatewayClient`，
+ * 独立成类型而不是 `PairingState` 上的属性：`PairingState` 的构造要一个 `RpcClient`，
  * 而它是 `final class`、没有协议 —— 规则挂在它身上，断言就得先造门面替身，而替身只能伪造
  * 我们自己的端口，测不出自己的错。
  *

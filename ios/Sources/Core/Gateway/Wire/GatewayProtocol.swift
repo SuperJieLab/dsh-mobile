@@ -355,20 +355,6 @@ protocol GatewayResponse: Decodable {
     var error: GatewayFailure? { get }
 }
 
-extension GatewayResponse {
-    func validate() throws {
-        guard v == gatewayProtocolVersion else {
-            throw GatewayClientError.versionMismatch(v)
-        }
-        guard ok else {
-            throw GatewayClientError.refused(
-                error ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue,
-                                        message: "")
-            )
-        }
-    }
-}
-
 struct ListSessionsResponse: GatewayResponse {
     let v: Int
     let ok: Bool

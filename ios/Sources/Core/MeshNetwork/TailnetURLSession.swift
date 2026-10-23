@@ -4,7 +4,7 @@
  * `URLSessionConfiguration.tailscaleSession(_:)`（swift/TailscaleKit/URLSession+Tailscale.swift）——
  * 我们不手拼 `ProxyConfiguration`，上游形状漂移在这里失败，不会带到真机。
  *
- * 消息层（GatewayClient / GatewayConnection）对这只 session 无感知：iOS 17+ 起
+ * 消息层（RpcClient / GatewayConnection）对这只 session 无感知：iOS 17+ 起
  * `URLSessionWebSocketTask` 也会遵守 `proxyConfigurations`。
  */
 import Foundation

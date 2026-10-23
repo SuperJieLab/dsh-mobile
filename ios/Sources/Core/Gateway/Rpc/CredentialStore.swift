@@ -36,7 +36,7 @@ final class CredentialStore {
 
     private let storage: Storage
 
-    /// 沙盒里存着的设备凭证；没有就是未配对。被撤销时由 `GatewayClient` 清掉。
+    /// 沙盒里存着的设备凭证；没有就是未配对。被撤销时由 `RpcClient` 清掉。
     private(set) var deviceToken: String?
 
     var hasDeviceToken: Bool { deviceToken != nil }
@@ -51,7 +51,7 @@ final class CredentialStore {
         storage.write(token)
     }
 
-    /// 关系在这台手机上的终点：被撤销（换票 401）时由 `GatewayClient` 调用。
+    /// 关系在这台手机上的终点：被撤销（换票 401）时由 `RpcClient` 调用。
     ///
     /// 只管设备凭证。手上那张访问票由票那一层自己清 —— 两边各清各的，这个类就不必知道
     /// 世界上有「票」这回事。

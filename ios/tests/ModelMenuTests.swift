@@ -123,7 +123,7 @@ final class ModelMenuTests: XCTestCase {
         let waiting = ModelCatalogState(fetch: { self.catalog() })
         XCTAssertNil(waiting.menu(selected: nil), "还没取过：菜单是「不知道」，不是空菜单")
 
-        let failing = ModelCatalogState(fetch: { throw GatewayClientError.notActivated })
+        let failing = ModelCatalogState(fetch: { throw RpcClientError.notActivated })
         await failing.reload()
         XCTAssertNil(failing.menu(selected: nil), "取不到：仍是「不知道」")
         XCTAssertNil(failing.effortLabel(for: nil), "功能条也不该凭空目录报出一个档名")

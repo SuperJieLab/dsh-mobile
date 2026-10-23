@@ -9,7 +9,7 @@ import Foundation
 
 /// 传输与信封读面的错误：不是协议语义，是「这次请求卡在哪一层」的翻译。
 /// 协议内的拒绝走 `.refused(GatewayFailure)`。
-enum GatewayClientError: Error {
+enum RpcClientError: Error {
     /// 请求压根没发出去或没回来 —— 网络层的事，不是协议层的事。
     case transport(url: URL, underlying: Error)
     /// 回来了，但 HTTP 状态不是 200（协议下 400 = body 不是 JSON，413 = body 过大）。
@@ -25,4 +25,20 @@ enum GatewayClientError: Error {
     case unauthenticated
     /// 端点不存在：组网尚未激活。零网络 —— 激活后重试即可。
     case notActivated
+}
+
+/// 回包的信封校验 —— 请求语义：它抛的正是本文件的词汇（版本不符、协议内拒绝），
+/// 与词汇同处；形状目录只声明 `GatewayResponse`，不判成败。
+extension GatewayResponse {
+    func validate() throws {
+        guard v == gatewayProtocolVersion else {
+            throw RpcClientError.versionMismatch(v)
+        }
+        guard ok else {
+            throw RpcClientError.refused(
+                error ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue,
+                                        message: "")
+            )
+        }
+    }
 }

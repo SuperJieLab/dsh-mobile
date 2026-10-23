@@ -23,7 +23,7 @@ final class ModelCatalogStateTests: XCTestCase {
         }
 
         func next() throws -> ModelCatalog {
-            guard !steps.isEmpty else { throw GatewayClientError.notActivated }
+            guard !steps.isEmpty else { throw RpcClientError.notActivated }
             return try steps.removeFirst().get()
         }
     }
@@ -62,7 +62,7 @@ final class ModelCatalogStateTests: XCTestCase {
     /// 协议拒绝原样带，认不出的码要显示服务端原文。
     func testRefusedKeepsServerText() async {
         let failure = GatewayFailure(code: "catalog-unavailable", message: "模型目录服务没起来")
-        let state = ModelCatalogState(fetch: { throw GatewayClientError.refused(failure) })
+        let state = ModelCatalogState(fetch: { throw RpcClientError.refused(failure) })
 
         await state.reload()
 
@@ -75,7 +75,7 @@ final class ModelCatalogStateTests: XCTestCase {
     /// 传输失败落在传输面；重试期间是等待面，成功之后回到内容面。
     func testOfflineThenRetry() async {
         let script = Script([
-            .failure(GatewayClientError.notActivated),
+            .failure(RpcClientError.notActivated),
             .success(makeCatalog(default: "m")),
         ])
         let box = WeakBox()

@@ -53,7 +53,7 @@ extension GatewayFailure {
     }
 }
 
-extension GatewayClientError: LocalizedError {
+extension RpcClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .transport(let url, let underlying):
