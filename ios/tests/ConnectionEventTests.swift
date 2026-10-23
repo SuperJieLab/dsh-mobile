@@ -1,5 +1,5 @@
 /**
- * 事件流判读的判据 —— `ConnectionEventReader`（`Core/Gateway/Events/`）。
+ * 事件流判读的判据 —— `ConnectionEventReader`（`Core/Gateway/ConnectionEvents/`）。
  *
  * 与 `SessionStreamReaderTests` 同一件事：给一段帧文本，判成什么、这条流接下来怎么办，
  * 不需要连接。差别在**值域更窄**：控制结局（`ready` 的代次、`refused` 的拒绝、`ended` 的

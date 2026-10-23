@@ -554,7 +554,7 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 5–7：Core 与线上形状的方向
 
-    /// 实现层的每个目录都必须真的扫到文件，根上的两件（装配、共用曲线）必须真的存在。
+    /// 实现层的每个目录都必须真的扫到文件，根上的两件与失败词汇的住处必须真的存在。
     ///
     /// 守的是下面各条判据的**盲区**：目录名是字面量，`swiftFiles(under:)` 对不存在的目录
     /// 回空数组、不抛错 ⇒ 改名时漏改一处，判据只是少扫一层而照样全绿（`Client/` → `Rpc/`
@@ -564,15 +564,16 @@ final class LayeringTests: XCTestCase {
             XCTAssertFalse(swiftFiles(under: directory).isEmpty,
                            "\(directory.lastPathComponent)/ 扫不到任何 .swift —— 目录改名了？")
         }
-        for name in ["GatewayHost.swift", "Backoff.swift"] {
+        for name in ["GatewayHost.swift", "Backoff.swift", "Rpc/RpcClientError.swift"] {
             let file = sourcesRoot.appendingPathComponent("Core/Gateway/\(name)")
             XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
-                          "根上的 \(name) 不在 —— 守卫名单与实际住处不一致")
+                          "\(name) 不在 —— 守卫名单与实际住处不一致")
         }
     }
 
-    /// 装配层站根，不站流层：流层目录里出现它，就是「门又长回了流里」。
+    /// 装配层站根：流层与传输层的目录里出现它，就是「门又长回了实现层」。
     ///
+    /// 两个方向一起扫：流层不站装配（门与租户分名），传输层也不引用装配（依赖方向单向）。
     /// 正控：根上的装配文件必须真的扫到造流入口 —— 空集会被读成合规。
     func testTheHostStaysOutOfTheStreamLayer() throws {
         let host = try String(
@@ -582,16 +583,18 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(host.contains("func makeStream"), "装配的造流入口没扫到 —— 判据可能扫错了树")
 
         var hits: [String] = []
-        for file in swiftFiles(under: sourcesRoot.appendingPathComponent("Core/Gateway/Stream")) {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            for (line, code) in codeLines(in: text) where code.contains("GatewayHost") {
-                hits.append("\(file.lastPathComponent):\(line)")
+        for name in ["Stream", "Connection"] {
+            for file in swiftFiles(under: sourcesRoot.appendingPathComponent("Core/Gateway/\(name)")) {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) where code.contains("GatewayHost") {
+                    hits.append("\(file.lastPathComponent):\(line)")
+                }
             }
         }
-        XCTAssertEqual(hits, [], "Stream/ 出现了装配层 —— 它站根：\(hits)")
+        XCTAssertEqual(hits, [], "实现层出现了装配层 —— 它站根：\(hits)")
     }
 
-    /// 线上形状目录里不出现 `Rpc/`、`Stream/`、`Events/` 声明的类型。
+    /// 线上形状目录里不出现 `Connection/`、`Rpc/`、`Stream/`、`ConnectionEvents/` 声明的类型。
     ///
     /// 只查**代码行**：注释里提到实现层不算违反；字符串里出现同名算命中（误报方向，接受）。
     func testWireDoesNotReferenceImplementationTypes() throws {
@@ -774,9 +777,10 @@ final class LayeringTests: XCTestCase {
     /// 盲区：只认字面量与裸标识符。用变量间接比较（`let kind = "it" + "em"`）抓不到，那种
     /// 写法靠评审；也可能误判 —— 本层若真需要这些词，说明职责又长回去了。
     func testTransportKnowsNoFrameContent() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Connection/GatewayConnection.swift")
-        let text = try String(contentsOf: file, encoding: .utf8)
-        let lines = codeLines(in: text)
+        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/Connection")
+        let lines = try swiftFiles(under: dir).flatMap { file -> [(Int, String)] in
+            codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        }
         let forbidden = [
             "\"follow\"", "\"item\"", "\"end\"", "\"error\"", "\"usage\"", "\"approval\"",
             "GatewayErrorCode", "sessionId",
@@ -802,12 +806,13 @@ final class LayeringTests: XCTestCase {
     ///
     /// 正控：文件里必须仍有 `func makeStream(`，否则说明扫错了文件（零命中读成合规）。
     func testStreamLayerLooksNeitherUpNorOut() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
-        let text = try String(contentsOf: file, encoding: .utf8)
-        let lines = codeLines(in: text)
+        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/Stream")
+        let lines = try swiftFiles(under: dir).flatMap { file -> [(Int, String)] in
+            codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        }
         let forbidden = [
             "URLSession", "GatewayConnection", "Unscoped", "GatewayErrorCode",
-            "\"follow\"", "\"events\"",
+            "\"follow\"", "\"events\"", "握手", "心跳", "代次",
         ]
 
         XCTAssertTrue(lines.contains { $0.1.contains("func makeStream(") },
@@ -827,9 +832,10 @@ final class LayeringTests: XCTestCase {
     ///
     /// 正控：文件里必须有流通道的路径常量，否则说明扫错了文件。
     func testTransportMintsNoIdsAndKeepsNoTable() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Connection/GatewayConnection.swift")
-        let text = try String(contentsOf: file, encoding: .utf8)
-        let lines = codeLines(in: text)
+        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/Connection")
+        let lines = try swiftFiles(under: dir).flatMap { file -> [(Int, String)] in
+            codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        }
         let forbidden = ["newStreamId", "[StreamId:", "Map<StreamId", "openInFlight", "byId"]
 
         XCTAssertTrue(lines.contains { $0.1.contains("\"/rpc/stream\"") },
@@ -940,9 +946,9 @@ final class LayeringTests: XCTestCase {
     func testTheOldNamesAreGone() throws {
         let retired = [
             "FollowClient", "SessionStreamHandle", "Subscription", "sendAllOpens", "forgetAll",
-            "ConnectionStore", "ConnectionEvents", "StreamTransport", "StreamPhase",
+            "ConnectionStore", "StreamTransport", "StreamPhase",
             "StreamBackoff", "GatewayLink", "GatewayClient", "GatewayClientError",
-            "Gateway/Client", "Core/Connection",
+            "Gateway/Client",
         ]
         var hits: [String] = []
         var scanned = 0
@@ -1040,8 +1046,8 @@ final class LayeringTests: XCTestCase {
 
     /// 阶段类型提出去了：业务与视图读的是顶层 `ConnectionPhase`，没有谁还写 `FollowClient.Phase`。
     ///
-    /// 断言按**文件名单**，不按出现次数：流层内部自己就有四处写这个名字（声明、传输层两个
-    /// 字段、门面的 `phase`），数次数时那四处正好凑够阈值 —— 四屏消费点一个都没跟进也照样绿。
+    /// 断言按**文件名单**，不按出现次数：这个名字在四处出现（声明、连接层两个字段、门面的
+    /// `phase`），数次数时那四处正好凑够阈值 —— 四屏消费点一个都没跟进也照样绿。
     func testThePhaseTypeIsTopLevelAndConsumed() throws {
         // 消费点名单：会话详情的编排与它那两个视图。哪里新增一处读阶段的地方，就加一个名字。
         let consumers = [
@@ -1628,36 +1634,6 @@ final class LayeringTests: XCTestCase {
                       "扫错文件了 —— 先怀疑路径")
         let hits = lines.filter { $0.1.lowercased().contains("approval") }.map(\.0)
         XCTAssertEqual(hits, [], "列表的取数层出现了审批（第 \(hits) 行）—— 列表不读审批的任何事实")
-    }
-
-    /// 每一次 `name(...)` 调用的实参原文（不含括号本身），跨行也算一次。
-    ///
-    /// 按括号配平取，不按行。游标推进到本次调用的块尾（不是推进一个字符）——
-    /// 否则同一文件里 `name(` 出现多次时扫描成本按平方涨。
-    ///
-    /// 盲区：字符串字面量里的括号会被当成结构 —— 本仓的构造调用实参里没有这种串，
-    /// 真出现时会报成「多一次调用」，看得见。
-    private func callArguments(of name: String, in text: String) -> [String] {
-        var out: [String] = []
-        var from = text.startIndex
-        while let open = text.range(of: name + "(", range: from..<text.endIndex) {
-            var depth = 0
-            var collected = ""
-            var cursor = text.index(open.lowerBound, offsetBy: name.count)
-            while cursor < text.endIndex {
-                let char = text[cursor]
-                if char == "(" { depth += 1 }
-                if char == ")" {
-                    depth -= 1
-                    if depth == 0 { break }
-                }
-                collected.append(char)
-                cursor = text.index(after: cursor)
-            }
-            out.append(collected)
-            from = cursor
-        }
-        return out
     }
 
     /// 从 `marker` 那一行起，取到下一个**顶格** `}`（含）为止。找不到 marker 返回 `nil`。

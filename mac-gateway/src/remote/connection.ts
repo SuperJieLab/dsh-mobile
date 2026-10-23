@@ -82,7 +82,7 @@ export interface Heartbeat {
  * 字节还在路上 —— 那时我们刚发出 ping，客户端却还没收到，它自然回不了 pong。**只有 pong 算数
  * 就等于要求「对端在被我们的大帧堵住的间隙里还能应答」**。客户端每 2 秒的 ping 走的是反向、
  * 未被堵住的那条路：收到它，就说明对面活着（与客户端侧同一条规则，见
- * `StreamTransport.livenessTick`）。
+ * `GatewayConnection.livenessTick`）。
  *
  * 代价：写不出去的连接不再由心跳判死，交给 TCP 自己的超时；客户端那侧的心跳会在它
  * 自己发现链路死掉时关掉这条连接（两端都留着各自的判据）。
@@ -104,7 +104,7 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
     if (unanswered > limit) {
       // 留痕：客户端死亡是常态，但「死于我们自己关掉它」与「客户端自己走了」
       // 是两件事 —— 没有这一行，Mac 侧的日志答不出这次连接怎么结束的
-      // （客户端那半边见 `StreamTransport` 心跳放弃时的 warn）。
+      // （客户端那半边见 `GatewayConnection` 心跳放弃时的 warn）。
       log.info(`heartbeat: no pong in ${limit + 1} rounds — closing socket`)
       killed = true
       socket.destroy()
@@ -224,7 +224,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
     }
     for (const frame of frames) {
       // 对端送来的任何一帧都是「它还活着」的证据 —— 与客户端侧同一条规则
-      //（`StreamTransport.livenessTick`）。最要紧的那一帧是客户端每 2 秒一次的 ping：它走的是
+      //（`GatewayConnection.livenessTick`）。最要紧的那一帧是客户端每 2 秒一次的 ping：它走的是
       // **未被堵住**的方向（客户端 → 网关），而我们的 pong 可能正排在一个大帧后面。
       // 此刻收不到它的 pong 说明不了什么。
       heartbeat.heardFrame()
