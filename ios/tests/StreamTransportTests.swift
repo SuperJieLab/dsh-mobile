@@ -54,7 +54,7 @@ final class StreamTransportTests: XCTestCase {
     ///
     /// 第一条防的是「传大帧时误杀」：网关先发对账帧、打开帧的大帧占住整条 TCP，
     /// 我们的 pong 排在它后面，一拍也到不了。
-    func testLivenessTickFourBranches() {
+    func testLivenessTickBranches() {
         // 有流在等打开帧：无论收到过什么、连失多少，都继续探活且归零。
         XCTAssertEqual(StreamTransport.livenessTick(
             awaitingOpening: true, heardFromPeer: false, missed: 2, limit: 2), .probe(missed: 0))
@@ -68,8 +68,17 @@ final class StreamTransportTests: XCTestCase {
         // 没在等、也没收到：连失数累加，到上限之上判死。
         XCTAssertEqual(StreamTransport.livenessTick(
             awaitingOpening: false, heardFromPeer: false, missed: 0, limit: 2), .probe(missed: 1))
+        // `next == limit` 这一格单独钉住：把判死条件写成 `>=` 时，上下两格（1 与 3）都还在
+        // 边界两侧不动，只有它会红 —— 少了它，「容错两拍」实际只剩一拍。
+        XCTAssertEqual(StreamTransport.livenessTick(
+            awaitingOpening: false, heardFromPeer: false, missed: 1, limit: 2), .probe(missed: 2),
+            "第 2 拍连失 2，仍在容错内")
         XCTAssertEqual(StreamTransport.livenessTick(
             awaitingOpening: false, heardFromPeer: false, missed: 2, limit: 2), .dead)
+        // 空闲连接（停在会话列表：一条流都没有）同样要判死：常驻之后大部分时间是这个处境。
+        XCTAssertEqual(StreamTransport.livenessTick(
+            awaitingOpening: false, heardFromPeer: false, missed: 9, limit: 2), .dead,
+            "连失数早已越过上限，不该因为「没有流」而继续 probe")
     }
 
     // MARK: - U5：迟到的回调该不该起作用
@@ -105,8 +114,11 @@ final class StreamTransportTests: XCTestCase {
         XCTAssertEqual(transport.phase, .connecting, "收到东西不等于就绪")
 
         // 某条流报「建成了」：这才是就绪。
-        transport.didEstablish("s1")
+        transport.didEstablish()
         XCTAssertEqual(transport.phase, .ready, "建成即就绪")
+
+        // 收尾：另一条用例也在连同一个端点，留下的退避循环会跨用例写日志、抢断言。
+        transport.deactivate()
     }
 
     // MARK: - U4：无编号帧只到收货人
@@ -131,6 +143,7 @@ final class StreamTransportTests: XCTestCase {
         transport.handleMessage(.string(scoped), generation: 1)
         XCTAssertEqual(behavior.handled, 1, "有编号的帧交给那条流")
         XCTAssertEqual(sink.frames.count, 1, "有编号的帧不进收货人")
+        transport.deactivate()
     }
 
     // MARK: - U2：坏帧不带走连接
@@ -138,12 +151,13 @@ final class StreamTransportTests: XCTestCase {
     func testAnUnparsableFrameLeavesTheConnectionAlive() {
         let transport = transport()
         transport.activate()
-        transport.didEstablish("s1")
+        transport.didEstablish()
 
         transport.handleMessage(.string("not json at all"), generation: 1)
 
         XCTAssertEqual(transport.phase, .ready, "解不出的帧不是消息，不该改阶段")
         XCTAssertTrue(transport.sentFrames.isEmpty, "更不该因此发任何帧")
+        transport.deactivate()
     }
 
     // MARK: - U6：退避与代次由传输层自己决定
@@ -205,21 +219,47 @@ extension StreamTransportTests {
 
         XCTAssertEqual(behavior.handled, 0, "无编号帧不进流")
         XCTAssertEqual(transport.phase, .connecting, "丢弃不改阶段")
+        transport.deactivate()
     }
 
-    /// 门面把收货人转给传输层。
+    /// 门面把收货人转给传输层 —— 断言落在**被转发的那一端**。
     ///
-    /// 这一跳写成空实现时两端的判据都还是绿的：审批帧到不了那张表，症状是「卡永不显示」。
+    /// 这一跳写成空实现（门面自己存一个属性、不再问传输层）时，若只在门面上读回刚写进去
+    /// 的值，断言照样绿，而症状是「审批卡永不显示」。所以注入一条真的传输层，问它拿到了没有。
     func testTheFacadeForwardsTheSinkToTheTransport() {
         let store = CredentialStore(storage: .init(
             read: { nil }, write: { _ in }, delete: {}
         ))
-        let link = GatewayLink(client: GatewayClient(credentials: store))
+        let transport = self.transport()
+        let link = GatewayLink(client: GatewayClient(credentials: store), transport: transport)
         let sink = Sink()
 
         link.unscopedSink = sink
 
-        XCTAssertTrue(link.unscopedSink === sink)
+        XCTAssertTrue(transport.unscopedSink === sink,
+                      "门面没把收货人转给传输层 —— 无编号帧会停在门面上")
+    }
+
+    /// 一条流都没有也要连 —— 「常驻」的字面含义就是这句。
+    ///
+    /// 停在会话列表时正是这个处境：没有流，连接仍在；也正因为如此，半开连接才会被发现。
+    func testTheConnectionIsResidentWithoutAnyStream() {
+        var handshakes = 0
+        let transport = StreamTransport()
+        transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
+        transport.authorizationProvider = { "ticket" }
+        transport.sessionProvider = {
+            handshakes += 1
+            return .shared
+        }
+
+        transport.activate()
+
+        XCTAssertEqual(handshakes, 1, "没有登记任何流也该连")
+        XCTAssertEqual(transport.sentFrames, [], "没有流就没有开流帧可发")
+
+        transport.deactivate()
+        XCTAssertEqual(transport.phase, .idle, "收掉之后没有连接，也没有排定的重试")
     }
 
     /// 在已连接上开第二条流：阶段不闪回「连接中」。
@@ -228,13 +268,17 @@ extension StreamTransportTests {
     func testOpeningASecondStreamKeepsThePhase() throws {
         let transport = transport()
         transport.activate()
-        transport.didEstablish("first")
+        transport.didEstablish()
         XCTAssertEqual(transport.phase, .ready)
 
         _ = try XCTUnwrap(transport.mux.makeStream(Behavior()))
         _ = try XCTUnwrap(transport.mux.makeStream(Behavior()))
 
         XCTAssertEqual(transport.phase, .ready, "开流不改阶段")
+        // 正控：有连接时造流真的发 open。这一组其余各处都断言 `sentFrames` **为空**，
+        // 而「send 根本不记账」会让那几条断言一起变成永远为真。
+        XCTAssertEqual(transport.sentFrames.count, 2, "两条流就是两条 open")
+        transport.deactivate()
     }
 
     /// 单帧接收上限必须是网关承诺上界的两倍：系统默认 1 MiB 正是「某个会话打不开」的成因。

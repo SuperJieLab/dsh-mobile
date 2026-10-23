@@ -35,7 +35,10 @@ protocol StreamPort: AnyObject {
     func abandon(_ reason: AbandonReason, attempt: StreamAttempt)
 
     /// 某条流建成了 —— 连接阶段与连接级退避由传输层据此更新。
-    func didEstablish(_ id: StreamId)
+    ///
+    /// 不带编号是刻意的：这一层的判据只有「这条连接上终于有东西通了」，它不认识流表、
+    /// 也就无从知道是哪条流 —— 带上编号反而会让读签名的人以为它需要这个事实。
+    func didEstablish()
 
     /// 当前这一代的令牌；`nil` = 手上没有 socket。
     var attempt: StreamAttempt? { get }
@@ -196,7 +199,7 @@ final class StreamMux {
             stream.openInFlight = false
             stream.retryAttempt = 0
             established.insert(stream.id)
-            port?.didEstablish(stream.id)
+            port?.didEstablish()
         }
         switch reply.next {
         case .keep:

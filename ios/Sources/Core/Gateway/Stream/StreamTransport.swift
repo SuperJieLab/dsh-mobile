@@ -135,7 +135,7 @@ final class StreamTransport: StreamPort, UnscopedFrameFeed {
         }
     }
 
-    func didEstablish(_ id: StreamId) {
+    func didEstablish() {
         reconnectAttempt = 0
         missedPongs = 0
         phase = .ready

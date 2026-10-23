@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { perfNow } from '../../src/log.ts'
 
 /**
- * 一条 dev 记录 —— 与 iOS `FollowClient` 产出的字段集逐字段对齐（期1 契约）。
+ * 一条 dev 记录 —— 与 iOS 传输层产出的字段集逐字段对齐（期1 契约）。
  *
  * 写成 `type` 而不是 `interface`：它是一条记录的**字面量形状**，没有可扩展的命名契约；
  * 而 `interface` 不参与「隐式 index signature」，于是赋不进 `PerfLike` 这类带索引签名的读面
@@ -198,7 +198,7 @@ export class BenchClient {
     const payload = frame.payload as Record<string, unknown> | undefined
     if (payload === undefined) return
 
-    // 打开帧：sessionId + cursor + events 三件齐（判读与 iOS `FollowClient` 同一形状）。
+    // 打开帧：sessionId + cursor + events 三件齐（判读与 iOS 传输层同一形状）。
     if (payload['sessionId'] !== undefined && payload['cursor'] !== undefined && payload['events'] !== undefined) {
       const devRecv = perfNow()
       // fold 等价物（opening 半）：窗口事件进镜像 —— 应用是同步的，返回即 fold 完成。

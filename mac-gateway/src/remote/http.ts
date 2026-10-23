@@ -7,7 +7,7 @@
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
-import { DEFAULT_LIMITS, failure, handle, success, type Limits } from '../protocol/rpc.ts'
+import { failure, handle, success, type Limits } from '../protocol/rpc.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { CommandPort } from '../ports/command.ts'

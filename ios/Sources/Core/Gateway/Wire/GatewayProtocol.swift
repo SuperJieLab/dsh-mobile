@@ -321,7 +321,6 @@ struct PageRequest: Encodable {
     let op = "page"
     let sessionId: String
     let beforeSeq: Int?
-    let maxMessages: Int?
 }
 
 /// 审批应答：应答词汇表只有两键，映射在服务端完成 ——

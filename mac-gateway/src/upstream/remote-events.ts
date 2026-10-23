@@ -138,13 +138,13 @@ export class ForwardedEvents implements ForwardedSource {
 
   #announceGeneration(): void {
     for (const sink of this.#sinks) {
-      this.#deliver(sink, () => sink.generation(this.generation))
+      this.#deliver(() => sink.generation(this.generation))
     }
   }
 
   #announceFrame(frame: UpstreamWireFrame): void {
     for (const sink of this.#sinks) {
-      this.#deliver(sink, () => sink.frame(frame))
+      this.#deliver(() => sink.frame(frame))
     }
   }
 
@@ -152,7 +152,7 @@ export class ForwardedEvents implements ForwardedSource {
    * 一个订阅者抛错不许让源换代：换代会让宿主重投全部待答问题、事件泵重发 `ready`，
    * 一个消费方的 bug 因此变成所有消费方的事故。降级成一行日志。
    */
-  #deliver(sink: ForwardedSink, hand: () => void): void {
+  #deliver(hand: () => void): void {
     try {
       hand()
     } catch (error) {

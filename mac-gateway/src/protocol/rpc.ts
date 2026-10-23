@@ -21,7 +21,6 @@ import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type {
   WireEvent,
   SessionRow,
-  SessionSlice,
   ErrorResponse,
   OkResponse,
   Response,

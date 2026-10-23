@@ -23,7 +23,7 @@ final class StreamMuxTests: XCTestCase {
         var sent: [String] = []
         var ensureCount = 0
         var abandonCount = 0
-        var establishedIds: [StreamId] = []
+        var establishCount = 0
         var attempt: StreamAttempt?
 
         /// 假装已经有一条连接（第 `generation` 代）。令牌的身份用本对象自己。
@@ -36,7 +36,7 @@ final class StreamMuxTests: XCTestCase {
         func abandon(_ reason: AbandonReason, attempt: StreamAttempt) {
             abandonCount += 1
         }
-        func didEstablish(_ id: StreamId) { establishedIds.append(id) }
+        func didEstablish() { establishCount += 1 }
     }
 
     /// 业务判读的替身：给什么答复就是什么答复。
@@ -68,10 +68,6 @@ final class StreamMuxTests: XCTestCase {
         let mux = StreamMux()
         mux.attach(port: port)
         return (mux, port)
-    }
-
-    private func envelope(_ json: String) throws -> MuxServerEnvelope {
-        try JSONDecoder().decode(MuxServerEnvelope.self, from: Data(json.utf8))
     }
 
     private func frame(_ id: StreamId) -> MuxServerEnvelope {
@@ -213,6 +209,18 @@ final class StreamMuxTests: XCTestCase {
         XCTAssertEqual(port.abandonCount, 1, "45 秒（此处拨到 50ms）没等到开口帧 ⇒ 放弃一次")
     }
 
+    /// 就绪硬超时的值是算出来的，不是抄来的。
+    ///
+    /// 它必须盖住「最慢链路上传完承诺上界」所需的时间：抄上游 15s 的那版在真机上活不过
+    /// 1.25 MB 的打开帧。判据钉的是这个关系，不是某个魔法数 —— 改小它会当场红。
+    func testTheReadyTimeoutCoversTheSlowestLink() {
+        let worstCaseSeconds = Double(4 * 1024 * 1024) / (125 * 1024)   // 4 MiB ÷ 125 KB/s ≈ 33.6s
+        let timeout = StreamMux().readyTimeout
+        XCTAssertGreaterThanOrEqual(timeout, worstCaseSeconds,
+                                    "盖不住最慢链路时，大窗口会被自己掐断")
+        XCTAssertEqual(timeout, 45, "取值 = 33.6s + 建连 ~2s，取整到 45s")
+    }
+
     /// 期间建成了：不再放弃。
     func testAnEstablishedStreamDisarmsTheReadyTimeout() async throws {
         let (mux, port) = makeMux()
@@ -223,7 +231,7 @@ final class StreamMuxTests: XCTestCase {
         let stream = try XCTUnwrap(mux.makeStream(behavior))
 
         mux.receive(frame(stream.id), raw: Data())
-        XCTAssertEqual(port.establishedIds, [stream.id], "建成要报给传输层")
+        XCTAssertEqual(port.establishCount, 1, "建成要报给传输层")
 
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(port.abandonCount, 0, "已建成的流不该再触发就绪超时")
@@ -270,7 +278,7 @@ final class StreamMuxTests: XCTestCase {
         mux.receive(frame("someone-else"), raw: Data())
 
         XCTAssertEqual(behavior.handled, 0, "别的流的帧不进判读器")
-        XCTAssertEqual(port.establishedIds, [])
+        XCTAssertEqual(port.establishCount, 0)
     }
 
     /// 换代次：每条已开过的流都换新号重开。

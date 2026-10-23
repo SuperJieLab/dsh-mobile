@@ -16,11 +16,11 @@ import assert from 'node:assert/strict'
 import { analyzeRecords, attributeBottleneck, curvePoint, type PerfLike } from '../../tools/bench/analyze.ts'
 
 /** 手工造一条 gw 记录：字段集与 `src/remote/egress.ts` 的 `gwRecord` 对齐。 */
-function gw(seq: number, evTime: number, gwRecv: number, gwSend: number, subMs = true): PerfLike {
+function gw(seq: number, evTime: number, gwRecv: number, gwSend: number): PerfLike {
   return { seg: 'gw', t: gwSend, sessionId: 's1', kind: 'event', seq, evTime, gwRecv, gwSend, bytes: 100 }
 }
 
-/** 手工造一条 dev 记录：字段集与 iOS `FollowClient` / 脚本客户端对齐。 */
+/** 手工造一条 dev 记录：字段集与 iOS 传输层 / 脚本客户端对齐。 */
 function dev(seq: number, devRecv: number, devApply: number): PerfLike {
   return { seg: 'dev', t: devApply, sessionId: 's1', kind: 'event', seq, gen: 1, devRecv, devApply, bytes: 90 }
 }

@@ -44,9 +44,12 @@ final class LayeringTests: XCTestCase {
         sourcesRoot.appendingPathComponent("SharedUI")
     }
 
-    /// 线上形状不许认识的三层：客户端、流、状态。
+    /// 线上形状不许认识的三层：一元调用、流、状态。
+    ///
+    /// ⚠️ 这三个目录名是**字面量**：改名（如 `Client/` → `Rpc/`）时这里不会编译失败，
+    /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。改名后必须回扫这一处。
     private var gatewayImplementationDirectories: [URL] {
-        ["Client", "Stream", "State"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
+        ["Rpc", "Stream", "State"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
 
     /// 界面目录 = `Features/` 的直接子目录。
@@ -505,7 +508,19 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 5–7：Core 与线上形状的方向
 
-    /// 线上形状目录里不出现 `Client/`、`Stream/`、`State/` 声明的类型。
+    /// 三个实现层目录都必须真的扫到文件。
+    ///
+    /// 守的是下面两条判据的**盲区**：目录名是字面量，`swiftFiles(under:)` 对不存在的目录
+    /// 回空数组、不抛错 ⇒ 改名时漏改一处，判据只是少扫一层而照样全绿（`Client/` → `Rpc/`
+    /// 那次真实发生过）。
+    func testEveryGatewayImplementationDirectoryIsFound() {
+        for directory in gatewayImplementationDirectories {
+            XCTAssertFalse(swiftFiles(under: directory).isEmpty,
+                           "\(directory.lastPathComponent)/ 扫不到任何 .swift —— 目录改名了？")
+        }
+    }
+
+    /// 线上形状目录里不出现 `Rpc/`、`Stream/`、`State/` 声明的类型。
     ///
     /// 只查**代码行**：注释里提到实现层不算违反；字符串里出现同名算命中（误报方向，接受）。
     func testWireDoesNotReferenceImplementationTypes() throws {
@@ -848,13 +863,14 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 改造前的九个旧名在源码里零命中：改名不留残影。
+    /// 改造前的十个旧名在源码里零命中：改名不留残影。
     ///
     /// 正控：`StreamMux` 必须命中 —— 否则说明扫描本身没工作（空集会被读成合规）。
     func testTheOldNamesAreGone() throws {
         let retired = [
             "FollowClient", "SessionStreamHandle", "Subscription", "sendAllOpens", "forgetAll",
-            "ConnectionStore", "ConnectionPhase", "ConnectionEvents", "Gateway/Client",
+            "ConnectionStore", "ConnectionPhase", "ConnectionEvents",
+            "Gateway/Client", "Core/Connection",
         ]
         var hits: [String] = []
         var scanned = 0
@@ -880,22 +896,23 @@ final class LayeringTests: XCTestCase {
 
     /// 阶段类型提出去了：业务与视图读的是顶层 `StreamPhase`，没有谁还写 `FollowClient.Phase`。
     ///
-    /// 数一遍消费者（正控）：少于四处说明「提出去」只改了声明，消费点没跟上。
+    /// 断言按**文件名单**，不按出现次数：流层内部自己就有四处写这个名字（声明、传输层两个
+    /// 字段、门面的 `phase`），数次数时那四处正好凑够阈值 —— 四屏消费点一个都没跟进也照样绿。
     func testThePhaseTypeIsTopLevelAndConsumed() throws {
-        var consumers = 0
-        let trees = ["Features", "Core/Gateway/Stream"].map {
-            sourcesRoot.appendingPathComponent($0)
+        // 消费点名单：会话详情的编排与它那两个视图。哪里新增一处读阶段的地方，就加一个名字。
+        let consumers = [
+            "Features/SessionDetail/State/SessionSync.swift",
+            "Features/SessionDetail/Views/ComposerStrip.swift",
+            "Features/SessionDetail/Views/NetworkSheet.swift",
+        ]
+        for path in consumers {
+            let file = sourcesRoot.appendingPathComponent(path)
+            let text = try XCTUnwrap(try? String(contentsOf: file, encoding: .utf8),
+                                     "\(path) 打不开 —— 名单要跟着挪文件改")
+            XCTAssertTrue(codeLines(in: text).contains { $0.1.contains("StreamPhase") },
+                          "\(path) 没读 StreamPhase —— 「提出去」只改了声明？")
         }
-        for file in trees.flatMap({ swiftFiles(under: $0) }) {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            for (_, code) in codeLines(in: text) where code.contains("StreamPhase") {
-                consumers += 1
-            }
-            XCTAssertFalse(text.contains("FollowClient"),
-                           "\(file.lastPathComponent) 还在写旧阶段类型的宿主名")
-        }
-        XCTAssertGreaterThanOrEqual(consumers, 4, "StreamPhase 的消费点只有 \(consumers) 处："
-                                    + "提出去只改了声明？")
+        // 旧宿主名不在这里守：`testTheOldNamesAreGone` 已扫全仓，重复一遍只会让失败信息更差。
     }
 
     /// 一条流的公开面没有连接级动作：「这条流坏了」与「整条连接断了」是两件事。

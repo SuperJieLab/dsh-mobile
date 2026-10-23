@@ -52,11 +52,6 @@ final class GatewayLink: ObservableObject, StreamFactory, UnscopedFrameFeed {
         transport.activate()
     }
 
-    /// 不要连接了（App 收尾）。
-    func deactivate() {
-        transport.deactivate()
-    }
-
     /// 回前台 / 组网就绪：立即重连（跳过退避）。**连接级动作** —— 只给根部与组网就绪那条
     /// 触发用，屏幕手里没有这个成员。
     func reconnectNow() {

@@ -1171,7 +1171,7 @@ test('E5: two events streams on one connection share the source — each gets ev
 test('E5b: a second open(events) under the same id is a protocol violation — the connection closes', { timeout: 10_000 }, async () => {
   // U2 只钉了 follow。`duplicate-id` 的判定在 op 分派**之前**，所以新 op 应当自动继承这条
   // 规矩 —— 但「应当」不是判据：把分派写在查表之前就会让这条流悄悄开成第二条。
-  const { feed, server } = await eventsServer()
+  const { server } = await eventsServer()
   try {
     const socket = await connect(server)
     send(socket, { type: 'open', streamId: 'dup', payload: { op: 'events' } })

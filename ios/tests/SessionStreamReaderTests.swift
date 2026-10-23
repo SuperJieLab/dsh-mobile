@@ -20,10 +20,6 @@ final class SessionStreamReaderTests: XCTestCase {
         return SessionStreamReader.read(envelope: envelope, raw: data, sessionId: session)
     }
 
-    private func envelope(_ text: String) throws -> MuxServerEnvelope {
-        try JSONDecoder().decode(MuxServerEnvelope.self, from: Data(text.utf8))
-    }
-
     // MARK: - O1：打开帧（三字段同在）
 
     /// 三个字段同在才进这一支；缺任何一个都该落到别的分类里去（`MuxShapeTests` 守着

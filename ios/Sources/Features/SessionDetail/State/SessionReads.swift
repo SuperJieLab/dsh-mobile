@@ -48,8 +48,7 @@ func readPage(
     beforeSeq: Int? = nil,
 ) async throws -> SessionPage {
     let response: PageResponse = try await client.perform(
-        // `maxMessages` 恒不传：客户端从不限制条数，取服务端默认。
-        PageRequest(sessionId: sessionId, beforeSeq: beforeSeq, maxMessages: nil)
+        PageRequest(sessionId: sessionId, beforeSeq: beforeSeq)
     )
     // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
     guard let pageStart = response.pageStart,
