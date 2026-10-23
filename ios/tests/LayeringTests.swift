@@ -49,7 +49,7 @@ final class LayeringTests: XCTestCase {
     /// ⚠️ 这三个目录名是**字面量**：改名（如 `Client/` → `Rpc/`）时这里不会编译失败，
     /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。改名后必须回扫这一处。
     private var gatewayImplementationDirectories: [URL] {
-        ["Connection", "Rpc", "Stream", "Events"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
+        ["Connection", "Rpc", "Stream", "ConnectionEvents"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
 
     /// 界面目录 = `Features/` 的直接子目录。
@@ -725,7 +725,7 @@ final class LayeringTests: XCTestCase {
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
             ("following", "Features/SessionDetail/State/SessionSync.swift"),
-            ("events", "Core/Gateway/Events/ConnectionEventStream.swift"),
+            ("events", "Core/Gateway/ConnectionEvents/ConnectionEventStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {
@@ -887,7 +887,7 @@ final class LayeringTests: XCTestCase {
         let session = sourcesRoot
             .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
         let events = sourcesRoot
-            .appendingPathComponent("Core/Gateway/Events/ConnectionEventStream.swift")
+            .appendingPathComponent("Core/Gateway/ConnectionEvents/ConnectionEventStream.swift")
 
         for (name, url) in [("会话详情", session), ("事件流", events)] {
             let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
@@ -903,7 +903,7 @@ final class LayeringTests: XCTestCase {
     /// 与 `testBothBusinessStreamsUseTheSameFactory` 是同一件事的两半：那一半守「怎么开」，
     /// 这一半守「不能动什么」。
     func testBusinessSidesHoldNoTransport() throws {
-        let roots = ["Features", "Core/Gateway/Events"]
+        let roots = ["Features", "Core/Gateway/ConnectionEvents"]
         var scanned = 0
         for root in roots {
             let files = swiftFiles(under: sourcesRoot.appendingPathComponent(root))
@@ -998,7 +998,7 @@ final class LayeringTests: XCTestCase {
     /// 末尾那条守的是「认不出时留痕要带名字」：不带 `\(kind)` 的那行 warn 现场只剩
     /// 「丢了一条东西」，而版本错配时最要紧的正是**丢的是哪一种**。
     func testTheApprovalCargoesAreRead() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Events/ConnectionEventReader.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/ConnectionEvents/ConnectionEventReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         for kind in ["waterfall", "cancel", "emit"] {
             let hits = text.components(separatedBy: "\"\(kind)\"").count - 1
