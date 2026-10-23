@@ -378,15 +378,15 @@ extension StreamMuxTests {
     ///
     /// 三个抽样点覆盖三种形态，不是三个例子 —— 爬升段、封顶段、抖动两端。
     func testBackoffCurveRisesJittersAndCaps() {
-        XCTAssertEqual(StreamBackoff.delayMs(attempt: 1, random: 0), 250, "首拍下限：500 的一半")
-        XCTAssertEqual(StreamBackoff.delayMs(attempt: 1, random: 0.999), 499, "首拍上限：接近 500")
+        XCTAssertEqual(Backoff.delayMs(attempt: 1, random: 0), 250, "首拍下限：500 的一半")
+        XCTAssertEqual(Backoff.delayMs(attempt: 1, random: 0.999), 499, "首拍上限：接近 500")
 
-        let failed = StreamBackoff.delayMs(attempt: 5, random: 0)
-        let failedMax = StreamBackoff.delayMs(attempt: 5, random: 0.999)
-        XCTAssertGreaterThan(failed, StreamBackoff.delayMs(attempt: 1, random: 0), "随失败次数爬升")
+        let failed = Backoff.delayMs(attempt: 5, random: 0)
+        let failedMax = Backoff.delayMs(attempt: 5, random: 0.999)
+        XCTAssertGreaterThan(failed, Backoff.delayMs(attempt: 1, random: 0), "随失败次数爬升")
         XCTAssertEqual(failedMax, 7_996, "第 5 拍上限 8 秒（抖动到 99.95%）")
 
-        XCTAssertEqual(StreamBackoff.delayMs(attempt: 20, random: 0), 5_000, "封顶 10 秒的一半")
-        XCTAssertEqual(StreamBackoff.delayMs(attempt: 20, random: 0.999), 9_995, "封顶不越过 10 秒")
+        XCTAssertEqual(Backoff.delayMs(attempt: 20, random: 0), 5_000, "封顶 10 秒的一半")
+        XCTAssertEqual(Backoff.delayMs(attempt: 20, random: 0.999), 9_995, "封顶不越过 10 秒")
     }
 }

@@ -8,7 +8,7 @@
  */
 import Foundation
 
-enum StreamBackoff {
+enum Backoff {
 
     /// 第一次重连的等待上限。
     static let baseMs = 500

@@ -327,7 +327,7 @@ final class StreamMux {
         guard renumber(stream) else { return }
 
         stream.retryAttempt += 1
-        let delay = StreamBackoff.delayMs(
+        let delay = Backoff.delayMs(
             attempt: stream.retryAttempt, random: Double.random(in: 0..<1)
         )
         stream.retryWorkItem?.cancel()

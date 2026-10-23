@@ -311,7 +311,7 @@ final class ConnectionEventTests: XCTestCase {
 
     /// 造流口的替身：只记账，不含任何判定。
     ///
-    /// 用它而不是真的 `GatewayLink`：后者要一个 `GatewayClient`（真 `URLSession` 路径），
+    /// 用它而不是真的 `GatewayHost`：后者要一个 `GatewayClient`（真 `URLSession` 路径），
     /// 于是「判读结论怎么变成流层的答复」这一跳就没有任何办法被断言 —— 而它正是
     /// `read` 与 `handle` 两组判据之间唯一的缝。
     @MainActor

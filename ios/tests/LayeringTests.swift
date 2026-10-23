@@ -554,9 +554,9 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 5–7：Core 与线上形状的方向
 
-    /// 三个实现层目录都必须真的扫到文件。
+    /// 实现层的每个目录都必须真的扫到文件，根上的两件（装配、共用曲线）必须真的存在。
     ///
-    /// 守的是下面两条判据的**盲区**：目录名是字面量，`swiftFiles(under:)` 对不存在的目录
+    /// 守的是下面各条判据的**盲区**：目录名是字面量，`swiftFiles(under:)` 对不存在的目录
     /// 回空数组、不抛错 ⇒ 改名时漏改一处，判据只是少扫一层而照样全绿（`Client/` → `Rpc/`
     /// 那次真实发生过）。
     func testEveryGatewayImplementationDirectoryIsFound() {
@@ -564,6 +564,31 @@ final class LayeringTests: XCTestCase {
             XCTAssertFalse(swiftFiles(under: directory).isEmpty,
                            "\(directory.lastPathComponent)/ 扫不到任何 .swift —— 目录改名了？")
         }
+        for name in ["GatewayHost.swift", "Backoff.swift"] {
+            let file = sourcesRoot.appendingPathComponent("Core/Gateway/\(name)")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                          "根上的 \(name) 不在 —— 守卫名单与实际住处不一致")
+        }
+    }
+
+    /// 装配层站根，不站流层：流层目录里出现它，就是「门又长回了流里」。
+    ///
+    /// 正控：根上的装配文件必须真的扫到造流入口 —— 空集会被读成合规。
+    func testTheHostStaysOutOfTheStreamLayer() throws {
+        let host = try String(
+            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/GatewayHost.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(host.contains("func makeStream"), "装配的造流入口没扫到 —— 判据可能扫错了树")
+
+        var hits: [String] = []
+        for file in swiftFiles(under: sourcesRoot.appendingPathComponent("Core/Gateway/Stream")) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) where code.contains("GatewayHost") {
+                hits.append("\(file.lastPathComponent):\(line)")
+            }
+        }
+        XCTAssertEqual(hits, [], "Stream/ 出现了装配层 —— 它站根：\(hits)")
     }
 
     /// 线上形状目录里不出现 `Rpc/`、`Stream/`、`Events/` 声明的类型。
@@ -916,6 +941,7 @@ final class LayeringTests: XCTestCase {
         let retired = [
             "FollowClient", "SessionStreamHandle", "Subscription", "sendAllOpens", "forgetAll",
             "ConnectionStore", "ConnectionEvents", "StreamTransport", "StreamPhase",
+            "StreamBackoff", "GatewayLink",
             "Gateway/Client", "Core/Connection",
         ]
         var hits: [String] = []
@@ -942,7 +968,7 @@ final class LayeringTests: XCTestCase {
 
     /// 一条投递通道：无编号帧那条路整条没了，客户端收到的帧只有「进流表」一种去处。
     ///
-    /// 正控：`GatewayLink` 的 `makeStream` 必须命中 —— 否则说明扫描面取错了，
+    /// 正控：`GatewayHost` 的 `makeStream` 必须命中 —— 否则说明扫描面取错了，
     /// 空集会被读成合规。
     func testTheSecondDeliveryPathIsGone() throws {
         var hits: [String] = []
@@ -958,7 +984,7 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "无编号帧那条路的残留：\(hits)")
 
         let link = try String(
-            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/Stream/GatewayLink.swift"),
+            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/GatewayHost.swift"),
             encoding: .utf8
         )
         XCTAssertTrue(link.contains("func makeStream"), "造流入口没扫到 —— 判据可能扫错了树")

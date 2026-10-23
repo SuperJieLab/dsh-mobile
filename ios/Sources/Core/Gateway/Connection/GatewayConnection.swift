@@ -424,7 +424,7 @@ final class GatewayConnection: StreamPort {
         }
     }
 
-    /// 退避重连 —— 延迟由 `StreamBackoff` 决定。
+    /// 退避重连 —— 延迟由 `Backoff` 决定。
     private func scheduleReconnect() {
         guard active else { return }
         // 单飞：本拍取代尚未触发的那一拍。不取代的话两个定时器各起一条连接，后起的那条把
@@ -432,7 +432,7 @@ final class GatewayConnection: StreamPort {
         reconnectWorkItem?.cancel()
         reconnectAttempt += 1
 
-        let delay = StreamBackoff.delayMs(
+        let delay = Backoff.delayMs(
             attempt: reconnectAttempt, random: Double.random(in: 0..<1)
         )
 

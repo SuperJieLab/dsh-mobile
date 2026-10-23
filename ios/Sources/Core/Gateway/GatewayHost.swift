@@ -17,7 +17,7 @@ import Foundation
  * 屏幕那一侧拿到的不是这个类型，而是 `StreamFactory` —— 它没有连接级动作。
  */
 @MainActor
-final class GatewayLink: ObservableObject, StreamFactory {
+final class GatewayHost: ObservableObject, StreamFactory {
 
     /// 连接阶段 —— 功能条网络格与连接详情的数据源。
     @Published private(set) var phase: ConnectionPhase = .idle

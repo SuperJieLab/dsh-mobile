@@ -34,7 +34,7 @@ struct SessionDetailView: View {
 
     /// - Parameter link: 只在这里交给 `SessionSync`，本视图不保留 —— 屏幕能对连接做的
     ///   只有流级动作（`SessionSync.retry()`），连接级动作在它的类型上不存在。
-    init(client: GatewayClient, session: SessionSummary, link: GatewayLink) {
+    init(client: GatewayClient, session: SessionSummary, link: GatewayHost) {
         self.client = client
         self.session = session
         _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id, link: link))
