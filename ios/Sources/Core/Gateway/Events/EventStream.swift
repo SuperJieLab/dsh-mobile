@@ -18,7 +18,7 @@ import Foundation
  * 观察是那个消费方的需求，不该提前让容器带上发布机制。
  */
 @MainActor
-final class ConnectionEventStream {
+final class EventStream {
 
     /// 最后一次从源收到的代次。网关发一条**不带代次**的 `ready` 时置空 —— 那一刻源没有活的
     /// 代次，手里一切基线都算旧的。
@@ -85,10 +85,10 @@ final class ConnectionEventStream {
 
     /// 判读之后的那一跳 —— 本类唯一的入口。
     ///
-    /// 对内可见（不 `private`）与 `GatewayConnection.handleMessage` 同理：这里有一条只有在
+    /// 对内可见（不 `private`）与 `WebSocketConnection.handleMessage` 同理：这里有一条只有在
     /// 此处才断言得到的契约 —— **什么算叫醒消费方**。走一条真连接也看得见它，但那时
     /// 「源的代次」与网络的偶然混在一起。
-    func handle(_ reading: ConnectionEventReading) {
+    func handle(_ reading: EventReading) {
         switch reading.content {
         case let .ready(reported):
             generation = reported
@@ -106,7 +106,7 @@ final class ConnectionEventStream {
             Log.warn(Log.Module.gateway, "event stream refused: \(failure.code) \(failure.message)")
             // 重试也不会变的那一类：流层会把它收起（`.stop`），而业务侧的 `stream` 字段还非空。
             // 标上，回前台时 `attach` 才能真的重建一条。
-            if !ConnectionEventReading.retryableCodes.contains(failure.code) {
+            if !EventReading.retryableCodes.contains(failure.code) {
                 markDetached()
             }
         case .ended, .ignored:
@@ -118,9 +118,9 @@ final class ConnectionEventStream {
 
 // MARK: - 这条流的两段自定义
 
-/// 连接级事件流：开流文本只有 `{op:"events"}`，帧的判读在 `ConnectionEventReader`。
+/// 连接级事件流：开流文本只有 `{op:"events"}`，帧的判读在 `EventReader`。
 /// 流层只问这两件事 —— 它不知道这条流不绑会话，也不认识 `ready` / `emit` 这些货物。
-extension ConnectionEventStream: StreamBehavior {
+extension EventStream: StreamBehavior {
 
     /// 日志里认人的标识 —— 与另一条流区分开。
     var label: String { "connection-events" }
@@ -130,7 +130,7 @@ extension ConnectionEventStream: StreamBehavior {
     }
 
     func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
-        let reading = ConnectionEventReader.read(envelope: envelope)
+        let reading = EventReader.read(envelope: envelope)
         handle(reading)
         return StreamReply(establishes: reading.establishes, next: reading.next)
     }

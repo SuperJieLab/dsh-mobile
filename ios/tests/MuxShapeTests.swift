@@ -1,5 +1,5 @@
 /**
- * 线上形状的编解码判据 —— 帧外壳、开流请求、opening 三件（`Wire/Mux.swift`）。
+ * 线上形状的编解码判据 —— 帧外壳、开流请求、opening 三件（`LongConnection/Wire/MuxFrames.swift`）。
  *
  * 这几条测的都是「形状的语义在同一条线上没变」：
  * - U1 编码由形状决定，且确定（同一输入两次编码逐字相同）；
@@ -130,7 +130,7 @@ final class MuxShapeTests: XCTestCase {
     }
 
     /// 缺 `cursor` / `sessionId` / `events` 任一 ⇒ 判不出这是 opening，返回 nil。
-    /// 连接层据此走「等下一帧 / 就绪硬超时」。
+    /// 判读方据此走「等下一帧 / 开流超时」。
     ///
     /// 三个字段分开断言：它们是同一个 `guard` 的三段，而「只写了第一段」的写法在别的两支上
     /// 会静默放过 —— 一条事件帧于是被当成 opening、把窗口清空。

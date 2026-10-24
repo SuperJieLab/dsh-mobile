@@ -1,5 +1,5 @@
 /**
- * 事件流判读的判据 —— `ConnectionEventReader`（`Core/Gateway/ConnectionEvents/`）。
+ * 事件流判读的判据 —— `EventReader`（`Core/Gateway/Events/`）。
  *
  * 与 `SessionStreamReaderTests` 同一件事：给一段帧文本，判成什么、这条流接下来怎么办，
  * 不需要连接。差别在**值域更窄**：控制结局（`ready` 的代次、`refused` 的拒绝、`ended` 的
@@ -16,16 +16,16 @@ import XCTest
 @testable import DshMobile
 
 @MainActor
-final class ConnectionEventTests: XCTestCase {
+final class EventStreamTests: XCTestCase {
 
-    private func read(_ text: String) throws -> ConnectionEventReading {
+    private func read(_ text: String) throws -> EventReading {
         let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: Data(text.utf8))
-        return ConnectionEventReader.read(envelope: envelope)
+        return EventReader.read(envelope: envelope)
     }
 
     /// 可重试码恰好两个 —— 多一个或少一个，都要有人重新判一次「重试会不会变」。
     func testTheRetryableCodesAreExactlyTheTwoThatCanHeal() {
-        XCTAssertEqual(ConnectionEventReading.retryableCodes, [
+        XCTAssertEqual(EventReading.retryableCodes, [
             GatewayErrorCode.sourceUnavailable.rawValue,
             GatewayErrorCode.internalError.rawValue,
         ])
@@ -139,8 +139,8 @@ final class ConnectionEventTests: XCTestCase {
 
     // MARK: - 建成与动作：两条边界
 
-    /// 建成只在 `ready` 上成立。写成「收到任何一帧即建成」的话，先到的 `emit` 会让心跳在源
-    /// 还没有代次时就开始判死 —— 而这条流的 `ready` 是它的全部状态。
+    /// 建成只在 `ready` 上成立。写成「收到任何一帧即建成」的话，先到的 `emit` 会让这条流
+    /// 在源还没有代次时就被当成开成了 —— 而它的 `ready` 才决定退避与开流超时。
     func testOnlyReadyEstablishesTheStream() throws {
         let samples: [(name: String, text: String, establishes: Bool)] = [
             ("带代次的 ready", #"{"type":"item","streamId":"e1","payload":{"kind":"ready","generation":1}}"#, true),
@@ -218,23 +218,23 @@ final class ConnectionEventTests: XCTestCase {
     /// 撞名不是假想：将来上游真有一条叫 `cancel` 的事件时，它的 `emit` 进事件名口，
     /// 货物口的 `cancel` 听众不该被叫醒。
     func testCargoIsDispatchedByNameWithoutCrossingNamespaces() throws {
-        let events = ConnectionEventStream()
+        let events = EventStream()
         var seen: [JSONValue] = []
         events.onCargo("session-list") { seen.append($0) }
 
-        events.handle(ConnectionEventReading(content: .cargo(
+        events.handle(EventReading(content: .cargo(
             type: "session-list", payload: .object(["change": .string("x")])
         )))
         XCTAssertEqual(seen.count, 1, "kind 名匹配才进这个听众")
 
-        events.handle(ConnectionEventReading(content: .ready(generation: 1)))
-        events.handle(ConnectionEventReading(content: .emit(name: "session-list", args: .array([]))))
-        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: .object([:]))))
+        events.handle(EventReading(content: .ready(generation: 1)))
+        events.handle(EventReading(content: .emit(name: "session-list", args: .array([]))))
+        events.handle(EventReading(content: .cargo(type: "waterfall", payload: .object([:]))))
         XCTAssertEqual(seen.count, 1, "别的内容与别的 kind 都不该进来 —— emit 名字同名也不串")
 
         var second = 0
         events.onCargo("session-list") { _ in second += 1 }
-        events.handle(ConnectionEventReading(content: .cargo(
+        events.handle(EventReading(content: .cargo(
             type: "session-list", payload: .object(["change": .string("y")])
         )))
         XCTAssertEqual(seen.count, 2)
@@ -249,22 +249,22 @@ final class ConnectionEventTests: XCTestCase {
     /// 不带代次（当它叫醒人就会变成「每帧重读一遍基线」）、新的代次算（去重读）、
     /// **失效也要通知**（此时能做的只有清空 —— 手里那些一条都答不了）。
     func testGenerationHandlersFirePerReadyIncludingSourceLoss() {
-        let events = ConnectionEventStream()
+        let events = EventStream()
         var seen: [Int?] = []
         events.onGeneration { seen.append($0) }
 
-        events.handle(ConnectionEventReading(content: .emit(
+        events.handle(EventReading(content: .emit(
             name: "api-session/added", args: .array([.string("s9")])
         )))
         XCTAssertEqual(seen, [], "emit 不带代次 —— 不该让它去重读基线")
 
-        events.handle(ConnectionEventReading(content: .ready(generation: 3)))
+        events.handle(EventReading(content: .ready(generation: 3)))
         XCTAssertEqual(seen, [3], "源第一次就绪要通知一次")
 
-        events.handle(ConnectionEventReading(content: .ready(generation: 4)))
+        events.handle(EventReading(content: .ready(generation: 4)))
         XCTAssertEqual(seen, [3, 4], "源重建之后是新的代次，再通知一次")
 
-        events.handle(ConnectionEventReading(content: .ready(generation: nil)))
+        events.handle(EventReading(content: .ready(generation: nil)))
         XCTAssertEqual(seen.count, 3, "源失效也要通知 —— 消费方据此清空手里的基线")
         XCTAssertNil(seen.last ?? 0, "失效那一次不带代次")
         XCTAssertNil(events.generation, "失效之后手里不能还留着一个看着有效的代次")
@@ -278,13 +278,13 @@ final class ConnectionEventTests: XCTestCase {
     /// 第三个说明「新增一类事件」在消费方这一侧零成本 —— 谁把分派写成 switch，第三个名字
     /// 就没有分支可走，那时红的是这条。
     func testConsumersAreMatchedByNameWithoutADispatchTable() {
-        let events = ConnectionEventStream()
+        let events = EventStream()
         var added = 0
         var removed: [JSONValue] = []
         events.on("api-session/added") { _ in added += 1 }
         events.on("api-session/removed") { removed.append($0) }
 
-        events.handle(ConnectionEventReading(content: .emit(
+        events.handle(EventReading(content: .emit(
             name: "api-session/removed", args: .array([.string("s9")])
         )))
         XCTAssertEqual(added, 0, "别的名字不该串到它这里")
@@ -292,7 +292,7 @@ final class ConnectionEventTests: XCTestCase {
 
         var unheard = 0
         events.on("some/future-event") { _ in unheard += 1 }
-        events.handle(ConnectionEventReading(content: .emit(
+        events.handle(EventReading(content: .emit(
             name: "some/future-event", args: .array([])
         )))
         XCTAssertEqual(unheard, 1, "新名字注册即可收到 —— 分派不该是一张要跟着改的表")
@@ -300,7 +300,7 @@ final class ConnectionEventTests: XCTestCase {
         // 同一类事件可以有两个听众：注册表是复数，不是「一格一个」。
         var second = 0
         events.on("api-session/added") { _ in second += 1 }
-        events.handle(ConnectionEventReading(content: .emit(
+        events.handle(EventReading(content: .emit(
             name: "api-session/added", args: .array([])
         )))
         XCTAssertEqual(added, 1)
@@ -311,7 +311,7 @@ final class ConnectionEventTests: XCTestCase {
 
     /// 造流口的替身：只记账，不含任何判定。
     ///
-    /// 用它而不是真的 `GatewayHost`：后者要一个 `RpcClient`（真 `URLSession` 路径），
+    /// 用它而不是真的 `LongConnection`：后者会真发一次握手（`URLSession` 路径），
     /// 于是「判读结论怎么变成流层的答复」这一跳就没有任何办法被断言 —— 而它正是
     /// `read` 与 `handle` 两组判据之间唯一的缝。
     @MainActor
@@ -325,10 +325,10 @@ final class ConnectionEventTests: XCTestCase {
 
     /// 登记的那一条流：开流文本是 `{op:"events"}`，答复由判读结论翻译而来。
     ///
-    /// 这一跳改错的方向全是静默的：`establishes: true` 恒真会让 `emit` 也叫建成（心跳在源
-    /// 还没有代次时开始判死）；`next` 传成常量 `.keep` 会让收尾不重开、被拒不收起。
+    /// 这一跳改错的方向全是静默的：`establishes: true` 恒真会让 `emit` 也叫建成（这条流在源
+    /// 还没有代次时就被当成开成了）；`next` 传成常量 `.keep` 会让收尾不重开、被拒不收起。
     func testAttachRegistersOneStreamWhoseBuildAndReplyFollowTheReading() throws {
-        let events = ConnectionEventStream()
+        let events = EventStream()
         let factory = RecordingFactory()
         events.attach(to: factory)
 

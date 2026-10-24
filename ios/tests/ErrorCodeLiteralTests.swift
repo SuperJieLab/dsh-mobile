@@ -29,7 +29,7 @@ final class ErrorCodeLiteralTests: XCTestCase {
         XCTAssertGreaterThan(files.count, 40, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
         // 身份正控：两个必须被扫到的目录各在。目录被改名时这一条先红，而不是静默通过。
         let names = Set(files.map { $0.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "") })
-        XCTAssertTrue(names.contains("Core/Gateway/Wire/GatewayProtocol.swift"), "没扫到线上形状")
+        XCTAssertTrue(names.contains("Core/Gateway/Wire/GatewayFailure.swift"), "没扫到线上形状")
         XCTAssertTrue(names.contains("Features/Approval/State/ApprovalStore.swift"), "没扫到界面层")
 
         let codes = GatewayErrorCode.allCases.map { "\"\($0.rawValue)\"" }

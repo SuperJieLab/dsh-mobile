@@ -3,17 +3,18 @@
  *
  * 存活范围是一条 socket。它自己决定「连不连 / 等多久 / 判不判死 / 迟到的回调算不算数」，
  * 失败经接口或阶段迁移交出；它**不认识流** —— 不造编号、不建表、不按编号分支，
- * 收帧之后整帧交给 `StreamMux`。反过来流层要发文本、要连接、要放弃，都经它实现的
- * `StreamPort` 进来。
+ * 收帧之后把外壳与原始字节交给注入的闭包，谁接、接了做什么都不知道。反过来，
+ * 外面要发文本、要连接，都经它实现的 `Channel` 进来。
  *
- * 它也不定义「就绪」：系统没有「已连接」这个回调，唯一的信号是「收到东西」，
- * 而收到东西不等于某条流建成（`{op:'events'}` 的 `ready` 会先于 follow 的打开帧到达，
- * 而打开帧的大帧还在路上）。所以 `.ready` 只由流层报「某条流建成了」触发。
+ * 判活只用本层看得见的两样证据：**收到一条可解析的帧**、**我们 ping 的 pong 回来了**。
+ * 系统没有「已连接」回调，也没有字节级进度（`countOfBytesReceived` 对 WS 任务恒为零），
+ * 所以这两样就是全部，不向流层要任何输入。`.ready` 与「还活着」因此是同一个信号 ——
+ * 代价是窗口必须长过最慢一帧的传输时间（见 `livenessWindow`）。
  */
 import Foundation
 
 @MainActor
-final class GatewayConnection: StreamPort {
+final class WebSocketConnection: Channel {
 
     /// 本网关提供流协议的精确路径。
     static let streamPath = "/rpc/stream"
@@ -24,8 +25,24 @@ final class GatewayConnection: StreamPort {
 
     /// 心跳节拍，与网关的 `PING_INTERVAL_MS` 配套：单边改会让两端判死时机不一致。
     private static let pingInterval: TimeInterval = 2
-    /// 允许连失几拍。第 `limit + 1` 拍仍没有证据即判死。
-    private static let maxMissedPongs = 2
+
+    /// 判死窗口：多久没有任何证据就当这条连接死了。
+    ///
+    /// **60 秒不是拍的**：打开帧上界 4 MiB，慢链路上传一大帧约 34 秒；而大消息传输期间
+    /// `receive` 一次都不触发、pong 也排在消息之后（实测 4 MiB / 400 KB/s 下延迟 10 秒以上），
+    /// 窗口必须长过它，否则正常传输会被判死。
+    ///
+    /// 它还必须**显著大于**流层的开流超时（45 秒）：两者同值时会在同一刻触发，
+    /// 「只重开那一条流」来不及执行，行为退化成整条连接重连。
+    ///
+    /// 做成可写不是为了灵活，是让这条路径**能被观测**：拨到几秒，测试里就看得见它发生。
+    var livenessWindow: TimeInterval = 60
+
+    /// 这个窗口允许连失几拍 —— 判死发生在第 `窗口 ÷ 节拍` 拍（向上取整：宁可多等，不可早判）。
+    /// 窗口小于两拍时 `max(1, …)` 把它抬到两拍：那一区间不再线性可控，只会更保守。
+    static func attemptLimit(for window: TimeInterval) -> Int {
+        max(1, Int((window / pingInterval).rounded(.up)) - 1)
+    }
 
     // MARK: - 注入
 
@@ -35,15 +52,19 @@ final class GatewayConnection: StreamPort {
     var authorizationProvider: (() -> String?)?
     /// 换一张票。见 `renewThenRetry`：换到之后该重连、换不到该等还是该停，由本类决定。
     var ticketRenewer: (() async -> AccessTicket)?
+    /// 不要连接了（App 收尾）。**谁订阅、听见了做什么，本层不知道。**
+    var onStopped: (() -> Void)?
+    /// 新一代连接开始了 —— 每次 `connect()` 一处。同上，订阅方自己决定反应。
+    var onGenerationChange: (() -> Void)?
     /// 建连的传输与地址每次现取：组网激活后下一轮连接即走隧道，本类零改动。
     var sessionProvider: () -> URLSession = { .shared }
     var baseURLProvider: () -> URL? = { nil }
 
     // MARK: - 状态
 
-    /// 连接阶段。通知挂在 setter 上：`connect`、收到开口帧、退避等待、`deactivate`
-    /// 四处都会改它，手写必定漏接一处。**开流不改它** —— 在已就绪的连接上开第二条流，
-    /// 屏幕不该闪「连接中」。
+    /// 连接阶段。通知挂在 setter 上：`connect`、收到可解析帧、退避等待、换票失败、
+    /// `deactivate` 都会改它，手写必定漏接一处。**开流不改它** —— 在已就绪的连接上
+    /// 开第二条流，屏幕不该闪「连接中」。
     private(set) var phase: ConnectionPhase = .idle {
         didSet {
             guard phase != oldValue else { return }
@@ -55,7 +76,7 @@ final class GatewayConnection: StreamPort {
     private var generation = 0
     private var task: URLSessionWebSocketTask?
     private var reconnectAttempt = 0
-    /// 本代连接连续未回的 pong 数 —— 随代次清零。唯一写者是心跳那一拍。
+    /// 本代连接连续未回的 pong 数 —— 随代次清零。心跳那一拍累加，收到帧时清零。
     private var missedPongs = 0
     /// 本拍内是否收到过对端的东西（一帧，或我们 ping 的 pong）。心跳每拍消费一次。
     private(set) var heardFromPeer = false
@@ -67,20 +88,13 @@ final class GatewayConnection: StreamPort {
     /// 对测试可读：判据要问「注销时到底发没发帧、发的是哪个编号」。
     private(set) var sentFrames: [String] = []
 
-    /// 流表。传输层是它唯一的持有者，本层只经四个动作与它往来（见文件头）。
+    /// 收到一帧（外壳 + 原始字节）。**接线由外面做**：本层不知道谁接、接了以后做什么。
     ///
-    /// 对内可见而不是 `private`：判据要能问「这一帧归到了哪条流」，
-    /// 而那件事只有流表回答得了；它不该为了断言敞开一张表。
-    let mux: StreamMux
+    /// 收帧是数据不是事实，所以它是注入的闭包而不是 `Channel` 上的事件 —— 做成事件，
+    /// 订阅方还得从事件里再取原始字节，等于多一层包装。
+    var onFrame: ((MuxServerEnvelope, Data) -> Void)?
 
-    init(mux: StreamMux? = nil) {
-        // `nil` 而不是默认表达式：跨 actor 的默认值求值不合法。可注入是为了这一跳能被断言。
-        let mux = mux ?? StreamMux()
-        self.mux = mux
-        mux.attach(port: self)
-    }
-
-    // MARK: - StreamPort
+    // MARK: - Channel
 
     var attempt: StreamAttempt? {
         guard let task else { return nil }
@@ -123,22 +137,6 @@ final class GatewayConnection: StreamPort {
         connect()
     }
 
-    func abandon(_ reason: AbandonReason, attempt: StreamAttempt) {
-        // 不是这一次尝试就没这条连接的事了（已经换过代次或换了传输）。
-        guard self.attempt == attempt else { return }
-        switch reason {
-        case .streamNotReady:
-            closeTask()
-            scheduleReconnect()
-        }
-    }
-
-    func didEstablish() {
-        reconnectAttempt = 0
-        missedPongs = 0
-        phase = .ready
-    }
-
     // MARK: - 生命周期
 
     /// 要一条连接（App 到了前台）。此刻可以一条流都没有。
@@ -151,7 +149,7 @@ final class GatewayConnection: StreamPort {
     /// 不要连接了（App 收尾 / 测试清理）：关连接、取消一切定时器、清空流表。
     func deactivate() {
         active = false
-        mux.closeAll()
+        onStopped?()
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         closeTask()
@@ -195,8 +193,7 @@ final class GatewayConnection: StreamPort {
         phase = .connecting
         Log.perf(Log.Module.session, PerfRecord(
             seg: .dev, t: PerfRecord.nowMs(),
-            fields: ["kind": .text("connect-init"), "gen": .number(Double(current)),
-                     "who": .text(labelsText)]
+            fields: ["kind": .text("connect-init"), "gen": .number(Double(current))]
         ))
 
         // 上一代次的连接必须先关掉：不关的话旧 socket 的 receive / heartbeat 还在
@@ -227,24 +224,17 @@ final class GatewayConnection: StreamPort {
         // 必须在 resume 之前设：超过上限的帧会让 receive 直接以 POSIX 40 失败。
         webSocketTask.maximumMessageSize = Self.maximumMessageSize
         task = webSocketTask
-        // 带上标识：`g2` 在两个实例里会重号，只有它加上标签能区分「谁的第 2 代」。
-        Log.info(Log.Module.session,
-                 "connect g\(current) [\(labelsText)] → \(components.url!)")
+        // 只报代次与地址：流标签是流层的词汇，本层不解释它（流层自己重开时按流记一行）。
+        Log.info(Log.Module.session, "connect g\(current) → \(components.url!)")
         webSocketTask.resume()
 
-        // 握手由系统完成，开流内容立即发出（未就绪的连接会替我们排队）——
-        // 服务端等的就是它：没有它，永远不会有打开帧。没有流时这些什么都不发。
-        mux.reopenAll()
+        // 握手由系统完成。换代次之后谁要发帧、发什么，由订阅方自己决定 ——
+        // 没有流时事件照发，什么都不会发生。
+        onGenerationChange?()
 
-        // 就绪硬超时不在这里起 —— 它挂在每一次开流尝试上（见 `StreamMux.armReadyTimeout`）。
+        // 开流超时不在这里起 —— 它挂在每一次开流尝试上（见 `StreamMux.armOpenTimeout`）。
         receiveLoop(on: webSocketTask, generation: current)
         heartbeat(on: webSocketTask, generation: current)
-    }
-
-    /// 表里各条流的标签（按登记序、逗号分隔），只进日志 —— 本层不解释它们。
-    private var labelsText: String {
-        let labels = mux.streamLabels
-        return labels.isEmpty ? "-" : labels.joined(separator: ",")
     }
 
     /// 关掉当前任务并使其回调作废（代次在外层管）。
@@ -284,9 +274,8 @@ final class GatewayConnection: StreamPort {
     /// 「收到任何东西」先于「按编号归流」。它关乎一条健康连接会不会被自己的心跳判死。
     func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
         // 收到任何一帧都是「对端还活着」的证据 —— 由心跳那一拍消费。
-        // ⚠️ 它**不**等于「这条流已建成」：升级后先到的任何一帧都算「收到过东西」，
-        // 而那时打开帧的一大帧可能还在路上 —— 把它当成就绪，心跳会立刻激活、
-        // 再在几拍之后把一条正在正常传输的连接判死。
+        // 证据不必等到「某条流建成」：本层不判编号的含义，也没有比这更细的信号 ——
+        // 系统不暴露字节进度，一条大帧传输期间 `receive` 一次都不回调（见窗口的取值）。
         heardFromPeer = true
         guard case .string(let text) = message else {
             Log.debug(Log.Module.session, "g\(current) non-text frame ignored")
@@ -300,8 +289,16 @@ final class GatewayConnection: StreamPort {
         }
         Log.debug(Log.Module.session, "g\(current) frame: \(frame.type)")
 
-        // 每个帧都有编号（协议如此），整帧交给流表 —— 本层不判编号的含义。
-        mux.receive(frame, raw: rawData)
+        // 一条可解析的帧 = 这一代连接真的通了：退避归零、连失清零、阶段就绪。
+        //
+        // 判据是「收到一条可解析的帧」，不是「某条流建成」—— 后者要靠流层告诉本层，
+        // 而那时本层已经知道收到东西了。就绪与存活在这里合成同一个信号。
+        reconnectAttempt = 0
+        missedPongs = 0
+        phase = .ready
+
+        // 每个帧都有编号（协议如此），整帧交给接帧的那一侧 —— 本层不判编号的含义。
+        onFrame?(frame, rawData)
     }
 
     // MARK: - 心跳与退避
@@ -311,15 +308,9 @@ final class GatewayConnection: StreamPort {
             while let self, self.generation == current, self.task === webSocketTask, self.active {
                 try? await Task.sleep(nanoseconds: UInt64(Self.pingInterval * 1_000_000_000))
                 guard self.generation == current, self.task === webSocketTask else { return }
-                // 证据**每拍消费一次**：这一拍收到过就归零，下一拍从零重新记。
-                let heard = self.heardFromPeer
-                self.heardFromPeer = false
-                switch Self.livenessTick(awaitingOpening: self.mux.hasPendingOpening,
-                                         heardFromPeer: heard,
-                                         missed: self.missedPongs,
-                                         limit: Self.maxMissedPongs) {
-                case .probe(let missed):
-                    self.missedPongs = missed
+                // 证据每拍消费一次、连失数在 `livenessStep` 里累加 —— 这里只负责按判定动作。
+                switch self.livenessStep() {
+                case .probe:
                     webSocketTask.sendPing { [weak self] error in
                         Task { @MainActor [weak self] in
                             // pong 回来了（completion 无错即 pong 已达）：对端活着。
@@ -329,8 +320,8 @@ final class GatewayConnection: StreamPort {
                 case .dead:
                     // 半死连接：对面不再回 pong。必须留痕 —— 「谁掐的」在客户端侧的答案。
                     Log.warn(Log.Module.session,
-                             "g\(current) heartbeat: no pong in \(Self.maxMissedPongs + 1)"
-                             + " rounds — closing")
+                             "g\(current) heartbeat: silent for \(Int(self.livenessWindow))s"
+                             + " — closing")
                     self.closeTask()
                     self.scheduleReconnect()
                     return
@@ -341,44 +332,50 @@ final class GatewayConnection: StreamPort {
 
     /// 一次心跳节拍的判定结果。
     enum Liveness: Equatable {
-        /// 继续探活；`missed` 是本拍之后的连失数（有流在等打开帧时恒为 0）。
+        /// 继续探活；`missed` 是本拍之后的连失数。
         case probe(missed: Int)
         /// 对面已消失（半死连接）。
         case dead
     }
 
+    /// 一拍：消费本拍证据、算出判定。**心跳只调这一个方法。**
+    ///
+    /// 判定与「证据从哪来」在这里合流，`livenessWindow` 也只在这里被读。为什么不把它拆成
+    /// 「纯函数 + 适配器」：那样断言的只是适配器读了窗口，心跳那一跳照样可以绕开它、
+    /// 自己拼一个写死的窗口 —— 而那正是「窗口可拨」要防的退化。这里被断言，就证明得了。
+    func livenessStep() -> Liveness {
+        let heard = heardFromPeer
+        heardFromPeer = false
+        let verdict = Self.livenessTick(window: livenessWindow, heardFromPeer: heard,
+                                        missed: missedPongs)
+        if case .probe(let missed) = verdict { missedPongs = missed }
+        return verdict
+    }
+
     /**
      一次心跳节拍的判定 —— 纯函数：这段编排里不碰 socket 就能断言的部分。
 
-     规则两句话：**有流在等打开帧时不判死；本拍收到过对端的东西就归零。**
+     规则一句话：**本拍收到过对端的东西就归零；否则连失累加，越过窗口那一拍判死。**
 
-     第一条的来由是「收到过任何一帧」这个前置项太弱：升级之后事件流的 `ready` **先**于
-     follow 的打开帧到达，心跳会被它当场激活；紧接着打开帧的一大帧占住整条 TCP
-     （中继链路上要好几秒），网关的 pong 排在那一大帧**后面**，一拍也到不了 ⇒ 每代连接
-     恰好活 6 秒就被自己判死。**「收到过东西」不等于「这条流已经建成」。**
+     「传大帧时误杀」由**窗口本身够长**兜住（默认 60 秒，见 `livenessWindow`）：
+     大帧传输期间 `receive` 与 pong 都排在它后面，一拍也回不来，所以这里的判据不是
+     「先别判」而是「等不到就等久一点」。
 
-     为什么门槛是「**正在**等打开帧」而不是「还没建成」：连接常驻之后，大量时间根本没有
-     流（停在会话列表）。照旧一律不判死，那一段的半死连接就永远发现不了 —— 表现是
-     「回到会话详情没有内容，也不重连」。所以空闲段必须判，只有「正在等打开帧」这一段让路。
+     空闲段（停在会话列表、一条流都没有）同样要判：半死连接在空闲段最常见，
+     放过它就等于永远发现不了 —— 于是这个函数不区分有没有流。
 
-     没有流在等打开帧的那一段不是没人管：正在等的那段归**就绪硬超时**（45s）——
-     「没建起来」与「建起来又死了」是两件事。
-
-     ⚠️ 已知未尽：**已成流之后**若单帧传输超过 6 秒（例如一条很大的工具结果），这条规则
-     仍会判死 —— 客户端拿不到「对面在忙」这个信息。根治要分片（把一帧拆成多帧，让控制帧
-     能插进分片之间），代价是新增一套「窗口未到齐」的状态。
+     ⚠️ 已知未尽：**已成流之后**若单帧传输超过整个窗口（例如一条很大的工具结果），
+     这条规则仍会判死 —— 客户端拿不到「对面在忙」这个信息。
 
      - Parameters:
-       - awaitingOpening: 本代是否有一条流已发出 open、还没收到开口帧。
+       - window: 判死窗口；允许连失 `window ÷ 节拍 - 1` 拍。
        - heardFromPeer: 本拍内是否收到过对端的东西（一帧，或我们 ping 的 pong）。
        - missed: 本拍之前累计的连失数。
-       - limit: 允许的最大连失数。
      */
-    static func livenessTick(awaitingOpening: Bool, heardFromPeer: Bool,
-                             missed: Int, limit: Int) -> Liveness {
-        guard !awaitingOpening, !heardFromPeer else { return .probe(missed: 0) }
+    static func livenessTick(window: TimeInterval, heardFromPeer: Bool, missed: Int) -> Liveness {
+        guard !heardFromPeer else { return .probe(missed: 0) }
         let next = missed + 1
-        return next > limit ? .dead : .probe(missed: next)
+        return next > attemptLimit(for: window) ? .dead : .probe(missed: next)
     }
 
     /**

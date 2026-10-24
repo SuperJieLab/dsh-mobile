@@ -3,10 +3,10 @@ import Foundation
 /**
  * 一帧的判读结论：「它是什么」与「这条流接下来怎么办」。
  *
- * 这两个值都由订阅这条流的一侧给出（见 `SessionStreamReader`），连接层只读它们决定动作 ——
- * 于是连接层不需要认识帧类型的取值。「建成」也不是由谁通报的：它随这一帧一起回来，
- * 由连接层在**收到每一帧时**读一次。让上层主动报「我建成了」的写法漏调一次就没有信号：
- * 心跳永不激活、退避永不归零，表现是每 45 秒静默断一次，而内容照常显示。
+ * 这两个值都由订阅这条流的一侧给出（见 `SessionStreamReader`），流表只读它们决定动作 ——
+ * 于是流表不需要认识帧类型的取值。「建成」也不是由谁通报的：它随这一帧一起回来，
+ * 由流表在**收到每一帧时**读一次。让上层主动报「我建成了」的写法漏调一次就没有信号：
+ * 这条流会一直被当成还没开成，退避不归零、开流超时照旧计时，于是被反复重开。
  */
 struct StreamReading {
 
@@ -55,7 +55,7 @@ struct StreamReading {
  *
  * 之所以要能不建连接就回答：判读错了不会编译失败，也不会有哪条测试红 —— 它认的是上游的
  * 事件形状，一份会漂移的东西。做成静态函数，是它唯一能被断言的形式。它不持有状态、
- * 不碰 socket；副作用只有一行日志：解不出打开帧的那一帧（就绪超时的第一现场）。
+ * 不碰 socket；副作用只有一行日志：解不出打开帧的那一帧（开流超时的第一现场）。
  *
  * 判据与网关侧的帧语义逐条对齐（两端协定的订阅流一节）：
  *
@@ -84,7 +84,7 @@ enum SessionStreamReader {
             guard let payload = envelope.payload else { return StreamReading(content: .ignored) }
             if payload["sessionId"] != nil && payload["cursor"] != nil && payload["events"] != nil {
                 guard let opening = OpeningFrame.decode(raw) else {
-                    // 留痕在这一跳：解不出打开帧的那一帧，正是 45 秒就绪超时的第一现场，
+                    // 留痕在这一跳：解不出打开帧的那一帧，正是开流超时的第一现场，
                     // 而 `.ignored` 不携带原因 —— 少了这一行，超时日志里就没有线索。
                     Log.warn(Log.Module.session,
                              "opening unparsable (first 120 chars): \(String(decoding: raw.prefix(120), as: UTF8.self))")

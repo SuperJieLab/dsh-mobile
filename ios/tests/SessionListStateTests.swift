@@ -227,7 +227,7 @@ final class SessionListStateTests: XCTestCase {
     /// 没人守，是这个仓库反复踩到的一种缺口。
     func testAFrameOnTheEventStreamReachesTheList() throws {
         let state = make(FakeFetch())
-        let events = ConnectionEventStream()
+        let events = EventStream()
         state.attach(events: events)
 
         let data = Data("""
@@ -235,7 +235,7 @@ final class SessionListStateTests: XCTestCase {
           "kind":"added","row":{"id":"s1","updatedAt":100}}}}
         """.utf8)
         let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: data)
-        events.handle(ConnectionEventReader.read(envelope: envelope))
+        events.handle(EventReader.read(envelope: envelope))
 
         XCTAssertEqual(state.sessions.map(\.id), ["s1"], "这一帧该一路走到列表上")
     }
@@ -245,7 +245,7 @@ final class SessionListStateTests: XCTestCase {
     /// 丢弃口径归消费方 —— 「认不出怎么办」是读法的一部分：列表的口径是跳过这一条继续。
     func testMalformedListChangeIsDroppedAtTheConsumer() throws {
         let state = make(FakeFetch())
-        let events = ConnectionEventStream()
+        let events = EventStream()
         state.attach(events: events)
 
         for text in [
@@ -253,7 +253,7 @@ final class SessionListStateTests: XCTestCase {
             #"{"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{"kind":"question"}}}"#,
         ] {
             let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: Data(text.utf8))
-            events.handle(ConnectionEventReader.read(envelope: envelope))
+            events.handle(EventReader.read(envelope: envelope))
         }
         XCTAssertTrue(state.sessions.isEmpty, "认不出的增量一条都不该进列表")
 
@@ -299,18 +299,18 @@ final class SessionListStateTests: XCTestCase {
         let fetch = FakeFetch()
         fetch.holds = false
         let state = make(fetch)
-        let events = ConnectionEventStream()
+        let events = EventStream()
         state.attach(events: events)
 
-        events.handle(ConnectionEventReading(content: .ready(generation: 3)))
+        events.handle(EventReading(content: .ready(generation: 3)))
         await settle()
         XCTAssertEqual(fetch.calls, 1, "第一次 ready")
 
-        events.handle(ConnectionEventReading(content: .ready(generation: 3)))
+        events.handle(EventReading(content: .ready(generation: 3)))
         await settle()
         XCTAssertEqual(fetch.calls, 2, "重连拿到相同代次也是新的开始")
 
-        events.handle(ConnectionEventReading(content: .ready(generation: nil)))
+        events.handle(EventReading(content: .ready(generation: nil)))
         await settle()
         XCTAssertEqual(fetch.calls, 3, "源失效也要重拉：那些事件再也补不回来")
     }

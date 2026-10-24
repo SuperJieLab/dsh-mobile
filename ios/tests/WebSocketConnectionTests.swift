@@ -1,7 +1,7 @@
 /**
- * 传输层的判据：心跳判定、迟到的回调、坏帧不带走连接、帧只进流表、就绪只由建成触发。
+ * 传输层的判据：心跳判定、迟到的回调、坏帧不带走连接、帧只进流表、收到帧即就绪。
  *
- * 这一组用**真的 `GatewayConnection`** 加一个连不上的端点（`127.0.0.1:1`）来验编排，
+ * 这一组用**真的 `WebSocketConnection`** 加一个连不上的端点（`127.0.0.1:1`）来验编排，
  * 纯判定（心跳、迟到回调）直接调静态函数。不构造假 socket：`URLSessionWebSocketTask`
  * 没有可替换的公开接口，为它造替身只会测到替身。
  *
@@ -15,14 +15,14 @@ import XCTest
 @testable import DshMobile
 
 @MainActor
-final class GatewayConnectionTests: XCTestCase {
+final class WebSocketConnectionTests: XCTestCase {
 
     /// 连不上的端点：握手会真发起（必定失败），但**发帧是同步的**，断言紧跟在动作之后。
     ///
     /// ⚠️ 握手失败之后传输层会按退避换届次（250–500ms 一拍），每一代都重开所有流。
     /// 所以只写不跨越退避窗口的断言；要等编排跑起来的地方显式等够一拍。
-    private func transport() -> GatewayConnection {
-        let transport = GatewayConnection()
+    private func transport() -> WebSocketConnection {
+        let transport = WebSocketConnection()
         transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
         transport.authorizationProvider = { "ticket" }
         transport.sessionProvider = { .shared }
@@ -44,35 +44,71 @@ final class GatewayConnectionTests: XCTestCase {
 
     // MARK: - U1：心跳的一个节拍
 
-    /// 规则两句话：**有流在等打开帧时不判死；本拍收到过对端的东西就归零。**
+    /// 规则一句话：**本拍收到过对端的东西就归零，否则连失累加，越过窗口那一拍判死。**
     ///
-    /// 第一条防的是「传大帧时误杀」：事件流的 `ready` 先于打开帧到达，打开帧的大帧占住整条 TCP，
-    /// 我们的 pong 排在它后面，一拍也到不了。
+    /// 「传大帧时不误杀」不靠这条规则，靠窗口本身够长（见 U8）。
     func testLivenessTickBranches() {
-        // 有流在等打开帧：无论收到过什么、连失多少，都继续探活且归零。
-        XCTAssertEqual(GatewayConnection.livenessTick(
-            awaitingOpening: true, heardFromPeer: false, missed: 2, limit: 2), .probe(missed: 0))
-        XCTAssertEqual(GatewayConnection.livenessTick(
-            awaitingOpening: true, heardFromPeer: true, missed: 1, limit: 2), .probe(missed: 0))
+        // 收到过东西 ⇒ 归零。
+        XCTAssertEqual(WebSocketConnection.livenessTick(
+            window: 6, heardFromPeer: true, missed: 2), .probe(missed: 0))
 
-        // 没在等：收到过东西 ⇒ 归零。
-        XCTAssertEqual(GatewayConnection.livenessTick(
-            awaitingOpening: false, heardFromPeer: true, missed: 2, limit: 2), .probe(missed: 0))
-
-        // 没在等、也没收到：连失数累加，到上限之上判死。
-        XCTAssertEqual(GatewayConnection.livenessTick(
-            awaitingOpening: false, heardFromPeer: false, missed: 0, limit: 2), .probe(missed: 1))
-        // `next == limit` 这一格单独钉住：把判死条件写成 `>=` 时，上下两格（1 与 3）都还在
-        // 边界两侧不动，只有它会红 —— 少了它，「容错两拍」实际只剩一拍。
-        XCTAssertEqual(GatewayConnection.livenessTick(
-            awaitingOpening: false, heardFromPeer: false, missed: 1, limit: 2), .probe(missed: 2),
-            "第 2 拍连失 2，仍在容错内")
-        XCTAssertEqual(GatewayConnection.livenessTick(
-            awaitingOpening: false, heardFromPeer: false, missed: 2, limit: 2), .dead)
+        // 没收到：累加，到窗口那一拍判死。6 秒 ÷ 2 秒节拍 = 3 拍。
+        XCTAssertEqual(WebSocketConnection.livenessTick(
+            window: 6, heardFromPeer: false, missed: 0), .probe(missed: 1))
+        // `next == limit` 这一格单独钉住：把判死条件写成 `>=` 时，上下两格都还在边界两侧不动，
+        // 只有它会红 —— 少了它，容错就少一拍。
+        XCTAssertEqual(WebSocketConnection.livenessTick(
+            window: 6, heardFromPeer: false, missed: 1), .probe(missed: 2),
+            "第 2 拍连失 2，仍在窗口内")
+        XCTAssertEqual(WebSocketConnection.livenessTick(
+            window: 6, heardFromPeer: false, missed: 2), .dead, "第 3 拍到点")
         // 空闲连接（停在会话列表：一条流都没有）同样要判死：常驻之后大部分时间是这个处境。
-        XCTAssertEqual(GatewayConnection.livenessTick(
-            awaitingOpening: false, heardFromPeer: false, missed: 9, limit: 2), .dead,
-            "连失数早已越过上限，不该因为「没有流」而继续 probe")
+        XCTAssertEqual(WebSocketConnection.livenessTick(
+            window: 60, heardFromPeer: false, missed: 29), .dead,
+            "60 秒窗口 = 第 30 拍；连失数越界后不该继续 probe")
+    }
+
+    // MARK: - U8：判死窗口可注入
+
+    /// 窗口是一个**可拨的量**，不是两个常量的乘积；判死发生在第 `窗口 ÷ 节拍` 拍。
+    ///
+    /// 为什么必须可拨：大消息传输期间 `receive` 不回调、pong 排在消息之后（实测 4 MiB /
+    /// 400 KB/s 下延迟 10 秒以上），窗口必须长到覆盖它；而「长到覆盖」这件事只有把窗口
+    /// 拨短才验得了 —— 否则每条判据都要跑满一个真实窗口。
+    func testLivenessWindowIsInjectable() {
+        XCTAssertEqual(WebSocketConnection.attemptLimit(for: 6), 2, "6 秒 ÷ 2 秒节拍 = 3 拍")
+        XCTAssertEqual(WebSocketConnection.attemptLimit(for: 60), 29, "60 秒 ÷ 2 秒节拍 = 30 拍")
+        // 非整倍数单独钉住：只钉 6 与 60 的话，把向上取整改成向下取整，那两条都还是绿的。
+        XCTAssertEqual(WebSocketConnection.attemptLimit(for: 5), 2, "5 秒 ÷ 2 = 2.5，向上取整 = 3 拍")
+
+        let short = transport()
+        XCTAssertEqual(short.livenessWindow, 60, "默认窗口要覆盖慢链路上的最大一帧")
+        short.livenessWindow = 6
+        XCTAssertEqual(short.livenessStep(), .probe(missed: 1))
+        XCTAssertEqual(short.livenessStep(), .probe(missed: 2))
+        XCTAssertEqual(short.livenessStep(), .dead, "6 秒窗口 = 第 3 拍判死")
+
+        // 默认值下同一条判定要能等满 30 拍 —— 窗口是被读的那个数，不是写死的 6。
+        let long = transport()
+        for beat in 1...29 {
+            XCTAssertNotEqual(long.livenessStep(), .dead, "第 \(beat) 拍还在窗口内")
+        }
+        XCTAssertEqual(long.livenessStep(), .dead, "60 秒窗口 = 第 30 拍判死")
+
+        // 证据被这一拍消费掉：收到一帧之后归零，且那一帧不能顺延算到下一拍。
+        let reset = transport()
+        XCTAssertEqual(reset.livenessStep(), .probe(missed: 1))
+        reset.handleMessage(.string(#"{"type":"item","streamId":"nobody","payload":{}}"#),
+                            generation: 1)
+        XCTAssertEqual(reset.livenessStep(), .probe(missed: 0), "这一拍收到过东西就归零")
+        XCTAssertFalse(reset.heardFromPeer, "证据被这一拍消费掉了")
+        XCTAssertEqual(reset.livenessStep(), .probe(missed: 1), "下一拍从零重新计")
+
+        // 两个时刻必须错开：开流超时要先把「只重开这一条」做完，判死窗口才轮到。
+        // 同值时两者同刻触发，行为退化成「整条连接重连」—— 而这只差一个数字，编译不会报。
+        // 余量（现在 15 秒）的宽窄靠代码评审，断言只钉方向。
+        XCTAssertGreaterThan(long.livenessWindow, StreamMux().openTimeout,
+                             "判死窗口必须长于流层的开流超时")
     }
 
     // MARK: - U5：迟到的回调该不该起作用
@@ -80,36 +116,51 @@ final class GatewayConnectionTests: XCTestCase {
     /// 代次与传输**双重相等**才算「本代当前的那条连接」。松一格，一个被取代的发送回调
     /// 就会把刚建好的连接掐掉、再排一次重连 —— 每 2 秒一转、永不恢复。
     func testLateCallbacksOnlyApplyToTheSameGenerationAndTransport() {
-        XCTAssertTrue(GatewayConnection.callbackApplies(
+        XCTAssertTrue(WebSocketConnection.callbackApplies(
             generation: 3, current: 3, sameTask: true))
-        XCTAssertFalse(GatewayConnection.callbackApplies(
+        XCTAssertFalse(WebSocketConnection.callbackApplies(
             generation: 2, current: 3, sameTask: true), "旧代次的回调不作数")
-        XCTAssertFalse(GatewayConnection.callbackApplies(
+        XCTAssertFalse(WebSocketConnection.callbackApplies(
             generation: 3, current: 3, sameTask: false), "同代但换了传输，也不作数")
-        XCTAssertFalse(GatewayConnection.callbackApplies(
+        XCTAssertFalse(WebSocketConnection.callbackApplies(
             generation: 2, current: 3, sameTask: false))
     }
 
-    // MARK: - U7：`.ready` 只由「某条流建成」触发
+    // MARK: - U7：收到一帧即就绪
 
-    /// 收到任何一帧都算「对端活着」，但**不等于就绪**：升级之后网关先发 `ready`，
-    /// 打开帧的大帧还在路上，此刻置就绪会让心跳立刻激活、再在几拍之后把连接判死。
-    func testFramesDoNotMakeTheConnectionReadyOnlyEstablishmentDoes() throws {
+    /// 收到任何一条可解析的帧，就算这一代连接已经通了 —— 同时它就是心跳要的证据。
+    ///
+    /// 「就绪」与「还活着」在本层是同一个信号：判定两者的依据都只能是「收到东西」。
+    /// 大消息期间不误杀靠的是窗口够长（U8），不是靠把就绪推后。
+    func testAnyParsableFrameMakesTheConnectionReady() throws {
         let transport = transport()
         transport.activate()
         XCTAssertEqual(transport.phase, .connecting, "刚发起连接是握手中")
+        XCTAssertFalse(transport.heardFromPeer, "还没收到过任何东西")
 
-        // 一帧谁都不要的（编号不在流表里）：落进流表后被丢掉，阶段不动。
+        // 一帧谁都不要的（编号不在流表里）也算：它证明这一代连接真的通了。
         let stray = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
         transport.handleMessage(.string(stray), generation: 1)
-        XCTAssertEqual(transport.phase, .connecting, "收到东西不等于就绪")
-
-        // 某条流报「建成了」：这才是就绪。
-        transport.didEstablish()
-        XCTAssertEqual(transport.phase, .ready, "建成即就绪")
+        XCTAssertEqual(transport.phase, .ready, "收到一帧就是通了")
+        XCTAssertTrue(transport.heardFromPeer, "同一帧也是心跳要的证据 —— 两个判据同一个来源")
 
         // 收尾：另一条用例也在连同一个端点，留下的退避循环会跨用例写日志、抢断言。
         transport.deactivate()
+    }
+
+    /// 连不上的端点 + 一张接好的流表。
+    ///
+    /// 连接层不再持有流表，两个模板要由外面接起来 —— 这一组用例就是那个「外面」，
+    /// 与 `LongConnection` 的接线同形（`attach` + `onFrame`）。少了任何一条，帧的归属与
+    /// 开流记账都观察不到。
+    private func transportWithStreams() -> (WebSocketConnection, StreamMux) {
+        let transport = transport()
+        let streams = StreamMux()
+        streams.attach(channel: transport)
+        transport.onFrame = { [weak streams] envelope, raw in
+            streams?.receive(envelope, raw: raw)
+        }
+        return (transport, streams)
     }
 
     // MARK: - U4：帧按编号归流
@@ -118,11 +169,11 @@ final class GatewayConnectionTests: XCTestCase {
     ///
     /// 守的是「剩下的这一条路还在」：协议里的每个帧都有编号，收货人只有一个。
     func testFramesReachOnlyTheStreamTheirIdNames() throws {
-        let transport = transport()
+        let (transport, streams) = transportWithStreams()
         let behavior = Behavior()
         let other = Behavior()
-        let stream = try XCTUnwrap(transport.mux.makeStream(behavior))
-        _ = try XCTUnwrap(transport.mux.makeStream(other))
+        let stream = try XCTUnwrap(streams.makeStream(behavior))
+        _ = try XCTUnwrap(streams.makeStream(other))
 
         let mine = #"{"type":"item","streamId":"\#(stream.id)","payload":{"kind":"ready"}}"#
         transport.handleMessage(.string(mine), generation: 1)
@@ -140,7 +191,10 @@ final class GatewayConnectionTests: XCTestCase {
     func testAnUnparsableFrameLeavesTheConnectionAlive() {
         let transport = transport()
         transport.activate()
-        transport.didEstablish()
+        // 先让它通了，再喂一条坏帧。
+        let ok = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
+        transport.handleMessage(.string(ok), generation: 1)
+        XCTAssertEqual(transport.phase, .ready)
 
         transport.handleMessage(.string("not json at all"), generation: 1)
 
@@ -177,7 +231,7 @@ final class GatewayConnectionTests: XCTestCase {
 
     /// 没有票不裸连：那一发必定被 401 拒，先去换票。
     func testWithoutATicketNoHandshakeIsAttempted() async throws {
-        let transport = GatewayConnection()
+        let transport = WebSocketConnection()
         var handshakes = 0
         transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
         transport.authorizationProvider = { nil }
@@ -195,14 +249,14 @@ final class GatewayConnectionTests: XCTestCase {
 
 // MARK: - 由旧判据并入
 
-extension GatewayConnectionTests {
+extension WebSocketConnectionTests {
 
     /// 一条流都没有也要连 —— 「常驻」的字面含义就是这句。
     ///
     /// 停在会话列表时正是这个处境：没有流，连接仍在；也正因为如此，半开连接才会被发现。
     func testTheConnectionIsResidentWithoutAnyStream() {
         var handshakes = 0
-        let transport = GatewayConnection()
+        let transport = WebSocketConnection()
         transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
         transport.authorizationProvider = { "ticket" }
         transport.sessionProvider = {
@@ -223,13 +277,14 @@ extension GatewayConnectionTests {
     ///
     /// 阶段的含义是「这条连接走到哪一步」，与登记了几条流无关。
     func testOpeningASecondStreamKeepsThePhase() throws {
-        let transport = transport()
+        let (transport, streams) = transportWithStreams()
         transport.activate()
-        transport.didEstablish()
+        let ok = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
+        transport.handleMessage(.string(ok), generation: 1)
         XCTAssertEqual(transport.phase, .ready)
 
-        _ = try XCTUnwrap(transport.mux.makeStream(Behavior()))
-        _ = try XCTUnwrap(transport.mux.makeStream(Behavior()))
+        _ = try XCTUnwrap(streams.makeStream(Behavior()))
+        _ = try XCTUnwrap(streams.makeStream(Behavior()))
 
         XCTAssertEqual(transport.phase, .ready, "开流不改阶段")
         // 正控：有连接时造流真的发 open。这一组其余各处都断言 `sentFrames` **为空**，
@@ -240,7 +295,7 @@ extension GatewayConnectionTests {
 
     /// 单帧接收上限必须是网关承诺上界的两倍：系统默认 1 MiB 正是「某个会话打不开」的成因。
     func testTheFrameCeilingIsTwiceTheGatewayCap() {
-        XCTAssertEqual(GatewayConnection.maximumMessageSize, 8 * 1024 * 1024)
+        XCTAssertEqual(WebSocketConnection.maximumMessageSize, 8 * 1024 * 1024)
     }
 
     /// 没有票 → 去换；换到了立刻重连（跳过这一轮退避），换不到且不会自愈就停。

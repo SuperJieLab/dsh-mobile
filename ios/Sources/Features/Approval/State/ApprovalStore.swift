@@ -80,7 +80,7 @@ final class ApprovalStore: ObservableObject {
     /// **每一条 `ready` 都清空**（不论代次值）：网关在 `ready` 之后紧跟着重放当前集合，
     /// 两者在同一个帧序列里相邻、客户端同步处理，界面上看不到中间态。这样表就没有跨代
     /// 状态 —— 与上游「句柄表是局部变量、代际更替随函数消失」同一个形态。
-    func attach(events: ConnectionEventStream) {
+    func attach(events: EventStream) {
         events.onCargo("waterfall") { [weak self] payload in self?.receive(payload) }
         // 撤回的解释在这里：`eventId` 是唯一的寻址信息。没有它删不掉任何东西 —— 留着这张卡
         // 比误删别人的强。

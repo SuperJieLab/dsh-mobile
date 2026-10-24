@@ -141,8 +141,8 @@ final class SessionStreamReaderTests: XCTestCase {
 
     // MARK: - O9：「建成」只在打开帧上成立
 
-    /// 建成判据的落点。写成「收到任何一帧即建成」的版本会让心跳提前激活 —— 事件帧先到、
-    /// 打开帧还在路上时，连接会在几拍之后被判死（`livenessTick` 的注释里记着这条现场）。
+    /// 建成判据的落点。写成「收到任何一帧即建成」的版本会让事件帧也撤掉开流超时 ——
+    /// 打开帧还在路上时，这条流就被当成开成了，于是它永远等不到自己的基线窗口。
     func testOnlyAnOpeningEstablishesTheStream() throws {
         let samples: [(name: String, text: String, establishes: Bool)] = [
             ("打开帧", #"{"type":"item","streamId":"s-1","payload":{"sessionId":"s-1","cursor":1,"events":[]}}"#, true),

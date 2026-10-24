@@ -8,7 +8,7 @@ import Foundation
  * 窄是它的判据 —— 事件流不重放，没有窗口、水位、未定稿帧，判读器若「顺手」认识它们，
  * 那些分支就永远不会被上游走过，只会成为下一次误判的入口。
  */
-struct ConnectionEventReading {
+struct EventReading {
 
     /// 这一帧是什么。
     enum Content: Equatable {
@@ -30,8 +30,8 @@ struct ConnectionEventReading {
 
     /// 这一帧是否意味着「这条流从此刻建成」。只有 `ready` 成立。
     ///
-    /// 这一条不是形式：`emit` 若能建成，源还没有代次时心跳就会开始判死；而这条流的
-    /// `ready` 是它的**全部状态**，建成与否只能由它说。
+    /// 这一条不是形式：`emit` 若能建成，这条流在源还没有代次时就会被当成开成了，
+    /// 于是它的开流超时撤防、退避归零 —— 而它的 `ready` 才是决定这些的**全部状态**。
     var establishes: Bool {
         if case .ready = content { return true }
         return false
@@ -67,7 +67,7 @@ struct ConnectionEventReading {
 }
 
 /**
- * 把一帧线上文本判成 `ConnectionEventReading` —— 纯函数，不碰 socket、不持状态。
+ * 把一帧线上文本判成 `EventReading` —— 纯函数，不碰 socket、不持状态。
  *
  * 两种流的内容不同：会话流一帧可以是打开帧、事件、未定稿帧、占用读数；这条流只有控制结局、
  * 转发事件与具名货物。窄值域是判据的一部分 —— 不认识的形状在这里一律丢弃，而不是猜一个
@@ -89,37 +89,37 @@ struct ConnectionEventReading {
  * 只吃外壳、不要原始字节：载荷里没有 typed 结构要直解（`args` 是任意 JSON，`JSONValue`
  * 已原样拿在手上），与 `SessionStreamReader` 需要 `raw` 的理由不同。
  */
-enum ConnectionEventReader {
+enum EventReader {
 
-    static func read(envelope: MuxServerEnvelope) -> ConnectionEventReading {
+    static func read(envelope: MuxServerEnvelope) -> EventReading {
         switch envelope.type {
         case "item":
             guard let payload = envelope.payload, let kind = payload["kind"]?.string else {
-                return ConnectionEventReading(content: .ignored)
+                return EventReading(content: .ignored)
             }
             switch kind {
             case "ready":
                 // `generation` 读不出（缺席、非整数、负数）一律 `nil`：它是一个会被当成代次的
                 // 数字，宁可说「不知道」，也不补一个看起来正常的数。
-                return ConnectionEventReading(content: .ready(generation: payload["generation"]?.int))
+                return EventReading(content: .ready(generation: payload["generation"]?.int))
             case "emit":
                 guard let name = payload["event"]?.string else {
                     // 名字读不出就无从分派给任何消费方 —— 丢弃。
-                    return ConnectionEventReading(content: .ignored)
+                    return EventReading(content: .ignored)
                 }
                 // `args` 整段缺席是正常的：上游 `emit(event)` 不带参数时，网关那份
                 // `JSON.stringify` 会把 `undefined` 字段丢掉。事件名已经说得清发生了什么。
-                return ConnectionEventReading(content: .emit(name: name, args: payload["args"] ?? .array([])))
+                return EventReading(content: .emit(name: name, args: payload["args"] ?? .array([])))
             case "session-list", "waterfall", "cancel":
                 // 三条具名货物：kind 名与载荷原样交出。这一层只分类，不解释货物内容 ——
                 // 怎么读、认不出怎么办（含无寻址的撤回），都住各自消费方。
-                return ConnectionEventReading(content: .cargo(type: kind, payload: payload))
+                return EventReading(content: .cargo(type: kind, payload: payload))
             default:
                 // 留痕要带**名字**：手机与网关可能不同版本，新货物被这一版丢弃时现场只剩这一行
                 // —— 不带名字就分不出「网关加了货物」与「这条流坏了」。
                 Log.warn(Log.Module.session,
                          "dropped an item kind this build does not know: \(kind)")
-                return ConnectionEventReading(content: .ignored)
+                return EventReading(content: .ignored)
             }
 
         case "error":
@@ -127,13 +127,13 @@ enum ConnectionEventReader {
                 code: envelope.payload?["code"]?.string ?? GatewayErrorCode.internalError.rawValue,
                 message: envelope.payload?["message"]?.string ?? ""
             )
-            return ConnectionEventReading(content: .refused(failure))
+            return EventReading(content: .refused(failure))
 
         case "end":
-            return ConnectionEventReading(content: .ended)
+            return EventReading(content: .ended)
 
         default:
-            return ConnectionEventReading(content: .ignored)
+            return EventReading(content: .ignored)
         }
     }
 }

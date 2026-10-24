@@ -188,19 +188,19 @@ final class ApprovalStoreTests: XCTestCase {
     ///
     /// 三处各自能单独坏（而且坏了都不编译失败），所以各一条断言。
     func testAttachWiresTheApprovalPathAndSourceLoss() {
-        let events = ConnectionEventStream()
+        let events = EventStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(events: events)
 
-        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
+        events.handle(EventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "货物从流里进来就成了一条")
 
-        events.handle(ConnectionEventReading(content: .cargo(type: "cancel", payload: .object(["eventId": .string("e1")]))))
+        events.handle(EventReading(content: .cargo(type: "cancel", payload: .object(["eventId": .string("e1")]))))
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "撤回那条货物把卡带走")
 
-        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
+        events.handle(EventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").count, 1)
-        events.handle(ConnectionEventReading(content: .ready(generation: nil)))
+        events.handle(EventReading(content: .ready(generation: nil)))
         XCTAssertTrue(store.pending(in: "s1").isEmpty,
                       "源失效清空：网关的上游没了，手里这些一条也答不了")
     }
@@ -209,17 +209,17 @@ final class ApprovalStoreTests: XCTestCase {
     ///
     /// 寻址校验归消费方 —— 「认不出怎么办」是读法的一部分：审批的口径是留卡比误删强。
     func testACancelWithoutAnEventIdKeepsTheCard() throws {
-        let events = ConnectionEventStream()
+        let events = EventStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(events: events)
 
-        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
+        events.handle(EventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").count, 1)
 
-        events.handle(ConnectionEventReading(content: .cargo(type: "cancel", payload: .object([:]))))
+        events.handle(EventReading(content: .cargo(type: "cancel", payload: .object([:]))))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "没带 eventId 的撤回删不掉任何东西")
 
-        events.handle(ConnectionEventReading(content: .cargo(
+        events.handle(EventReading(content: .cargo(
             type: "cancel", payload: .object(["eventId": .string("")])
         )))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "空串同理 —— 留着这张卡比误删别人的强")
@@ -238,7 +238,7 @@ final class ApprovalStoreTests: XCTestCase {
     /// 这条守的是「表没有跨代状态」：不做这一步，重连之后宿主已经不持有的卡会一直留着
     /// （重放只会覆盖仍存活的那些）。
     func testEveryReadyRebuildsTheTableFromTheReplay() {
-        let events = ConnectionEventStream()
+        let events = EventStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(events: events)
 
@@ -246,10 +246,10 @@ final class ApprovalStoreTests: XCTestCase {
         XCTAssertEqual(store.pending(in: "s1").count, 1, "断线之前收到的那一条还在")
 
         // 重连：先 ready（清表），再重放当前集合。
-        events.handle(ConnectionEventReading(content: .ready(generation: 7)))
+        events.handle(EventReading(content: .ready(generation: 7)))
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "ready 是重建的界线")
 
-        events.handle(ConnectionEventReading(content: .cargo(type: "waterfall", payload: waterfall())))
+        events.handle(EventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").map(\.eventId), ["e1"], "重放重建")
     }
 

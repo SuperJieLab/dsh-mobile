@@ -44,12 +44,14 @@ final class LayeringTests: XCTestCase {
         sourcesRoot.appendingPathComponent("SharedUI")
     }
 
-    /// 线上形状不许认识的实现层：一元调用、流、事件流收端。纯判定不在此列 —— 它住消费方。
+    /// 线上形状不许认识的实现层：一元调用、长连接（WS + 流）、事件流收端。
+    /// 纯判定不在此列 —— 它住消费方。
     ///
-    /// ⚠️ 这三个目录名是**字面量**：改名（如 `Client/` → `Rpc/`）时这里不会编译失败，
+    /// ⚠️ 这三个目录名是**字面量**：改名时这里不会编译失败，
     /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。改名后必须回扫这一处。
     private var gatewayImplementationDirectories: [URL] {
-        ["Connection", "Rpc", "Stream", "ConnectionEvents"].map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
+        ["LongConnection", "Identity", "Rpc", "Events"]
+            .map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
 
     /// 界面目录 = `Features/` 的直接子目录。
@@ -320,7 +322,7 @@ final class LayeringTests: XCTestCase {
     /// 想图省事的人看的。
     ///
     /// 落在**代码行**上而不是文件全文：Core 里有多处注释在解释「谁消费我」（`RefreshGate`
-    /// 写 `SessionSync`、`GatewayConnection` 写 `SessionSync`），那些提及是必要的说明，不是依赖。
+    /// 写 `SessionSync`、`WebSocketConnection` 写 `SessionSync`），那些提及是必要的说明，不是依赖。
     func testCoreDoesNotReferenceFeatureTypes() throws {
         let core = sourcesRoot.appendingPathComponent("Core")
         let featureTypes = try declaredTypes(under: try interfaceDirectories(), topLevelOnly: true)
@@ -356,7 +358,7 @@ final class LayeringTests: XCTestCase {
     /// 发起请求的一处），于是「本地认为还有效、另一处认为过期」在运行时看不出来。同型的先例
     /// 是 `Menu` 与 `Picker` 各算一遍选中项，屏幕上勾与值对不上。
     ///
-    /// 判据落在**比较表达式**上而不是字段名：`GatewayProtocol` 里那个 `expiresAt: Double?`
+    /// 判据落在**比较表达式**上而不是字段名：`RpcMessages.swift` 里那个 `expiresAt: Double?`
     /// 是协议字段（解码必须还在），`RpcClient` 里那行把它换成 `Date` 也是必要的一步
     /// —— 两者都不做比较。
     func testOnlyOnePlaceComparesTicketExpiry() throws {
@@ -382,7 +384,7 @@ final class LayeringTests: XCTestCase {
                        "访问票的过期比较应当只有一处（TicketKeeper），实际："
                        + comparisons.map { "\($0.file):\($0.line)" }.joined(separator: " / "))
         XCTAssertEqual(comparisons.first?.file,
-                       "Core/Gateway/Rpc/TicketKeeper.swift",
+                       "Core/Gateway/Identity/TicketKeeper.swift",
                        "过期判定该住在票那一层，不是别处")
     }
 
@@ -475,7 +477,9 @@ final class LayeringTests: XCTestCase {
         var built = 0
         for file in swiftFiles(under: sourcesRoot) {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-            if relative.hasPrefix("Core/Gateway/Wire/") || relative.hasPrefix("Core/Gateway/Rpc/") {
+            if relative.hasPrefix("Core/Gateway/Wire/")
+                || relative.hasPrefix("Core/Gateway/Rpc/")
+                || relative.hasPrefix("Core/Gateway/LongConnection/Wire/") {
                 continue
             }
             let text = try String(contentsOf: file, encoding: .utf8)
@@ -564,7 +568,8 @@ final class LayeringTests: XCTestCase {
             XCTAssertFalse(swiftFiles(under: directory).isEmpty,
                            "\(directory.lastPathComponent)/ 扫不到任何 .swift —— 目录改名了？")
         }
-        for name in ["GatewayHost.swift", "Backoff.swift", "Rpc/RpcClientError.swift"] {
+        for name in ["LongConnection/LongConnection.swift", "LongConnection/Backoff.swift",
+                     "Rpc/RpcClientError.swift"] {
             let file = sourcesRoot.appendingPathComponent("Core/Gateway/\(name)")
             XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
                           "\(name) 不在 —— 守卫名单与实际住处不一致")
@@ -577,16 +582,16 @@ final class LayeringTests: XCTestCase {
     /// 正控：根上的装配文件必须真的扫到造流入口 —— 空集会被读成合规。
     func testTheHostStaysOutOfTheStreamLayer() throws {
         let host = try String(
-            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/GatewayHost.swift"),
+            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/LongConnection.swift"),
             encoding: .utf8
         )
         XCTAssertTrue(host.contains("func makeStream"), "装配的造流入口没扫到 —— 判据可能扫错了树")
 
         var hits: [String] = []
-        for name in ["Stream", "Connection"] {
+        for name in ["LongConnection/Stream", "LongConnection/WebSocket"] {
             for file in swiftFiles(under: sourcesRoot.appendingPathComponent("Core/Gateway/\(name)")) {
                 let text = try String(contentsOf: file, encoding: .utf8)
-                for (line, code) in codeLines(in: text) where code.contains("GatewayHost") {
+                for (line, code) in codeLines(in: text) where code.contains("LongConnection") {
                     hits.append("\(file.lastPathComponent):\(line)")
                 }
             }
@@ -594,7 +599,7 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "实现层出现了装配层 —— 它站根：\(hits)")
     }
 
-    /// 线上形状目录里不出现 `Connection/`、`Rpc/`、`Stream/`、`ConnectionEvents/` 声明的类型。
+    /// 线上形状目录里不出现实现层（`LongConnection/`、`Identity/`、`Rpc/`、`Events/`）声明的类型。
     ///
     /// 只查**代码行**：注释里提到实现层不算违反；字符串里出现同名算命中（误报方向，接受）。
     func testWireDoesNotReferenceImplementationTypes() throws {
@@ -671,7 +676,7 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, 0, "线上形状里出现了显示口径的符号")
     }
 
-    /// 三件线上形状各只有一处声明，且都在 `Wire/Mux.swift` —— 与网关 `wire/mux.ts` 按名对看。
+    /// 三件线上形状各只有一处声明，且都在 `Wire/MuxFrames.swift` —— 与网关 `wire/mux.ts` 按名对看。
     ///
     /// 失败模式是「另写一份刚好够用的」：形状散在使用处时，两端各写一份且互不相认，改字段
     /// 那一侧靠回忆或 grep 发现。判据按**声明**数，不按引用数 —— 引用本来就会有多处，
@@ -703,8 +708,8 @@ final class LayeringTests: XCTestCase {
         }
 
         for shape in shapes {
-            XCTAssertEqual(homes[shape], ["Core/Gateway/Wire/Mux.swift"],
-                           "\(shape) 应只有一处声明且在 Wire/Mux.swift，实际：\(homes[shape] ?? [])")
+            XCTAssertEqual(homes[shape], ["Core/Gateway/LongConnection/Wire/MuxFrames.swift"],
+                           "\(shape) 应只有一处声明且在 Wire/MuxFrames.swift，实际：\(homes[shape] ?? [])")
         }
     }
 
@@ -717,6 +722,190 @@ final class LayeringTests: XCTestCase {
         return pattern.firstMatch(in: line, options: [], range: range) != nil
     }
 
+    /// 这一行是否声明了名为 `name` 的类型（`struct` / `class` / `enum` / `protocol`）。
+    private static func declaresType(_ name: String, in line: String) -> Bool {
+        for keyword in ["struct", "class", "enum", "protocol"] {
+            guard let pattern = try? NSRegularExpression(
+                pattern: "\\b" + keyword + "\\s+" + NSRegularExpression.escapedPattern(for: name) + "\\b")
+            else { continue }
+            let range = NSRange(line.startIndex..., in: line)
+            if pattern.firstMatch(in: line, options: [], range: range) != nil { return true }
+        }
+        return false
+    }
+
+    /// 根 `Wire/` 只放载荷：信封（`*Request` / `*Response` / `GatewayResponse`）住 `Rpc/Wire/`。
+    ///
+    /// 判据是「信封带 `v` / `ok` / `err`，只在 HTTP 出现」—— 放在根 `Wire/` 会让读代码的人
+    /// 以为流也能发请求。正控：`Rpc/Wire/` 必须真的扫到信封，否则这条判据只是扫了个空。
+    func testRootWireHoldsNoEnvelopes() throws {
+        let wire = sourcesRoot.appendingPathComponent("Core/Gateway/Wire")
+        let files = swiftFiles(under: wire)
+        // 正控：扫空目录时 hits 恒为空 —— 「零命中」与「目录没了」同形。
+        XCTAssertGreaterThanOrEqual(files.count, 6, "根 Wire/ 只扫到 \(files.count) 个文件")
+        var hits: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for name in Self.declaredTypes(in: text)
+            where name.hasSuffix("Request") || name.hasSuffix("Response") || name == "GatewayResponse" {
+                hits.append("\(file.lastPathComponent) \(name)")
+            }
+        }
+        XCTAssertEqual(hits, [], "根 Wire/ 出现了信封：\(hits)")
+
+        let rpcWire = sourcesRoot.appendingPathComponent("Core/Gateway/Rpc/Wire")
+        let names = try swiftFiles(under: rpcWire).flatMap {
+            Self.declaredTypes(in: try String(contentsOf: $0, encoding: .utf8))
+        }
+        XCTAssertTrue(names.contains("GatewayResponse"), "Rpc/Wire/ 没扫到信封 —— 先怀疑路径")
+    }
+
+    /// 身份不属任何一条链路：`Identity/` 不出现任一链路的类型与线路；长连接源码零 `RpcClient`。
+    ///
+    /// 两半一起断：① `Identity/` 只认识「票」与「设备凭证」；② 长连接只收闭包 ——
+    /// 收类型就等于把整台一元客户端抱进来（那正是它为了取票认识三百行的由来）。
+    func testIdentityBelongsToNeitherLink() throws {
+        let identity = sourcesRoot.appendingPathComponent("Core/Gateway/Identity")
+        let files = swiftFiles(under: identity)
+        XCTAssertGreaterThanOrEqual(files.count, 2, "Identity/ 只扫到 \(files.count) 个文件")
+
+        var hits: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for word in ["RpcClient", "WebSocketConnection", "URLSession", "LongConnection"]
+                where code.contains(word) {
+                    hits.append("\(file.lastPathComponent):\(line) \(word)")
+                }
+            }
+        }
+        XCTAssertEqual(hits, [], "Identity/ 认识了某条链路：\(hits)")
+
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/LongConnection.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertFalse(lines.contains { $0.1.contains("RpcClient") }, "长连接认识了整台一元客户端")
+    }
+
+    /// WebSocket 层认不出流层的任何词汇，也不动流表。
+    ///
+    /// 两半一起断：① 类型名零命中 —— 它连「流」这个概念都不该出现；② `mux.` 零命中 ——
+    /// 收帧改成交给注入的闭包之后，连接层对流表一个成员都不该访问。
+    ///
+    /// 扫描面是两处：`WebSocket/`（`Channel` 住那里）与 `Connection/`（连接本体住那里）。
+    /// 两处都要扫，否则「扫空目录回空数组」会让这条判据静默变绿。
+    /// 正控：文件数少于预期时先怀疑路径推算。
+    func testTheWebSocketLayerKnowsNoStreamVocabulary() throws {
+        let roots = webSocketLayerRoots
+        let streamVocabulary = ["StreamMux", "LogicalStream", "StreamBehavior",
+                                "StreamFactory", "StreamReply", "StreamPort"]
+        var scanned = 0
+        var nameHits: [String] = []
+        var muxHits: [String] = []
+
+        for root in roots {
+            for file in swiftFiles(under: root) {
+                scanned += 1
+                let text = try String(contentsOf: file, encoding: .utf8)
+                let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                for (line, code) in codeLines(in: text) {
+                    for name in streamVocabulary where code.contains(name) {
+                        nameHits.append("\(relative):\(line) \(name)")
+                    }
+                    if code.contains("mux.") { muxHits.append("\(relative):\(line)") }
+                }
+            }
+        }
+
+        // 门槛按**文件数**而不是下限：少一个文件就说明扫描面缺了一块。
+        XCTAssertGreaterThanOrEqual(scanned, 3, "只扫到 \(scanned) 个文件 —— 先怀疑路径推算")
+        XCTAssertEqual(nameHits, [], "WebSocket 层出现了流层词汇：\(nameHits)")
+        XCTAssertEqual(muxHits, [], "WebSocket 层还在访问流表：\(muxHits)")
+    }
+
+    /// WebSocket 层的扫描面：`Channel` 与连接本体同住 `WebSocket/`。
+    private var webSocketLayerRoots: [URL] {
+        ["Core/Gateway/LongConnection/WebSocket"]
+            .map { sourcesRoot.appendingPathComponent($0) }
+    }
+
+    /// 装配只有一处：造流表、接 `Channel`、接收帧闭包都在统筹对象里各一次。
+    ///
+    /// 三个接点各自失败的症状不同，所以各断各的：漏 `attach` ⇒ 事件没人听（换代次不重开）；
+    /// 漏 `onFrame` ⇒ 帧全被丢掉（界面永远空）；漏 `onGenerationChange` 的订阅在流表里，
+    /// 由 `StreamMuxTests` 那条行为判据守着。
+    func testTheWiringHappensInOnePlaceOnly() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/LongConnection.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+
+        XCTAssertEqual(lines.filter { $0.1.contains("attach(channel:") }.count, 1,
+                       "Channel 只在一处接上")
+        XCTAssertEqual(lines.filter { $0.1.contains("onFrame =") }.count, 1,
+                       "收帧闭包只在一处接上")
+        XCTAssertEqual(lines.filter { $0.1.contains("makeStream(") && !$0.1.contains("func ") }.count, 1,
+                       "造流口只转发一次")
+    }
+
+    /// 两个反应由流层订阅：连接层只发事件，不直接动流表。
+    ///
+    /// 两半都要断：只删调用不补发出，行为会静默消失（换代次后流不重开）；只补发出不删调用，
+    /// 等于同一件事有两条路径（换号两次）。所以「调用没了」与「发出点各一个」写在一起。
+    func testTheConnectionEmitsInsteadOfTouchingTheTable() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/WebSocket/WebSocketConnection.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+
+        XCTAssertFalse(lines.contains { $0.1.contains("mux.reopenAll(") },
+                       "重新开流由事件触发，不由连接层调用")
+        XCTAssertFalse(lines.contains { $0.1.contains("mux.closeAll(") },
+                       "清表同理")
+        XCTAssertEqual(lines.filter { $0.1.contains("onGenerationChange?()") }.count, 1,
+                       "换代次只在这一处发出")
+        XCTAssertEqual(lines.filter { $0.1.contains("onStopped?()") }.count, 1,
+                       "停用只在这一处发出")
+    }
+
+    /// 流层的声明各住一处：`StreamMux.swift` 只留流表**与它那一行**。
+    ///
+    /// 为什么 `LogicalStream` 不单独住一个文件：它的四个可变字段（编号 / 文本 / 退避档位 /
+    /// 在途标记）是 `fileprivate` —— 只有同一个文件里的流表能写，编译器替「业务侧改不到它们」
+    /// 把关。拆开就必须放宽成 `internal`，等于用一条编译期保证换目录整洁。所以这里钉的是
+    /// 「别把跨层那个令牌也塞回来」：`StreamAttempt` 不掌握任何可变状态，住自己的文件。
+    ///
+    /// 失败模式：跨层声明与流表挤在一起时，读文件的人分不清哪些是「表的行为」、
+    /// 哪些只是它旁边放着的形状。
+    ///
+    /// 判据自带正控：扫描面的文件数少于预期时先怀疑路径推算（扫空目录回空数组，
+    /// 零命中与合规同形）。
+    func testTheStreamLayerDeclarationsHaveOneHomeEach() throws {
+        let expected: [String: [String]] = [
+            "StreamMux": ["Core/Gateway/LongConnection/Stream/StreamMux.swift"],
+            "LogicalStream": ["Core/Gateway/LongConnection/Stream/StreamMux.swift"],
+            // 父级：WebSocket 层生成它、流层用它对等比较，两层共守（见该文件头）。
+            "StreamAttempt": ["Core/Gateway/LongConnection/StreamAttempt.swift"],
+            "Channel": ["Core/Gateway/LongConnection/WebSocket/Channel.swift"],
+        ]
+        let root = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection")
+        let files = swiftFiles(under: root)
+        var homes: [String: [String]] = [:]
+
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (_, code) in codeLines(in: text) {
+                for name in expected.keys where Self.declaresType(name, in: code) {
+                    homes[name, default: []].append(relative)
+                }
+            }
+        }
+
+        XCTAssertGreaterThanOrEqual(files.count, 9,
+                                    "只扫到 \(files.count) 个文件 —— 目录改名了？")
+        for (name, home) in expected {
+            XCTAssertEqual(homes[name], home,
+                           "\(name) 应只有一处声明且在 \(home)，实际：\(homes[name] ?? [])")
+        }
+    }
+
+
     /// 开流帧**按 op 点名**拼装：每一类开流只有一处拼装点，且每一处都在清单写下的位置。
     ///
     /// 旧写法只认 `MuxOpenFrame.following(` 一个 marker：第二类开流帧（`events(`）加进来之后
@@ -728,7 +917,7 @@ final class LayeringTests: XCTestCase {
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
             ("following", "Features/SessionDetail/State/SessionSync.swift"),
-            ("events", "Core/Gateway/ConnectionEvents/ConnectionEventStream.swift"),
+            ("events", "Core/Gateway/Events/EventStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {
@@ -753,7 +942,7 @@ final class LayeringTests: XCTestCase {
         // 它们当成没出现 —— 而这正是这条判据唯一要抓的东西。
         //
         // 盲区：根本不经过工厂、自己拼 `{"type":"open",...}` 字面量的形态扫不到。那个方向
-        // 只能由「`Wire/Mux.swift` 是唯一的开流帧构造入口」这条纪律挡着，靠评审。
+        // 只能由「`Wire/MuxFrames.swift` 是唯一的开流帧构造入口」这条纪律挡着，靠评审。
         let factory = try NSRegularExpression(pattern: "MuxOpenFrame\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)")
         var found: Set<String> = []
         for file in swiftFiles(under: sourcesRoot) {
@@ -777,7 +966,7 @@ final class LayeringTests: XCTestCase {
     /// 盲区：只认字面量与裸标识符。用变量间接比较（`let kind = "it" + "em"`）抓不到，那种
     /// 写法靠评审；也可能误判 —— 本层若真需要这些词，说明职责又长回去了。
     func testTransportKnowsNoFrameContent() throws {
-        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/Connection")
+        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/WebSocket")
         let lines = try swiftFiles(under: dir).flatMap { file -> [(Int, String)] in
             codeLines(in: try String(contentsOf: file, encoding: .utf8))
         }
@@ -806,12 +995,12 @@ final class LayeringTests: XCTestCase {
     ///
     /// 正控：文件里必须仍有 `func makeStream(`，否则说明扫错了文件（零命中读成合规）。
     func testStreamLayerLooksNeitherUpNorOut() throws {
-        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/Stream")
+        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/Stream")
         let lines = try swiftFiles(under: dir).flatMap { file -> [(Int, String)] in
             codeLines(in: try String(contentsOf: file, encoding: .utf8))
         }
         let forbidden = [
-            "URLSession", "GatewayConnection", "Unscoped", "GatewayErrorCode",
+            "URLSession", "WebSocketConnection", "Unscoped", "GatewayErrorCode",
             "\"follow\"", "\"events\"", "握手", "心跳", "代次",
         ]
 
@@ -832,7 +1021,7 @@ final class LayeringTests: XCTestCase {
     ///
     /// 正控：文件里必须有流通道的路径常量，否则说明扫错了文件。
     func testTransportMintsNoIdsAndKeepsNoTable() throws {
-        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/Connection")
+        let dir = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/WebSocket")
         let lines = try swiftFiles(under: dir).flatMap { file -> [(Int, String)] in
             codeLines(in: try String(contentsOf: file, encoding: .utf8))
         }
@@ -856,7 +1045,7 @@ final class LayeringTests: XCTestCase {
     /// 这一条单独守，因为它与上面那张单元表方向相反 —— 收货人是「连接级」的，
     /// 一旦它出现在流层，就会有人给某条流代收，而「归谁」随之变成登记顺序的函数。
     func testUnscopedFramesNeverEnterTheStreamLayer() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/Stream/StreamMux.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
 
         XCTAssertTrue(text.contains("final class StreamMux"), "先怀疑路径或改名")
@@ -870,7 +1059,7 @@ final class LayeringTests: XCTestCase {
     /// 这条判据守的是**声明的形状**：有人把 `fileprivate(set)` 放宽成 `internal(set)`，
     /// 编译器就不再拦，而这行字是唯一会红的信号。
     func testStreamStateIsOnlyWritableByTheStreamTable() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/Stream/StreamMux.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
         let body = try XCTUnwrap(block(startingAt: "final class LogicalStream", in: lines),
@@ -893,7 +1082,7 @@ final class LayeringTests: XCTestCase {
         let session = sourcesRoot
             .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
         let events = sourcesRoot
-            .appendingPathComponent("Core/Gateway/ConnectionEvents/ConnectionEventStream.swift")
+            .appendingPathComponent("Core/Gateway/Events/EventStream.swift")
 
         for (name, url) in [("会话详情", session), ("事件流", events)] {
             let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
@@ -909,7 +1098,7 @@ final class LayeringTests: XCTestCase {
     /// 与 `testBothBusinessStreamsUseTheSameFactory` 是同一件事的两半：那一半守「怎么开」，
     /// 这一半守「不能动什么」。
     func testBusinessSidesHoldNoTransport() throws {
-        let roots = ["Features", "Core/Gateway/ConnectionEvents"]
+        let roots = ["Features", "Core/Gateway/Events"]
         var scanned = 0
         for root in roots {
             let files = swiftFiles(under: sourcesRoot.appendingPathComponent(root))
@@ -917,7 +1106,7 @@ final class LayeringTests: XCTestCase {
             for file in files {
                 scanned += 1
                 let text = try String(contentsOf: file, encoding: .utf8)
-                for (line, code) in codeLines(in: text) where code.contains("GatewayConnection") {
+                for (line, code) in codeLines(in: text) where code.contains("WebSocketConnection") {
                     XCTFail("\(root)/\(file.lastPathComponent):\(line) 出现了传输层 —— 业务只该拿造流口")
                 }
             }
@@ -925,22 +1114,22 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(scanned, 20, "只扫到 \(scanned) 个文件 —— 先怀疑路径推算")
     }
 
-    /// 传输层对流表只调那四个动作，每个各出现一次。
+    /// 判活只有一个入口：心跳必须走 `livenessStep`，窗口必须从实例上读。
     ///
-    /// 数的是「同一件事有没有第二条路径」：多出一处，就说明有一帧能被路由两次、
-    /// 或一次换代次被重开两遍 —— 两种都只在真机上表现为「偶尔断一下」。
-    func testTheTransportTalksToTheMuxThroughFourCallsOnly() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Connection/GatewayConnection.swift")
+    /// 纯函数谁都能调 —— 在调用点写死一个窗口值不会让任何**行为**判据变红，但会让
+    /// 「窗口可拨」变成空话：拨了不生效，测试照样绿。所以这里数两件事：调用点只有一处，
+    /// 且那一处喂的是 `livenessWindow`。
+    func testTheLivenessVerdictHasASingleCallSite() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/WebSocket/WebSocketConnection.swift")
         let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
-        let calls = ["mux.receive(", "mux.reopenAll()", "mux.closeAll()", "mux.hasPendingOpening"]
+        let callSites = lines.filter { $0.1.contains("livenessTick(") && !$0.1.contains("func ") }
 
-        for call in calls {
-            let count = lines.filter { $0.1.contains(call) }.count
-            XCTAssertEqual(count, 1, "\(call) 出现 \(count) 次（该恰好一次）")
-        }
+        XCTAssertEqual(callSites.count, 1, "livenessTick 被调用 \(callSites.count) 次（该恰好一次）")
+        XCTAssertTrue(callSites.allSatisfy { $0.1.contains("window: livenessWindow") },
+                      "唯一那次调用必须读实例上的窗口，不能写死")
     }
 
-    /// 改造前的旧名在源码里零命中：改名不留残影。
+    /// 改造前/本期删掉的旧名在源码里零命中：改名与删接口都不留残影。
     ///
     /// 正控：`StreamMux` 必须命中 —— 否则说明扫描本身没工作（空集会被读成合规）。
     func testTheOldNamesAreGone() throws {
@@ -949,6 +1138,11 @@ final class LayeringTests: XCTestCase {
             "ConnectionStore", "StreamTransport", "StreamPhase",
             "StreamBackoff", "GatewayLink", "GatewayClient", "GatewayClientError",
             "Gateway/Client",
+            // 判活不再向流层要信息之后，这四个符号随接口一起消失。
+            "didEstablish", "AbandonReason", "awaitingOpening", "hasPendingOpening",
+            // 层界与命名那一期作废的名字：作用域词与「宿主」都不再说它是什么。
+            "GatewayHost", "GatewayConnection", "ConnectionEventStream",
+            "ConnectionEventReader", "ConnectionEventReading", "StreamPort",
         ]
         var hits: [String] = []
         var scanned = 0
@@ -966,7 +1160,7 @@ final class LayeringTests: XCTestCase {
 
         // 正控：造号点必须在，且它现在的名字是新的。
         let mux = try String(
-            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift"),
+            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/Stream/StreamMux.swift"),
             encoding: .utf8
         )
         XCTAssertTrue(mux.contains("static func newStreamId()"), "新造号点没扫到 —— 判据可能扫错了树")
@@ -974,7 +1168,7 @@ final class LayeringTests: XCTestCase {
 
     /// 一条投递通道：无编号帧那条路整条没了，客户端收到的帧只有「进流表」一种去处。
     ///
-    /// 正控：`GatewayHost` 的 `makeStream` 必须命中 —— 否则说明扫描面取错了，
+    /// 正控：`LongConnection` 的 `makeStream` 必须命中 —— 否则说明扫描面取错了，
     /// 空集会被读成合规。
     func testTheSecondDeliveryPathIsGone() throws {
         var hits: [String] = []
@@ -990,7 +1184,7 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "无编号帧那条路的残留：\(hits)")
 
         let link = try String(
-            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/GatewayHost.swift"),
+            contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/LongConnection.swift"),
             encoding: .utf8
         )
         XCTAssertTrue(link.contains("func makeStream"), "造流入口没扫到 —— 判据可能扫错了树")
@@ -1004,7 +1198,7 @@ final class LayeringTests: XCTestCase {
     /// 末尾那条守的是「认不出时留痕要带名字」：不带 `\(kind)` 的那行 warn 现场只剩
     /// 「丢了一条东西」，而版本错配时最要紧的正是**丢的是哪一种**。
     func testTheApprovalCargoesAreRead() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/ConnectionEvents/ConnectionEventReader.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Events/EventReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         for kind in ["waterfall", "cancel", "emit"] {
             let hits = text.components(separatedBy: "\"\(kind)\"").count - 1
@@ -1062,14 +1256,14 @@ final class LayeringTests: XCTestCase {
             XCTAssertTrue(codeLines(in: text).contains { $0.1.contains("ConnectionPhase") },
                           "\(path) 没读 ConnectionPhase —— 「提出去」只改了声明？")
         }
-        // 旧宿主名不在这里守：`testTheOldNamesAreGone` 已扫全仓，重复一遍只会让失败信息更差。
+        // 旧宿主名不在这里守：`testTheOldNamesAreGone` 已扫 `ios/Sources`，重复只让报错更差。
     }
 
     /// 一条流的公开面没有连接级动作：「这条流坏了」与「整条连接断了」是两件事。
     ///
     /// 正控：`close` / `restart` 必须在（否则这段文本取错了，零命中是假绿）。
     func testLogicalStreamHasNoConnectionLevelActions() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Stream/StreamMux.swift")
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/Stream/StreamMux.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
         let body = try XCTUnwrap(block(startingAt: "final class LogicalStream", in: lines),
@@ -1098,7 +1292,7 @@ final class LayeringTests: XCTestCase {
         let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionStreamReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
-        let forbidden = ["StreamMux", "GatewayConnection", "URLSession", "MuxOpenFrame", "RpcClient"]
+        let forbidden = ["StreamMux", "WebSocketConnection", "URLSession", "MuxOpenFrame", "RpcClient"]
 
         XCTAssertTrue(lines.contains { $0.1.contains("static func read(") },
                       "没找到 `static func read(` —— 先怀疑路径或名字")
@@ -1120,8 +1314,8 @@ final class LayeringTests: XCTestCase {
     ///
     /// 盲区：类型体里若声明同名嵌套结构，切块会提前结束（漏报方向）；这一条靠评审看。
     func testOpeningFrameDoesNotKnowSessionPage() throws {
-        let text = try String(contentsOf: wireDirectory.appendingPathComponent("Mux.swift"),
-                              encoding: .utf8)
+        let text = try String(contentsOf: sourcesRoot.appendingPathComponent(
+            "Core/Gateway/LongConnection/Wire/MuxFrames.swift"), encoding: .utf8)
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard let start = lines.firstIndex(where: { $0 == "struct OpeningFrame {" }) else {
             return XCTFail("没找到顶格的 `struct OpeningFrame {` —— 先怀疑名字或路径")
@@ -1734,10 +1928,15 @@ final class LayeringTests: XCTestCase {
     /// `topLevelOnly` 用于方向检查：内层同名类型（`TailnetNode.MeshPath` 与
     /// `ConnectionBadge.MeshPath`）会互相误报；而跨层引用一个嵌套类型必须写出它的外层名字，
     /// 外层名字本身就在集合里 —— 所以只取顶层不会漏。
+    /// 收集实现层声明的类型名。
+    ///
+    /// 跳过各层下的 `Wire/`：那里面是两端契约形状（`OpeningFrame` 等），不是实现 ——
+    /// 契约之间互相引用是允许的，把它们算进来会让根 `Wire/` 的合法引用变成违规。
     private func declaredTypes(under directories: [URL], topLevelOnly: Bool = false) throws -> [String] {
         var names: [String] = []
         for directory in directories {
             for file in swiftFiles(under: directory) {
+                if file.path.contains("/Wire/") { continue }
                 let text = try String(contentsOf: file, encoding: .utf8)
                 names.append(contentsOf: topLevelOnly
                              ? Self.topLevelTypes(in: text)

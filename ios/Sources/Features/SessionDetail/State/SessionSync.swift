@@ -99,11 +99,11 @@ final class SessionSync: ObservableObject {
 
     /// 造流口：打开会话详情即造一条流，离屏即关掉它。
     ///
-    /// **连接归 App**（`GatewayHost`）——这一屏只说明「我要看这个会话」。
+    /// **连接归 App**（`LongConnection`）——这一屏只说明「我要看这个会话」。
     /// 传输层交来整帧，判读在 `SessionStreamReader`（纯函数），本层只做副作用并把
     /// 「这条流接下来怎么办」回给它 —— 判据在这边、动作在那边。
     ///
-    /// 类型是窄接口而不是 `GatewayHost`：连接级动作（重连整条连接）在这个类型上不存在，
+    /// 类型是窄接口而不是 `LongConnection`：连接级动作（重连整条连接）在这个类型上不存在，
     /// 于是「一条流坏了去重连全部」在这里写不出来。
     private let factory: any StreamFactory
     /// 本屏那一条流。关它、重开它都是它自己的方法 —— 连接与别的流不动。
@@ -138,7 +138,7 @@ final class SessionSync: ObservableObject {
     /// 合并窗口 = 一个渲染帧量级。未定稿内容逐帧到达无感知；事件文本晚一帧出现。
     private static let flushWindowNanos: UInt64 = 16_000_000
 
-    init(client: RpcClient, sessionId: String, link: GatewayHost) {
+    init(client: RpcClient, sessionId: String, link: LongConnection) {
         self.client = client
         self.sessionId = sessionId
         self.factory = link

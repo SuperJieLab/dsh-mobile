@@ -12,11 +12,11 @@ struct DshMobileApp: App {
     @StateObject private var node: TailnetNode
     @StateObject private var store: MeshStore
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
-    @StateObject private var link: GatewayHost
+    @StateObject private var link: LongConnection
     private let client: RpcClient
     /// 连接级事件流的收端 —— App 级，与连接同寿。两个消费方：待答表（清空）与
     /// 会话列表（逐个事件 + 代次重拉）。
-    private let events: ConnectionEventStream
+    private let events: EventStream
     /// 待答审批 —— App 级、唯一实例。不随任何一屏生死：停在会话列表时它照样在收。
     @StateObject private var approvals: ApprovalStore
 
@@ -25,9 +25,19 @@ struct DshMobileApp: App {
         let client = RpcClient()
         _node = StateObject(wrappedValue: node)
         _store = StateObject(wrappedValue: MeshStore(client: client, node: node))
-        _link = StateObject(wrappedValue: GatewayHost(client: client))
+        // 长连接只拿四个能力，不拿一元客户端本体：票 / 换票 / 传输 / 地址都在这里接一次，
+        // 之后它再也不认识 `RpcClient`。四个参数必填 —— 漏接一个编译不过。
+        _link = StateObject(wrappedValue: LongConnection(
+            authorization: { [weak client] in client?.validAccessToken() },
+            renewTicket: { [weak client] in
+                guard let client else { return .unavailable }
+                return await client.ticket()
+            },
+            session: { [weak client] in client?.meshSession ?? .shared },
+            baseURL: { [weak client] in client?.baseURL }
+        ))
         self.client = client
-        let events = ConnectionEventStream()
+        let events = EventStream()
         self.events = events
         _approvals = StateObject(wrappedValue: ApprovalStore(
             answerer: GatewayApprovalAnswerer(client: client)

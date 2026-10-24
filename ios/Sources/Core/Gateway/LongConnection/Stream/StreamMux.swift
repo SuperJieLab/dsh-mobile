@@ -1,63 +1,15 @@
 /**
  * 流表：这条连接上开着哪几条流，以及每条流自己的编号、退避与「这一次尝试」。
  *
- * 它不认识 socket：发文本、要连接、放弃连接三件事都经 `StreamPort`（由传输层实现）。
+ * 它不认识 socket：发文本、要连接两件事都经 `Channel`（由 WebSocket 层实现）。
  * 它也不认识业务：每条流的判读是造流时注入的 `StreamBehavior`。
  *
- * `LogicalStream` 与 `StreamAttempt` 住在同一个文件里，是刻意的 ——
- * 流的四个可变字段（编号 / 文本 / 退避档位 / 在途标记）只有本文件能写，编译器替
- * 「业务侧改不到它们」这句话把关；构造入口同样只有 `makeStream` 一条。
+ * `LogicalStream` 与流表住同一个文件，是刻意的 —— 流的四个可变字段（编号 / 文本 /
+ * 退避档位 / 在途标记）是 `fileprivate`：只有本文件能写，编译器替「业务侧改不到它们」
+ * 这句话把关；构造入口同样只有 `makeStream` 一条。跨层的两个形状（`Channel` /
+ * `StreamAttempt`）不掌握任何可变状态，各住自己的文件。
  */
 import Foundation
-
-/// 放弃这条连接的理由 —— 流层判出来的事，动作归传输层。
-enum AbandonReason: Equatable {
-    /// 这次开流迟迟等不到开口帧。
-    case streamNotReady
-}
-
-/**
- * 流层要传输层做的事，只有这几个。
- *
- * 端口归消费方（本层定义、传输层遵循）：于是类型依赖单向 —— 传输层认识 `StreamMux`
- * 的具体类型，本层只认识这个协议。
- */
-@MainActor
-protocol StreamPort: AnyObject {
-
-    /// 发一段已经编好的文本。没有连接时静默（一个字节都不记）。
-    func send(_ text: String)
-
-    /// 现在就要一条连接：取消排着的那一拍退避，立刻建。不 active 时自己空转。
-    func ensureConnected()
-
-    /// 放弃这条连接，然后按退避重连。
-    func abandon(_ reason: AbandonReason, attempt: StreamAttempt)
-
-    /// 某条流建成了 —— 连接阶段与连接级退避由传输层据此更新。
-    ///
-    /// 不带编号是刻意的：这一层的判据只有「这条连接上终于有东西通了」，它不认识流表、
-    /// 也就无从知道是哪条流 —— 带上编号反而会让读签名的人以为它需要这个事实。
-    func didEstablish()
-
-    /// 当前这一代的令牌；`nil` = 手上没有 socket。
-    var attempt: StreamAttempt? { get }
-}
-
-/**
- * 「这一次尝试」的令牌：哪一代连接、哪一条传输。
- *
- * 两个字段缺一不可：单看代次，同代之内传输也可能已被替换（连接是先关后建），
- * 那时一个被取代的回调若还被算数，就会把刚建好的连接掐掉、再排一次重连。
- */
-struct StreamAttempt: Equatable {
-    let generation: Int
-    let connection: AnyObject
-
-    static func == (lhs: StreamAttempt, rhs: StreamAttempt) -> Bool {
-        lhs.generation == rhs.generation && lhs.connection === rhs.connection
-    }
-}
 
 /**
  * 一条流 —— 业务手里的一等对象，也是流表里的那一行。
@@ -80,7 +32,7 @@ final class LogicalStream {
     fileprivate(set) var openInFlight = false
     /// 这一条流是否已经开出去过。再开一次就是新的开流，要新号。
     fileprivate(set) var openedAtLeastOnce = false
-    /// 本次开流尝试的令牌（就绪超时靠它判「还是不是这一次」）。
+    /// 本次开流尝试的令牌（开流超时靠它判「还是不是这一次」）。
     fileprivate(set) var attempt: StreamAttempt?
     fileprivate var retryWorkItem: DispatchWorkItem?
     fileprivate weak var owner: StreamMux?
@@ -111,24 +63,32 @@ final class LogicalStream {
 @MainActor
 final class StreamMux {
 
-    /// 就绪硬超时：从**每一次开流尝试**起算，多久没等到开口帧就当这次尝试没成。
+    /// 开流超时：从**每一次开流尝试**起算，多久没等到开口帧就当这次尝试没成。
     ///
     /// 45 秒不是拍的：打开帧是这条流里最大的一帧，慢链路实测约 125 KB/s，而两端约定的
     /// 打开帧上界是 4 MiB ⇒ 约 34 秒，加建连约 2 秒。两端任一侧改了上界，这个数要重算。
     ///
+    /// 它还必须**短于**连接层的判死窗口：到点后本层要先把「只重开这一条」做完，
+    /// 连接层才轮到判死。两者同值时会在同一刻触发，行为退化成整条连接重连。
+    ///
     /// 做成可变不是为了灵活性，是为了让这条路径**能被观测**：拨到几十毫秒就在测试里看得见
     /// 它发生，而不是只活在文档里。
-    var readyTimeout: TimeInterval = 45
+    var openTimeout: TimeInterval = 45
 
-    private weak var port: (any StreamPort)?
+    private weak var channel: (any Channel)?
     private var byId: [StreamId: LogicalStream] = [:]
     private var registrations = 0
-    /// 已建成的流编号。阶段说连接，这个集合说每条流。
-    private(set) var established: Set<StreamId> = []
+    /// 已建成的流编号。阶段说连接，这个集合说每条流 —— 只在本文件里读写。
+    private var established: Set<StreamId> = []
 
-    /// 接上传输层。弱引用：传输层持有本对象，反向只需能喊话。
-    func attach(port: any StreamPort) {
-        self.port = port
+    /// 接上传输层，并订阅它发的那两个事实：停用、换代次。
+    ///
+    /// 订阅在这里而不是装配层：状态在本表，反应也只能由本表做 —— 让上级接事件再回调，
+    /// 等于在装配层又开一个能改流表的入口。弱引用：传输层持有本对象，反向只需能喊话。
+    func attach(channel: any Channel) {
+        self.channel = channel
+        channel.onStopped = { [weak self] in self?.closeAll() }
+        channel.onGenerationChange = { [weak self] in self?.reopenAll() }
     }
 
     // MARK: - 造流与关流
@@ -149,10 +109,10 @@ final class StreamMux {
         stream.owner = self
         byId[fresh.id] = stream
         // 有连接就立刻开出去；没有就让传输层去建一条（它自己判要不要动）。
-        if port?.attempt != nil {
+        if channel?.attempt != nil {
             sendOpen(stream)
         } else {
-            port?.ensureConnected()
+            channel?.ensureConnected()
         }
         return stream
     }
@@ -175,10 +135,10 @@ final class StreamMux {
         established.remove(stream.id)
         stream.openInFlight = false
         guard renumber(stream) else { return }
-        if port?.attempt != nil {
+        if channel?.attempt != nil {
             sendOpen(stream)
         } else {
-            port?.ensureConnected()
+            channel?.ensureConnected()
         }
     }
 
@@ -199,7 +159,6 @@ final class StreamMux {
             stream.openInFlight = false
             stream.retryAttempt = 0
             established.insert(stream.id)
-            port?.didEstablish()
         }
         switch reply.next {
         case .keep:
@@ -217,18 +176,20 @@ final class StreamMux {
     // MARK: - 连接换代次 / 收尾
 
     /// 换代次：每条已开过的流换新号重开，第一次开出去的流用登记时造的那个号。
-    func reopenAll() {
+    private func reopenAll() {
         established.removeAll()
         for stream in orderedStreams() {
             if stream.openedAtLeastOnce {
                 guard renumber(stream) else { continue }
             }
+            // 每条流各记一行：连接层不再报「这一代挂着谁」，重开了哪些只有这里说得清。
+            Log.info(Log.Module.session, "[\(stream.label)] reopened on g\(channel?.attempt?.generation ?? 0)")
             sendOpen(stream)
         }
     }
 
     /// 连接收尾：清空登记，**不发帧**（线都没了，帧发不出去）。
-    func closeAll() {
+    private func closeAll() {
         for stream in Array(byId.values) { forget(stream) }
     }
 
@@ -237,13 +198,6 @@ final class StreamMux {
         byId[stream.id] === stream && stream.retryWorkItem != nil
     }
 
-    /// 有没有一条流「已发出 open、还没收到开口帧」—— 心跳让路的唯一判据。
-    var hasPendingOpening: Bool {
-        byId.values.contains { $0.openInFlight }
-    }
-
-    /// 表里各条流的标签（按登记序），只进日志。
-    var streamLabels: [String] { orderedStreams().map(\.label) }
 
     // MARK: - 编号与重开
 
@@ -278,12 +232,12 @@ final class StreamMux {
 
     /// 在这一条流上发出它的开流内容。
     private func sendOpen(_ stream: LogicalStream) {
-        // 这一次尝试还没建成：旧编号的「建成」不成立，否则就绪超时与心跳都会照着旧账判。
+        // 这一次尝试还没建成：旧编号的「建成」不成立，否则开流超时会照着旧账判。
         established.remove(stream.id)
         stream.openInFlight = true
         stream.openedAtLeastOnce = true
-        port?.send(stream.text)
-        armReadyTimeout(stream)
+        channel?.send(stream.text)
+        armOpenTimeout(stream)
     }
 
     private func sendCancel(_ id: StreamId) {
@@ -291,25 +245,27 @@ final class StreamMux {
             Log.warn(Log.Module.session, "cancel frame encoding failed for stream \(id)")
             return
         }
-        port?.send(text)
+        channel?.send(text)
     }
 
-    /// 就绪硬超时：按流各起一个，判据是「还是这一次尝试」。
-    private func armReadyTimeout(_ stream: LogicalStream) {
-        guard let token = port?.attempt else { return }
+    /// 开流超时：按流各起一个，判据是「还是这一次尝试」。
+    private func armOpenTimeout(_ stream: LogicalStream) {
+        guard let token = channel?.attempt else { return }
         stream.attempt = token
         let id = stream.id
-        let budget = readyTimeout
+        let budget = openTimeout
         let label = stream.label
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000))
-            guard let self, self.port?.attempt == token, self.byId[id] === stream,
+            guard let self, self.channel?.attempt == token, self.byId[id] === stream,
                   stream.openInFlight, !self.established.contains(id) else { return }
-            // 这一行是「这次连接为什么没成」的第一现场：45 秒还没等到打开帧，通常意味着
-            // 慢链路正传一大帧，或者对面根本没在服务这个会话。
+            // 这一行是「这条流为什么没开成」的第一现场。
+            //
+            // 只重开这一条：连接自有它的判死窗口兜着（且比这个超时更长），流层只管流。
+            // 一条流开不起来，不该把同一连接上的别的流一起带走。
             Log.warn(Log.Module.session,
-                     "[\(label)] ready timeout (\(Int(budget))s) — closing and retrying")
-            self.port?.abandon(.streamNotReady, attempt: token)
+                     "[\(label)] opening timeout (\(Int(budget))s) — reopening this stream only")
+            self.scheduleRetry(stream)
         }
     }
 
@@ -317,8 +273,7 @@ final class StreamMux {
 
     /// 这条流被拒但值得再试：旧号当场作废，新号等退避到了再发。
     ///
-    /// 等待期间这条流不在等开口帧，于是心跳照常判活 —— 不会因为「一条流在睡觉」而
-    /// 放过半死连接。
+    /// 等待期间这条流不在等开口帧 —— 于是它不会被自己的开流超时反复重开。
     private func scheduleRetry(_ stream: LogicalStream) {
         sendCancel(stream.id)
         established.remove(stream.id)
@@ -357,10 +312,10 @@ final class StreamMux {
         guard Self.shouldOpenOnRetry(
             openInFlight: stream.openInFlight, established: established.contains(stream.id)
         ) else { return }
-        if port?.attempt != nil {
+        if channel?.attempt != nil {
             sendOpen(stream)
         } else {
-            port?.ensureConnected()
+            channel?.ensureConnected()
         }
     }
 

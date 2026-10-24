@@ -8,9 +8,9 @@ struct SessionListView: View {
     /// 取数走 `state`，不经这里。
     @ObservedObject var client: RpcClient
     /// 到网关的常驻连接（App 级）。本屏只用它传给会话详情 —— 连接不随哪一屏生死。
-    let link: GatewayHost
+    let link: LongConnection
     /// 连接级事件流。列表是它的消费方之一：逐个事件改一行，代次报到就重拉一次。
-    let events: ConnectionEventStream
+    let events: EventStream
 
     /// 取数与三种面。`@StateObject`：视图重建时保留，不随 body 重算重建。
     @StateObject private var state: SessionListState
@@ -23,7 +23,7 @@ struct SessionListView: View {
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @EnvironmentObject private var store: MeshStore
 
-    init(client: RpcClient, link: GatewayHost, events: ConnectionEventStream) {
+    init(client: RpcClient, link: LongConnection, events: EventStream) {
         self.client = client
         self.link = link
         self.events = events
