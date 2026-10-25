@@ -89,7 +89,7 @@ final class SessionSync: ObservableObject {
     @Published private(set) var displayedModel: ModelSelection? = nil
 
     private let client: RpcClient
-    private let sessionId: String
+    let sessionId: String
     /// 内存里的镜像。视图重建会新建一个 `SessionSync`、窗口重取一次 ——
     /// 服务端此刻给的比本地残留可信。
     private var mirror = SessionMirror()
@@ -392,7 +392,7 @@ final class SessionSync: ObservableObject {
     func startFollowing() {
         // 一次屏幕只造一条：重复调用不换号、也不多一条流（视图重算会让这里被调多次）。
         guard stream == nil else { return }
-        stream = factory.makeStream(self)
+        stream = factory.makeStream(SessionBehavior(owner: self))
         // 首屏兜底与开流成败无关：编不出帧时它是唯一还能把内容送到屏幕上的路。
         scheduleFirstScreenFallback()
     }
@@ -432,7 +432,11 @@ final class SessionSync: ObservableObject {
     /// 只有这两类值得计时：它们各自代表「首屏窗口到手」与「一条事件落地」，延迟超标时这
     /// 两行是判断卡在哪一段的第一现场。其余类别（占用、收尾）一个渲染帧就完了，
     /// 计时只会把日志撑大。
-    private func recordPerf(_ reading: StreamReading, bytes: Int, recv: Double, apply: Double) {
+    /// 性能记录。**与 `apply` 分开是为了顺序**：先应用再看时序会把「应用到哪一步」
+    /// 记成「收到」，两者之差正是这一跳的耗时。
+    ///
+    /// 对外开放的理由同 `apply` —— 它是本类为适配器开的第二扇门。
+    func recordPerf(_ reading: StreamReading, bytes: Int, recv: Double, apply: Double) {
         switch reading.content {
         case .opening(let opening):
             Log.perf(Log.Module.session, PerfRecord(
@@ -455,7 +459,10 @@ final class SessionSync: ObservableObject {
     ///
     /// 「这条流接下来怎么办」不在这里决定 —— 它随判读结果（`reading.next`）一起回去，
     /// 由连接层执行；本方法只管屏幕上发生了什么。
-    private func handle(_ reading: StreamReading) {
+    ///
+    /// 对外开放是因为 `SessionBehavior` 要调它（它只做翻译，副作用留在这里）：
+    /// 这是本类为适配器开的两扇门之一，门开得越窄越好 —— 别把 `mirror` / `transient` 也交出去。
+    func apply(_ reading: StreamReading) {
         switch reading.content {
         case .opening(let opening):
             applyOpening(opening)
@@ -667,35 +674,5 @@ final class SessionSync: ObservableObject {
         nodes = assembler.assemble(mirror.events)
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
-    }
-}
-
-// MARK: - 这条流的两段自定义
-
-/// 会话流：开流文本在这一层拼（请求只在状态层里拼），帧的判读在 `SessionStreamReader`
-/// （纯函数）。流层只问这两件事，别的都不知道。
-extension SessionSync: StreamBehavior {
-
-    /// 日志里认人的标识 —— 会话 id。流层不解释它。
-    var label: String { sessionId }
-
-    /// 凭刚造好的编号拼出开流文本：编号由流表造，`op` 与会话由这一层给。
-    func build(_ id: StreamId) throws -> String {
-        try MuxOpenFrame.following(sessionId: sessionId, streamId: id).encoded()
-    }
-
-    /// 一帧到手：判读 → 副作用 → 回一句话。
-    ///
-    /// 到达与应用的边界卡在这一跳的两侧：`devRecv` 是帧到手，`devApply` 是本层处理完
-    ///（镜像合并、状态机吸收、刷新闸标记都在里面）。
-    func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
-        let reading = SessionStreamReader.read(
-            envelope: envelope, raw: raw, sessionId: sessionId
-        )
-        let recv = PerfRecord.nowMs()
-        handle(reading)
-        let apply = PerfRecord.nowMs()
-        recordPerf(reading, bytes: raw.count, recv: recv, apply: apply)
-        return StreamReply(establishes: reading.establishes, next: reading.next)
     }
 }

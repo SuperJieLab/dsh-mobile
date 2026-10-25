@@ -816,6 +816,86 @@ final class LayeringTests: XCTestCase {
                       "写入口不叫 update(session:baseURL:) 了")
     }
 
+    /// 一个类型不许同时被视图与流层消费。
+    ///
+    /// 两个协议各自代表一端的消费者：`ObservableObject` 意味着有视图在读它的 `@Published`，
+    /// `StreamBehavior` 意味着流层（Core）拿它当帧判读器。同一个类型同时是两者，就把
+    /// 「改流层判读协议」与「改视图状态」绑在一起 —— 改一边要动另一边，而两边根本不相关。
+    ///
+    /// **按类型名聚合，不按单行**：conform 可以写在 `extension` 里，与类型声明不在同一行。
+    /// 只扫单行会漏掉那个形态。
+    ///
+    /// 判据自带正控：两个集合都必须非空，否则交集永远为空。
+    func testNoTypeIsBothViewStateAndStreamBehavior() throws {
+        var viewStates: Set<String> = []
+        var streamBehaviors: Set<String> = []
+
+        for file in swiftFiles(under: sourcesRoot) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (_, code) in codeLines(in: text) {
+                for name in Self.conformedTypes(conformingTo: "ObservableObject", in: code) {
+                    viewStates.insert(name)
+                }
+                for name in Self.conformedTypes(conformingTo: "StreamBehavior", in: code) {
+                    streamBehaviors.insert(name)
+                }
+            }
+        }
+
+        XCTAssertFalse(viewStates.isEmpty, "一个 ObservableObject 都没扫到 —— 先怀疑正则")
+        XCTAssertFalse(streamBehaviors.isEmpty, "一个 StreamBehavior 都没扫到 —— 先怀疑正则")
+
+        let both = viewStates.intersection(streamBehaviors).sorted()
+        XCTAssertEqual(both, [],
+                       "这些类型同时被视图与流层消费：\(both) —— 判读器要单独一个类型")
+    }
+
+    /// 这一行里 conform 了 `protocol` 的类型名。认三种写法：
+    /// `final class X: P`、`extension X: P`、`struct X: P, Q`。
+    private static func conformedTypes(conformingTo proto: String, in line: String) -> [String] {
+        let pattern = "\\b(?:class|struct|enum|extension)\\s+(\\w+)\\s*:[^{]*\\b"
+            + NSRegularExpression.escapedPattern(for: proto) + "\\b"
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        return re.matches(in: line, options: [], range: range).compactMap { m in
+            Range(m.range(at: 1), in: line).map { String(line[$0]) }
+        }
+    }
+
+    /// 状态源为流层适配器开的门**恰好两扇**，且顺序是「先应用、再记性能」。
+    ///
+    /// 门开得越窄越好：把 `mirror` / `transient` 也交出去，适配器就能绕过判读直接改镜像，
+    /// 而「一帧怎么变成屏幕上的变化」立刻出现第二个决策者。
+    ///
+    /// 顺序也是判据的一部分：先记性能再应用，会把「应用到哪一步」记成「收到」——
+    /// 两者之差正是这一跳的耗时，颠倒了这条时延数据就没有意义。
+    func testTheBehaviorGetsExactlyTwoDoors() throws {
+        let stateSource = sourcesRoot.appendingPathComponent(
+            "Features/SessionDetail/State/SessionSync.swift")
+        let lines = codeLines(in: try String(contentsOf: stateSource, encoding: .utf8))
+
+        // 正控：确认读到了本体。
+        XCTAssertTrue(lines.contains { $0.1.contains("class SessionSync") }, "没读到状态源")
+
+        // 只为适配器开放的两个入口（`internal`，不带 `private`）。
+        let doors = ["func apply(_ reading: StreamReading)",
+                     "func recordPerf(_ reading: StreamReading"]
+        for door in doors {
+            XCTAssertTrue(lines.contains { $0.1.contains(door) },
+                          "入口不见了：\(door)")
+        }
+
+        // 适配器里两个调用的先后。
+        let behavior = sourcesRoot.appendingPathComponent(
+            "Features/SessionDetail/State/SessionBehavior.swift")
+        let bLines = codeLines(in: try String(contentsOf: behavior, encoding: .utf8))
+        let applyAt = bLines.first { $0.1.contains("owner.apply(") }?.0
+        let perfAt = bLines.first { $0.1.contains("owner.recordPerf(") }?.0
+        let applyLine = try XCTUnwrap(applyAt, "适配器没调 apply")
+        let perfLine = try XCTUnwrap(perfAt, "适配器没调 recordPerf")
+        XCTAssertLessThan(applyLine, perfLine, "先应用、再记性能 —— 顺序颠倒时延数据就错了")
+    }
+
     /// 端点层只认识两个值：一个地址、一条传输。
     ///
     /// 它被两条链路共读，所以往它身上加任何一类知识都会被另一条链路继承 ——
@@ -1070,7 +1150,7 @@ final class LayeringTests: XCTestCase {
     /// 豁免要写出坐标，坐标对不上（清单里那个文件不再构造，或别处也构造）就红。
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
-            ("following", "Features/SessionDetail/State/SessionSync.swift"),
+            ("following", "Features/SessionDetail/State/SessionBehavior.swift"),
             ("events", "Core/Gateway/Events/EventStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
