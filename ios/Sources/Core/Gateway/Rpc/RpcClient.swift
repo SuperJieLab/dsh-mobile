@@ -1,17 +1,16 @@
 import Foundation
 
-/// 与 Mac 侧网关的**唯一出口**：带身份地发一次请求，外加维护身份本身。
+/// 与 Mac 侧网关的**身份门面**：带票地发一次请求，外加维护身份本身。
 ///
 /// 它**不认识任何 op**。每个 op 的请求怎么拼、回包怎么读，归用到它的那个功能
-/// （`Features/*/State/` 下各自的取数与下发）。这里只回答三件事：端点在哪（`activate`）、
-/// 关系还在不在（`adopt` / `sever` / `isPaired`）、这一次请求带什么票且撞上 401 之后怎么办
-/// （`perform`）。
+/// （`Features/*/State/` 下各自的取数与下发）。这里只回答三件事：关系还在不在
+/// （`adopt` / `sever` / `isPaired`）、这一次请求带什么票（`ticket` / `validAccessToken`）、
+/// 撞上 401 之后怎么办（`perform`）。
 ///
-/// **传输为什么也在这里。** 拼 `POST /rpc`、按状态码与信封判成败、把 `URLError` 原样带出 ——
-/// 这些看起来是纯网络，但它们和身份是同一件事的两面：401 到底读成「换票再来」还是「关系断了」，
-/// 取决于这是一次业务请求还是一次鉴权请求，而那正是 `perform` 的分支。分成两个文件时这个判断
-/// 要跨文件传一个含糊的布尔（`treat401AsRefusal`），语义在传递中丢掉一半。合起来的判据是
-/// **一次请求从构造到校验是一段不可分的过程**，分开后没有任何一方能单独说清 401 的含义。
+/// **发字节那半不在这里**，在 `HttpTransport` —— 它不认识票，于是「换票那一发不带票」
+/// 不是一条纪律，而是结构上拿不到票源：票闸在 `perform`，裸发层没有它。
+/// 401 的两种读法（「换票再来」与「关系断了」）仍只在本类判：裸发层只负责把
+/// 「这是一次鉴权请求」这个**事实**传上来（`treat401AsRefusal`），怎么处置由这里决定。
 ///
 /// **要票的唯一入口是 `ticket()`**，返回三态（`AccessTicket`）而不是 Bool：拿不到的原因分成
 /// 「不会自己好」与「等一等就好」两种，其中只有后者值得重试。并发的调用共享同一个在途换票
@@ -28,13 +27,11 @@ import Foundation
 @MainActor
 final class RpcClient: ObservableObject {
 
-    /// 网关端点 —— **激活前不存在**：App 在节点验证 Running 之前不持有
-    /// 任何网关地址，`activate` 是它从无到有的唯一时刻。
-    private(set) var baseURL: URL?
-
-    /// 组网激活后换上的传输：激活前 = `.shared`（但端点不存在，请求不会发出）。
-    /// `WebSocketConnection` 的建连源每次现取，激活后下一轮连接即走隧道。
-    private(set) var meshSession: URLSession = .shared
+    /// 地址与传输的主人。本类只读它，不存副本 —— 两条链路读同一个实例，
+    /// 否则「组网激活换了这一份、那一份没换」会表现为「切了隧道仍往老地址打」。
+    private let endpoint: Endpoint
+    /// 裸发层 —— 票闸在下面，它不认识票。
+    private let http: HttpTransport
 
     /// 设备凭证在手机侧的家。默认共享单例：全 App 一个身份。
     private let credentials: CredentialStore
@@ -42,9 +39,16 @@ final class RpcClient: ObservableObject {
     /// 访问票的生命周期（有没有、还剩多久、要不要换、并发谁去换）。
     ///
     /// 换票动作 `renewTicket` 在本类 —— 它要线路与协议，而票那一层不该认识这些。
-    /// 接线在 `init` 末尾做而不是属性初始化式里：那个闭包要读 `self.renewTicket`，
-    /// 而属性初始化式跑在 `self` 完整可用之前（编译器会拦）。
-    private var tickets = TicketKeeper { _ in .retryLater }
+    ///
+    /// **为什么是 `lazy`**：构造它要一个读 `self.renewTicket` 的闭包，而 Swift 要求
+    /// 闭包捕获 `self` 时所有存储属性已初始化 —— 包括这一条自己。这是语言层的环。
+    /// `lazy` 是唯一的直说方式：**一个定义、一个构造点**，首次用时才求值，那时 `self`
+    /// 已完整。它不同于「先塞一个假值、稍后再替换」—— 后者存在一个「票层是假的」的阶段，
+    /// 而这里不存在那个阶段。
+    private lazy var tickets = TicketKeeper { [weak self] deviceToken in
+        guard let self else { return .retryLater }
+        return await self.renewTicket(deviceToken: deviceToken)
+    }
 
     /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
     @Published private(set) var isPaired: Bool
@@ -57,26 +61,13 @@ final class RpcClient: ObservableObject {
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
     nonisolated static let timeout: TimeInterval = 10
 
-    init(credentials: CredentialStore? = nil) {
+    init(endpoint: Endpoint, credentials: CredentialStore? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
         let store = credentials ?? .shared
+        self.endpoint = endpoint
+        self.http = HttpTransport(endpoint: endpoint)
         self.credentials = store
         self.isPaired = store.hasDeviceToken
-        // 换成真的换票动作。弱引用：票那一层活不过门面，没有理由让它把门面吊住。
-        tickets = TicketKeeper { [weak self] deviceToken in
-            guard let self else { return .retryLater }
-            return await self.renewTicket(deviceToken: deviceToken)
-        }
-    }
-
-    /// 组网激活：节点验证 Running 后由 store 调用，这是端点从无到有的唯一时刻 ——
-    /// HTTP 换 session、WebSocket 换建连源，整体切到 tailnet。消息层零感知：
-    /// 协议、凭证、身份状态机都不动，只换传输与地址。
-    func activate(session: URLSession, baseURL: URL) {
-        meshSession = session
-        self.baseURL = baseURL
-        // 传输切换是局域网 → tailnet 的分界点状态迁移，在此留痕。
-        Log.info(Log.Module.gateway, "activated: HTTP+WS switched to \(baseURL.absoluteString)")
     }
 
     // MARK: - 身份
@@ -132,11 +123,23 @@ final class RpcClient: ObservableObject {
     ///
     /// 三条出口对应三种处境，不合并：服务端 401 意味着关系没了（连同设备凭证一起清掉，
     /// App 回到未配对），传输失败只是这一次没成。
+    ///
+    /// **它直接走裸发层，不走 `perform`** —— 这不是省一层，是这道闸的落点：
+    /// `perform` 会先问票层要票，而此刻票层正等在**这次换票**上 ⇒ 问它就是等自己。
+    /// 走裸发层则结构上拿不到票（`authorization` 传 nil），那条回环不存在。
     private func renewTicket(deviceToken: String) async -> TicketKeeper.Renewal {
         do {
-            let response: RefreshResponse = try await perform(
-                RefreshRequest(deviceToken: deviceToken), authenticated: false
+            let response: RefreshResponse? = try await http.send(
+                RefreshRequest(deviceToken: deviceToken),
+                authorization: nil,
+                treat401AsRefusal: true
             )
+            guard let response else {
+                // 鉴权请求的 401 在裸发层里自带语义上抛，不会返回 nil —— 真到了这里说明
+                // 有人在裸发层改了那条分支。按「换不到」处理，不静默。
+                Log.warn(Log.Module.gateway, "refresh returned without a verdict")
+                return .retryLater
+            }
             guard let token = response.accessToken, let expiresAt = response.expiresAt else {
                 // `ok: true` 却没带票：服务端的应答有问题，下一轮还会是同一个答案。
                 Log.warn(Log.Module.gateway, "refresh answered without a ticket")
@@ -165,24 +168,25 @@ final class RpcClient: ObservableObject {
     /// 一定是一份服务端声明成功的应答。**这条校验只写在这里**：op 散到各功能之后，
     /// 少写一次不会编译报错、也不会让任何断言变红，只会静默接受一份失败回包。
     ///
-    /// - Parameter authenticated: 这次请求要不要票。只有 `pair` 与换票本身是 `false`。
-    ///   401 该怎么读也由它定（见 `sendOnce`）—— 两件事同源，所以只收一个参数。
+    /// - Parameter authenticated: 这次请求要不要票。**配对是唯一的 `false`** ——
+    ///   换票自己不走这条路（它直接经 `HttpTransport.send`，结构上拿不到票）。
+    ///   401 该怎么读也由它定（见 `HttpTransport.send`）—— 两件事同源，所以只收一个参数。
     func perform<Request: Encodable, Response: GatewayResponse>(
         _ request: Request,
         authenticated: Bool = true
     ) async throws -> Response {
         // 未激活 = 没有地址可打：fail-fast，不猜地址。
-        guard let baseURL else { throw RpcClientError.notActivated }
+        guard let baseURL = endpoint.baseURL else { throw RpcClientError.notActivated }
         // 手上有票才发。没有票照样发出去，换来的是一次注定被拒的往返 —— 服务端记一条
         // 「没有有效票」，客户端再换票重试，同一件事花两次。先换再发只多一次 wait，
         // 而在票还在的场景里（15 分钟内）它一次都不等。
         let ticket = authenticated ? await self.ticket() : nil
-        // 标注类型：`sendOnce` 的返回只在这里判空，编译器无从推它的泛型参数。
-        let first: Response? = try await sendOnce(
-            request, at: baseURL, authorization: ticket?.token, treat401AsRefusal: !authenticated
+        // 标注类型：`send` 的返回只在这里判空，编译器无从推它的泛型参数。
+        let first: Response? = try await http.send(
+            request, authorization: ticket?.token, treat401AsRefusal: !authenticated
         )
         if let first { return first }
-        // 走到这里 = 业务请求被 401 拒了（鉴权请求的 401 在 `sendOnce` 里自带语义上抛，
+        // 走到这里 = 业务请求被 401 拒了（鉴权请求的 401 在 `send` 里自带语义上抛，
         // 不会返回 nil）。换一张票（单飞），恰好重试一次。
         //
         // 票换不到时按处境说不通的话：`.unavailable` 是「未配对 / 关系被撤销」，
@@ -192,8 +196,8 @@ final class RpcClient: ObservableObject {
         // 死票再发一遍。设备凭证在这里现取 —— 它是这一刻的事实，不缓存在票那一层。
         switch await tickets.renewAnyway(deviceToken: credentials.deviceToken) {
         case .granted(let fresh):
-            let retried: Response? = try await sendOnce(
-                request, at: baseURL, authorization: fresh, treat401AsRefusal: false
+            let retried: Response? = try await http.send(
+                request, authorization: fresh, treat401AsRefusal: false
             )
             if let retried { return retried }
             throw RpcClientError.unauthenticated
@@ -204,82 +208,6 @@ final class RpcClient: ObservableObject {
         }
     }
 
-    /// 发一次，不解身份语义，并在解码后校验信封。
-    ///
-    /// 返回 `nil` 只表示**业务请求被 401 拒了**（换票再来一次的号）。配对与换票的 401 是
-    /// **定论**，必须读出信封里的原因上抛：配对码不对就要说配对码不对。
-    private func sendOnce<Request: Encodable, Response: GatewayResponse>(
-        _ request: Request,
-        at baseURL: URL,
-        authorization: String?,
-        treat401AsRefusal: Bool
-    ) async throws -> Response? {
-        var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // 身份只走传输头，不进消息体：消息体的每一个字段都是协议的一部分，
-        // 凭证放进去会让它出现在日志、重放与错误回显里。
-        if let authorization {
-            urlRequest.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
-        }
-        urlRequest.timeoutInterval = Self.timeout
-        urlRequest.httpBody = try JSONEncoder().encode(request)
-
-        let payload: Data
-        let urlResponse: URLResponse
-        do {
-            (payload, urlResponse) = try await meshSession.data(for: urlRequest)
-        } catch {
-            // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
-            Log.warn(
-                Log.Module.gateway,
-                "transport: \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
-            )
-            throw RpcClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
-        }
-
-        if let http = urlResponse as? HTTPURLResponse {
-            guard http.statusCode != 401 else {
-                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层换票重试；鉴权请求
-                // 的 401 自带语义，必须读出信封上抛。
-                guard treat401AsRefusal else {
-                    Log.debug(Log.Module.gateway, "401 on business op — renewing ticket")
-                    return nil
-                }
-                if let failure = envelopeFailure(in: payload) {
-                    if failure.code == GatewayErrorCode.unauthenticated.rawValue {
-                        Log.info(
-                            Log.Module.gateway,
-                            "auth op refused: \(failure.code) — \(failure.message)"
-                        )
-                        throw RpcClientError.unauthenticated
-                    }
-                    throw RpcClientError.refused(failure)
-                }
-                throw RpcClientError.unauthenticated
-            }
-            if http.statusCode != 200 {
-                Log.warn(Log.Module.gateway, "HTTP \(http.statusCode) from \(baseURL.host ?? "?")")
-                throw RpcClientError.badStatus(http.statusCode)
-            }
-        }
-
-        let response: Response
-        do {
-            response = try JSONDecoder().decode(Response.self, from: payload)
-        } catch {
-            // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
-            // 比解码器的报错信息有用得多。
-            if let failure = envelopeFailure(in: payload) {
-                Log.warn(Log.Module.gateway, "op refused: \(failure.code) — \(failure.message)")
-                throw RpcClientError.refused(failure)
-            }
-            Log.warn(Log.Module.gateway, "malformed response: \(String(describing: error))")
-            throw RpcClientError.malformedResponse(detail: String(describing: error))
-        }
-        try response.validate()
-        return response
-    }
 }
 
 /// 换票没成（网络不通 / 网关不在）—— 只用来给「这次失败不是因为身份」一个可读的说法。
@@ -287,12 +215,3 @@ private struct TicketUnavailable: LocalizedError {
     var errorDescription: String? { "换取访问票失败 —— 网关没连上。" }
 }
 
-/// 只用来在解码失败时兜出信封里的错误。
-private struct FailureEnvelope: Decodable {
-    let error: GatewayFailure?
-}
-
-/// 信封里的 error（没有就 nil）。
-private func envelopeFailure(in payload: Data) -> GatewayFailure? {
-    (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
-}

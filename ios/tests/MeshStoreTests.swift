@@ -44,27 +44,27 @@ final class MeshStoreTests: XCTestCase {
         let config = MeshConfig(controlURLString: "https://203.0.113.10:8443",
                                 gatewayURLString: "http://100.64.0.1:3081")
         let node = FakeNode()
-        let client = FakeClient()
-        let store = MeshStore(client: client, node: node)
+        let endpoint = FakeEndpoint()
+        let store = MeshStore(endpoint: endpoint, node: node)
         await store.start(config: config)
-        XCTAssertTrue(client.activations.isEmpty,
+        XCTAssertTrue(endpoint.updates.isEmpty,
                       "K4a start 不激活：未激活 = 端点不存在，不兜底")
 
         // 唯一激活点：节点验证 Running → client 恰收到一次「隧道 session + 配置地址」。
         let tunnel = URLSession(configuration: .ephemeral)
         node.nodeState = .running
         node.onVerifiedRunning?(tunnel)
-        XCTAssertTrue(client.activations.count == 1
-                      && client.activations[0].0 === tunnel
-                      && client.activations[0].1 == config.gatewayBaseURL!,
+        XCTAssertTrue(endpoint.updates.count == 1
+                      && endpoint.updates[0].0 === tunnel
+                      && endpoint.updates[0].1 == config.gatewayBaseURL!,
                       "K4b VerifiedRunning 唯一激活点：端点一次建成（不穿视图层）")
         XCTAssertTrue(store.phase == .ready, "K4c 激活后阶段投影为 ready")
 
         // —— N2d/N2e：start 进程内幂等（列表页 .task 重入触发
         // 第二次 start → 节点重启 → 活连接被杀 + 徽章掉直连标签）——
-        let activationsBefore = client.activations.count
+        let activationsBefore = endpoint.updates.count
         await store.start(config: config)
-        XCTAssertTrue(client.activations.count == activationsBefore,
+        XCTAssertTrue(endpoint.updates.count == activationsBefore,
                       "N2d start 幂等：重复 start 不重复兜底激活（传输切换只此一次）")
         XCTAssertTrue(node.launchCount == 1,
                       "N2e start 幂等：重复 start 不再拉起节点（tsnet 重启会杀活连接）")
@@ -94,11 +94,12 @@ final class MeshStoreTests: XCTestCase {
 
 // MARK: - 假件（只实现 store 的注入面，不 import TailscaleKit / 不碰网络）
 
-private final class FakeClient: GatewayActivating, @unchecked Sendable {
-    /// (session, baseURL) 记录对，按激活顺序排列。
-    var activations: [(URLSession, URL)] = []
-    func activate(session: URLSession, baseURL: URL) {
-        activations.append((session, baseURL))
+/// 端点层的替身：只记「换了几次、换成什么」。
+private final class FakeEndpoint: EndpointUpdating, @unchecked Sendable {
+    /// (session, baseURL) 记录对，按更新顺序排列。
+    var updates: [(URLSession, URL)] = []
+    func update(session: URLSession, baseURL: URL) {
+        updates.append((session, baseURL))
     }
 }
 

@@ -25,7 +25,7 @@ final class LongConnection: ObservableObject, StreamFactory {
     private let transport: WebSocketConnection
     private let streams: StreamMux
 
-    /// 四个能力都由根部注入，**全部必填**。
+    /// 四个能力都由根部注入，**全部必填**（其中两个来自端点层）。
     ///
     /// 为什么收闭包而不是收一元客户端：这条连接要的只是「一张票 / 一次换票 / 一条传输 /
     /// 一个地址」四件事，而它们都住在一元客户端那边。收类型就等于把整台客户端抱进来 ——

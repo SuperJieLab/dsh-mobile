@@ -4,9 +4,12 @@ import SwiftUI
 /// （进屏、下拉、回前台、组网就绪、工具栏按钮）—— 触发点是平台事件与用户手势，只有视图拿得到。
 /// 按协议**排序是服务端的承诺**（这里一行排序代码都没有）。
 struct SessionListView: View {
-    /// 读它是为了渲染：`isPaired` 决定这一屏让位给配对屏，`baseURL` 显示在页脚。
+    /// 读这两者是为了渲染：`isPaired` 决定这一屏让位给配对屏，`baseURL` 显示在页脚。
     /// 取数走 `state`，不经这里。
     @ObservedObject var client: RpcClient
+
+    /// 这一屏只**读**它一处（页脚显示当前地址）—— 地址不归视图判断，归端点层。
+    let endpoint: Endpoint
     /// 到网关的常驻连接（App 级）。本屏只用它传给会话详情 —— 连接不随哪一屏生死。
     let link: LongConnection
     /// 连接级事件流。列表是它的消费方之一：逐个事件改一行，代次报到就重拉一次。
@@ -23,8 +26,9 @@ struct SessionListView: View {
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @EnvironmentObject private var store: MeshStore
 
-    init(client: RpcClient, link: LongConnection, events: EventStream) {
+    init(client: RpcClient, endpoint: Endpoint, link: LongConnection, events: EventStream) {
         self.client = client
+        self.endpoint = endpoint
         self.link = link
         self.events = events
         _state = StateObject(wrappedValue: SessionListState(client: client))
@@ -62,7 +66,7 @@ struct SessionListView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("\(state.sessions.count) 个会话 · \(client.baseURL?.absoluteString ?? "未激活")")
+                Text("\(state.sessions.count) 个会话 · \(endpoint.baseURL?.absoluteString ?? "未激活")")
             }
         }
         .navigationTitle("会话")

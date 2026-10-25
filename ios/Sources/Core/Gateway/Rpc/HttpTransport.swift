@@ -1,0 +1,113 @@
+/**
+ * 一元调用的**裸发层**：发一次、读回包、判成败。**它不认识票。**
+ *
+ * 「带不带票」不是它的开关，而是调用方给不给 `authorization` —— 于是免票那条路
+ * （换票自己）结构上拿不到票，也就不可能回头去问票层（那会变成「等自己那一趟」的死锁）。
+ *
+ * 它只认识三件事：往哪打（`Endpoint`）、一段字节、怎么算失败。不认识 op、不认识票的生命周期、
+ * 不知道谁在重试 —— 那些都在 `RpcClient`。
+ */
+import Foundation
+
+@MainActor
+final class HttpTransport {
+
+    private let endpoint: Endpoint
+
+    init(endpoint: Endpoint) {
+        self.endpoint = endpoint
+    }
+
+    /// 唯一端点 —— 所有 op 都打这一个地址，靠信封里的 `op` 分派。
+    nonisolated static let rpcPath = "/rpc"
+
+    /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
+    nonisolated static let timeout: TimeInterval = 10
+
+    /// 发一次，不解身份语义，并在解码后校验信封。
+    ///
+    /// 返回 `nil` 只表示**业务请求被 401 拒了**（换票再来一次的号）。配对与换票的 401 是
+    /// **定论**，必须读出信封里的原因上抛：配对码不对就要说配对码不对。
+    func send<Request: Encodable, Response: GatewayResponse>(
+        _ request: Request,
+        authorization: String?,
+        treat401AsRefusal: Bool
+    ) async throws -> Response? {
+        guard let baseURL = endpoint.baseURL else { throw RpcClientError.notActivated }
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // 身份只走传输头，不进消息体：消息体的每一个字段都是协议的一部分，
+        // 凭证放进去会让它出现在日志、重放与错误回显里。
+        if let authorization {
+            urlRequest.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
+        }
+        urlRequest.timeoutInterval = Self.timeout
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+
+        let payload: Data
+        let urlResponse: URLResponse
+        do {
+            (payload, urlResponse) = try await endpoint.session.data(for: urlRequest)
+        } catch {
+            // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
+            Log.warn(
+                Log.Module.gateway,
+                "transport: \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
+            )
+            throw RpcClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
+        }
+
+        if let http = urlResponse as? HTTPURLResponse {
+            guard http.statusCode != 401 else {
+                // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层换票重试；鉴权请求
+                // 的 401 自带语义，必须读出信封上抛。
+                guard treat401AsRefusal else {
+                    Log.debug(Log.Module.gateway, "401 on business op — renewing ticket")
+                    return nil
+                }
+                if let failure = envelopeFailure(in: payload) {
+                    if failure.code == GatewayErrorCode.unauthenticated.rawValue {
+                        Log.info(
+                            Log.Module.gateway,
+                            "auth op refused: \(failure.code) — \(failure.message)"
+                        )
+                        throw RpcClientError.unauthenticated
+                    }
+                    throw RpcClientError.refused(failure)
+                }
+                throw RpcClientError.unauthenticated
+            }
+            if http.statusCode != 200 {
+                Log.warn(Log.Module.gateway, "HTTP \(http.statusCode) from \(baseURL.host ?? "?")")
+                throw RpcClientError.badStatus(http.statusCode)
+            }
+        }
+
+        let response: Response
+        do {
+            response = try JSONDecoder().decode(Response.self, from: payload)
+        } catch {
+            // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
+            // 比解码器的报错信息有用得多。
+            if let failure = envelopeFailure(in: payload) {
+                Log.warn(Log.Module.gateway, "op refused: \(failure.code) — \(failure.message)")
+                throw RpcClientError.refused(failure)
+            }
+            Log.warn(Log.Module.gateway, "malformed response: \(String(describing: error))")
+            throw RpcClientError.malformedResponse(detail: String(describing: error))
+        }
+        try response.validate()
+        return response
+    }
+}
+
+/// 只用来在解码失败时兜出信封里的错误。
+private struct FailureEnvelope: Decodable {
+    let error: GatewayFailure?
+}
+
+/// 信封里的 error（没有就 nil）。
+private func envelopeFailure(in payload: Data) -> GatewayFailure? {
+    (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
+}

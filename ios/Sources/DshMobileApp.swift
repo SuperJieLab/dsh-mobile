@@ -14,6 +14,8 @@ struct DshMobileApp: App {
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
     @StateObject private var link: LongConnection
     private let client: RpcClient
+    /// 地址与传输的主人 —— 两条链路读同一个实例，装配根只造一次。
+    private let endpoint: Endpoint
     /// 连接级事件流的收端 —— App 级，与连接同寿。两个消费方：待答表（清空）与
     /// 会话列表（逐个事件 + 代次重拉）。
     private let events: EventStream
@@ -22,9 +24,11 @@ struct DshMobileApp: App {
 
     init() {
         let node = TailnetNode()
-        let client = RpcClient()
+        let endpoint = Endpoint()
+        let client = RpcClient(endpoint: endpoint)
+        self.endpoint = endpoint
         _node = StateObject(wrappedValue: node)
-        _store = StateObject(wrappedValue: MeshStore(client: client, node: node))
+        _store = StateObject(wrappedValue: MeshStore(endpoint: endpoint, node: node))
         // 长连接只拿四个能力，不拿一元客户端本体：票 / 换票 / 传输 / 地址都在这里接一次，
         // 之后它再也不认识 `RpcClient`。四个参数必填 —— 漏接一个编译不过。
         _link = StateObject(wrappedValue: LongConnection(
@@ -33,8 +37,9 @@ struct DshMobileApp: App {
                 guard let client else { return .unavailable }
                 return await client.ticket()
             },
-            session: { [weak client] in client?.meshSession ?? .shared },
-            baseURL: { [weak client] in client?.baseURL }
+            // 两条链路读同一个端点实例：组网激活换的就是它，不存在第二份副本。
+            session: { [weak endpoint] in endpoint?.session ?? .shared },
+            baseURL: { [weak endpoint] in endpoint?.baseURL }
         ))
         self.client = client
         let events = EventStream()
@@ -47,7 +52,7 @@ struct DshMobileApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack {
-                SessionListView(client: client, link: link, events: events)
+                SessionListView(client: client, endpoint: endpoint, link: link, events: events)
                     // 启动编排（兜底激活 → 组网 → 激活内化）全在 store.start。
                     // 配置读坏了不交给节点：空配置只会换来一个误导的「不可达」。
                     .task {

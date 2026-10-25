@@ -147,12 +147,12 @@ final class RpcClientAuthTests: XCTestCase {
             write: { stored = $0 },
             delete: { stored = nil }
         ))
-        let client = RpcClient(credentials: store)
-        client.activate(
+        let endpoint = Endpoint()
+        endpoint.update(
             session: URLSession(configuration: configuration),
             baseURL: URL(string: "http://127.0.0.1:3081")!
         )
-        return client
+        return RpcClient(endpoint: endpoint, credentials: store)
     }
 
     /// 第一条业务请求就带票：`refresh` 排在它之前，且没有「先发一发无票的」。
@@ -165,6 +165,26 @@ final class RpcClientAuthTests: XCTestCase {
                        "顺序是先换票、再发业务请求：\(calls.map(\.op))")
         XCTAssertEqual(calls[1].authorization, "Bearer fresh",
                        "业务请求上必须已经带上刚换到的票")
+    }
+
+    /// 换票那一发**不带票** —— 这一条守的是一次静默死锁。
+    ///
+    /// 链条：业务请求要票 → 票层去换 → 换票本身是一次请求 → 若它也要票，就再问票层。
+    /// 而那一刻票层正等在**自己发起的那一趟**上 ⇒ 它在等自己，请求永不返回。
+    /// 编译不报错，其余断言全绿 —— 所以只能靠「看那一发到底带没带 `Authorization`」发现。
+    ///
+    /// 为什么不写成结构断言（「源码里写了 `authenticated: false`」）：那种断言只能拦住
+    /// 一种写法，且改个默认值就绕过去了；这里断的是**实际发出的字节**。
+    func testTheRefreshCallItselfCarriesNoTicket() async throws {
+        let client = client()
+        _ = try await fetchSessions(client)
+
+        let refresh = try XCTUnwrap(
+            ScriptedURLProtocol.snapshot().first { $0.op == "refresh" },
+            "先确认真的换过票 —— 否则这一条守着空气"
+        )
+        XCTAssertNil(refresh.authorization,
+                     "换票请求免票：带票会让票闸回头问票，而它正等在自己那一趟上（死锁）")
     }
 
     /// 手上有票时**一次都不换** —— 「先确认」不能变成「每次都换」。
@@ -201,11 +221,10 @@ final class RpcClientAuthTests: XCTestCase {
         let store = CredentialStore(storage: .init(
             read: { stored }, write: { stored = $0 }, delete: { stored = nil }
         ))
-        let client = RpcClient(credentials: store)
-        client.activate(
-            session: Self.stubbedSession(),
-            baseURL: URL(string: "http://127.0.0.1:3081")!
-        )
+        let endpoint = Endpoint()
+        endpoint.update(session: Self.stubbedSession(),
+                        baseURL: URL(string: "http://127.0.0.1:3081")!)
+        let client = RpcClient(endpoint: endpoint, credentials: store)
 
         let outcome = await client.ticket()
         XCTAssertEqual(outcome, .unavailable, "没有设备凭证 → 换不出票，且重试没有意义")
@@ -221,11 +240,10 @@ final class RpcClientAuthTests: XCTestCase {
         let store = CredentialStore(storage: .init(
             read: { stored }, write: { stored = $0 }, delete: { stored = nil }
         ))
-        let client = RpcClient(credentials: store)
-        client.activate(
-            session: Self.stubbedSession(),
-            baseURL: URL(string: "http://127.0.0.1:3081")!
-        )
+        let endpoint = Endpoint()
+        endpoint.update(session: Self.stubbedSession(),
+                        baseURL: URL(string: "http://127.0.0.1:3081")!)
+        let client = RpcClient(endpoint: endpoint, credentials: store)
         ScriptedURLProtocol.transportFailure = URLError(.cannotConnectToHost)
 
         let outcome = await client.ticket()

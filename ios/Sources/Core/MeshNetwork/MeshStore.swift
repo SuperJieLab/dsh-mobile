@@ -5,8 +5,8 @@
  * 只是它加「组网传输是否建成」这一个输入后的**投影**。启动编排、VerifiedRunning 激活、
  * 回前台探活住在这里。
  *
- * 与 `RpcClient`：client 是 op 门面 + 身份状态机，由根部创建后传进来；本 store 只在
- * 节点验证 Running 时调一次 `activate` —— 组网域不吞身份域，业务调用面照旧直接消费 client。
+ * 与 `Endpoint`：端点层的地址与传输在组网激活时才存在，本 store 是唯一在节点验证 Running
+ * 之后写它的一方 —— 组网域不吞身份域，业务调用面照旧直接消费 `RpcClient`。
  * 端点在激活前不存在。
  */
 import Foundation
@@ -18,12 +18,16 @@ import Combine
 // （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
 // TailscaleKit / RpcClient，见 tests/MeshStoreTests.swift）。
 
-/// 组网激活能力：`RpcClient.activate` 的窄面。
+/// 组网激活时「换路由」的窄面 —— `Endpoint.update` 的接口形状。
 ///
 /// 只放 store 真正读的成员 —— 投影不读身份，签名里也就没有它：连接阶段只由节点状态
 /// 与「组网传输是否建成」这两个输入决定。
-@MainActor protocol GatewayActivating: AnyObject {
-    func activate(session: URLSession, baseURL: URL)
+///
+/// 不叫 `activate`：**组网是否算激活是 store 的判断**（它有节点状态机），
+/// 被调方只负责「把这两个值换成新的」。同名时在装配文件里读不出哪个是哪个
+/// （另一个 `activate` 是「回前台要一条连接」）。
+@MainActor protocol EndpointUpdating: AnyObject {
+    func update(session: URLSession, baseURL: URL)
 }
 
 /// 组网节点能力：`TailnetNode` 的窄面。状态仍由 `TailnetNodeState` 状态机判定，
@@ -61,7 +65,7 @@ final class MeshStore: ObservableObject {
     /// `reportDamagedConfiguration`。界面据此说「重新填写」，而不是「检查证书」。
     @Published private(set) var storedConfigDamaged = false
 
-    private let client: GatewayActivating
+    private let endpoint: EndpointUpdating
     private let node: MeshNodeControlling
     /// 组网是否已激活（回调已 firing 且 activate 已调）。
     private var tailnetActivated = false
@@ -73,8 +77,8 @@ final class MeshStore: ObservableObject {
     /// node.launch 重启 tsnet、杀掉活连接并清掉路径展示。
     private var started = false
 
-    init(client: GatewayActivating, node: MeshNodeControlling) {
-        self.client = client
+    init(endpoint: EndpointUpdating, node: MeshNodeControlling) {
+        self.endpoint = endpoint
         self.node = node
         self.nodeState = node.nodeState
         self.phase = MeshPhase.resolve(nodeState: node.nodeState,
@@ -95,7 +99,7 @@ final class MeshStore: ObservableObject {
         self.config = config
         node.onVerifiedRunning = { [weak self] session in
             guard let self, let baseURL = self.config?.gatewayBaseURL else { return }
-            self.client.activate(session: session, baseURL: baseURL)
+            self.endpoint.update(session: session, baseURL: baseURL)
             self.tailnetActivated = true
             self.reproject()
         }

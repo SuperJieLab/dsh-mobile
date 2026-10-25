@@ -286,7 +286,7 @@ final class LayeringTests: XCTestCase {
     /// 它们的依赖方向由 `coreUpwardBans` 里「协议层不认识组网」那条反向兜住。
     func testMeshCarrierDoesNotKnowTheOrchestrator() throws {
         let mesh = sourcesRoot.appendingPathComponent("Core/MeshNetwork")
-        let orchestrator = ["MeshStore", "MeshPhase", "GatewayActivating", "MeshNodeControlling"]
+        let orchestrator = ["MeshStore", "MeshPhase", "EndpointUpdating", "MeshNodeControlling"]
         let exempt: Set<String> = ["MeshStore.swift", "MeshStoreAdapters.swift", "MeshPhase.swift"]
 
         let files = swiftFiles(under: mesh).filter { !exempt.contains($0.lastPathComponent) }
@@ -758,6 +758,160 @@ final class LayeringTests: XCTestCase {
             Self.declaredTypes(in: try String(contentsOf: $0, encoding: .utf8))
         }
         XCTAssertTrue(names.contains("GatewayResponse"), "Rpc/Wire/ 没扫到信封 —— 先怀疑路径")
+    }
+
+    /// 地址与传输只有一个主：`Endpoint`。
+    ///
+    /// 两半一起断：① 没有人再自己存一份（存了就会出现「激活换了这一份、那一份没换」，
+    /// 而症状是「切了组网仍往老地址打」——只在真机上表现为连不上，本地全绿）；
+    /// ② 写入点只有 `MeshStore` 那一处（组网激活是它判断的事）。
+    ///
+    /// ⚠️ 这条靠**具体文件名**找落点：`Endpoint.swift` 改名后必须同轮改这里。
+    func testTheRouteHasOneOwner() throws {
+        let endpointFile = sourcesRoot.appendingPathComponent("Core/Gateway/Endpoint.swift")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: endpointFile.path),
+                      "Endpoint.swift 不在 —— 先怀疑路径推算")
+
+        // 正控：能在这个文件里读到两个成员，否则下面的「零命中」守的是空气。
+        let endpointLines = codeLines(in: try String(contentsOf: endpointFile, encoding: .utf8))
+        XCTAssertTrue(endpointLines.contains { $0.1.contains("var baseURL") })
+        XCTAssertTrue(endpointLines.contains { $0.1.contains("var session") })
+
+        var hits: [String] = []
+        var writers = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            if file.lastPathComponent == "Endpoint.swift" { continue }
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (line, code) in codeLines(in: text) {
+                // 只认**存值**的那种声明与赋值。取数的闭包（`baseURLProvider`）不算 ——
+                // 它是「怎么问」，不是「存着多少」，恰恰是接缝该有的形态。
+                let storesURL = (code.contains("var baseURL: URL") || code.contains("var baseURL: URL?"))
+                let storesSession = code.contains("var meshSession: URLSession")
+                    || code.contains("var session: URLSession")
+                if storesURL || storesSession || code.contains(".baseURL =") {
+                    hits.append("\(relative):\(line)")
+                }
+                // 数的是**真的往里写**的调用点，不是声明、不是协议、不是测试。
+                // 用正则吞掉空白与换行：参数被格式化到下一行也算一次，
+                // 否则格式化一下判据就假红。
+                if code.range(of: "\\.update\\(\\s*session:", options: .regularExpression) != nil {
+                    writers += 1
+                }
+            }
+        }
+        XCTAssertEqual(hits, [], "这些地方还自己存着地址或传输：\(hits)")
+        XCTAssertEqual(writers, 1, "地址与传输的写入点应恰好一处（MeshStore），实际 \(writers)")
+
+        // 端点层内部也只许一个写入口：多一个 `reset()` / `updateRoute(_:)` 就等于
+        // 「唯一写入点」变成「唯一对外方法」，而注释说的是前者。
+        var assignments: [String] = []
+        for (line, code) in endpointLines
+        where (code.contains("self.baseURL =") || code.contains("self.session =")) {
+            assignments.append("\(line)")
+        }
+        XCTAssertEqual(assignments.count, 2,
+                       "两个属性各赋一次（都在 update 里），实际：\(assignments)")
+        XCTAssertTrue(endpointLines.contains { $0.1.contains("func update(session:") },
+                      "写入口不叫 update(session:baseURL:) 了")
+    }
+
+    /// 端点层只认识两个值：一个地址、一条传输。
+    ///
+    /// 它被两条链路共读，所以往它身上加任何一类知识都会被另一条链路继承 ——
+    /// 加票，WebSocket 就间接认识票；加错误码，它就开始判成败。两者都不该发生在「存路由」这一层。
+    func testTheEndpointKnowsOnlyRoute() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Endpoint.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertGreaterThan(lines.count, 10, "只扫到 \(lines.count) 行 —— 先怀疑路径推算")
+        // 正控：确认读到了本体，否则下面的零命中守的是空气。
+        XCTAssertTrue(lines.contains { $0.1.contains("func update(session:") }, "没读到写入口")
+
+        let forbidden = ["AccessTicket", "TicketKeeper", "StreamMux", "StreamBehavior",
+                         "GatewayErrorCode", "RpcClientError", "RpcClient"]
+        var hits: [String] = []
+        for (line, code) in lines {
+            for word in forbidden where code.contains(word) {
+                hits.append("\(line) \(word)")
+            }
+        }
+        XCTAssertEqual(hits, [], "端点层认识了别的东西：\(hits)")
+    }
+
+    /// 构造是一条链：**没有「先塞假值、稍后替换」的中间态**。
+    ///
+    /// 判据只看一件事：`TicketKeeper` 在全仓只有**一个**构造点，且那个构造点的实参不是
+    /// 「恒返回等一等」的假动作。占位写法（`TicketKeeper { _ in .retryLater }` 打底、
+    /// `init` 末尾再赋值）会让「票层是假的」成为一个真实可达的阶段 —— 那段时间里任何
+    /// 要票的路径都静默拿到「等一等」。
+    ///
+    /// 换成 `lazy` 之后这条仍成立：一个定义、一个构造点，首次用时求值。
+    func testTheTicketsHaveOneRealConstructionSite() throws {
+        var sites: [String] = []
+        var fakes: [String] = []
+        for file in swiftFiles(under: sourcesRoot) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            // 认**构造**的形态（`= TicketKeeper {`），不认类声明那一行（`class TicketKeeper {`）。
+            for (line, code) in codeLines(in: text) where code.contains("= TicketKeeper {") {
+                sites.append("\(relative):\(line)")
+                if code.contains("retryLater") { fakes.append("\(relative):\(line)") }
+            }
+        }
+        XCTAssertEqual(sites.count, 1, "票层应只有一个构造点，实际：\(sites)")
+        XCTAssertEqual(fakes, [], "构造点用了假动作（先占位后替换的形态）：\(fakes)")
+    }
+
+    /// 裸发层不认识票 —— 它只认识地址、字节与怎么算失败。
+    ///
+    /// 这一条守的是那个死锁的结构面：若裸发层能读票，它就有办法在换票那一发上带票，
+    /// 而带票会让票闸回头问票、等在自己那一趟上。行为面由
+    /// `RpcClientAuthTests.testTheRefreshCallItselfCarriesNoTicket` 守着，两条一起才够 ——
+    /// 结构面管「写不出来」，行为面管「真跑起来确实没带」。
+    func testTheBareTransportKnowsNoTicket() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Rpc/HttpTransport.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertGreaterThan(lines.count, 20, "只扫到 \(lines.count) 行 —— 先怀疑路径推算")
+
+        // 正控：这个文件里确实有发送口，否则下面的「零命中」守的是空气。
+        XCTAssertTrue(lines.contains { $0.1.contains("func send") }, "没扫到发送口")
+
+        // 认的是「票这件事」：票的类型、票的生命周期、带不带票的开关。
+        // 不认 `unauthenticated` —— 那是身份失败的**词汇**（`RpcClientError` 的一个 case），
+        // 裸发层要判「服务端说没身份」就必须能说这个词，它与「此刻手上有没有一张票」无关。
+        // `RpcClient` 也在名单里：持有一个门面就等于能问它要票 —— 那是恢复
+        // 「等自己那一趟」的最短路径。但 `RpcClientError` 要排除：那是**失败词汇**
+        // 而不是票源，裸发层判成败必须能说它（`RpcClientError.unauthenticated`）。
+        let forbidden = ["AccessTicket", "TicketKeeper", "tickets",
+                         "authenticated:", "authenticated ?", "authenticated)"]
+        var hits: [String] = []
+        for (line, code) in lines {
+            for word in forbidden where code.contains(word) {
+                hits.append("\(line) \(word)")
+            }
+            // 门面名单独判：剥掉 `RpcClientError` 再找 `RpcClient`。
+            let stripped = code.replacingOccurrences(of: "RpcClientError", with: "")
+            if stripped.contains("RpcClient") { hits.append("\(line) RpcClient") }
+        }
+        XCTAssertEqual(hits, [], "裸发层认识了票：\(hits)")
+    }
+
+    /// 「组网通了、换路由」与「回前台、要一条连接」不许同名。
+    ///
+    /// 两者都在同一个装配文件里被调用，字面完全一样时，读代码的人只能靠参数分辨哪个是哪个。
+    /// 断的是**带参数的那个形态**：要连接那个没有参数，它不受这条约束。
+    func testRouteUpdateIsNotNamedActivate() throws {
+        let files = swiftFiles(under: sourcesRoot)
+        XCTAssertGreaterThan(files.count, 50, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
+        var hits: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (line, code) in codeLines(in: text) where code.contains("func activate(session:") {
+                hits.append("\(relative):\(line)")
+            }
+        }
+        XCTAssertEqual(hits, [], "换路由不该叫 activate：\(hits)")
     }
 
     /// 身份不属任何一条链路：`Identity/` 不出现任一链路的类型与线路；长连接源码零 `RpcClient`。

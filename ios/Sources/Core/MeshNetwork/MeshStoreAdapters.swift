@@ -1,11 +1,11 @@
 /**
- * 真实类型到组网域接缝的适配：`RpcClient` / `TailnetNode`
+ * 真实类型到组网域接缝的适配：`Endpoint` / `TailnetNode`
  * 各自认识自己的窄面，一行声明即注入 `MeshStore`。只进 App target，
  * 不进测试编译面 —— 测试用假件（`MeshStoreTests.swift`）。
  */
 import Foundation
 
-extension RpcClient: GatewayActivating {}
+extension Endpoint: EndpointUpdating {}
 
 extension TailnetNode: MeshNodeControlling {
     var nodeState: TailnetNodeState { state }
