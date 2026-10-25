@@ -169,7 +169,7 @@ struct SessionDetailView: View {
                 Section {
                     EmptyView()
                 } footer: {
-                    Text("共 \(sync.eventCount) 条事件，其中 \(sync.messages.count) 条消息 · \(sync.status.line)")
+                    Text("共 \(sync.eventCount) 条事件，其中 \(sync.messageCount) 条消息 · \(sync.status.line)")
                 }
 
                 // 滚动锚点：**必须在 footer 之后**。`scrollTo(…, anchor: .bottom)` 对齐的是

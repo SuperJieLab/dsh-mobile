@@ -816,6 +816,37 @@ final class LayeringTests: XCTestCase {
                       "写入口不叫 update(session:baseURL:) 了")
     }
 
+    /// 消息条数只从**已组装的显示节点**数，不从原始事件另算一遍。
+    ///
+    /// 同一件事两个出处会漂：`nodes` 是界面真正渲染的东西，另一份 `[DisplayMessage]`
+    /// 若与它不同步（少一个过滤、多一次去重），footer 说「3 条消息」而屏上只有 2 条，
+    /// 而两者都「看起来对」。
+    ///
+    /// 也不只是正确性 —— 从原始事件重算要为**窗口里每个事件**构造一次 `DisplayMessage`
+    ///（含字符串拼接），而这些结果只用 `.count`。
+    func testMessageCountComesFromAssembledNodes() throws {
+        let sync = sourcesRoot.appendingPathComponent(
+            "Features/SessionDetail/State/SessionSync.swift")
+        let lines = codeLines(in: try String(contentsOf: sync, encoding: .utf8))
+
+        // 正控：确认读到了本体与刷新点。
+        XCTAssertTrue(lines.contains { $0.1.contains("func refreshView()") }, "没读到刷新点")
+
+        // 不许再有一份 `[DisplayMessage]` 的发布属性，也不许再从事件里 compactMap 它。
+        let shape = "compactMap(" + "\\" + ".displayMessage)"
+        let offenders = lines.filter {
+            $0.1.contains("var messages") || $0.1.contains(shape)
+        }.map { $0.0 }
+        XCTAssertEqual(offenders, [], "又从事件另算了一份消息：行 \(offenders)")
+
+        // 消息条数要能从组装结果数出来。
+        let assembler = sourcesRoot.appendingPathComponent(
+            "Features/SessionDetail/State/TranscriptAssembler.swift")
+        let aLines = codeLines(in: try String(contentsOf: assembler, encoding: .utf8))
+        XCTAssertTrue(aLines.contains { $0.1.contains("case message(") },
+                      "TranscriptNode 里没有 message 形态 —— 数不出来了")
+    }
+
     /// 一个类型不许同时被视图与流层消费。
     ///
     /// 两个协议各自代表一端的消费者：`ObservableObject` 意味着有视图在读它的 `@Published`，

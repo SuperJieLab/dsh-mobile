@@ -54,10 +54,21 @@ final class SessionSync: ObservableObject {
         case thrown(any Error)
     }
 
-    /// 屏幕上要画的消息。
-    @Published private(set) var messages: [DisplayMessage] = []
     /// 屏幕上要画的东西 —— 消息**与过程**；由组装器从同一批事件算出。
     @Published private(set) var nodes: [TranscriptNode] = []
+
+    /// 消息条数 —— **从已组装的节点数**，不从原始事件另算一份。
+    ///
+    /// 另行存一份 `[DisplayMessage]` 有两个代价：它为窗口里每个事件构造一次显示对象
+    /// （含字符串拼接），而那些结果只被用来数个数；更要紧的是同一件事有了两个出处 ——
+    /// 一旦两份不同步（少一个过滤、多一次去重），状态行说「3 条消息」而屏上只有 2 条，
+    /// 两者却都「看起来对」。
+    var messageCount: Int {
+        nodes.reduce(0) { count, node in
+            if case .message = node { return count + 1 }
+            return count
+        }
+    }
     /// 视图里的事件条数（消息只是其中一部分）。
     @Published private(set) var eventCount = 0
     /// 还能往回翻吗。为真时界面给出入口。
@@ -670,7 +681,6 @@ final class SessionSync: ObservableObject {
     /// 增量 —— 重算代价远低于「增量组装写错一处就静默少一行」的风险。手感真有问题时
     /// 再谈增量，那时要先有一条能证明「少了一行」的判据。
     private func refreshView() {
-        messages = mirror.events.compactMap(\.displayMessage)
         nodes = assembler.assemble(mirror.events)
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
