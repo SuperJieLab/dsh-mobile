@@ -39,3 +39,11 @@ extension EffortChoice.Label {
         }
     }
 }
+
+/// 功能条模型格里那个名字。
+///
+/// 兜底顺序由调用方算好（选中值 ?? 目录默认值），这里只管「一个都没有时说什么」——
+/// 那句话是产品决定，不是协议事实；放在 `State/` 里会让编排文件出现用户可见的中文。
+func modelDisplayName(_ shown: ModelSelection?) -> String {
+    shown.map { $0.model } ?? "未知"
+}

@@ -7,8 +7,8 @@
  * 判据都要能看见「请求发了几次」，所以取数与事件都是替身：真 socket 在这里只会把
  * 「哪一次请求落到谁的账上」混进网络的偶然。
  */
-import Combine
 import Foundation
+import Combine
 import XCTest
 
 @testable import DshMobile
@@ -54,7 +54,9 @@ final class SessionListStateTests: XCTestCase {
     }
 
     private func make(_ fetch: FakeFetch) -> SessionListState {
-        SessionListState { try await fetch.fetch() }
+        // 地址那一半与这组判据无关（它只在页脚显示），给一个固定串即可 ——
+        // 构造点仍是唯一一处，页脚的内容由 `GatewayAddressTests` 守。
+        SessionListState(fetch: { try await fetch.fetch() }, address: { "未激活" })
     }
 
     /// 让挂起的任务跑到它的第一个 await。

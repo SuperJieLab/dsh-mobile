@@ -156,6 +156,6 @@ final class MeshStore {
         // 离线也可能已配对，两件事互不决定。
         nodeState = node.nodeState
         phase = MeshPhase.resolve(nodeState: node.nodeState,
-                                        hasGatewaySession: tailnetActivated)
+                                  hasGatewaySession: tailnetActivated)
     }
 }

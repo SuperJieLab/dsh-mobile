@@ -10,7 +10,8 @@
  * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册；
  * - `TailscaleError` 没有结构化的 key 错误分支，badKey / unreachable 只能按错误消息归类
  *   —— 这里是薄翻译层。
- */import Foundation
+ */
+import Foundation
 import TailscaleKit
 
 @MainActor
@@ -70,7 +71,7 @@ final class TailnetNode {
     func launch(config: MeshConfig) async {
         let key = TailnetKeyStore.load()
         let healthy = Self.stateStoreHealthy()
-        Log.info(Log.Module.mesh, "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy) controlURL=\(config.controlURLString ?? "nil") gateway=\(config.gatewayURLString ?? "nil")")
+        Log.info(Log.Module.mesh, "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy) controlURL=\(config.controlURLString) gateway=\(config.gatewayURLString)")
         transition(.launch(keyPresent: key != nil, nodeStateHealthy: healthy))
 
         switch state {

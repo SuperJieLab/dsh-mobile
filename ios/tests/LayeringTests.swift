@@ -2018,26 +2018,25 @@ final class LayeringTests: XCTestCase {
     /// 根部会被静默放行；而 `Display/` 的职责正是消费状态类型（把 `Status` 写成句子），
     /// 它认识 `SessionSync` 是对的。`State/` 本来就该放编排。
     ///
+    /// **视图一个都不认识它**（连宿主也不认识：装配归容器）：正控因此落在 `State/` 上
+    /// —— 那个类型确实还被这一屏用着，扫不到说明路径推算错了，零命中是假的。
+    ///
     /// 盲区：把类型 `typealias` 成别的名字后认不出（漏报方向）；整行注释被跳过，
     /// **行内**注释里出现算命中（误报方向，接受）。
     func testViewsDoNotKnowOrchestrationTypes() throws {
         let interfaces = try interfaceDirectories()
-        let hosts = Set(interfaces.map { $0.lastPathComponent + "View.swift" })
         var scanned = 0
-        var syncHosts = 0
+        var stateSides = 0
 
         for interface in interfaces {
             for file in swiftFiles(under: interface) {
-                guard !file.path.contains("/State/"),
-                      !file.path.contains("/Display/") else { continue }
-                if hosts.contains(file.lastPathComponent) {
-                    // 宿主本身要认识编排：一个都不认识说明路径推算错了，下面的 0 命中是假的。
-                    let text = try String(contentsOf: file, encoding: .utf8)
-                    if text.contains("SessionSync") { syncHosts += 1 }
+                let text = try String(contentsOf: file, encoding: .utf8)
+                if file.path.contains("/State/") {
+                    if text.contains("SessionSync") { stateSides += 1 }
                     continue
                 }
+                guard !file.path.contains("/Display/") else { continue }
                 scanned += 1
-                let text = try String(contentsOf: file, encoding: .utf8)
                 for (line, code) in codeLines(in: text) where contains("SessionSync", in: code) {
                     XCTFail("\(interface.lastPathComponent)/\(file.lastPathComponent):\(line)"
                             + " 出现 SessionSync —— 视图只吃算好的值，判定归 State/")
@@ -2045,7 +2044,7 @@ final class LayeringTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(scanned, 0, "一个非 State/ 的文件都没扫到 —— 先怀疑路径推算")
-        XCTAssertGreaterThan(syncHosts, 0, "没有任何宿主认识 SessionSync —— 先怀疑路径推算")
+        XCTAssertGreaterThan(stateSides, 0, "没有任何 State/ 认识 SessionSync —— 先怀疑路径推算")
     }
 
     // MARK: - 待答表的三条结构判据
@@ -2102,20 +2101,90 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 列表读事件的两条结构判据
 
-    /// 列表状态只有一个实例（它在视图的 `@StateObject` 里）。两个实例各持一份行序，
-    /// 事件只喂到其中一个 —— 而另一份会一直显示旧内容，且没有任何判据能看出来。
-    func testTheSessionListStateIsBuiltOnce() throws {
-        var found: [String] = []
+    /// 每个屏的 state 只有一个实例。
+    ///
+    /// 两个实例的症状都是静默的：列表那份各持一行序，事件只喂到其中一个，另一份一直显示
+    /// 旧内容；详情那份则会让同一次操作发两条流。
+    ///
+    /// 构造点住组合根（单例）与 `makeDetail`（每会话一份）——
+    /// 判据只数次数，不钉文件 —— 钉文件会在构造点移动时假红一次，而「几处」才是它要守的东西。
+    func testEachScreenStateIsBuiltOnce() throws {
+        let names = ["SessionListState(", "SessionDetailState(", "PairingState("]
+        var found: [String: [String]] = [:]
         var scanned = 0
         for file in swiftFiles(under: sourcesRoot) {
             scanned += 1
             let text = try String(contentsOf: file, encoding: .utf8)
-            for (line, code) in codeLines(in: text) where code.contains("SessionListState(") {
-                found.append("\(file.lastPathComponent):\(line)")
+            for (line, code) in codeLines(in: text) {
+                for name in names where code.contains(name) {
+                    found[name, default: []].append("\(file.lastPathComponent):\(line)")
+                }
             }
         }
         XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
-        XCTAssertEqual(found.count, 1, "列表状态只能有一个实例：\(found)")
+        for name in names {
+            let sites = found[name] ?? []
+            XCTAssertEqual(sites.count, 1, "\(name) 只能构造一处：\(sites)")
+        }
+    }
+
+    /// 渲染视图的字段里没有服务类型 —— 不是「不许写」，是「拿不到」。
+    ///
+    /// 三个文件各是自己那一屏的渲染段。它们可以接住 state、接住闭包、接住值，
+    /// 但不认识 `RpcClient` / `LongConnection` / `EventStream` / `Endpoint`。
+    ///
+    /// 盲区：服务经闭包捕获后仍可用（`makeDetail` 里就是这样），那是有意的能力传递；
+    /// 这条守的是「顺手多用一下」—— 视图拿得到服务时，那种用法不需要谁同意。
+    func testRenderViewsHoldNoServices() throws {
+        let files = [
+            "Features/SessionList/Views/SessionListView.swift",
+            "Features/SessionDetail/Views/SessionDetailView.swift",
+            "Features/Pairing/Views/PairingView.swift",
+        ]
+        let banned = ["RpcClient", "LongConnection", "EventStream", "Endpoint"]
+        var scanned = 0
+        for path in files {
+            let url = sourcesRoot.appendingPathComponent(path)
+            let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
+            for (i, code) in lines {
+                scanned += 1
+                for name in banned where code.contains(name) {
+                    XCTFail("\(path):\(i) 出现 \(name) —— 渲染视图的字段里不该有服务")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 100, "扫到的行太少 —— 先怀疑路径推算")
+    }
+
+    /// 已配对那一支出现时要接上长连接 —— 「配对之后一切实时」的唯一入口。
+    ///
+    /// 它没有任何行为判据能碰到（视图不在测试覆盖里），而删掉它的症状是**配对成功后
+    /// 列表页静默不更新、审批卡永不出现**：传输层把「无票」当终态（`activate` 的闸只让
+    /// 第一次通过），不会自己再试。真正救场的只有「进一次会话详情」—— 所以这种缺口
+    /// 会以间歇性报告的形式出现，极难归因。
+    func testThePairedBranchStartsTheConnection() throws {
+        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
+        XCTAssertTrue(lines.contains { $0.1.contains(".task { onConnectionStart() }") },
+                      "已配对分支没有接上长连接 —— 配对之后事件流永远不连")
+        XCTAssertTrue(lines.contains { $0.1.contains("link.activate()") },
+                      "onConnectionStart 成了空壳 —— 连接从未被激活")
+        XCTAssertTrue(lines.contains { $0.1.contains("events.attach(to: link)") },
+                      "连接活了但事件流没登记 —— 列表与审批都收不到")
+    }
+
+    /// 容器只造不取数：`SessionDetailState` 里没有 `Task`、没有 `async` 成员。
+    ///
+    /// 不按 `await` 判：部件自己的取数闭包写在构造那一行里，那是部件的活 ——
+    /// 把它算成容器的越界，判据会先假红一次。容器真要越界，长出来的必是
+    /// `Task {` 或一个 `async` 方法。
+    func testTheDetailContainerOnlyConstructs() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionDetailState.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertTrue(lines.contains { $0.1.contains("final class SessionDetailState") },
+                      "扫错文件了 —— 先怀疑路径")
+        let hits = lines.filter { $0.1.contains("Task") || $0.1.contains("async") }.map(\.0)
+        XCTAssertEqual(hits, [], "容器里出现了取数或调度（第 \(hits) 行）—— 它只造不取数")
     }
 
     // MARK: - 待审批标记的三条结构判据
@@ -2151,17 +2220,23 @@ final class LayeringTests: XCTestCase {
         return out
     }
 
-    /// 列表视图真的把事件流交给了状态层。
+    /// 列表状态真的被接上了事件流，而视图只剩「触发重拉」。
     ///
     /// 这一行是整条链路的入口，而它没有任何行为判据能碰到（视图不在测试覆盖里）：
     /// 删掉它，两端的判据全绿而列表永远不动。结构判据是唯一守得住它的形式。
-    func testTheListScreenSubscribesToTheEventStream() throws {
-        let file = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
-        let text = try String(contentsOf: file, encoding: .utf8)
-        let lines = codeLines(in: text)
-        XCTAssertTrue(lines.contains { $0.1.contains("state.attach(events:") },
-                      "列表视图没有把事件流交给状态层 —— 事件到不了列表")
-        XCTAssertTrue(lines.contains { $0.1.contains("await state.reload()") },
+    ///
+    /// 锚落在**组合根**：它造这个 state，也就由它接。视图的字段里没有 `EventStream`，
+    /// 所以锚不在视图 —— 那一半（服务不进渲染视图的字段）由
+    /// `testRenderViewsHoldNoServices` 守，两条各守一半。
+    func testTheListStateIsSubscribedToTheEventStream() throws {
+        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let rootLines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
+        XCTAssertTrue(rootLines.contains { $0.1.contains("listState.attach(events: events)") },
+                      "根没有把事件流交给列表状态 —— 事件到不了列表")
+
+        let list = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
+        let listLines = codeLines(in: try String(contentsOf: list, encoding: .utf8))
+        XCTAssertTrue(listLines.contains { $0.1.contains("await state.reload()") },
                       "扫错文件了：连首载都不在这份文件里")
     }
 

@@ -96,6 +96,7 @@ final class SessionSync {
     /// **刻意不参与观察**：它每帧都变，被追踪会让 `RefreshGate` 的合并刷新失效
     /// （一次事件一次全量重算，那正是分帧批处理的相反面）。消费方是连接详情的 sheet，
     /// 打开那一刻读一次即可 —— 它回答的是「多久没更新」的量级，不需要逐帧跳动。
+    @ObservationIgnored
     private(set) var lastFrameAt: Date? = nil
     /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
     private(set) var displayedModel: ModelSelection? = nil

@@ -10,17 +10,14 @@ import SwiftUI
 /// 组网段是「视图 → 连接域」两跳，不另立一层：headscale 地址与接入 key
 /// （沙盒存储）在此录入，节点状态如实展示；配对仍走原三票身份（不因在虚拟网内简化）。
 struct PairingView: View {
-    @State private var state: PairingState
+    /// 配对码那一段的状态：根部造、三条展示路径共用同一个实例。
+    @Environment(PairingState.self) private var state
     /// 组网段的数据源 —— 视图读连接态的唯一出口，节点状态与动作都经 store 转发。
     @Environment(MeshStore.self) private var store
 
     @State private var controlURL = MeshConfig.load().controlURLString
     @State private var gatewayURL = MeshConfig.load().gatewayURLString
     @State private var tailnetKey = ""
-
-    init(client: RpcClient) {
-        _state = State(initialValue: PairingState(client: client))
-    }
 
     @ViewBuilder
     var body: some View {
@@ -60,6 +57,8 @@ struct PairingView: View {
         }
         .navigationTitle("配对")
         .scrollDismissesKeyboard(.immediately)
+        // 共用一份状态：打开时清掉别处留下的失败横幅。
+        .onAppear { state.resetFeedback() }
     }
 
     // MARK: - 组网段

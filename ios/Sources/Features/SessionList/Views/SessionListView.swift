@@ -1,22 +1,15 @@
 import SwiftUI
 
-/// 会话列表。取数与「显示哪些」在 `SessionListState` 里；本文件只画，以及登记五个触发点
-/// （进屏、下拉、回前台、组网就绪、工具栏按钮）—— 触发点是平台事件与用户手势，只有视图拿得到。
+/// 会话列表。取数与「显示哪些」在 `SessionListState` 里；本文件只画，以及登记四个触发点
+/// （下拉、回前台、组网就绪、工具栏按钮）—— 触发点是平台事件与用户手势，只有视图拿得到。
+/// 进屏首载在本文件（平台事件）；事件订阅的接线在根部（它造这个 state，也就由它接）。
 /// 按协议**排序是服务端的承诺**（这里一行排序代码都没有）。
+///
+/// 字段里没有服务对象：取数走 `state`，地址走 `state.addressLine`，详情由 `makeDetail` 造。
 struct SessionListView: View {
-    /// 读这两者是为了渲染：`isPaired` 决定这一屏让位给配对屏，`baseURL` 显示在页脚。
-    /// 取数走 `state`，不经这里。
-    let client: RpcClient
-
-    /// 这一屏只**读**它一处（页脚显示当前地址）—— 地址不归视图判断，归端点层。
-    let endpoint: Endpoint
-    /// 到网关的常驻连接（App 级）。本屏只用它传给会话详情 —— 连接不随哪一屏生死。
-    let link: LongConnection
-    /// 连接级事件流。列表是它的消费方之一：逐个事件改一行，代次报到就重拉一次。
-    let events: EventStream
-
-    /// 取数与三种面。`@State`：视图重建时保留，不随 body 重算重建。
-    @State private var state: SessionListState
+    let state: SessionListState
+    /// 造下一屏的容器 —— 它要 `sessionId`，只有点开那一行才知道；本屏只转交这个能力。
+    let makeDetail: (SessionSummary) -> SessionDetailState
 
     /// 组网/配对入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
     /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
@@ -26,20 +19,8 @@ struct SessionListView: View {
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
     @Environment(MeshStore.self) private var store
 
-    init(client: RpcClient, endpoint: Endpoint, link: LongConnection, events: EventStream) {
-        self.client = client
-        self.endpoint = endpoint
-        self.link = link
-        self.events = events
-        _state = State(initialValue: SessionListState(client: client))
-    }
-
     var body: some View {
-        if !client.isPaired {
-            PairingView(client: client)
-        } else {
-            pairedList
-        }
+        pairedList
     }
 
     private var pairedList: some View {
@@ -66,14 +47,14 @@ struct SessionListView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("\(state.sessions.count) 个会话 · \(endpoint.baseURL?.absoluteString ?? "未激活")")
+                Text("\(state.sessions.count) 个会话 · \(state.addressLine)")
             }
         }
         .navigationTitle("会话")
         .navigationDestination(for: SessionSummary.self) { session in
-            // 显式再注一次（双保险）：navigationDestination 闭包在容器懒建时求值，
-            // 根部注入到不了推入的视图 —— 不补这一句，详情页读不到连接域。
-            SessionDetailView(client: client, session: session, link: link)
+            // 根部已经注入连接域 —— 推入的视图继承它（`ApprovalStore` 同样只在根部注入，
+            // 详情正文读得到）。这一行因此是重复注入，等确认过 sheet 的环境继承再清掉。
+            SessionDetailView(session: session, make: makeDetail)
                 .environment(store)
         }
         .overlay {
@@ -88,13 +69,9 @@ struct SessionListView: View {
             }
         }
         .refreshable { await state.reload() }
-        // 一个 task、一条语句序：先订阅再首载。两个 `.task` 之间没有执行顺序的承诺，
-        // 而「订阅之前到达的那一帧」不会进账（那时没有在途请求可归）。
-        // `attach` 幂等，视图重复出现不会注册第二个听众。
-        .task {
-            state.attach(events: events)
-            await state.reload()
-        }
+        // 进屏首载。事件订阅不在这里：它是 App 级的一次接线，挂在组合根上（那边造
+        // 这个 state，也就由它接）。本屏只负责「什么时候取」——那是手势与平台事件。
+        .task { await state.reload() }
         // 组网就绪即首载：启动窗口内的请求会 fail-fast（端点还不存在），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
         // 这里的 `guard case .ready` 只是省一次必然失败的请求；「未就绪」该怎么显示由
@@ -129,7 +106,7 @@ struct SessionListView: View {
             }
         }
         .sheet(isPresented: $showMeshSettings) {
-            NavigationStack { PairingView(client: client) }
+            NavigationStack { PairingView() }
                 .environment(store)
         }
     }
