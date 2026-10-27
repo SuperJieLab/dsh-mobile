@@ -70,6 +70,19 @@ final class MeshSetupStateTests: XCTestCase {
         XCTAssertEqual(retried, [stored])
     }
 
+    /// 控制面必须是 https —— 明文控制面配不上证书。这条判在配置本身（`isComplete`），
+    /// 组网段只把它与「密钥非空」与起来。
+    func testControlPlaneMustBeHTTPS() {
+        let sut = state()
+        sut.tailnetKey = "hskey-auth-x"
+        sut.controlURL = "http://example:8443"
+        sut.gatewayURL = "http://100.64.0.1:3081"
+        XCTAssertFalse(sut.canSubmit, "控制面是 http 时不该可提交")
+
+        sut.controlURL = "https://example:8443"
+        XCTAssertTrue(sut.canSubmit, "换成 https 后可提交")
+    }
+
     /// 能不能提交跟着规则走：没有密钥不行，两格地址不成形也不行。
     func testCanSubmitFollowsTheRule() {
         let sut = state()

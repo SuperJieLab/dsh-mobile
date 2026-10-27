@@ -36,27 +36,6 @@ final class PairingRulesTests: XCTestCase {
                        "提交中 + 输入不足，仍不可提交")
     }
 
-    // MARK: - 组网录入
-
-    /// 密钥非空 + 配置完整，才可提交。三个输入各缺一次，都要判不可提交。
-    func testMeshSubmit() {
-        let complete = MeshConfig(controlURLString: "https://10.0.0.1:8443",
-                                  gatewayURLString: "http://100.64.0.1:3081")
-
-        XCTAssertFalse(PairingRules.canSubmitMesh(key: "", config: complete), "密钥为空不可提交")
-        XCTAssertTrue(PairingRules.canSubmitMesh(key: "hskey-auth-x", config: complete),
-                      "密钥非空 + 配置完整可提交")
-
-        let httpControl = MeshConfig(controlURLString: "http://10.0.0.1:8443",
-                                     gatewayURLString: "http://100.64.0.1:3081")
-        XCTAssertFalse(PairingRules.canSubmitMesh(key: "hskey-auth-x", config: httpControl),
-                       "控制面必须是 https（明文控制面配不上证书）")
-
-        let noGateway = MeshConfig(controlURLString: "https://10.0.0.1:8443",
-                                   gatewayURLString: "")
-        XCTAssertFalse(PairingRules.canSubmitMesh(key: "hskey-auth-x", config: noGateway),
-                       "网关地址为空不可提交")
-    }
 
     /// 「配置是否完整」这条规则本身：控制面要 `https`，网关地址只需是个 URL。
     func testMeshConfigCompleteness() {
@@ -87,13 +66,12 @@ final class PairingRulesTests: XCTestCase {
     /// （`code.count >= 6`、`(code as NSString).length`）
     /// 认不出；只扫这两个文件 —— 将来第三个地方拼一遍判据，要靠新加的屏自己守住。
     func testRuleHasNoSecondCopy() throws {
-        let dir = sourcesRoot.appendingPathComponent("Features/Pairing")
-        let meshDir = sourcesRoot.appendingPathComponent("Features/MeshSettings")
-        // 规则的两个消费者：两段输入各在自己的状态里读一次规则。
-        let holders = [dir.appendingPathComponent("State/PairingState.swift"),
-                       meshDir.appendingPathComponent("State/MeshSetupState.swift")]
+        let pairing = sourcesRoot.appendingPathComponent("Features/Pairing")
+        // 规则的持有者：配对码与「正在提交」在同一个状态里。组网那条判定是它自己的两个
+        // 条件（密钥非空 + 配置完整），没有独立决定，就地写在 `MeshSetupState` 里。
+        let holders = [pairing.appendingPathComponent("State/PairingState.swift")]
         // 视图只读状态给出的结论，不该再读一次规则 —— 但它照样要查碎片（抄回来的判据）。
-        let consumers = [dir.appendingPathComponent("Views/PairingView.swift")]
+        let consumers = [pairing.appendingPathComponent("Views/PairingView.swift")]
         let fragments = ["count == 6", "count >= 6", "key.isEmpty", "tailnetKey.isEmpty"]
 
         var scanned = 0

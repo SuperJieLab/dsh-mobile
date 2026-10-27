@@ -12,10 +12,6 @@ struct SessionListView: View {
     /// 造下一屏的容器 —— 本屏只转交这个能力。
     let makeDetail: (SessionSummary) -> SessionDetailState
 
-    /// 组网入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
-    /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
-    @State private var showMeshSettings = false
-
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
 
@@ -89,10 +85,12 @@ struct SessionListView: View {
                                 meshPath: screen.meshPath)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showMeshSettings = true
+                // 设置是唯一常驻入口：组网与身份两行都在里面。未就绪时界面本身就是组网
+                // 配置页，不必从这里进。
+                NavigationLink {
+                    SettingsView(state: screen.settings)
                 } label: {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
+                    Image(systemName: "gearshape")
                 }
                 Button {
                     Task { await screen.list.reload() }
@@ -101,9 +99,6 @@ struct SessionListView: View {
                 }
                 .disabled(screen.list.isLoading)
             }
-        }
-        .sheet(isPresented: $showMeshSettings) {
-            NavigationStack { MeshSettingsView(state: screen.meshSettings) }
         }
     }
 }

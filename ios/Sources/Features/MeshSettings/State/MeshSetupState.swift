@@ -51,7 +51,9 @@ final class MeshSetupState {
 
     /// 可提交吗 —— 一行转发到 `PairingRules`（同屏的两条规则住同一个值类型）。
     var canSubmit: Bool {
-        PairingRules.canSubmitMesh(key: tailnetKey, config: config)
+        // 两个条件都是现成的判定：接入密钥非空，且两份地址构成完整配置。
+        // 写在这里而不另立一个规则类型 —— 它没有独立于这两个判定的决定。
+        !tailnetKey.isEmpty && config.isComplete
     }
 
     /// 保存并接入：先落盘，再把**同一份**配置交给连接域。

@@ -2098,14 +2098,15 @@ final class LayeringTests: XCTestCase {
     /// 判据只数次数，不钉文件 —— 钉文件会在构造点移动时假红一次，而「几处」才是它要守的东西。
     func testEachScreenStateIsBuiltOnce() throws {
         let names = ["SessionListState(", "SessionListScreenState(", "SessionDetailState(",
-                     "PairingState(", "MeshSettingsState("]
+                     "PairingState(", "MeshSettingsState(", "MeshSetupState(",
+                     "SettingsState("]
         var found: [String: [String]] = [:]
         var scanned = 0
         for file in swiftFiles(under: sourcesRoot) {
             scanned += 1
             let text = try String(contentsOf: file, encoding: .utf8)
             for (line, code) in codeLines(in: text) {
-                for name in names where code.contains(name) {
+                for name in names where Self.mentionsType(code, name) {
                     found[name, default: []].append("\(file.lastPathComponent):\(line)")
                 }
             }
@@ -2134,6 +2135,7 @@ final class LayeringTests: XCTestCase {
             "Features/SessionDetail/Views/SessionDetailView.swift",
             "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
+            "Features/Settings/Views/SettingsView.swift",
         ]
         let banned = ["RpcClient", "LongConnection", "EventStream", "Endpoint"]
         var scanned = 0
@@ -2166,6 +2168,7 @@ final class LayeringTests: XCTestCase {
             "Features/SessionDetail/Views/SessionDetailView.swift",
             "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
+            "Features/Settings/Views/SettingsView.swift",
         ]
         var checked = 0
         for path in files {
@@ -2199,6 +2202,23 @@ final class LayeringTests: XCTestCase {
         guard let m = re.firstMatch(in: code, options: [], range: range),
               let r = Range(m.range(at: 1), in: code) else { return nil }
         return String(code[r])
+    }
+
+    /// 未配对时组网设置仍然可达 —— 「先配网、再配对」那条路的存在性。
+    ///
+    /// 为什么值得一条判据：组网配置页的两个入口里，常驻那个（设置页）只在列表里，而列表
+    /// 要求已配对；修复那个在选屏的「组网未就绪」那一支。缺了后者，新装用户就永远配不上
+    /// —— 而这件事没有编译错误、没有行为报错，只有真机上「配不上」一个症状。
+    ///
+    /// 锚落在组合根：那一支就在选屏的 `switch` 里。盲区：只证明两行都在同一份文件，证不了
+    /// 它们接在同一个分支上 —— 分支那半靠评审。
+    func testMeshSettingsIsReachableWithoutIdentity() throws {
+        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
+        XCTAssertTrue(lines.contains { $0.1.contains("case .needsMesh") },
+                      "选屏没有「组网未就绪」那一支 —— 组网没配好时无处可去")
+        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsView(state: screen.meshSettings)") },
+                      "未就绪那一支不展示组网配置页 —— 「先配网、再配对」那条路断了")
     }
 
     /// 配对屏与组网设置是两个视图：一个换身份，一个换路径。
@@ -2241,6 +2261,18 @@ final class LayeringTests: XCTestCase {
                       "onConnectionStart 成了空壳 —— 连接从未被激活")
         XCTAssertTrue(lines.contains { $0.1.contains("events.attach(to: link)") },
                       "连接活了但事件流没登记 —— 列表与审批都收不到")
+    }
+
+    /// 这一行是不是**声明了**那个类型 —— 要有左边界。
+    ///
+    /// 为什么不能直接 `contains`：`SettingsState(` 是 `MeshSettingsState(` 的后缀，
+    /// 用 `contains` 数出来的「两处构造」里有一处是另一个类型。子串误匹配会让判据报出一个
+    /// 假的重复，然后为了消除它去改名字 —— 那是治错了地方。
+    private static func mentionsType(_ code: String, _ name: String) -> Bool {
+        let pattern = "(?<![A-Za-z0-9_])" + NSRegularExpression.escapedPattern(for: name)
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(code.startIndex..<code.endIndex, in: code)
+        return re.firstMatch(in: code, options: [], range: range) != nil
     }
 
     /// 列表合并里的行拷贝只有一个入口。

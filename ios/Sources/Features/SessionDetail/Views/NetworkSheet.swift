@@ -14,7 +14,6 @@ struct NetworkSheet: View {
     /// 组网配置存过但读不出来 —— 与「从没配过」分开说。
     let configDamaged: Bool
     let onRetry: () -> Void
-    let onOpenMesh: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -32,7 +31,7 @@ struct NetworkSheet: View {
                 Section("组网") {
                     row("节点", nodeText)
                     if configDamaged {
-                        Text("保存的组网配置读取失败，请在组网设置里重新填写。")
+                        Text("保存的组网配置读取失败，请到设置里重新填写。")
                             .font(.footnote)
                             .foregroundStyle(.orange)
                     }
@@ -40,7 +39,6 @@ struct NetworkSheet: View {
 
                 Section {
                     Button("重试现在") { onRetry() }
-                    Button("组网设置") { onOpenMesh() }
                 }
             }
             .navigationTitle("连接")

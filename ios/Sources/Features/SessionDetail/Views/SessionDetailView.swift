@@ -58,7 +58,7 @@ private struct SessionDetailBody: View {
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
-    /// 本屏五个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
+    /// 本屏四个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
     @State private var activeSheet: DetailSheet?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
@@ -89,8 +89,8 @@ private struct SessionDetailBody: View {
         }
         .navigationTitle(detail.session.title ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
-        // 五个展开面共用一个 `.sheet(item:)`：两个独立的 `.sheet` 在同一事务里
-        // 「关一个、开一个」（连接详情 → 组网设置）时，第二个经常不 present。
+        // 四个展开面共用一个 `.sheet(item:)`：两个独立的 `.sheet` 在同一事务里
+        // 「关一个、开一个」（连接详情 → 全部待批）时，第二个经常不 present。
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .network:
@@ -99,15 +99,6 @@ private struct SessionDetailBody: View {
                 UsageSheet(usage: detail.sync.usage)
             case .approvals:
                 allApprovalsSheet
-            case .mesh:
-                NavigationStack {
-                    MeshSettingsView(state: detail.meshSettings)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("完成") { activeSheet = nil }
-                            }
-                        }
-                }
             case .model:
                 ModelSheetView(
                     catalog: detail.catalog,
@@ -365,8 +356,7 @@ private struct SessionDetailBody: View {
                      lastFrameAt: detail.sync.lastFrameAt,
                      nodeState: detail.nodeState,
                      configDamaged: detail.configDamaged,
-                     onRetry: { detail.sync.retry() },
-                     onOpenMesh: { activeSheet = .mesh })
+                     onRetry: { detail.sync.retry() })
     }
 
     /// 折叠起来的那些卡。**不含**上方已经露出的第一张 —— 文案说「还有 N 个」，列出来的就该是 N 个。
@@ -405,12 +395,12 @@ private struct SessionDetailBody: View {
         .presentationDetents([.medium, .large])
     }
 
-    /// 本屏五个展开面。合成一个 `.sheet(item:)` 的 id。
+    /// 本屏四个展开面。合成一个 `.sheet(item:)` 的 id。
+    /// 组网设置不在其中：详情只展示组网事实，配置入口在设置页（未就绪时整屏就是配置页）。
     private enum DetailSheet: String, Identifiable {
         case network
         case usage
         case approvals
-        case mesh
         case model
 
         var id: String { rawValue }

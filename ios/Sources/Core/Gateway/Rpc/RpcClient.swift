@@ -80,11 +80,13 @@ final class RpcClient {
         Log.info(Log.Module.gateway, "paired — device token stored")
     }
 
-    /// **掐断关系**：服务端不认这张设备凭证了（撤销或凭证被替换）。清掉本地凭证与在手的票，
-    /// App 回到未配对。
+    /// **掐断关系**：这张设备凭证不再被承认了。清掉本地凭证与在手的票，App 回到未配对。
+    ///
+    /// 两个触发者：服务端撤销（凭证被替换或吊销）与**用户主动解除**（设置页里那一个按钮）。
+    /// 两者做的是同一件事 —— 本机不再持有这张凭证 —— 所以共用一个入口。
     ///
     /// 与 `adopt` 成对：两者是同一件事的两个方向，所以写在相邻的位置、名字对称。
-    private func sever() {
+    func sever() {
         Log.warn(Log.Module.gateway, "relationship severed by server — device token cleared")
         credentials.deleteDeviceToken()
         tickets.clear()

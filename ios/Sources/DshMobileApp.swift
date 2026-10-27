@@ -33,12 +33,12 @@ struct DshMobileApp: App {
     /// 列表这一屏的依赖面：列表 + 连接域投影 + 页脚地址。视图只接它一个。
     @State private var listScreen: SessionListScreenState
     /// 配对屏的 state。单实例、无运行期参数 ⇒ 同样归根部。
-    /// 三条展示路径共用它（未配对时的整屏、列表的组网设置、详情的组网设置）。
+    /// 只有一条展示路径（未配对时的整屏）—— 组网设置已从它拆出去。
     @State private var pairing: PairingState
-    /// 组网录入那一段的 state —— 同一屏的第二个部件（换路径，与换身份分开）。
+    /// 组网录入那一段的 state —— 与换身份分开的那一半（换路径）。
     /// 它也在这里造，于是「读一次盘」发生在启动时，而不是每次视图重建。
     @State private var meshSetup: MeshSetupState
-    /// 组网设置这一页的依赖面：录入草稿 + 节点事实。两处 sheet 与详情屏都从这里取。
+    /// 组网设置这一页的依赖面：录入草稿 + 节点事实。设置页那一行与未就绪整屏都从这里取。
     @State private var meshSettings: MeshSettingsState
     /// 造会话详情容器的能力。它要 `sessionId`（点开那一行才知道），根造不了那一个，
     /// 但知道 `client` / `link` —— 于是把「造」交出去，把「用什么造」留在这里。
@@ -71,11 +71,13 @@ struct DshMobileApp: App {
             retry: { [weak store] config in await store?.retryMesh(config: config) }
         )
         let meshSettings = MeshSettingsState(setup: meshSetup, store: store)
+        let settings = SettingsState(meshSettings: meshSettings, client: client)
         let listState = SessionListState(client: client)
         // 地址读的是通信域的只读投影：本层认识 `Endpoint`，列表那一屏只收到一个返回串的能力。
         let listScreen = SessionListScreenState(
             list: listState,
             meshSettings: meshSettings,
+            settings: settings,
             address: { [weak endpoint] in gatewayAddressLine(endpoint?.baseURL) }
         )
 
@@ -181,6 +183,10 @@ private struct RootScreen: View {
     var body: some View {
         NavigationStack {
             switch stage {
+            case .needsMesh:
+                // 未就绪时整屏就是组网配置页：那一面只有一件事可做（修网），多一层说明
+                // 只是多一次点击。它顶部本来就显示节点五态与「配置读坏了」。
+                MeshSettingsView(state: screen.meshSettings)
             case .needsPairing:
                 PairingView(state: pairing)
             case .ready:
@@ -201,16 +207,29 @@ private struct RootScreen: View {
         }
     }
 
-    /// 应用此刻处于哪个阶段。只有两个取值、一个条件 —— 提成独立值类型只是把一行 `if`
-    /// 变成两处样板；出现第三个取值（比如启动中）时再提，那时它有资格占一个类型。
+    /// 应用此刻该显示哪一面。由两个事实算出，不是流程阶段 —— 组网随时可能坏回去，
+    /// 所以「未就绪」会反复出现，它不是一次性的阶段。
     private var stage: Stage {
-        client.isPaired ? .ready : .needsPairing
+        Stage.resolve(meshPhase: screen.phase, isPaired: client.isPaired)
     }
+}
 
-    private enum Stage {
-        /// 还没有设备凭证：整屏交给配对。
-        case needsPairing
-        /// 有凭证：主界面。
-        case ready
+/// 显示面：现在该给用户看什么。
+///
+/// 两个事实定一个取值：能不能发请求（`MeshPhase.ready` 才有 `Endpoint.baseURL`）、
+/// 有没有身份。**第一支不看身份** —— 网不通时不管有没有凭证，能做的都只有修网；
+/// 「已配对但断网」因此落在同一面，不需要额外分支。
+enum Stage: Equatable {
+    /// 组网没就绪：整屏是组网配置页。
+    case needsMesh
+    /// 组网就绪但没身份：整屏是配对页。
+    case needsPairing
+    /// 两者都满足：主界面。
+    case ready
+
+    /// 纯函数：两个事实定一个面。穷举四种组合由测试守着。
+    static func resolve(meshPhase: MeshPhase, isPaired: Bool) -> Stage {
+        guard case .ready = meshPhase else { return .needsMesh }
+        return isPaired ? .ready : .needsPairing
     }
 }

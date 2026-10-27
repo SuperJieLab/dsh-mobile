@@ -18,15 +18,19 @@ import Foundation
 @MainActor
 final class SessionListScreenState {
     let list: SessionListState
-    /// 组网设置的依赖面 —— 列表这一处的 sheet 用它，详情那一处从自己的容器取同一份草稿。
+    /// 组网设置的依赖面 —— 未就绪的整屏与设置页都从它取。
     let meshSettings: MeshSettingsState
+    /// 设置页的依赖面（组网 + 身份）。
+    let settings: SettingsState
     private let address: () -> String
 
     init(list: SessionListState,
          meshSettings: MeshSettingsState,
+         settings: SettingsState,
          address: @escaping () -> String) {
         self.list = list
         self.meshSettings = meshSettings
+        self.settings = settings
         self.address = address
     }
 

@@ -33,7 +33,7 @@ final class SessionDetailState {
     let catalog: ModelCatalogState
     let commands: CommandDirectory
     let composer: ComposerState
-    /// 组网设置 sheet 的入口（与列表那处共用一份草稿）。
+    /// 组网事实的来源（节点五态、路径、配置读坏）—— 这一屏只读，配置入口在设置页。
     let meshSettings: MeshSettingsState
     /// App 级的待答表 —— 这一屏只读它按会话分出来的那一栏。
     let approvals: ApprovalStore
