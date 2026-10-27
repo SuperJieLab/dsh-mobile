@@ -1,20 +1,23 @@
 import Foundation
 
-/// 与 Mac 侧网关的**身份门面**：带票地发一次请求，外加维护身份本身。
+/// 与 Mac 侧网关的**请求门面**：带票地发一次请求，并维护票的生命周期。
 ///
 /// 它**不认识任何 op**。每个 op 的请求怎么拼、回包怎么读，归用到它的那个功能
-/// （`Features/*/State/` 下各自的取数与下发）。这里只回答三件事：关系还在不在
-/// （`adopt` / `sever` / `isPaired`）、这一次请求带什么票（`ticket` / `validAccessToken`）、
-/// 撞上 401 之后怎么办（`perform`）。
+/// （`Features/*/State/` 下各自的取数与下发）。这里只回答两件事：这一次请求带什么票
+/// （`ticket` 换、`tickets.validToken` 读）、撞上 401 之后怎么办（`perform`）。
+///
+/// **身份不在这里。** 「关系还在不在」的真值是 `CredentialStore.deviceToken` —— 它自己
+/// 可观察，所以没有第二份副本要同步，也没有一个「客户端认为的身份」要与它对齐。本类只在
+/// 需要凭证时去问（换票的入参、断关系时清掉它），不持有任何身份状态。
 ///
 /// **发字节那半不在这里**，在 `HttpTransport` —— 它不认识票，于是「换票那一发不带票」
 /// 不是一条纪律，而是结构上拿不到票源：票闸在 `perform`，裸发层没有它。
 /// 401 的两种读法（「换票再来」与「关系断了」）仍只在本类判：裸发层只负责把
 /// 「这是一次鉴权请求」这个**事实**传上来（`treat401AsRefusal`），怎么处置由这里决定。
 ///
-/// **要票的唯一入口是 `ticket()`**，返回三态（`AccessTicket`）而不是 Bool：拿不到的原因分成
-/// 「不会自己好」与「等一等就好」两种，其中只有后者值得重试。并发的调用共享同一个在途换票
-/// 任务（单飞），所以「同时问」不会变成「同时换两张」。
+/// **票面经 `tickets` 直接对外**（`validToken` 读现状、`ticket` 换一张）。只有 `ticket()`
+/// 留在本类：它是**组合**动作 —— 把本机凭证接给票层，而凭证只有这里同时拿得到。
+/// 读现状不包方法，直接用 `tickets.validToken()` —— 那是一条纯转发，包一层只是多一个名字。
 ///
 /// **为什么要「用之前先确认」，而不是等 401 再换**：访问票只活在内存里（`TicketKeeper`），
 /// 冷启动后、或票过期（15 分钟）后回来，手上就是没有票。纯反应式会让每一次这样的处境都先发
@@ -22,10 +25,12 @@ import Foundation
 /// 撞上 401 仍然会换一次并重试（那覆盖的是「本地以为有票、服务端不认」，比如 Mac 重启）；
 /// 两条路分工，不是冗余。
 ///
-/// `struct` 改 `class` 是因为票与已配对状态是**可变共享状态** —— 值语义会在视图间复制出
-/// 各自为政的凭证；仍 `@MainActor`，因为调用方本就在主线程。
+/// `struct` 改 `class` 是因为票与凭证是**可变共享状态** —— 值语义会在视图间复制出
+/// 各自为政的副本；仍 `@MainActor`，因为调用方本就在主线程。
+///
+/// **不带观察**：本类没有可观察成员（全部是 `let` 或 `lazy`）。要观察身份，观察
+/// `CredentialStore`；它才是那个事实的出处。
 @MainActor
-@Observable
 final class RpcClient {
 
     /// 往哪打：组网域产出的地址，本类只**问**它，不存副本。`nil` = 隧道没通。
@@ -33,7 +38,7 @@ final class RpcClient {
     /// 裸发层 —— 票闸在下面，它不认识票。
     private let http: HttpTransport
 
-    /// 设备凭证在手机侧的家。默认共享单例：全 App 一个身份。
+    /// 设备凭证在手机侧的家。它自己可观察 —— 本类只是读者之一。
     private let credentials: CredentialStore
 
     /// 访问票的生命周期（有没有、还剩多久、要不要换、并发谁去换）。
@@ -45,69 +50,58 @@ final class RpcClient {
     /// `lazy` 是唯一的直说方式：**一个定义、一个构造点**，首次用时才求值，那时 `self`
     /// 已完整。它不同于「先塞一个假值、稍后再替换」—— 后者存在一个「票层是假的」的阶段，
     /// 而这里不存在那个阶段。
-    /// **为什么不参与观察（`@ObservationIgnored`）**：它是 `lazy`，而 `@Observable`
-    /// 把存储属性改写成计算属性，`lazy` 在计算属性上不成立。它也不需要被观察 ——
-    /// 票的生命周期变化只经 `isPaired` 与 `perform` 的结果体现，没有读者看它本身。
-    @ObservationIgnored
-    private lazy var tickets = TicketKeeper { [weak self] deviceToken in
+    private(set) lazy var tickets = TicketKeeper { [weak self] deviceToken in
         guard let self else { return .retryLater }
         return await self.renewTicket(deviceToken: deviceToken)
     }
-
-    /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
-    private(set) var isPaired: Bool
 
     init(session: @escaping () -> URLSession,
          baseURL: @escaping () -> URL?,
          credentials: CredentialStore? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
-        let store = credentials ?? .shared
         self.baseURLProvider = baseURL
         self.http = HttpTransport(session: session, baseURL: baseURL)
-        self.credentials = store
-        self.isPaired = store.hasDeviceToken
+        self.credentials = credentials ?? .shared
     }
 
-    // MARK: - 身份
+    // MARK: - 关系结束
 
-    /// **建立关系**：把一次配对换来的设备凭证收下，此后这台手机算已配对。
+    /// **关系结束了**：本机不再持有这张凭证，手上的票也一并作废。
     ///
-    /// 它只做身份的落地，不碰协议 —— 配对请求由 `Pairing` 那个功能自己发，换来的
-    /// `deviceToken` 交到这里。这样「关系什么时候成立」只有一个入口，而它与下面的
-    /// `sever()` 是同一对迁移的相反两半。
-    func adopt(deviceToken: String) {
-        credentials.saveDeviceToken(deviceToken)
-        isPaired = true
-        Log.info(Log.Module.gateway, "paired — device token stored")
-    }
-
-    /// **掐断关系**：这张设备凭证不再被承认了。清掉本地凭证与在手的票，App 回到未配对。
+    /// 两条触发路径，动作相同而原因不同，所以收一个 `reason`（日志要分得清 —— 排障时
+    /// 「用户自己点的」与「被服务端踢下线」是完全不同的两件事）：
+    /// - 服务端撤销：换票被 401 拒（见 `renewTicket`）
+    /// - 用户主动解除：配对页那个按钮
     ///
-    /// 两个触发者：服务端撤销（凭证被替换或吊销）与**用户主动解除**（设置页里那一个按钮）。
-    /// 两者做的是同一件事 —— 本机不再持有这张凭证 —— 所以共用一个入口。
+    /// **两半必须一起做**，这是本方法存在的唯一理由：只删凭证不清票，会留下「有票没凭证」
+    /// 的窗口 —— 请求带着未过期的票照常成功，而用户以为关系已经解除。这两半分别住在
+    /// `CredentialStore` 与 `TicketKeeper`，只有本类同时持有两者。
     ///
-    /// 与 `adopt` 成对：两者是同一件事的两个方向，所以写在相邻的位置、名字对称。
-    func sever() {
-        Log.warn(Log.Module.gateway, "relationship severed by server — device token cleared")
+    /// 不叫 `sever`：「切断」描述的是服务端那一侧的动作，用户主动解除那一支说不通。
+    func discardIdentity(reason: Reason) {
+        Log.warn(Log.Module.gateway, "identity discarded (\(reason.logWord)) — token and ticket cleared")
         credentials.deleteDeviceToken()
         tickets.clear()
-        isPaired = false
     }
 
-    /// 还活着的 access 票；没有就是 `nil`。
-    ///
-    /// 流通道升级时要读它 —— 那里只有同步上下文，拿不了异步的 `ticket()`。它**只回答现状，
-    /// 不会去换**。
-    ///
-    /// **为什么这里是两行转发，而 `perform` 却直接用 `tickets`**：`perform` 就在本类里，
-    /// 同一层内不必绕；而这两个方法是被 `Features/` 调的，它们是票这件事**在 Core 之外的
-    /// 唯一可见面**。把 `tickets` 交出去就等于连 `renewAnyway` 一起交出去 —— 那个绕过
-    /// 「先问有没有」，一次疏忽就让每个请求都换一张票。
-    func validAccessToken() -> String? {
-        tickets.validToken()
+    /// 关系为什么结束。两个取值对应两条触发路径，只为日志区分。
+    enum Reason {
+        /// 服务端不认这段关系了（撤销 / 凭证被替换）。
+        case revokedByServer
+        /// 用户在配对页主动解除。
+        case userRequested
+
+        var logWord: String {
+            switch self {
+            case .revokedByServer: return "by server"
+            case .userRequested: return "by user"
+            }
+        }
     }
 
-    /// 要一张票 —— 使用方唯一的入口：有就立刻给，没有就去换（并发时搭同一趟）。
+    // MARK: - 票
+
+    /// 换一张票 —— 使用方的入口：有就立刻给，没有就去换（并发时搭同一趟）。
     ///
     /// 三种结果各有各的处置（见 `AccessTicket`）。本类在这两行里补一件票那一层不知道的事：
     /// 设备凭证在本地存着没有。
@@ -115,6 +109,9 @@ final class RpcClient {
     /// **凭证按参传入，不让票那一层自己去取**：它现在是一台纯状态机 —— 输入只有注入的
     /// 换票动作与这一枚凭证，所以每条断言都能只给这两样。换成注入一个读取器，它每次调用就
     /// 要读一遍可变外部状态，断言也得跟着造一个。
+    ///
+    /// **为什么只有这个方法留在本类**：换票是**组合** —— 把凭证接给票层，而两者只有这里同时
+    /// 拿得到。只读现状（`tickets.validToken()`）不必包一层，那只是多一个名字。
     func ticket() async -> AccessTicket {
         await tickets.ticket(deviceToken: credentials.deviceToken)
     }
@@ -151,7 +148,7 @@ final class RpcClient {
             )
         } catch RpcClientError.unauthenticated {
             // 服务端不认这段关系了：撤销或凭证被替换。重试没有意义。
-            sever()
+            discardIdentity(reason: .revokedByServer)
             return .unavailable
         } catch {
             // 传输失败不是关系终结：票换不到只是暂时，退避后再试。

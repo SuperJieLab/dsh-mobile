@@ -12,10 +12,15 @@ import Foundation
  * 设备凭证是**关系本体**：要经得起杀 App / 重启，被撤销才消失。访问票不在这里
  * —— 它是 15 分钟的运行时产物，见 `TicketKeeper`。
  *
+ * **它可观察，而且它是「有没有配对」的唯一出处。** 不要在任何别处存一份 `isPaired` ——
+ * 「已配对 ≡ 有凭证」是结构，不是要靠手工同步维持的纪律。读者读 `hasDeviceToken`，
+ * 没有第二份可以对不齐。
+ *
  * 存储介质的选择（沙盒文件而非 Keychain / UserDefaults，以及明文可接受的取舍）在
  * `SecretFile` 的文件头，这里不再重复。
  */
 @MainActor
+@Observable
 final class CredentialStore {
 
     static let shared = CredentialStore()

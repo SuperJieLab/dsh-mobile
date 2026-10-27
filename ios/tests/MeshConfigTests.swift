@@ -27,6 +27,23 @@ final class MeshConfigTests: XCTestCase {
         super.tearDown()
     }
 
+    /// 「配置是否完整」这条规则本身：控制面要 `https`，网关地址只需是个 URL。
+    ///
+    /// 规则住在 `MeshConfig`，断言就跟它住一起 —— 它不属于任何一屏。
+    func testCompleteness() {
+        XCTAssertTrue(MeshConfig(controlURLString: "https://a:8443",
+                                 gatewayURLString: "http://b:3081").isComplete)
+        XCTAssertFalse(MeshConfig(controlURLString: "http://a:8443",
+                                  gatewayURLString: "http://b:3081").isComplete,
+                       "明文控制面不算完整")
+        XCTAssertFalse(MeshConfig(controlURLString: "",
+                                  gatewayURLString: "http://b:3081").isComplete,
+                       "还没配过（控制面为空）不算完整")
+        XCTAssertFalse(MeshConfig(controlURLString: "https://a:8443",
+                                  gatewayURLString: "").isComplete,
+                       "网关地址为空不算完整")
+    }
+
     /// 从没存过 ⇒ `missing`，不是 `damaged`。
     func testMissingWhenNeverSaved() {
         XCTAssertEqual(MeshConfig.read(defaults), .missing, "空域应当读成「从没配过」")

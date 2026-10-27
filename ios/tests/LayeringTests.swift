@@ -766,6 +766,68 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(names.contains("GatewayResponse"), "Rpc/Wire/ 没扫到信封 —— 先怀疑路径")
     }
 
+    /// 身份只有一个出处：`CredentialStore.deviceToken`。
+    ///
+    /// 守「已配对 ≡ 有设备凭证」。若别处再存一份 `isPaired`，它就要靠手工同步维持 ——
+    /// 绕过同步点写一次凭证，盘上有、界面说没有，而编译不报错、断言也不红。
+    ///
+    /// 断法：全仓不存在 `var isPaired: Bool` 的**存值**声明。计算属性与闭包可以
+    ///（`var isPaired: Bool { hasIdentity() }` 是读穿，不是副本）。
+    func testIdentityHasNoSecondCopy() throws {
+        var hits: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                scanned += 1
+                // 存值两种写法：`var isPaired: Bool`（行尾）与 `var isPaired: Bool = …`。
+                // 计算属性是 `var isPaired: Bool { … }` —— 带花括号，不在下面两条之内。
+                let storedBare = code.range(
+                    of: "var\\s+isPaired\\s*:\\s*Bool\\s*$", options: .regularExpression) != nil
+                let storedInit = code.range(
+                    of: "var\\s+isPaired\\s*:\\s*Bool\\s*=", options: .regularExpression) != nil
+                if storedBare || storedInit { hits.append("\(relative):\(line)") }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 1000, "扫到的行太少 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, [], "这些地方存着一份 isPaired —— 身份只有 CredentialStore 一处")
+    }
+
+    /// 设置页的依赖面不认识请求层。
+    ///
+    /// 身份与解除都以闭包注入。视图拿到 `RpcClient` 就知道怎么发请求（那是禁的），而这一层
+    /// 也不需要知道 —— 它要的只是「有没有身份」与「断开关系」两件事。
+    func testSettingsStateHoldsNoClient() throws {
+        let file = sourcesRoot.appendingPathComponent("Features/Settings/State/SettingsState.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertGreaterThan(lines.count, 10, "只扫到 \(lines.count) 行 —— 先怀疑路径推算")
+
+        // 正控：确认读到了本体，否则下面的零命中守的是空气。
+        XCTAssertTrue(lines.contains { $0.1.contains("func unlink()") }, "没读到 unlink")
+        let hits = lines.filter { $0.1.contains("RpcClient") }.map { "\($0.0)" }
+        XCTAssertEqual(hits, [], "设置页的依赖面认识了请求层：\(hits)")
+    }
+
+    /// 票必须晚于凭证消亡：凭证没了，手上那张票也不许还活着。
+    ///
+    /// 只删凭证不清票会留下一个窗口 —— 请求带着未过期的票照常成功，而用户以为关系已经解除。
+    /// 两半分别住在 `CredentialStore` 与 `TicketKeeper`，只有 `RpcClient` 同时持有两者，
+    /// 所以这条判据落在那个跨两层的动作上。
+    func testTicketDiesWithCredential() throws {
+        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Rpc/RpcClient.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+
+        // 正控：先确认读到了那个动作，否则下面的「两行相邻」守的是空气。
+        let start = try XCTUnwrap(lines.first { $0.1.contains("func discardIdentity(") }?.0,
+                                  "没读到 discardIdentity —— 先怀疑改名")
+        let body = lines.filter { $0.0 > start && $0.0 <= start + 6 }
+        XCTAssertTrue(body.contains { $0.1.contains("deleteDeviceToken") },
+                      "discardIdentity 里必须删凭证")
+        XCTAssertTrue(body.contains { $0.1.contains("tickets.clear") },
+                      "discardIdentity 里必须清票 —— 只删凭证会留下「有票没凭证」的窗口")
+    }
+
     /// 隧道的产物只有一个主人：`MeshStore.route`。
     ///
     /// 守的是「一个事实一个存放处」。地址与传输是同一件事的两半（组网激活那一刻的产物），
@@ -2256,7 +2318,7 @@ final class LayeringTests: XCTestCase {
             }
         }
         for (i, code) in meshLines {
-            for name in ["PairingState", "PairingRules"] where code.contains(name) {
+            for name in ["PairingState"] where code.contains(name) {
                 XCTFail("MeshSettingsView.swift:\(i) 出现 \(name) —— 组网页只管换路径")
             }
         }

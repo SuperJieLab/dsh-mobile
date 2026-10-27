@@ -49,10 +49,10 @@ final class MeshSetupState {
         MeshConfig(controlURLString: controlURL, gatewayURLString: gatewayURL)
     }
 
-    /// 可提交吗 —— 一行转发到 `PairingRules`（同屏的两条规则住同一个值类型）。
+    /// 可提交吗 —— 两个条件都是现成的判定：接入密钥非空，且两份地址构成完整配置。
+    ///
+    /// 就地判而不另立规则类型：它没有独立于这两个判定的决定。
     var canSubmit: Bool {
-        // 两个条件都是现成的判定：接入密钥非空，且两份地址构成完整配置。
-        // 写在这里而不另立一个规则类型 —— 它没有独立于这两个判定的决定。
         !tailnetKey.isEmpty && config.isComplete
     }
 

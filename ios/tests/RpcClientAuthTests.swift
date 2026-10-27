@@ -247,6 +247,6 @@ final class RpcClientAuthTests: XCTestCase {
         let outcome = await client.ticket()
         XCTAssertEqual(outcome, .retryLater, "换不到只是这一次，不是关系没了")
         XCTAssertEqual(stored, "device-token", "传输失败绝不能清掉设备凭证 —— 那是关系的本体")
-        XCTAssertTrue(client.isPaired, "关系仍在")
+        XCTAssertTrue(store.hasDeviceToken, "关系仍在 —— 凭证还在就是还在")
     }
 }

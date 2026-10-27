@@ -1,15 +1,14 @@
 /**
  * 设置页的依赖面：组网那一行的说法与身份（有没有凭证、能不能解除）。
  *
- * 它成立的依据是两条**组合**，不是「把两个对象装在一起」：`meshSummary` 把阶段与路径
- * 拼成一句副标题，`unlink` 把「用户点了解除」落到具体的清凭证动作上。零组合的容器是
- * 转发层（组网录入那一页就因此没有容器 —— 它的两个依赖直接进签名）。
+ * 它成立的依据是两条**组合**：`meshSummary` 把阶段与路径拼成一句副标题，
+ * `identitySummary` 把「有没有凭证」翻成一句状态。零组合的容器是转发层。
  *
- * `isPaired` 是唯一一条纯读穿，但它不是转发：`client` 是 private，这一条是它的**唯一出口**
- * —— 视图拿到 `RpcClient` 就等于知道怎么发请求，那是禁的，所以读穿在这里是边界而非多余。
+ * **它不认识 `RpcClient`。** 身份与解除都以闭包注入 —— 视图拿到客户端就知道怎么发请求，
+ * 那是禁的；而这一层也不需要知道。闭包的另一端在组合根。
  *
- * **引用 ≠ 拥有**：`setup` / `store` / `client` 都是根造的、与进程同寿。解除配对会清掉
- * 沙盒里的设备凭证（`RpcClient.sever`），那是身份对象自己的事，不由这一层执行删除动作。
+ * **引用 ≠ 拥有**：`setup` / `store` 是根造的、与进程同寿。解除配对会清掉沙盒里的设备
+ * 凭证与在手票 —— 那是身份与票自己的事，不由这一层执行。
  *
  * 这里不放中文：组网那行的句子在 `MeshSettings/Display/MeshText.swift`。
  */
@@ -21,16 +20,25 @@ final class SettingsState {
     let setup: MeshSetupState
     /// 节点五态与路径的来源。只读 —— 动手的入口在 `setup`。
     let store: MeshStore
-    private let client: RpcClient
 
-    init(setup: MeshSetupState, store: MeshStore, client: RpcClient) {
+    /// 有没有身份。**闭包而非字段**：闭包里读的是 `CredentialStore.hasDeviceToken`，
+    /// 而它可观察 —— 视图求值时读到这里就建立了追踪，凭证一变整页重算。
+    private let hasIdentity: () -> Bool
+    /// 解除配对。闭包而非客户端：这一层不该知道怎么发请求。
+    private let discardIdentity: () -> Void
+
+    init(setup: MeshSetupState,
+         store: MeshStore,
+         hasIdentity: @escaping () -> Bool,
+         discardIdentity: @escaping () -> Void) {
         self.setup = setup
         self.store = store
-        self.client = client
+        self.hasIdentity = hasIdentity
+        self.discardIdentity = discardIdentity
     }
 
-    /// 有没有身份。读穿到客户端 —— 它翻假时这一页会自动重算。
-    var isPaired: Bool { client.isPaired }
+    /// 有没有身份。读穿到闭包 —— 它翻假时这一页会自动重算。
+    var isPaired: Bool { hasIdentity() }
 
     /// 组网那一行的副标题：阶段 + 路径（就绪时）。
     var meshSummary: String {
@@ -42,6 +50,6 @@ final class SettingsState {
 
     /// 解除配对：清掉本地凭证与在手票。服务端那边由 Mac 侧撤销，这里只管本机。
     func unlink() {
-        client.sever()
+        discardIdentity()
     }
 }

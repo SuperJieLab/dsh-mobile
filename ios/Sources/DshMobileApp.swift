@@ -17,9 +17,12 @@ struct DshMobileApp: App {
     @State private var store: MeshStore
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
     @State private var link: LongConnection
-    /// 一元客户端。根部要读 `isPaired` 才决定显示哪一屏，所以它是可观察的 `@State`
-    /// 而不是 `let` —— 与 `node` / `store` / `link` 同一行列。
+    /// 请求门面（带票发一次）。它不再可观察 —— 身份的真值在 `credentials` 那里，
+    /// 本类只在换票时读凭证。仍用 `@State` 持着，与 `node` / `store` / `link` 同列。
     @State private var client: RpcClient
+    /// 身份的真值：设备凭证。**它是「有没有配对」的唯一出处** —— 选屏、设置页、配对页
+    /// 都读它；`RpcClient` 换票时也向它取。一个实例、没有副本，所以没有对不齐的可能。
+    private let credentials: CredentialStore
     /// 连接级事件流的收端 —— App 级，与连接同寿。三个消费方：待答表（清空）、
     /// 会话列表（逐个事件 + 代次重拉）、列表的事件订阅接线。
     private let events: EventStream
@@ -46,14 +49,18 @@ struct DshMobileApp: App {
         let node = TailnetNode()
         // 组网域先造：隧道的产物（传输 + 地址）只住在它那里，两条链路向它取。
         let store = MeshStore(node: node)
+        // 身份的真值：一个实例，两处读 —— `RpcClient` 换票时取凭证，各处闭包读
+        // 「有没有」。「已配对 ≡ 有凭证」因此是结构，不是纪律。
+        let credentials = CredentialStore.shared
         let client = RpcClient(
             session: { [weak store] in store?.route?.session ?? .shared },
-            baseURL: { [weak store] in store?.route?.baseURL }
+            baseURL: { [weak store] in store?.route?.baseURL },
+            credentials: credentials
         )
         // 长连接只拿四个能力，不拿一元客户端本体：票 / 换票 / 传输 / 地址都在这里接一次，
         // 之后它再也不认识 `RpcClient`。四个参数必填 —— 漏接一个编译不过。
         let link = LongConnection(
-            authorization: { [weak client] in client?.validAccessToken() },
+            authorization: { [weak client] in client?.tickets.validToken() },
             renewTicket: { [weak client] in
                 guard let client else { return .unavailable }
                 return await client.ticket()
@@ -64,18 +71,36 @@ struct DshMobileApp: App {
         )
         let events = EventStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
-        let pairing = PairingState(client: client)
+        // 配对段的三件事都以闭包交出去：它不认识 `RpcClient`，也不认识凭证存在哪。
+        let pairing = PairingState(
+            submit: { [weak client] code in
+                guard let client else { throw RpcClientError.notActivated }
+                try await pairDevice(client, code: code, into: credentials)
+            },
+            hasIdentity: { [weak credentials] in credentials?.hasDeviceToken ?? false },
+            discardIdentity: { [weak client] in
+                client?.discardIdentity(reason: .userRequested)
+            }
+        )
         // 组网段的两个动作都以闭包交给它：它不认识 `MeshStore`，只认识「提交一份」与
         // 「按存下来的那份重试」。
         let meshSetup = MeshSetupState(
             submit: { [weak store] key, config in await store?.submitMeshKey(key, config: config) },
             retry: { [weak store] config in await store?.retryMesh(config: config) }
         )
-        let settings = SettingsState(setup: meshSetup, store: store, client: client)
+        let settings = SettingsState(
+            setup: meshSetup,
+            store: store,
+            hasIdentity: { [weak credentials] in credentials?.hasDeviceToken ?? false },
+            discardIdentity: { [weak client] in
+                client?.discardIdentity(reason: .userRequested)
+            }
+        )
         let listState = SessionListState(client: client)
         // 地址读的是隧道产物的只读投影：本层知道它在哪，列表那一屏只收到「读一句字」的能力。
         let address = { [weak store] in gatewayAddressLine(store?.route?.baseURL) }
 
+        self.credentials = credentials
         self.events = events
         self.address = address
         self.makeDetail = { session in
@@ -99,7 +124,7 @@ struct DshMobileApp: App {
     var body: some Scene {
         WindowGroup {
             RootScreen(
-                client: client,
+                credentials: credentials,
                 list: listState,
                 store: store,
                 meshSetup: meshSetup,
@@ -164,7 +189,8 @@ struct DshMobileApp: App {
 /// 它认识服务（`client` 与三个闭包），因为它是装配点的视图面，不是某一屏的渲染段：
 /// 渲染段的规矩（依赖只有一条通道）从这里往下才开始算。
 private struct RootScreen: View {
-    let client: RpcClient
+    /// 身份的真值。选屏读它 —— 它可观察，凭证一变这一屏就重算。
+    let credentials: CredentialStore
     let list: SessionListState
     /// 连接域 —— 选屏读 `phase`，组网配置页读节点五态。
     let store: MeshStore
@@ -216,7 +242,7 @@ private struct RootScreen: View {
     /// 应用此刻该显示哪一面。由两个事实算出，不是流程阶段 —— 组网随时可能坏回去，
     /// 所以「未就绪」会反复出现，它不是一次性的阶段。
     private var stage: Stage {
-        Stage.resolve(meshPhase: store.phase, isPaired: client.isPaired)
+        Stage.resolve(meshPhase: store.phase, isPaired: credentials.hasDeviceToken)
     }
 }
 
