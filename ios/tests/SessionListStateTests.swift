@@ -53,9 +53,7 @@ final class SessionListStateTests: XCTestCase {
     }
 
     private func make(_ fetch: FakeFetch) -> SessionListState {
-        // 地址那一半与这组判据无关（它只在页脚显示），给一个固定串即可 ——
-        // 构造点仍是唯一一处，页脚的内容由 `GatewayAddressTests` 守。
-        SessionListState(fetch: { try await fetch.fetch() }, address: { "未激活" })
+        SessionListState { try await fetch.fetch() }
     }
 
     /// 让挂起的任务跑到它的第一个 await。

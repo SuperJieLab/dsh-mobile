@@ -34,12 +34,6 @@ final class SessionListState {
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
     /// 走真网络时，「两次请求并发」与「一次请求很慢」在测试里长得一样。
     private let fetch: () async throws -> [SessionSummary]
-    /// 页脚那句地址。给的是一个**读串的能力**，不是端点对象 —— 这一层不认识通信域，
-    /// 只认识「有一行字要显示」。
-    ///
-    /// 它不参与观察（闭包里读的是不可观察的端点）。页脚之所以会跟着变，是因为整屏
-    /// 在 `store.phase` 变化时重算 —— 那条依赖在视图里，不在这里。
-    private let address: () -> String
     /// 在途的那一次。单飞的落点，也是这批账的归属。
     private var inflight: Task<[SessionSummary], Error>?
     /// 这一次在途期间到达的变更，按到达顺序 —— 落地时依次重放。
@@ -49,19 +43,13 @@ final class SessionListState {
     private var buffered: [SessionListChange] = []
     /// 是否已经听过事件流（`attach` 幂等）。
     private var attached = false
-    init(fetch: @escaping () async throws -> [SessionSummary],
-         address: @escaping () -> String) {
+    init(fetch: @escaping () async throws -> [SessionSummary]) {
         self.fetch = fetch
-        self.address = address
     }
 
-    convenience init(client: RpcClient, address: @escaping () -> String) {
-        self.init(fetch: { try await fetchSessions(client) }, address: address)
+    convenience init(client: RpcClient) {
+        self.init { try await fetchSessions(client) }
     }
-
-    /// 页脚里地址那一半。与条数拼在同一句里，但两半的来源不同：条数出自 `sessions`，
-    /// 地址出自通信域 —— 视图只读这一句，不拼、不判。
-    var addressLine: String { address() }
 
     /// 要显示的失败文案；没有失败时是 `nil`。徽标与空态条件都读它 —— 它是三态里失败那一面的
     /// 读法，不是第二份状态。

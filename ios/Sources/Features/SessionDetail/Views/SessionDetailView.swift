@@ -62,10 +62,6 @@ private struct SessionDetailBody: View {
     @State private var activeSheet: DetailSheet?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
-    /// 根部注入的连接域：功能条的网络格与连接详情读它（图中转与节点状态）。
-    @Environment(MeshStore.self) private var store
-    /// 根部注入的待答表：App 级，不随本屏生死 —— 停在列表时到达的审批也在里面。
-    @Environment(ApprovalStore.self) private var approvals
 
     var body: some View {
         Group {
@@ -105,14 +101,13 @@ private struct SessionDetailBody: View {
                 allApprovalsSheet
             case .mesh:
                 NavigationStack {
-                    PairingView()
+                    MeshSettingsView(state: detail.meshSettings)
                         .toolbar {
                             ToolbarItem(placement: .topBarTrailing) {
                                 Button("完成") { activeSheet = nil }
                             }
                         }
                 }
-                .environment(store)
             case .model:
                 ModelSheetView(
                     catalog: detail.catalog,
@@ -247,7 +242,7 @@ private struct SessionDetailBody: View {
 
             if !isComposing {
                 ComposerStrip(
-                    model: detail.stripModel(meshPath: store.meshPath),
+                    model: detail.stripModel(),
                     onTapModel: { activeSheet = .model },
                     onTapNetwork: { activeSheet = .network },
                     onTapUsage: { activeSheet = .usage }
@@ -264,11 +259,6 @@ private struct SessionDetailBody: View {
         .padding(.bottom, 6)
     }
 
-    /// 本会话还挂着的卡。表按会话分组，这里只取这一栏 —— 别的会话的那几条不进这一屏。
-    private var pendingApprovals: [ApprovalTable.Entry] {
-        approvals.pending(in: detail.session.id)
-    }
-
     /// 待批卡：只露第一张，其余折成一行计数。
     ///
     /// 审批是串行的 —— 批完一张才该看下一张。同时露两张不提供额外判断信息，只会把输入框
@@ -276,10 +266,10 @@ private struct SessionDetailBody: View {
     @ViewBuilder
     private var approvalSection: some View {
         // 一次求值给这一节用 —— 它在 body 里被读三处（首张、计数、计数减一）。
-        let pending = pendingApprovals
+        let pending = detail.pendingApprovals
         if let first = pending.first {
-            ApprovalCard(approval: first, state: approvals.state(for: first.eventId)) { allow in
-                Task { await approvals.answer(first, allow: allow) }
+            ApprovalCard(approval: first, state: detail.approvals.state(for: first.eventId)) { allow in
+                Task { await detail.approvals.answer(first, allow: allow) }
             }
             .padding(.horizontal, 4)
             .padding(.bottom, 6)
@@ -295,7 +285,7 @@ private struct SessionDetailBody: View {
             }
         }
 
-        if let notice = approvals.notice(for: detail.session.id) {
+        if let notice = detail.notice {
             Text(notice)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -371,17 +361,17 @@ private struct SessionDetailBody: View {
 
     private var networkSheet: some View {
         NetworkSheet(phase: detail.sync.phase,
-                     carrier: store.meshPath,
+                     carrier: detail.meshPath,
                      lastFrameAt: detail.sync.lastFrameAt,
-                     nodeState: store.nodeState,
-                     configDamaged: store.storedConfigDamaged,
+                     nodeState: detail.nodeState,
+                     configDamaged: detail.configDamaged,
                      onRetry: { detail.sync.retry() },
                      onOpenMesh: { activeSheet = .mesh })
     }
 
     /// 折叠起来的那些卡。**不含**上方已经露出的第一张 —— 文案说「还有 N 个」，列出来的就该是 N 个。
     private var allApprovalsSheet: some View {
-        let rest = Array(pendingApprovals.dropFirst())
+        let rest = Array(detail.pendingApprovals.dropFirst())
         return NavigationStack {
             Group {
                 if rest.isEmpty {
@@ -395,8 +385,8 @@ private struct SessionDetailBody: View {
                         VStack(spacing: 8) {
                             ForEach(rest) { approval in
                                 ApprovalCard(approval: approval,
-                                             state: approvals.state(for: approval.eventId)) { allow in
-                                    Task { await approvals.answer(approval, allow: allow) }
+                                             state: detail.approvals.state(for: approval.eventId)) { allow in
+                                    Task { await detail.approvals.answer(approval, allow: allow) }
                                 }
                             }
                         }

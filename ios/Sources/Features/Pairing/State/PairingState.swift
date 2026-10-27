@@ -34,15 +34,6 @@ final class PairingState {
         PairingRules.canSubmitCode(code, isSubmitting: isPairing)
     }
 
-    /// 清掉上一次的失败横幅。
-    ///
-    /// 三条展示路径共用这一份状态（未配对时的整屏、列表的组网设置、详情的组网设置），
-    /// 于是「在别处输错过一次」会跟着下一次打开一起出现。`code` 不清：它是用户刚打的字，
-    /// 留着才好改一位再试；`isPairing` 也不清 —— 那是在途事实，与谁打开无关。
-    func resetFeedback() {
-        failure = nil
-    }
-
     func pair() async {
         isPairing = true
         defer { isPairing = false }

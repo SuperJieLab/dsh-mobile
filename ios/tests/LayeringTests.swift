@@ -2097,7 +2097,8 @@ final class LayeringTests: XCTestCase {
     /// 构造点住组合根（单例）与 `makeDetail`（每会话一份）——
     /// 判据只数次数，不钉文件 —— 钉文件会在构造点移动时假红一次，而「几处」才是它要守的东西。
     func testEachScreenStateIsBuiltOnce() throws {
-        let names = ["SessionListState(", "SessionDetailState(", "PairingState("]
+        let names = ["SessionListState(", "SessionListScreenState(", "SessionDetailState(",
+                     "PairingState(", "MeshSettingsState("]
         var found: [String: [String]] = [:]
         var scanned = 0
         for file in swiftFiles(under: sourcesRoot) {
@@ -2116,18 +2117,23 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 渲染视图的字段里没有服务类型 —— 不是「不许写」，是「拿不到」。
+    /// 渲染视图不认识**传输与持久化** —— 认识读模型是可以的，认识实现不行。
     ///
-    /// 三个文件各是自己那一屏的渲染段。它们可以接住 state、接住闭包、接住值，
-    /// 但不认识 `RpcClient` / `LongConnection` / `EventStream` / `Endpoint`。
+    /// 原先这条写的理由是「字段里没有服务类型，不是不许写是拿不到」。那句话是假的：
+    /// `@Environment(MeshStore.self) private var store` 就是一个字段，写明了类型、也拿得到。
+    /// 视图确实在读连接域的四个投影（`phase` / `meshPath` / `nodeState` / `storedConfigDamaged`），
+    /// 那是设计，不是泄漏 —— 界线是「认识的是事实还是实现」。
     ///
-    /// 盲区：服务经闭包捕获后仍可用（`makeDetail` 里就是这样），那是有意的能力传递；
-    /// 这条守的是「顺手多用一下」—— 视图拿得到服务时，那种用法不需要谁同意。
+    /// 所以这里只禁实现：拿到它们就等于知道「怎么发、怎么连、存哪儿」。依赖**几件事**由
+    /// `testRenderViewsTakeOneEntry` 守，两条各管一半。
+    ///
+    /// 盲区：类型名换了就认不出（漏报方向）；行内注释里出现算命中（误报方向，接受）。
     func testRenderViewsHoldNoServices() throws {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
             "Features/Pairing/Views/PairingView.swift",
+            "Features/MeshSettings/Views/MeshSettingsView.swift",
         ]
         let banned = ["RpcClient", "LongConnection", "EventStream", "Endpoint"]
         var scanned = 0
@@ -2137,11 +2143,87 @@ final class LayeringTests: XCTestCase {
             for (i, code) in lines {
                 scanned += 1
                 for name in banned where code.contains(name) {
-                    XCTFail("\(path):\(i) 出现 \(name) —— 渲染视图的字段里不该有服务")
+                    XCTFail("\(path):\(i) 出现 \(name) —— 视图认识传输层就等于知道怎么发")
                 }
             }
         }
         XCTAssertGreaterThan(scanned, 100, "扫到的行太少 —— 先怀疑路径推算")
+    }
+
+    /// 渲染视图的依赖只有一个入口：一个容器，加一个「造下一屏的能力」闭包。
+    ///
+    /// 为什么不用黑名单：那个形状守的是「别用这几个名字」，换个名字就绕过去；而真正要守的
+    /// 是**依赖几件事**。两条合起来：
+    /// - 零 `@Environment(T.self)` —— 依赖只有一条通道（构造参数）。`@Environment(\.scenePhase)`
+    ///   这类平台值是系统给的，不在其列。
+    /// - 声明里以 `State` 结尾的存储属性恰好一个 —— 这一屏的容器。多个就是「容器 + 散装」，
+    ///   读者从签名看不出依赖面有多大。
+    ///
+    /// 盲区：容器内部持有多少东西这条看不见 —— 那是各容器自己的判据（只持有与折值）。
+    func testRenderViewsTakeOneEntry() throws {
+        let files = [
+            "Features/SessionList/Views/SessionListView.swift",
+            "Features/SessionDetail/Views/SessionDetailView.swift",
+            "Features/Pairing/Views/PairingView.swift",
+            "Features/MeshSettings/Views/MeshSettingsView.swift",
+        ]
+        var checked = 0
+        for path in files {
+            let url = sourcesRoot.appendingPathComponent(path)
+            let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
+            // 依赖的第二通道：只许平台值（`@Environment(\.scenePhase)`）。
+            for (i, code) in lines where code.contains("@Environment(") {
+                guard code.contains("@Environment(\\.") else {
+                    XCTFail("\(path):\(i) 从环境取对象 —— 依赖走构造参数，一个容器")
+                    continue
+                }
+            }
+            // 依赖面的大小：以 `State` 结尾的存储属性恰好一个。
+            let stateFields = lines.compactMap { i, code -> String? in
+                guard let name = Self.declaredStateType(in: code) else { return nil }
+                return "\(i):\(name)"
+            }
+            XCTAssertEqual(stateFields.count, 1,
+                           "\(path) 的容器字段应为 1 个，实际 \(stateFields)")
+            checked += 1
+        }
+        XCTAssertEqual(checked, files.count, "有个文件没扫到 —— 先怀疑路径推算")
+    }
+
+    /// 一行声明里那个以 `State` 结尾的存储属性类型名。闭包返回类型（`-> XxxState`）不算：
+    /// 它是能力，不是依赖。
+    private static func declaredStateType(in code: String) -> String? {
+        let pattern = "^\\s*(?:@\\w+\\s+)*(?:let|var)\\s+\\w+\\s*:\\s*([A-Z]\\w*State)\\b"
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(code.startIndex..<code.endIndex, in: code)
+        guard let m = re.firstMatch(in: code, options: [], range: range),
+              let r = Range(m.range(at: 1), in: code) else { return nil }
+        return String(code[r])
+    }
+
+    /// 配对屏与组网设置是两个视图：一个换身份，一个换路径。
+    ///
+    /// 合在一起时，已配对状态打开组网设置会在标题「配对」的页面上挂着「输入 6 位配对码」——
+    /// 而 `canPair` 不判是否已配对，按下去会真的再发一次配对请求。
+    func testPairingAndMeshSettingsAreSeparate() throws {
+        let pairing = sourcesRoot.appendingPathComponent("Features/Pairing/Views/PairingView.swift")
+        let mesh = sourcesRoot.appendingPathComponent("Features/MeshSettings/Views/MeshSettingsView.swift")
+        let pairingLines = codeLines(in: try String(contentsOf: pairing, encoding: .utf8))
+        let meshLines = codeLines(in: try String(contentsOf: mesh, encoding: .utf8))
+        XCTAssertTrue(pairingLines.contains { $0.1.contains("let state: PairingState") },
+                      "扫错文件了 —— 配对屏不认识 PairingState？")
+        XCTAssertTrue(meshLines.contains { $0.1.contains("let state: MeshSettingsState") },
+                      "扫错文件了 —— 组网设置不认识 MeshSettingsState？")
+        for (i, code) in pairingLines {
+            for name in ["MeshSetupState", "MeshStore", "MeshConfig"] where code.contains(name) {
+                XCTFail("PairingView.swift:\(i) 出现 \(name) —— 配对屏只管换身份")
+            }
+        }
+        for (i, code) in meshLines {
+            for name in ["PairingState", "PairingRules"] where code.contains(name) {
+                XCTFail("MeshSettingsView.swift:\(i) 出现 \(name) —— 组网页只管换路径")
+            }
+        }
     }
 
     /// 已配对那一支出现时要接上长连接 —— 「配对之后一切实时」的唯一入口。
@@ -2263,7 +2345,7 @@ final class LayeringTests: XCTestCase {
 
         let list = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
         let listLines = codeLines(in: try String(contentsOf: list, encoding: .utf8))
-        XCTAssertTrue(listLines.contains { $0.1.contains("await state.reload()") },
+        XCTAssertTrue(listLines.contains { $0.1.contains("await screen.list.reload()") },
                       "扫错文件了：连首载都不在这份文件里")
     }
 

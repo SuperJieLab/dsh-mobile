@@ -13,8 +13,15 @@
  * 参数，不然「改一格显示什么」要在一份几百行的渲染代码里找。
  *
  * 它自己不带 `@Observable`：字段全是 `let`，它不发布任何东西。视图读
- * `detail.stripModel(...)` 时建立的是对**部件**的追踪（真正的可变状态在那里），
+ * `detail.stripModel()` 时建立的是对**部件**的追踪（真正的可变状态在那里），
  * 所以刷新粒度与直接读部件一致。
+ *
+ * **引用 ≠ 拥有**：`meshSettings` 与 `approvals` 是根造的、与进程同寿。这一屏关掉不会
+ * 清空待答表（停在列表时它照样在收），也不会重置组网草稿；容器只是把它们放在一起，
+ * 让渲染段只接一个参数。
+ *
+ * 折值只在两种情形做：要**组合**两处（`stripModel` / `pendingApprovals` / `notice`），
+ * 或同一个值被读两处以上（网络 sheet 的三连）。其余读穿到部件，不在这里抄一遍。
  */
 import Foundation
 
@@ -26,9 +33,19 @@ final class SessionDetailState {
     let catalog: ModelCatalogState
     let commands: CommandDirectory
     let composer: ComposerState
+    /// 组网设置 sheet 的入口（与列表那处共用一份草稿）。
+    let meshSettings: MeshSettingsState
+    /// App 级的待答表 —— 这一屏只读它按会话分出来的那一栏。
+    let approvals: ApprovalStore
 
-    init(client: RpcClient, session: SessionSummary, link: LongConnection) {
+    init(client: RpcClient,
+         session: SessionSummary,
+         link: LongConnection,
+         meshSettings: MeshSettingsState,
+         approvals: ApprovalStore) {
         self.session = session
+        self.meshSettings = meshSettings
+        self.approvals = approvals
         sync = SessionSync(client: client, sessionId: session.id, link: link)
         catalog = ModelCatalogState { try await fetchCatalog(client) }
         commands = CommandDirectory { try await fetchCommands(client, sessionId: session.id) }
@@ -40,9 +57,8 @@ final class SessionDetailState {
     /// 兜底规则：选中值 ?? 目录默认 ?? 未知。目录默认值只为「重拉期间不闪成未知」；
     /// 等级名与模型名读同一个 `shown`，两处各取一份会出现「模型是 A、等级是 B」。
     ///
-    /// `meshPath` 由调用方给：它属于跨屏的连接域上下文（`MeshStore`），不归这一屏持有 ——
-    /// 折值可以要一个值，但不该因此把那个对象拉进来。
-    func stripModel(meshPath: CarrierPath?) -> ComposerStripModel {
+    /// 载体那一路读连接域的投影（`meshPath`）—— 它不归这一屏持有，但这一屏要读它。
+    func stripModel() -> ComposerStripModel {
         let shown = sync.displayedModel ?? catalog.lastKnownDefault
         return ComposerStripModel.make(
             phase: sync.phase,
@@ -55,4 +71,17 @@ final class SessionDetailState {
 
     /// 内容还没到 —— 此刻不挂 List（理由见视图：空列表先出现会让初始布局落在顶部）。
     var isTranscriptEmpty: Bool { sync.eventCount == 0 }
+
+    /// 本会话还挂着的卡。表按会话分组，这一屏只取这一栏。
+    var pendingApprovals: [ApprovalTable.Entry] { approvals.pending(in: session.id) }
+
+    /// 这一屏的审批提示（"已过期"这类），没有时是 nil。
+    var notice: String? { approvals.notice(for: session.id) }
+
+    /// 徽章与网络 sheet 读的路径投影 —— 同一个值三处读，折在这里一处。
+    var meshPath: CarrierPath? { meshSettings.store.meshPath }
+    /// 节点五态。
+    var nodeState: TailnetNodeState { meshSettings.store.nodeState }
+    /// 存过的组网配置读不出来。
+    var configDamaged: Bool { meshSettings.store.storedConfigDamaged }
 }

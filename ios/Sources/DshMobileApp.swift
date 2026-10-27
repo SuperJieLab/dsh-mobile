@@ -30,12 +30,16 @@ struct DshMobileApp: App {
     /// 列表屏的 state。单实例、构造只要 client ⇒ 按「上一级造」归根部。
     /// 它的寿命因此是进程级：离开详情再回来，列表照旧在原地（它本来就是栈根）。
     @State private var listState: SessionListState
+    /// 列表这一屏的依赖面：列表 + 连接域投影 + 页脚地址。视图只接它一个。
+    @State private var listScreen: SessionListScreenState
     /// 配对屏的 state。单实例、无运行期参数 ⇒ 同样归根部。
     /// 三条展示路径共用它（未配对时的整屏、列表的组网设置、详情的组网设置）。
     @State private var pairing: PairingState
     /// 组网录入那一段的 state —— 同一屏的第二个部件（换路径，与换身份分开）。
     /// 它也在这里造，于是「读一次盘」发生在启动时，而不是每次视图重建。
     @State private var meshSetup: MeshSetupState
+    /// 组网设置这一页的依赖面：录入草稿 + 节点事实。两处 sheet 与详情屏都从这里取。
+    @State private var meshSettings: MeshSettingsState
     /// 造会话详情容器的能力。它要 `sessionId`（点开那一行才知道），根造不了那一个，
     /// 但知道 `client` / `link` —— 于是把「造」交出去，把「用什么造」留在这里。
     private let makeDetail: (SessionSummary) -> SessionDetailState
@@ -66,16 +70,23 @@ struct DshMobileApp: App {
             submit: { [weak store] key, config in await store?.submitMeshKey(key, config: config) },
             retry: { [weak store] config in await store?.retryMesh(config: config) }
         )
-        // 地址读的是通信域的只读投影：本层认识 `Endpoint`，列表那一层只收到一个返回串的能力。
-        let listState = SessionListState(
-            client: client,
+        let meshSettings = MeshSettingsState(setup: meshSetup, store: store)
+        let listState = SessionListState(client: client)
+        // 地址读的是通信域的只读投影：本层认识 `Endpoint`，列表那一屏只收到一个返回串的能力。
+        let listScreen = SessionListScreenState(
+            list: listState,
+            meshSettings: meshSettings,
             address: { [weak endpoint] in gatewayAddressLine(endpoint?.baseURL) }
         )
 
         self.endpoint = endpoint
         self.events = events
         self.makeDetail = { session in
-            SessionDetailState(client: client, session: session, link: link)
+            SessionDetailState(client: client,
+                               session: session,
+                               link: link,
+                               meshSettings: meshSettings,
+                               approvals: approvals)
         }
         _node = State(initialValue: node)
         _store = State(initialValue: store)
@@ -84,15 +95,18 @@ struct DshMobileApp: App {
         _approvals = State(initialValue: approvals)
         _pairing = State(initialValue: pairing)
         _meshSetup = State(initialValue: meshSetup)
+        _meshSettings = State(initialValue: meshSettings)
         _listState = State(initialValue: listState)
+        _listScreen = State(initialValue: listScreen)
     }
 
     var body: some Scene {
         WindowGroup {
             RootScreen(
                 client: client,
-                listState: listState,
+                screen: listScreen,
                 makeDetail: makeDetail,
+                pairing: pairing,
                 // 已配对那一支出现时接上长连接。连接必须有身份才有意义（无票可换时
                 // 传输层把它当终态，不会自己再试），而「刚配上」正是那一支第一次出现。
                 onConnectionStart: {
@@ -137,12 +151,6 @@ struct DshMobileApp: App {
                 approvals.attach(events: events)
                 listState.attach(events: events)
             }
-            // 注在根部：推入的视图与三处 sheet 都继承这里的环境（`ApprovalStore` 只在
-            // 这里注入，而详情正文读得到 —— 这就是「继承成立」的现成证据）。
-            .environment(store)
-            .environment(approvals)
-            .environment(pairing)
-            .environment(meshSetup)
         }
     }
 }
@@ -154,11 +162,14 @@ struct DshMobileApp: App {
 /// 两处都靠追踪才会重新求值 —— 放在 Scene 里是「大概行」，放在 View 里是「一定行」。
 ///
 /// 它认识服务（`client` 与三个闭包），因为它是装配点的视图面，不是某一屏的渲染段：
-/// 渲染段的规矩（字段里没有服务）从这里往下才开始算。
+/// 渲染段的规矩（依赖只有一个入口）从这里往下才开始算。
 private struct RootScreen: View {
     let client: RpcClient
-    let listState: SessionListState
+    /// 列表这一屏的依赖面 —— 重连点读它的 `phase`，列表视图整块交给它。
+    let screen: SessionListScreenState
     let makeDetail: (SessionSummary) -> SessionDetailState
+    /// 配对屏的状态：只在「还没配对」那一支用，但它是 App 级单例，由根部传进来。
+    let pairing: PairingState
     /// 已配对那一支出现：接上长连接（`activate` + 事件流登记）。
     let onConnectionStart: () -> Void
     /// 回前台：探活 + 重连。
@@ -166,24 +177,21 @@ private struct RootScreen: View {
     /// 组网就绪：立刻重连，不等下一轮退避。
     let onMeshReady: () -> Void
 
-    /// 组网阶段 —— 重连点读它。
-    @Environment(MeshStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
-
     var body: some View {
         NavigationStack {
             switch stage {
             case .needsPairing:
-                PairingView()
+                PairingView(state: pairing)
             case .ready:
-                SessionListView(state: listState, makeDetail: makeDetail)
+                SessionListView(screen: screen, makeDetail: makeDetail)
                     .task { onConnectionStart() }
                     // 这一支出现 ⟺ 身份刚成立（或启动时已成立）。连接在这里接，不在启动
                     // 编排里：未配对时它没有票可换，传输层把「无票」当终态收起，之后
                     // 再没有人会把它拉起来。
             }
         }
-        .onChange(of: store.phase) { _, phase in
+        .onChange(of: screen.phase) { _, phase in
             guard case .ready = phase else { return }
             onMeshReady()
         }

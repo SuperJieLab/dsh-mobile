@@ -88,9 +88,10 @@ final class PairingRulesTests: XCTestCase {
     /// 认不出；只扫这两个文件 —— 将来第三个地方拼一遍判据，要靠新加的屏自己守住。
     func testRuleHasNoSecondCopy() throws {
         let dir = sourcesRoot.appendingPathComponent("Features/Pairing")
+        let meshDir = sourcesRoot.appendingPathComponent("Features/MeshSettings")
         // 规则的两个消费者：两段输入各在自己的状态里读一次规则。
         let holders = [dir.appendingPathComponent("State/PairingState.swift"),
-                       dir.appendingPathComponent("State/MeshSetupState.swift")]
+                       meshDir.appendingPathComponent("State/MeshSetupState.swift")]
         // 视图只读状态给出的结论，不该再读一次规则 —— 但它照样要查碎片（抄回来的判据）。
         let consumers = [dir.appendingPathComponent("Views/PairingView.swift")]
         let fragments = ["count == 6", "count >= 6", "key.isEmpty", "tailnetKey.isEmpty"]

@@ -5,19 +5,19 @@ import SwiftUI
 /// 进屏首载在本文件（平台事件）；事件订阅的接线在根部（它造这个 state，也就由它接）。
 /// 按协议**排序是服务端的承诺**（这里一行排序代码都没有）。
 ///
-/// 字段里没有服务对象：取数走 `state`，地址走 `state.addressLine`，详情由 `makeDetail` 造。
+/// 依赖只有 `screen`：列表、连接域的只读投影、页脚那句地址都在它里面。`makeDetail` 是
+/// 「造下一屏的能力」，不是依赖对象 —— 它要 `sessionId`，只有点开那一行才知道。
 struct SessionListView: View {
-    let state: SessionListState
-    /// 造下一屏的容器 —— 它要 `sessionId`，只有点开那一行才知道；本屏只转交这个能力。
+    let screen: SessionListScreenState
+    /// 造下一屏的容器 —— 本屏只转交这个能力。
     let makeDetail: (SessionSummary) -> SessionDetailState
 
-    /// 组网/配对入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
+    /// 组网入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
     /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
     @State private var showMeshSettings = false
+
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
-    /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
-    @Environment(MeshStore.self) private var store
 
     var body: some View {
         pairedList
@@ -25,11 +25,11 @@ struct SessionListView: View {
 
     private var pairedList: some View {
         List {
-            if let failure = state.failureText {
+            if let failure = screen.list.failureText {
                 Section {
                     FailureBanner(text: failure)
                 }
-            } else if state.outcome == .waitingForMesh {
+            } else if screen.list.outcome == .waitingForMesh {
                 Section {
                     // 组网就绪前的必然等待：不是错误，中性显示。
                     Label("等待组网就绪…", systemImage: "antenna.radiowaves.left.and.right")
@@ -38,7 +38,7 @@ struct SessionListView: View {
                 }
             }
 
-            ForEach(state.sessions) { session in
+            ForEach(screen.list.sessions) { session in
                 NavigationLink(value: session) {
                     SessionRow(session: session)
                 }
@@ -47,20 +47,17 @@ struct SessionListView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("\(state.sessions.count) 个会话 · \(state.addressLine)")
+                Text("\(screen.list.sessions.count) 个会话 · \(screen.addressLine)")
             }
         }
         .navigationTitle("会话")
         .navigationDestination(for: SessionSummary.self) { session in
-            // 根部已经注入连接域 —— 推入的视图继承它（`ApprovalStore` 同样只在根部注入，
-            // 详情正文读得到）。这一行因此是重复注入，等确认过 sheet 的环境继承再清掉。
             SessionDetailView(session: session, make: makeDetail)
-                .environment(store)
         }
         .overlay {
-            if state.isLoading && state.sessions.isEmpty {
+            if screen.list.isLoading && screen.list.sessions.isEmpty {
                 ProgressView("正在读 Mac 上的会话…")
-            } else if state.sessions.isEmpty && state.failureText == nil {
+            } else if screen.list.sessions.isEmpty && screen.list.failureText == nil {
                 ContentUnavailableView(
                     "还没有会话",
                     systemImage: "tray",
@@ -68,28 +65,28 @@ struct SessionListView: View {
                 )
             }
         }
-        .refreshable { await state.reload() }
+        .refreshable { await screen.list.reload() }
         // 进屏首载。事件订阅不在这里：它是 App 级的一次接线，挂在组合根上（那边造
         // 这个 state，也就由它接）。本屏只负责「什么时候取」——那是手势与平台事件。
-        .task { await state.reload() }
+        .task { await screen.list.reload() }
         // 组网就绪即首载：启动窗口内的请求会 fail-fast（端点还不存在），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
         // 这里的 `guard case .ready` 只是省一次必然失败的请求；「未就绪」该怎么显示由
         // `SessionListState` 的等待面决定（与详情屏同一形状，见 SessionDetailView）。
-        .onChange(of: store.phase) { _, phase in
+        .onChange(of: screen.phase) { _, phase in
             guard case .ready = phase else { return }
-            Task { await state.reload() }
+            Task { await screen.list.reload() }
         }
         // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应。失败时旧列表照常保留。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { await state.reload() }
+            Task { await screen.list.reload() }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ConnectionBadge(state: ConnectionBadge.Status(isLoading: state.isLoading,
-                                                             lastFailure: state.failureText),
-                                meshPath: store.meshPath)
+                ConnectionBadge(state: ConnectionBadge.Status(isLoading: screen.list.isLoading,
+                                                             lastFailure: screen.list.failureText),
+                                meshPath: screen.meshPath)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -98,16 +95,15 @@ struct SessionListView: View {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                 }
                 Button {
-                    Task { await state.reload() }
+                    Task { await screen.list.reload() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .disabled(state.isLoading)
+                .disabled(screen.list.isLoading)
             }
         }
         .sheet(isPresented: $showMeshSettings) {
-            NavigationStack { PairingView() }
-                .environment(store)
+            NavigationStack { MeshSettingsView(state: screen.meshSettings) }
         }
     }
 }
