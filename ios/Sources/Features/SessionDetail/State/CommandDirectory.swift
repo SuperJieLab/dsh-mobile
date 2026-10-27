@@ -8,11 +8,11 @@
  * **不缓存跨会话**：命令集是 per-agent 的，还会随插件装卸变；把上一份留给下一次打开
  * 就等于显示一个已经不作数的列表。所以每次打开都重新取，失败就说失败。
  */
-import Combine
 import Foundation
 
 @MainActor
-final class CommandDirectory: ObservableObject {
+@Observable
+final class CommandDirectory {
 
     /// 屏幕上要落成的三种面。
     enum Outcome: Equatable {
@@ -32,7 +32,7 @@ final class CommandDirectory: ObservableObject {
         case offline
     }
 
-    @Published private(set) var outcome: Outcome = .waiting
+    private(set) var outcome: Outcome = .waiting
 
     private let fetch: @MainActor () async throws -> [CommandInfo]
 

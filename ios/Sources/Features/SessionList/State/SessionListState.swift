@@ -14,11 +14,11 @@
  * 单飞：两次 `reload()` 撞在一起时只有一次请求，两次都等它的结果。没有单飞，
  * 「这批账归哪一次请求」就没有答案 —— 而重放的正确性全押在它上面。
  */
-import Combine
 import Foundation
 
 @MainActor
-final class SessionListState: ObservableObject {
+@Observable
+final class SessionListState {
 
     /// 屏幕上要落成的三种面。`failed` 带着要**原样**显示的文案。
     enum Outcome: Equatable {
@@ -27,9 +27,9 @@ final class SessionListState: ObservableObject {
         case waitingForMesh
     }
 
-    @Published private(set) var sessions: [SessionSummary] = []
-    @Published private(set) var isLoading = false
-    @Published private(set) var outcome: Outcome = .ready
+    private(set) var sessions: [SessionSummary] = []
+    private(set) var isLoading = false
+    private(set) var outcome: Outcome = .ready
 
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
     /// 走真网络时，「两次请求并发」与「一次请求很慢」在测试里长得一样。

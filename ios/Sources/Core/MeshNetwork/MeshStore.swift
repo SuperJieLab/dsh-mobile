@@ -10,7 +10,6 @@
  * 端点在激活前不存在。
  */
 import Foundation
-import Combine
 
 // MARK: - 注入接缝
 //
@@ -39,8 +38,8 @@ import Combine
     /// 节点验证 Running、tailnet session 建成的那一刻（同值迁移不触发 onChange，
     /// 所以激活只能挂回调，不能靠观察状态变化）。
     var onVerifiedRunning: ((URLSession) -> Void)? { get set }
-    /// 节点侧任何对外可见事实变化（状态迁移 / 路径刷新）的推送通道：视图已不观察
-    /// 节点的 @Published，store 的投影靠它回灌 —— 没有它，轮询探到的失败与
+    /// 节点侧任何对外可见事实变化（状态迁移 / 路径刷新）的推送通道：视图不直接观察
+    /// 节点，store 的投影靠它回灌 —— 没有它，轮询探到的失败与
     /// direct↔relay 切换会冻结在最近一次 store 调用的快照上。
     var onNodeChanged: (() -> Void)? { get set }
     func launchNode(config: MeshConfig) async
@@ -51,19 +50,20 @@ import Combine
 }
 
 @MainActor
-final class MeshStore: ObservableObject {
+@Observable
+final class MeshStore {
 
     /// 对外连接阶段 —— 视图读连接态的唯一出处。
-    @Published private(set) var phase: MeshPhase
+    private(set) var phase: MeshPhase
     /// 节点层状态的细粒度透传：`phase` 把 registering 与 running-未组网都折进
     /// connecting，组网管理屏要区分这两态，故单独暴露（读取面仍唯一出处）。
-    @Published private(set) var nodeState: TailnetNodeState
+    private(set) var nodeState: TailnetNodeState
     /// 直连 / 中继；非 ready 期为 nil。徽章路径那一行的独立数据源 —— 它不折进
     /// `phase`，因为「连上了」与「走的是哪条路」是两个不同的变化原因。
-    @Published private(set) var meshPath: CarrierPath?
+    private(set) var meshPath: CarrierPath?
     /// 读盘时发现组网配置损坏（存过，但解不出来）。节点不会启动 —— 详情见
     /// `reportDamagedConfiguration`。界面据此说「重新填写」，而不是「检查证书」。
-    @Published private(set) var storedConfigDamaged = false
+    private(set) var storedConfigDamaged = false
 
     private let endpoint: EndpointUpdating
     private let node: MeshNodeControlling

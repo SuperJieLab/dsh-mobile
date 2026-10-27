@@ -10,11 +10,11 @@
  *
  * 触发点不在这里：打开菜单时现拉一次、不订阅刷新 —— 目录只在凭证 / 适配器变更时才变。
  */
-import Combine
 import Foundation
 
 @MainActor
-final class ModelCatalogState: ObservableObject {
+@Observable
+final class ModelCatalogState {
 
     /// 屏幕上要落成的三种面。
     enum Outcome: Equatable {
@@ -34,7 +34,7 @@ final class ModelCatalogState: ObservableObject {
         case offline
     }
 
-    @Published private(set) var outcome: Outcome = .waiting
+    private(set) var outcome: Outcome = .waiting
 
     /// 上一次成功拿到的目录默认值。**只为按钮标题**：重拉期间 `outcome` 回到 `.waiting`，
     /// 而按钮不该因为「重新取一次」把模型名闪成「未知」。

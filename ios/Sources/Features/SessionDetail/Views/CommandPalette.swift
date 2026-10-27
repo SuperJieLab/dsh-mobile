@@ -9,7 +9,7 @@ import SwiftUI
 struct CommandPalette: View {
 
     /// 目录的三面。取数与判定都在里面，这里只读。
-    @ObservedObject var directory: CommandDirectory
+    let directory: CommandDirectory
     /// 过滤用的查询串（`SlashTrigger.querying` 里那一段）。
     let query: String
     /// 选中一条：把回填好的草稿交出去。

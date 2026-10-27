@@ -10,15 +10,15 @@
  * 失败文案是服务端原文，且**不清空** `code`：改一位再试。配对成功后由门面翻 `isPaired`，
  * 视图自己让位给列表 —— 这里不判断「配好之后显示什么」，否则会出现第二个真相来源。
  */
-import Combine
 import Foundation
 
 @MainActor
-final class PairingState: ObservableObject {
+@Observable
+final class PairingState {
 
-    @Published var code = ""
-    @Published private(set) var isPairing = false
-    @Published private(set) var failure: String?
+    var code = ""
+    private(set) var isPairing = false
+    private(set) var failure: String?
 
     private let client: RpcClient
 

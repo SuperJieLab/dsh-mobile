@@ -10,19 +10,22 @@ import SwiftUI
 /// 组网段是「视图 → 连接域」两跳，不另立一层：headscale 地址与接入 key
 /// （沙盒存储）在此录入，节点状态如实展示；配对仍走原三票身份（不因在虚拟网内简化）。
 struct PairingView: View {
-    @StateObject private var state: PairingState
+    @State private var state: PairingState
     /// 组网段的数据源 —— 视图读连接态的唯一出口，节点状态与动作都经 store 转发。
-    @EnvironmentObject private var store: MeshStore
+    @Environment(MeshStore.self) private var store
 
     @State private var controlURL = MeshConfig.load().controlURLString
     @State private var gatewayURL = MeshConfig.load().gatewayURLString
     @State private var tailnetKey = ""
 
     init(client: RpcClient) {
-        _state = StateObject(wrappedValue: PairingState(client: client))
+        _state = State(initialValue: PairingState(client: client))
     }
 
+    @ViewBuilder
     var body: some View {
+        // 局部 `@Bindable`：`@State` 的 `$` 只到对象这一层，取属性绑定要再包一次。
+        @Bindable var state = state
         Form {
             meshSection
 

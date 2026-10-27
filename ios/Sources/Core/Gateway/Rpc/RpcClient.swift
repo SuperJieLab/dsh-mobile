@@ -25,7 +25,8 @@ import Foundation
 /// `struct` 改 `class` 是因为票与已配对状态是**可变共享状态** —— 值语义会在视图间复制出
 /// 各自为政的凭证；仍 `@MainActor`，因为调用方本就在主线程。
 @MainActor
-final class RpcClient: ObservableObject {
+@Observable
+final class RpcClient {
 
     /// 地址与传输的主人。本类只读它，不存副本 —— 两条链路读同一个实例，
     /// 否则「组网激活换了这一份、那一份没换」会表现为「切了隧道仍往老地址打」。
@@ -45,13 +46,17 @@ final class RpcClient: ObservableObject {
     /// `lazy` 是唯一的直说方式：**一个定义、一个构造点**，首次用时才求值，那时 `self`
     /// 已完整。它不同于「先塞一个假值、稍后再替换」—— 后者存在一个「票层是假的」的阶段，
     /// 而这里不存在那个阶段。
+    /// **为什么不参与观察（`@ObservationIgnored`）**：它是 `lazy`，而 `@Observable`
+    /// 把存储属性改写成计算属性，`lazy` 在计算属性上不成立。它也不需要被观察 ——
+    /// 票的生命周期变化只经 `isPaired` 与 `perform` 的结果体现，没有读者看它本身。
+    @ObservationIgnored
     private lazy var tickets = TicketKeeper { [weak self] deviceToken in
         guard let self else { return .retryLater }
         return await self.renewTicket(deviceToken: deviceToken)
     }
 
     /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
-    @Published private(set) var isPaired: Bool
+    private(set) var isPaired: Bool
 
     /// 协议里的唯一端点 —— 所有 op 都打这一个地址，靠信封里的 `op` 分派。
     /// 多端点会把资源语义烧进 URL：客户端就得记住哪个资源走哪个地址，

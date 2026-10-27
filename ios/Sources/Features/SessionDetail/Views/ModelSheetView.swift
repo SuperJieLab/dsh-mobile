@@ -14,7 +14,7 @@ import SwiftUI
 struct ModelSheetView: View {
 
     /// 目录的三面。取数与判定都在里面，这里只读 —— 由宿主持有并传进来。
-    @ObservedObject var catalog: ModelCatalogState
+    let catalog: ModelCatalogState
     /// 宿主当前显示的选择；列表里打勾、设置页显示当前档都用它。
     let selected: ModelSelection?
     /// 选中一个模型或一档等级。

@@ -140,23 +140,21 @@ final class LayeringTests: XCTestCase {
     /// `SessionSync` 等持有者 —— 整目录扫会误伤。名单就是「这几件是纯判定」这个决定的可判
     /// 形式；名单自带存在性正控：文件改名或删掉时先红，防扫描面静默缩水。
     ///
-    /// 认三类标志，覆盖同一种失败的不同写法（只查协议名会漏掉最常见的那个）：
+    /// 认三类标志，覆盖同一种失败的不同写法：
     /// - `class` / `actor` —— 引用型，可能有可变状态。这是最根本的一条：一个不遵任何协议的
-    ///   `final class Cache` 也能装可变状态，只查 `ObservableObject` 会放它过去。
-    /// - `ObservableObject` / `@Published` —— 发布型持有者。
-    /// - `import SwiftUI` / `UIKit` / `Combine` —— 值类型判定不需要它们；出现即说明这一层
-    ///   开始认识界面或响应式框架。
+    ///   `final class Cache` 也能装可变状态；`@Observable` 的类型同样是 `class`，由这条一并拦下。
+    /// - `import SwiftUI` / `UIKit` / `Combine` / `Observation` —— 值类型判定不需要它们；
+    ///   出现即说明这一层开始认识界面或响应式框架。
     ///
-    /// 盲区：`@Observable` 宏展开后的形态认不出（它要宏插件，本项目的验证环境不用）；
-    /// 行内注释里出现上述词会误报 —— 误报方向，接受。第四件同型判定加进来时要记得进名单。
+    /// 盲区：行内注释里出现上述词会误报 —— 误报方向，接受。第四件同型判定加进来时要记得进名单。
     private static let sessionViewJudgments = [
         "SessionMirror.swift", "TransientChannel.swift", "MessageDisplay.swift",
     ]
 
     func testSessionViewJudgmentsHoldOnlyValueTypes() throws {
         let home = sourcesRoot.appendingPathComponent("Features/SessionDetail/State")
-        let banned = ["class ", "actor ", "ObservableObject", "@Published",
-                      "import SwiftUI", "import UIKit", "import Combine"]
+        let banned = ["class ", "actor ",
+                      "import SwiftUI", "import UIKit", "import Combine", "import Observation"]
         var checked = 0
         for name in Self.sessionViewJudgments {
             let file = home.appendingPathComponent(name)
@@ -174,6 +172,27 @@ final class LayeringTests: XCTestCase {
         }
         XCTAssertEqual(checked, Self.sessionViewJudgments.count,
                        "名单有 \(Self.sessionViewJudgments.count - checked) 件没扫到 —— 先看上面的 XCTFail")
+    }
+
+    /// 旧观察机制不许回来：`ObservableObject` / `@Published` / `import Combine` 全仓零命中。
+    ///
+    /// 两套机制并存的代价是「不刷新」无法归因 —— 一次重算可能是对象级的，也可能是属性级的。
+    /// 所以这不是风格偏好，是迁移完成后要一直守的那条边界。
+    func testNoObservableObjectLeftovers() throws {
+        let banned = ["ObservableObject", "@Published", "import Combine"]
+        var hits: [String] = []
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (line, code) in codeLines(in: text) {
+                for needle in banned where code.contains(needle) {
+                    hits.append("\(file.lastPathComponent):\(line) \(needle)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
+        XCTAssertEqual(hits, [], "旧观察机制又出现了：\(hits)")
     }
 
     /// `Core/` 下不许有 `State/` —— 通信域的承诺是「无产品行为」：纯判定住消费方，
@@ -849,12 +868,12 @@ final class LayeringTests: XCTestCase {
 
     /// 一个类型不许同时被视图与流层消费。
     ///
-    /// 两个协议各自代表一端的消费者：`ObservableObject` 意味着有视图在读它的 `@Published`，
+    /// 两端的消费者各有一个标记：`@Observable` 意味着有视图在读它的属性，
     /// `StreamBehavior` 意味着流层（Core）拿它当帧判读器。同一个类型同时是两者，就把
     /// 「改流层判读协议」与「改视图状态」绑在一起 —— 改一边要动另一边，而两边根本不相关。
     ///
-    /// **按类型名聚合，不按单行**：conform 可以写在 `extension` 里，与类型声明不在同一行。
-    /// 只扫单行会漏掉那个形态。
+    /// **`@Observable` 不是 conformance**：它是属性宏，写在类型声明上一行，所以按
+    /// 「`@Observable` 行 + 紧随的 class 声明」配对识别，不能复用 `conformedTypes`。
     ///
     /// 判据自带正控：两个集合都必须非空，否则交集永远为空。
     func testNoTypeIsBothViewStateAndStreamBehavior() throws {
@@ -863,22 +882,42 @@ final class LayeringTests: XCTestCase {
 
         for file in swiftFiles(under: sourcesRoot) {
             let text = try String(contentsOf: file, encoding: .utf8)
-            for (_, code) in codeLines(in: text) {
-                for name in Self.conformedTypes(conformingTo: "ObservableObject", in: code) {
-                    viewStates.insert(name)
-                }
+            let lines = codeLines(in: text)
+            viewStates.formUnion(Self.observableTypes(in: lines))
+            for (_, code) in lines {
                 for name in Self.conformedTypes(conformingTo: "StreamBehavior", in: code) {
                     streamBehaviors.insert(name)
                 }
             }
         }
 
-        XCTAssertFalse(viewStates.isEmpty, "一个 ObservableObject 都没扫到 —— 先怀疑正则")
+        XCTAssertFalse(viewStates.isEmpty, "一个 @Observable 类型都没扫到 —— 先怀疑正则")
         XCTAssertFalse(streamBehaviors.isEmpty, "一个 StreamBehavior 都没扫到 —— 先怀疑正则")
 
         let both = viewStates.intersection(streamBehaviors).sorted()
         XCTAssertEqual(both, [],
                        "这些类型同时被视图与流层消费：\(both) —— 判读器要单独一个类型")
+    }
+
+    /// 标了 `@Observable` 的类型名：属性行在前，`class` 声明紧随其后（中间没有别的声明）。
+    private static func observableTypes(in lines: [(Int, String)]) -> Set<String> {
+        var out: Set<String> = []
+        var sawAttribute = false
+        for (_, code) in lines {
+            let trimmed = code.trimmingCharacters(in: .whitespaces)
+            if trimmed == "@Observable" { sawAttribute = true; continue }
+            guard sawAttribute else { continue }
+            let pattern = "^(?:final\\s+)?class\\s+(\\w+)"
+            if let re = try? NSRegularExpression(pattern: pattern),
+               let m = re.firstMatch(in: trimmed,
+                                     range: NSRange(trimmed.startIndex..<trimmed.endIndex,
+                                                    in: trimmed)),
+               let r = Range(m.range(at: 1), in: trimmed) {
+                out.insert(String(trimmed[r]))
+            }
+            sawAttribute = false
+        }
+        return out
     }
 
     /// 这一行里 conform 了 `protocol` 的类型名。认三种写法：

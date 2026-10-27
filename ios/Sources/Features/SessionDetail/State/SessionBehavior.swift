@@ -2,7 +2,7 @@
  * 把流层交来的一帧翻译成对状态源的一次调用 —— **这是它与流层之间唯一的事**。
  *
  * 为什么单独一个类型而不是让状态源自己 conform `StreamBehavior`：两个协议的消费者不在同一层。
- * `ObservableObject` 的消费者是视图，`StreamBehavior` 的消费者是流表（`Core/Gateway`）。
+ * `@Observable` 状态源的消费者是视图，`StreamBehavior` 的消费者是流表（`Core/Gateway`）。
  * 挂在一个类型上，改流层的判读协议就要动一个视图状态类型，而这两件事没有任何共同的变化原因。
  *
  * 它**没有自己的状态**：一帧进来，判读（纯函数 `SessionStreamReader`）→ 副作用（状态源）

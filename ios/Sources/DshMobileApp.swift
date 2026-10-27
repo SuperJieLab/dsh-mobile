@@ -9,10 +9,10 @@ import SwiftUI
 @main
 struct DshMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var node: TailnetNode
-    @StateObject private var store: MeshStore
+    @State private var node: TailnetNode
+    @State private var store: MeshStore
     /// 到网关的常驻连接 —— App 级、唯一实例。会话详情只在它上面开关流。
-    @StateObject private var link: LongConnection
+    @State private var link: LongConnection
     private let client: RpcClient
     /// 地址与传输的主人 —— 两条链路读同一个实例，装配根只造一次。
     private let endpoint: Endpoint
@@ -20,18 +20,18 @@ struct DshMobileApp: App {
     /// 会话列表（逐个事件 + 代次重拉）。
     private let events: EventStream
     /// 待答审批 —— App 级、唯一实例。不随任何一屏生死：停在会话列表时它照样在收。
-    @StateObject private var approvals: ApprovalStore
+    @State private var approvals: ApprovalStore
 
     init() {
         let node = TailnetNode()
         let endpoint = Endpoint()
         let client = RpcClient(endpoint: endpoint)
         self.endpoint = endpoint
-        _node = StateObject(wrappedValue: node)
-        _store = StateObject(wrappedValue: MeshStore(endpoint: endpoint, node: node))
+        _node = State(initialValue: node)
+        _store = State(initialValue: MeshStore(endpoint: endpoint, node: node))
         // 长连接只拿四个能力，不拿一元客户端本体：票 / 换票 / 传输 / 地址都在这里接一次，
         // 之后它再也不认识 `RpcClient`。四个参数必填 —— 漏接一个编译不过。
-        _link = StateObject(wrappedValue: LongConnection(
+        _link = State(initialValue: LongConnection(
             authorization: { [weak client] in client?.validAccessToken() },
             renewTicket: { [weak client] in
                 guard let client else { return .unavailable }
@@ -44,7 +44,7 @@ struct DshMobileApp: App {
         self.client = client
         let events = EventStream()
         self.events = events
-        _approvals = StateObject(wrappedValue: ApprovalStore(
+        _approvals = State(initialValue: ApprovalStore(
             answerer: GatewayApprovalAnswerer(client: client)
         ))
     }
@@ -93,8 +93,8 @@ struct DshMobileApp: App {
             // 注在 NavigationStack 根部：navigationDestination 推入的视图
             // （SessionDetailView）在推入那一刻读不到子树注入的环境 —— 根部注入
             // 才覆盖整棵导航树。
-            .environmentObject(store)
-            .environmentObject(approvals)
+            .environment(store)
+            .environment(approvals)
         }
     }
 }

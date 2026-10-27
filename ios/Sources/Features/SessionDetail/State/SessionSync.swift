@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 
 /// 一个会话的同步编排：把「取窗口 / 追新增 / 往回翻」接到状态机上。状态机
@@ -8,15 +7,17 @@ import Foundation
 /// - **先窗口后增量**：先要一个最新窗口，再往后追 —— 于是**不需要跨会话记住任何位置**，
 ///   冷启动、重启、跑了一夜回来行为都一样。
 ///
-/// 镜像只在内存里：没有任何位置或内容落盘。用 `ObservableObject` 而非 `@Observable` 宏 ——
-/// 后者要跑进程外的宏插件，本项目的验证环境不允许（**能被本地编译验证，比写法新更重要**）。
+/// 镜像只在内存里：没有任何位置或内容落盘。观察机制是 `@Observable` —— 追踪到属性级，
+/// 只在 `body` 读到的那几个变化时重算。它的宏插件跑进程外进程，构建时必须带
+/// `-Xfrontend -disable-sandbox`（嵌套沙箱会拦掉插件，报 malformed response）。
 ///
 /// 它只装两件事：编排本身，以及「把线上形状送成状态机的输入」（`parseBaseline(_:)`、
 /// `refreshView` 的三条投影）—— 后者与调用顺序同源，不构成第二个变化原因。告知的置位与
 /// 清除住 `ResyncNoticeState`，用户看得见的句子住 `Display/SyncText.swift`：句子若写回
 /// 本文件，`LayeringTests.testStateHasNoUserFacingStrings` 会红。
 @MainActor
-final class SessionSync: ObservableObject {
+@Observable
+final class SessionSync {
 
     /// 状态行要说的事。**重置与失败必须说得出来** —— 那是用户唯一能察觉异常的地方。
     ///
@@ -55,7 +56,7 @@ final class SessionSync: ObservableObject {
     }
 
     /// 屏幕上要画的东西 —— 消息**与过程**；由组装器从同一批事件算出。
-    @Published private(set) var nodes: [TranscriptNode] = []
+    private(set) var nodes: [TranscriptNode] = []
 
     /// 消息条数 —— **从已组装的节点数**，不从原始事件另算一份。
     ///
@@ -70,34 +71,34 @@ final class SessionSync: ObservableObject {
         }
     }
     /// 视图里的事件条数（消息只是其中一部分）。
-    @Published private(set) var eventCount = 0
+    private(set) var eventCount = 0
     /// 还能往回翻吗。为真时界面给出入口。
-    @Published private(set) var hasOlder = false
-    @Published private(set) var status: Status = .idle
+    private(set) var hasOlder = false
+    private(set) var status: Status = .idle
     /// 「对不上」的告知 —— 底部**固定面**的数据源。判定全在值类型里。
     ///
     /// 与 `status` 的分工：`status` 说「同步到哪了」，只在**取窗口时**更新 —— 重连是传输层
     /// 事件，不该跳它；本项说的是「有内容没能接上、或已被清空重来」—— 它要出现在**不随内容
     /// 滚动**的面上，否则用户往回翻时看不见，屏上看起来一切正常、只是少了一段。
-    @Published private(set) var notice: ResyncNotice?
+    private(set) var notice: ResyncNotice?
     /// 正在生成的回复（流式输出）；没有进行中的 attempt 就是空串。
-    @Published private(set) var transientText = ""
+    private(set) var transientText = ""
     /// 上一次向后翻页是否还在路上。
     ///
     /// 与 `status` 分开：`status` 是「同步到哪一步」的总述，下拉刷新也会让它进 `.syncing`；
     /// 而界面要区分的是「顶部正在等更早的内容」—— 那时该在列表顶上给占位，不是给一句状态。
-    @Published private(set) var isPagingOlder = false
+    private(set) var isPagingOlder = false
     /// 上下文占用。为 `nil` 时占用格显示 `--` 并保持可点 —— 不消失：三格里其余两格永远有值，
     /// 这一格消失会让模型格横向挪一次。
-    @Published private(set) var usage: UsagePayload? = nil
+    private(set) var usage: UsagePayload? = nil
     /// 最后一次收到数据帧的时刻。`nil` = 进本屏以来还没收到过。
     ///
-    /// **刻意不发布**：它每帧都变，`@Published` 会让 `RefreshGate` 的合并刷新失效
+    /// **刻意不参与观察**：它每帧都变，被追踪会让 `RefreshGate` 的合并刷新失效
     /// （一次事件一次全量重算，那正是分帧批处理的相反面）。消费方是连接详情的 sheet，
     /// 打开那一刻读一次即可 —— 它回答的是「多久没更新」的量级，不需要逐帧跳动。
     private(set) var lastFrameAt: Date? = nil
     /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
-    @Published private(set) var displayedModel: ModelSelection? = nil
+    private(set) var displayedModel: ModelSelection? = nil
 
     private let client: RpcClient
     let sessionId: String
@@ -122,7 +123,10 @@ final class SessionSync: ObservableObject {
     /// 连接阶段 —— 本屏读连接状态的唯一出处（功能条网络格与连接详情都读它）。
     ///
     /// 它来自宿主而不是流：阶段说的是「这条连接走到哪一步」，与登记了几条流无关。
-    @Published private(set) var phase: ConnectionPhase = .idle
+    /// **读穿而不是镜像**：观察机制按属性追踪，`body` 里读 `sync.phase` 会一路读到
+    /// `link.phase`，于是连接阶段一变就重算；存一份副本反而要自己维护同步。
+    var phase: ConnectionPhase { connectionPhase() }
+    private let connectionPhase: () -> ConnectionPhase
     private var transient = TransientChannel()
 
     /// 首屏兜底：WS 迟迟不给窗口时用 HTTP 拉一次。
@@ -140,8 +144,6 @@ final class SessionSync: ObservableObject {
     private var usageState = UsageState()
     /// 当前模型的订阅更新。判定全在值类型里，这里只持有并转发结果。
     private var modelState = ModelSelectionState()
-    /// 连接阶段变化的转发（`phase` 是它的落地处）。
-    private var phaseObservation: AnyCancellable?
     /// 刷新合并闸：事件帧批处理，判定在值类型 `RefreshGate`。
     private var refreshGate = RefreshGate()
     /// flush 是否已有一次调度在途（防重复调度）。
@@ -153,9 +155,8 @@ final class SessionSync: ObservableObject {
         self.client = client
         self.sessionId = sessionId
         self.factory = link
-        // 只订阅、不下手：发布流就地接上，不必留一个属性给下一任读者。
-        phaseObservation = link.$phase
-            .sink { [weak self] phase in self?.phase = phase }
+        // 只读穿、不订阅：阶段是连接域的事实，本类不持有副本 —— 观察机制会跟到源头。
+        self.connectionPhase = { [weak link] in link?.phase ?? .idle }
     }
 
     /// 下发一条指令：回包 ok = 已受理，回答本身从订阅流里来；失败如实进状态行。

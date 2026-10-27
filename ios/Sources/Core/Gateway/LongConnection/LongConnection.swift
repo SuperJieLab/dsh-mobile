@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 
 /**
@@ -8,7 +7,7 @@ import Foundation
  * 传输上**造一条流**。屏幕那一侧永远看不到「进屏重新握手、离屏丢掉整窗」这件事。
  *
  * 为什么需要这一层：两个模板互不认识，总得有人把它们接起来；阶段还要能被 SwiftUI 观察
- *（功能条的网络格），而传输层不碰 Combine 的发布机制。这一层只做三件事 —— 持有两者、
+ *（功能条的网络格），而传输层不碰任何发布机制。这一层只做三件事 —— 持有两者、
  * 接上三个接点、转发阶段与造流。它不判断任何东西：判据仍在传输层与流表，屏幕上的事仍在状态层。
  *
  * **连接参数只在这里绑一次**：票在哪取、传输换成哪一条、地址从哪来，三件都是「怎么连」
@@ -17,10 +16,11 @@ import Foundation
  * 屏幕那一侧拿到的不是这个类型，而是 `StreamFactory` —— 它没有连接级动作。
  */
 @MainActor
-final class LongConnection: ObservableObject, StreamFactory {
+@Observable
+final class LongConnection: StreamFactory {
 
     /// 连接阶段 —— 功能条网络格与连接详情的数据源。
-    @Published private(set) var phase: ConnectionPhase = .idle
+    private(set) var phase: ConnectionPhase = .idle
 
     private let transport: WebSocketConnection
     private let streams: StreamMux

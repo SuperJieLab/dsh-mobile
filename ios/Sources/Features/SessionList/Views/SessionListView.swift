@@ -6,7 +6,7 @@ import SwiftUI
 struct SessionListView: View {
     /// 读这两者是为了渲染：`isPaired` 决定这一屏让位给配对屏，`baseURL` 显示在页脚。
     /// 取数走 `state`，不经这里。
-    @ObservedObject var client: RpcClient
+    let client: RpcClient
 
     /// 这一屏只**读**它一处（页脚显示当前地址）—— 地址不归视图判断，归端点层。
     let endpoint: Endpoint
@@ -15,8 +15,8 @@ struct SessionListView: View {
     /// 连接级事件流。列表是它的消费方之一：逐个事件改一行，代次报到就重拉一次。
     let events: EventStream
 
-    /// 取数与三种面。`@StateObject`：视图重建时保留，不随 body 重算重建。
-    @StateObject private var state: SessionListState
+    /// 取数与三种面。`@State`：视图重建时保留，不随 body 重算重建。
+    @State private var state: SessionListState
 
     /// 组网/配对入口：已配对时配对页不再自动顶上（凭证在同一次安装内持久），
     /// 组网段必须有常驻入口 —— 否则 noKey 状态无 UI 可达。
@@ -24,14 +24,14 @@ struct SessionListView: View {
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
     /// 根部注入的连接域：就绪即首载与徽章的路径一行都读它。
-    @EnvironmentObject private var store: MeshStore
+    @Environment(MeshStore.self) private var store
 
     init(client: RpcClient, endpoint: Endpoint, link: LongConnection, events: EventStream) {
         self.client = client
         self.endpoint = endpoint
         self.link = link
         self.events = events
-        _state = StateObject(wrappedValue: SessionListState(client: client))
+        _state = State(initialValue: SessionListState(client: client))
     }
 
     var body: some View {
@@ -74,7 +74,7 @@ struct SessionListView: View {
             // 显式再注一次（双保险）：navigationDestination 闭包在容器懒建时求值，
             // 根部注入到不了推入的视图 —— 不补这一句，详情页读不到连接域。
             SessionDetailView(client: client, session: session, link: link)
-                .environmentObject(store)
+                .environment(store)
         }
         .overlay {
             if state.isLoading && state.sessions.isEmpty {
@@ -130,7 +130,7 @@ struct SessionListView: View {
         }
         .sheet(isPresented: $showMeshSettings) {
             NavigationStack { PairingView(client: client) }
-                .environmentObject(store)
+                .environment(store)
         }
     }
 }

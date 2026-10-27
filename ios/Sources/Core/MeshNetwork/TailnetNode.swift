@@ -14,7 +14,8 @@
 import TailscaleKit
 
 @MainActor
-final class TailnetNode: ObservableObject {
+@Observable
+final class TailnetNode {
 
     /// key 的可核对形式：头 11 位（`hskey-auth-`）+ 尾 6 位 —— 足以和 headscale
     /// 日志里的 auth id / VPS preauthkeys list 对号，又不整串刷屏。
@@ -26,14 +27,14 @@ final class TailnetNode: ObservableObject {
     }
 
     /// 状态机当前状态（界面据此渲染；迁移判定全在 `TailnetNodeState.handle`）。
-    @Published private(set) var state: TailnetNodeState = .noKey
+    private(set) var state: TailnetNodeState = .noKey
 
     /// Running 后可用：全部流量进 tailnet 的 session，给 `RpcClient` 注入。
     private(set) var gatewaySession: URLSession?
 
     /// 当前到网关对端的路径：Running 期间轮询刷新，其余状态为 nil。
     /// 展示层的唯一数据源 —— `ConnectionBadge` 只吃这个值，不感知本类型。
-    @Published private(set) var meshPath: CarrierPath?
+    private(set) var meshPath: CarrierPath?
 
     /// 节点验证 Running、tailnet session 建成的那一刻（App 据此把传输切进虚拟网）。
     /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调。

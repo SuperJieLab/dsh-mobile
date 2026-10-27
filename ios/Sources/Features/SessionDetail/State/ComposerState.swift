@@ -12,17 +12,17 @@
  *
  * 投递动作由外部注入（`submit(_:)` 的入参）—— 本类不认识网关，每条断言都不必起服务。
  */
-import Combine
 import Foundation
 
 @MainActor
-final class ComposerState: ObservableObject {
+@Observable
+final class ComposerState {
 
     /// 草稿。`TextField` 双向绑定它。
-    @Published var text = ""
+    var text = ""
 
     /// 正在投递 —— 发送按钮据此置灰，挡住连按。
-    @Published private(set) var isSubmitting = false
+    private(set) var isSubmitting = false
 
     /// 投递一条：入参是已经分好流的那一行，返回值是**是否已受理**。
     typealias Deliver = @MainActor (SlashDispatch) async -> Bool

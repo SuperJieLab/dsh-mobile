@@ -6,7 +6,6 @@
  *
  * 每次应答都带客户端生成的 `answerId`：回包丢了重试，网关回放第一次的结果，绝不二次投递。
  */
-import Combine
 import Foundation
 
 /// 发一次应答。收成一行是为了三种结局能被分别注入 —— 它们只在网络那一层分得开，
@@ -34,7 +33,8 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 }
 
 @MainActor
-final class ApprovalStore: ObservableObject {
+@Observable
+final class ApprovalStore {
 
     /// 一张卡的应答进展。没有这一项 = 还没动过（也就可以按）。
     enum AnswerState: Equatable {
@@ -48,10 +48,10 @@ final class ApprovalStore: ObservableObject {
 
     /// 表本身发布出去：它一变，读它的视图就重算。不另存一份镜像 ——
     /// 两份数据会有「谁先更新」的问题，而这里没有第二个写者。
-    @Published private var table = ApprovalTable()
-    @Published private(set) var states: [String: AnswerState] = [:]
+    private var table = ApprovalTable()
+    private(set) var states: [String: AnswerState] = [:]
     /// 每个会话最近一句话（「已投递」「这条已经不在了」）。新卡到达即清 —— 说明讲的是上一件事。
-    @Published private(set) var notices: [String: String] = [:]
+    private(set) var notices: [String: String] = [:]
 
     private let answerer: any ApprovalAnswering
 

@@ -13,36 +13,36 @@ struct SessionDetailView: View {
     let session: SessionSummary
 
     /// 同步编排。视图重建时会新建一个、窗口重取一次 —— 重取的理由见 `SessionSync`。
-    @StateObject private var sync: SessionSync
+    @State private var sync: SessionSync
     /// 模型目录。宿主持有：功能条那一格要用目录默认值兜底显示名，两处读的必须是同一份。
-    @StateObject private var catalog: ModelCatalogState
+    @State private var catalog: ModelCatalogState
     /// 命令目录。每次敲 `/` 都要一份新的 —— 命令集随插件装卸变，不缓存。
-    @StateObject private var commands: CommandDirectory
+    @State private var commands: CommandDirectory
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
     /// 输入框那一行：草稿、能不能发、面板该不该开 —— 判定在 `State/ComposerState.swift`。
-    @StateObject private var composer = ComposerState()
+    @State private var composer = ComposerState()
     /// 本屏五个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
     @State private var activeSheet: DetailSheet?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
     /// 根部注入的连接域：功能条的网络格与连接详情读它（图中转与节点状态）。
-    @EnvironmentObject private var store: MeshStore
+    @Environment(MeshStore.self) private var store
     /// 根部注入的待答表：App 级，不随本屏生死 —— 停在列表时到达的审批也在里面。
-    @EnvironmentObject private var approvals: ApprovalStore
+    @Environment(ApprovalStore.self) private var approvals
 
     /// - Parameter link: 只在这里交给 `SessionSync`，本视图不保留 —— 屏幕能对连接做的
     ///   只有流级动作（`SessionSync.retry()`），连接级动作在它的类型上不存在。
     init(client: RpcClient, session: SessionSummary, link: LongConnection) {
         self.client = client
         self.session = session
-        _sync = StateObject(wrappedValue: SessionSync(client: client, sessionId: session.id, link: link))
-        _catalog = StateObject(
-            wrappedValue: ModelCatalogState { try await fetchCatalog(client) }
+        _sync = State(initialValue: SessionSync(client: client, sessionId: session.id, link: link))
+        _catalog = State(
+            initialValue: ModelCatalogState { try await fetchCatalog(client) }
         )
-        _commands = StateObject(
-            wrappedValue: CommandDirectory { try await fetchCommands(client, sessionId: session.id) }
+        _commands = State(
+            initialValue: CommandDirectory { try await fetchCommands(client, sessionId: session.id) }
         )
     }
 
@@ -99,7 +99,7 @@ struct SessionDetailView: View {
                             }
                         }
                 }
-                .environmentObject(store)
+                .environment(store)
             case .model:
                 ModelSheetView(
                     catalog: catalog,
@@ -321,7 +321,10 @@ struct SessionDetailView: View {
     /// 输入行：宽度全给输入框，发送键在最右。
     ///
     /// 输入框**不带自己的边框**：它坐在玻璃上，再加一圈描边就成了两层皮。
+    @ViewBuilder
     private var composerRow: some View {
+        // 局部 `@Bindable`：`@State` 的 `$` 只到对象这一层，取属性绑定要再包一次。
+        @Bindable var composer = composer
         HStack(spacing: 6) {
             TextField("发一条指令给 DSH…", text: $composer.text, axis: .vertical)
                 .lineLimit(1...4)
