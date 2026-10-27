@@ -1,33 +1,22 @@
 /**
- * 组网域的唯一宿主：把「节点 × 身份 × 传输」三段收敛为一个对外阶段。
+ * 组网域的唯一宿主：把「节点状态」收敛为「能不能发请求」，并持有隧道的唯一产物。
  *
  * 迁移判定仍在纯状态机 `TailnetNodeState`，这里不做第二台 —— `MeshPhase.resolve`
- * 只是它加「组网传输是否建成」这一个输入后的**投影**。启动编排、VerifiedRunning 激活、
+ * 只是它加「隧道是否建成」这一个输入后的**投影**。启动编排、VerifiedRunning 激活、
  * 回前台探活住在这里。
  *
- * 与 `Endpoint`：端点层的地址与传输在组网激活时才存在，本 store 是唯一在节点验证 Running
- * 之后写它的一方 —— 组网域不吞身份域，业务调用面照旧直接消费 `RpcClient`。
- * 端点在激活前不存在。
+ * **产物也住这里**：隧道通了之后「往哪打、走哪条传输」由 `route` 一次给全，不再有第二个
+ * 对象存着它的一半。地址与传输同生共死 —— 没有「有地址但没有传输」这种态。
+ *
+ * 业务调用面照旧直接消费 `RpcClient`：组网域不吞身份域。
  */
 import Foundation
 
 // MARK: - 注入接缝
 //
-// store 只认这两个协议，不认具体类型 —— 真实类型的适配住在 `MeshStoreAdapters.swift`
+// store 只认一个协议，不认具体类型 —— 真实类型的适配住在 `MeshStoreAdapters.swift`
 // （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
-// TailscaleKit / RpcClient，见 tests/MeshStoreTests.swift）。
-
-/// 组网激活时「换路由」的窄面 —— `Endpoint.update` 的接口形状。
-///
-/// 只放 store 真正读的成员 —— 投影不读身份，签名里也就没有它：连接阶段只由节点状态
-/// 与「组网传输是否建成」这两个输入决定。
-///
-/// 不叫 `activate`：**组网是否算激活是 store 的判断**（它有节点状态机），
-/// 被调方只负责「把这两个值换成新的」。同名时在装配文件里读不出哪个是哪个
-/// （另一个 `activate` 是「回前台要一条连接」）。
-@MainActor protocol EndpointUpdating: AnyObject {
-    func update(session: URLSession, baseURL: URL)
-}
+// TailscaleKit，见 tests/MeshStoreTests.swift）。
 
 /// 组网节点能力：`TailnetNode` 的窄面。状态仍由 `TailnetNodeState` 状态机判定，
 /// 本协议只暴露读取与既有入口，不做任何新判定。
@@ -53,8 +42,11 @@ import Foundation
 @Observable
 final class MeshStore {
 
-    /// 对外连接阶段 —— 视图读连接态的唯一出处。
-    private(set) var phase: MeshPhase
+    /// 对外连接阶段 —— 视图读连接态的唯一出处。**算出来的，不存**：它的两个输入
+    /// （节点状态、隧道是否建成）各有唯一出处，再存一份就是第三个存放处。
+    var phase: MeshPhase {
+        MeshPhase.resolve(nodeState: nodeState, hasGatewaySession: route != nil)
+    }
     /// 节点层状态的细粒度透传：`phase` 把 registering 与 running-未组网都折进
     /// connecting，组网管理屏要区分这两态，故单独暴露（读取面仍唯一出处）。
     private(set) var nodeState: TailnetNodeState
@@ -65,10 +57,27 @@ final class MeshStore {
     /// `reportDamagedConfiguration`。界面据此说「重新填写」，而不是「检查证书」。
     private(set) var storedConfigDamaged = false
 
-    private let endpoint: EndpointUpdating
+    /// 隧道的产物：往哪打、走哪条传输。**地址与传输同生共死** —— 没有「有地址但没有
+    /// 传输」这种态，也没有「有传输但地址作废」这种态。
+    struct Route {
+        let session: URLSession
+        let baseURL: URL
+    }
+
+    /// 节点验证 Running 那一刻拿到的产物。唯一写入点是 `onVerifiedRunning`。
+    private var verifiedRoute: Route?
+
+    /// 此刻能不能发、往哪发 —— 没有第二条路径能拿到这个答案。
+    ///
+    /// **守卫在读数上**：`nodeState` 不是 `.running` 就一定 nil，哪怕 `verifiedRoute`
+    /// 还留着上一次的值。于是「`route != nil` ⟺ `phase == .ready`」是算出来的，
+    /// 不靠谁记得清 —— 没有「清」这个动作可忘。
+    var route: Route? {
+        guard case .running = nodeState else { return nil }
+        return verifiedRoute
+    }
+
     private let node: MeshNodeControlling
-    /// 组网是否已激活（回调已 firing 且 activate 已调）。
-    private var tailnetActivated = false
     /// 组网配置的当前值：start 存底，组网管理动作（submitKey / retry）刷新 ——
     /// VerifiedRunning 回调读它而不是读 start 时刻的快照，否则换了地址之后重入
     /// 仍然打到旧地址。
@@ -77,12 +86,9 @@ final class MeshStore {
     /// node.launch 重启 tsnet、杀掉活连接并清掉路径展示。
     private var started = false
 
-    init(endpoint: EndpointUpdating, node: MeshNodeControlling) {
-        self.endpoint = endpoint
+    init(node: MeshNodeControlling) {
         self.node = node
         self.nodeState = node.nodeState
-        self.phase = MeshPhase.resolve(nodeState: node.nodeState,
-                                             hasGatewaySession: false)
     }
 
     /// 启动编排：挂回调 + 拉起节点。激活只发生在 VerifiedRunning 回调里，没有兜底激活 ——
@@ -99,9 +105,8 @@ final class MeshStore {
         self.config = config
         node.onVerifiedRunning = { [weak self] session in
             guard let self, let baseURL = self.config?.gatewayBaseURL else { return }
-            self.endpoint.update(session: session, baseURL: baseURL)
-            self.tailnetActivated = true
-            self.reproject()
+            self.verifiedRoute = Route(session: session, baseURL: baseURL)
+            self.nodeChanged()
         }
         node.onNodeChanged = { [weak self] in self?.nodeChanged() }
         await node.launchNode(config: config)
@@ -125,7 +130,6 @@ final class MeshStore {
         started = true
         storedConfigDamaged = true
         nodeState = .noKey
-        phase = .needsSetup
     }
 
     // MARK: - 组网管理（设置页动作透传；判定在节点层，这里只接顺序）
@@ -144,17 +148,12 @@ final class MeshStore {
         nodeChanged()
     }
 
-    /// 节点侧事实变化的统一回灌口：重投影 + 刷路径。
+    /// 节点侧事实变化的统一回灌口：重读节点状态 + 刷路径。
+    ///
+    /// 只读一个输入 —— 阶段与「能不能发」都由 `nodeState` 与 `route` 在读数上算出来，
+    /// 这里不再算第二遍。
     private func nodeChanged() {
-        reproject()
-        meshPath = node.carrierPath
-    }
-
-    private func reproject() {
-        // 投影的输入由 `resolve` 的签名定死：节点状态 + 传输是否建成。身份不进来 ——
-        // 离线也可能已配对，两件事互不决定。
         nodeState = node.nodeState
-        phase = MeshPhase.resolve(nodeState: node.nodeState,
-                                  hasGatewaySession: tailnetActivated)
+        meshPath = node.carrierPath
     }
 }

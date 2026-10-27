@@ -40,32 +40,29 @@ final class MeshStoreTests: XCTestCase {
         XCTAssertTrue(switched == .ready, "N1d running 且传输已切换 → ready")
 
         // —— K4：启动零激活 + VerifiedRunning 唯一激活点——
-        // 激活前 App 不持有端点；端点从无到有只发生在节点验证 Running 那一刻。
+        // 激活前 App 不持有隧道产物；产物从无到有只发生在节点验证 Running 那一刻。
         let config = MeshConfig(controlURLString: "https://203.0.113.10:8443",
                                 gatewayURLString: "http://100.64.0.1:3081")
         let node = FakeNode()
-        let endpoint = FakeEndpoint()
-        let store = MeshStore(endpoint: endpoint, node: node)
+        let store = MeshStore(node: node)
         await store.start(config: config)
-        XCTAssertTrue(endpoint.updates.isEmpty,
-                      "K4a start 不激活：未激活 = 端点不存在，不兜底")
+        XCTAssertNil(store.route,
+                     "K4a start 不激活：未激活 = 没有产物，不兜底")
 
-        // 唯一激活点：节点验证 Running → client 恰收到一次「隧道 session + 配置地址」。
+        // 唯一激活点：节点验证 Running → 产物恰出现一次（隧道 session + 配置地址）。
         let tunnel = URLSession(configuration: .ephemeral)
         node.nodeState = .running
         node.onVerifiedRunning?(tunnel)
-        XCTAssertTrue(endpoint.updates.count == 1
-                      && endpoint.updates[0].0 === tunnel
-                      && endpoint.updates[0].1 == config.gatewayBaseURL!,
-                      "K4b VerifiedRunning 唯一激活点：端点一次建成（不穿视图层）")
+        XCTAssertTrue(store.route?.session === tunnel
+                      && store.route?.baseURL == config.gatewayBaseURL!,
+                      "K4b VerifiedRunning 唯一激活点：产物一次建成（不穿视图层）")
         XCTAssertTrue(store.phase == .ready, "K4c 激活后阶段投影为 ready")
 
         // —— N2d/N2e：start 进程内幂等（列表页 .task 重入触发
         // 第二次 start → 节点重启 → 活连接被杀 + 徽章掉直连标签）——
-        let activationsBefore = endpoint.updates.count
         await store.start(config: config)
-        XCTAssertTrue(endpoint.updates.count == activationsBefore,
-                      "N2d start 幂等：重复 start 不重复兜底激活（传输切换只此一次）")
+        XCTAssertTrue(store.route?.session === tunnel,
+                      "N2d start 幂等：重复 start 不重建产物（也不清空已建成的）")
         XCTAssertTrue(node.launchCount == 1,
                       "N2e start 幂等：重复 start 不再拉起节点（tsnet 重启会杀活连接）")
 
@@ -74,6 +71,10 @@ final class MeshStoreTests: XCTestCase {
         await store.sceneActive()
         XCTAssertTrue(store.phase == .failed(.unreachable),
                       "N3a 回前台探活失败 → 如实落 failed(unreachable)，不自动重试")
+        // **产物跟着判据失效**：阶段不再是 ready 时，路就不通了 —— 这不是靠谁去清，
+        // 是 `route` 在读数上守卫。删掉那道守卫，两条都会红。
+        XCTAssertNil(store.route,
+                     "N3a2 隧道不可用时 route 必须为 nil —— 否则上层还会往死地址打")
         node.nodeState = .running
         node.reviveShouldFail = false
         node.carrierPath = .direct
@@ -93,15 +94,6 @@ final class MeshStoreTests: XCTestCase {
 }
 
 // MARK: - 假件（只实现 store 的注入面，不 import TailscaleKit / 不碰网络）
-
-/// 端点层的替身：只记「换了几次、换成什么」。
-private final class FakeEndpoint: EndpointUpdating, @unchecked Sendable {
-    /// (session, baseURL) 记录对，按更新顺序排列。
-    var updates: [(URLSession, URL)] = []
-    func update(session: URLSession, baseURL: URL) {
-        updates.append((session, baseURL))
-    }
-}
 
 @MainActor private final class FakeNode: MeshNodeControlling, @unchecked Sendable {
     var nodeState: TailnetNodeState = .noKey

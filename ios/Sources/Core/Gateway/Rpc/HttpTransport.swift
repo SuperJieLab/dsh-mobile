@@ -4,18 +4,26 @@
  * 「带不带票」不是它的开关，而是调用方给不给 `authorization` —— 于是免票那条路
  * （换票自己）结构上拿不到票，也就不可能回头去问票层（那会变成「等自己那一趟」的死锁）。
  *
- * 它只认识三件事：往哪打（`Endpoint`）、一段字节、怎么算失败。不认识 op、不认识票的生命周期、
- * 不知道谁在重试 —— 那些都在 `RpcClient`。
+ * 它只认识三件事：往哪打（两个提供者：一条传输、一个地址）、一段字节、怎么算失败。
+ * 不认识 op、不认识票的生命周期、不知道谁在重试 —— 那些都在 `RpcClient`。
+ *
+ * **为什么是两个闭包而不是一个对象**：地址与传输由组网域产出，而本层是它的下层 ——
+ * 收一个对象就等于认识那条路上的东西。收两个「取值的能力」之后，本文件里一个组网类型
+ * 都没有（与 `LongConnection` 同一形状）。
  */
 import Foundation
 
 @MainActor
 final class HttpTransport {
 
-    private let endpoint: Endpoint
+    /// 这次走哪条传输。每次发请求现取 —— 组网换过传输之后下一发即生效。
+    private let sessionProvider: () -> URLSession
+    /// 往哪打。`nil` 表示隧道还没通 —— fail-fast，不猜地址。
+    private let baseURLProvider: () -> URL?
 
-    init(endpoint: Endpoint) {
-        self.endpoint = endpoint
+    init(session: @escaping () -> URLSession, baseURL: @escaping () -> URL?) {
+        self.sessionProvider = session
+        self.baseURLProvider = baseURL
     }
 
     /// 唯一端点 —— 所有 op 都打这一个地址，靠信封里的 `op` 分派。
@@ -33,7 +41,7 @@ final class HttpTransport {
         authorization: String?,
         treat401AsRefusal: Bool
     ) async throws -> Response? {
-        guard let baseURL = endpoint.baseURL else { throw RpcClientError.notActivated }
+        guard let baseURL = baseURLProvider() else { throw RpcClientError.notActivated }
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -48,7 +56,7 @@ final class HttpTransport {
         let payload: Data
         let urlResponse: URLResponse
         do {
-            (payload, urlResponse) = try await endpoint.session.data(for: urlRequest)
+            (payload, urlResponse) = try await sessionProvider().data(for: urlRequest)
         } catch {
             // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
             Log.warn(

@@ -20,8 +20,6 @@ struct DshMobileApp: App {
     /// 一元客户端。根部要读 `isPaired` 才决定显示哪一屏，所以它是可观察的 `@State`
     /// 而不是 `let` —— 与 `node` / `store` / `link` 同一行列。
     @State private var client: RpcClient
-    /// 地址与传输的主人 —— 两条链路读同一个实例，装配根只造一次。
-    private let endpoint: Endpoint
     /// 连接级事件流的收端 —— App 级，与连接同寿。三个消费方：待答表（清空）、
     /// 会话列表（逐个事件 + 代次重拉）、列表的事件订阅接线。
     private let events: EventStream
@@ -38,7 +36,7 @@ struct DshMobileApp: App {
     @State private var meshSetup: MeshSetupState
     /// 设置屏的依赖面：组网那一行的说法 + 身份。设置页那一行与解除配对都用它。
     @State private var settings: SettingsState
-    /// 页脚那句地址。根认识 `Endpoint`，列表那一屏只收到「读一句字」的能力。
+    /// 页脚那句地址。根知道隧道产物在哪，列表那一屏只收到「读一句字」的能力。
     private let address: () -> String
     /// 造会话详情容器的能力。它要 `sessionId`（点开那一行才知道），根造不了那一个，
     /// 但知道 `client` / `link` —— 于是把「造」交出去，把「用什么造」留在这里。
@@ -46,9 +44,12 @@ struct DshMobileApp: App {
 
     init() {
         let node = TailnetNode()
-        let endpoint = Endpoint()
-        let client = RpcClient(endpoint: endpoint)
-        let store = MeshStore(endpoint: endpoint, node: node)
+        // 组网域先造：隧道的产物（传输 + 地址）只住在它那里，两条链路向它取。
+        let store = MeshStore(node: node)
+        let client = RpcClient(
+            session: { [weak store] in store?.route?.session ?? .shared },
+            baseURL: { [weak store] in store?.route?.baseURL }
+        )
         // 长连接只拿四个能力，不拿一元客户端本体：票 / 换票 / 传输 / 地址都在这里接一次，
         // 之后它再也不认识 `RpcClient`。四个参数必填 —— 漏接一个编译不过。
         let link = LongConnection(
@@ -57,9 +58,9 @@ struct DshMobileApp: App {
                 guard let client else { return .unavailable }
                 return await client.ticket()
             },
-            // 两条链路读同一个端点实例：组网激活换的就是它，不存在第二份副本。
-            session: { [weak endpoint] in endpoint?.session ?? .shared },
-            baseURL: { [weak endpoint] in endpoint?.baseURL }
+            // 两条链路读同一份产物：组网激活换的就是它，不存在第二份副本。
+            session: { [weak store] in store?.route?.session ?? .shared },
+            baseURL: { [weak store] in store?.route?.baseURL }
         )
         let events = EventStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
@@ -72,10 +73,9 @@ struct DshMobileApp: App {
         )
         let settings = SettingsState(setup: meshSetup, store: store, client: client)
         let listState = SessionListState(client: client)
-        // 地址读的是通信域的只读投影：本层认识 `Endpoint`，列表那一屏只收到一个返回串的能力。
-        let address = { [weak endpoint] in gatewayAddressLine(endpoint?.baseURL) }
+        // 地址读的是隧道产物的只读投影：本层知道它在哪，列表那一屏只收到「读一句字」的能力。
+        let address = { [weak store] in gatewayAddressLine(store?.route?.baseURL) }
 
-        self.endpoint = endpoint
         self.events = events
         self.address = address
         self.makeDetail = { session in
@@ -222,7 +222,7 @@ private struct RootScreen: View {
 
 /// 显示面：现在该给用户看什么。
 ///
-/// 两个事实定一个取值：能不能发请求（`MeshPhase.ready` 才有 `Endpoint.baseURL`）、
+/// 两个事实定一个取值：能不能发请求（`MeshPhase.ready` 才有隧道产物）、
 /// 有没有身份。**第一支不看身份** —— 网不通时不管有没有凭证，能做的都只有修网；
 /// 「已配对但断网」因此落在同一面，不需要额外分支。
 enum Stage: Equatable {

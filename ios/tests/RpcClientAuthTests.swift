@@ -147,12 +147,10 @@ final class RpcClientAuthTests: XCTestCase {
             write: { stored = $0 },
             delete: { stored = nil }
         ))
-        let endpoint = Endpoint()
-        endpoint.update(
-            session: URLSession(configuration: configuration),
-            baseURL: URL(string: "http://127.0.0.1:3081")!
-        )
-        return RpcClient(endpoint: endpoint, credentials: store)
+        let session = URLSession(configuration: configuration)
+        return RpcClient(session: { session },
+                         baseURL: { URL(string: "http://127.0.0.1:3081")! },
+                         credentials: store)
     }
 
     /// 第一条业务请求就带票：`refresh` 排在它之前，且没有「先发一发无票的」。
@@ -221,10 +219,10 @@ final class RpcClientAuthTests: XCTestCase {
         let store = CredentialStore(storage: .init(
             read: { stored }, write: { stored = $0 }, delete: { stored = nil }
         ))
-        let endpoint = Endpoint()
-        endpoint.update(session: Self.stubbedSession(),
-                        baseURL: URL(string: "http://127.0.0.1:3081")!)
-        let client = RpcClient(endpoint: endpoint, credentials: store)
+        let session = Self.stubbedSession()
+        let client = RpcClient(session: { session },
+                               baseURL: { URL(string: "http://127.0.0.1:3081")! },
+                               credentials: store)
 
         let outcome = await client.ticket()
         XCTAssertEqual(outcome, .unavailable, "没有设备凭证 → 换不出票，且重试没有意义")
@@ -240,10 +238,10 @@ final class RpcClientAuthTests: XCTestCase {
         let store = CredentialStore(storage: .init(
             read: { stored }, write: { stored = $0 }, delete: { stored = nil }
         ))
-        let endpoint = Endpoint()
-        endpoint.update(session: Self.stubbedSession(),
-                        baseURL: URL(string: "http://127.0.0.1:3081")!)
-        let client = RpcClient(endpoint: endpoint, credentials: store)
+        let session = Self.stubbedSession()
+        let client = RpcClient(session: { session },
+                               baseURL: { URL(string: "http://127.0.0.1:3081")! },
+                               credentials: store)
         ScriptedURLProtocol.transportFailure = URLError(.cannotConnectToHost)
 
         let outcome = await client.ticket()

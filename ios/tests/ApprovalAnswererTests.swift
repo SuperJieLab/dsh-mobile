@@ -22,10 +22,10 @@ final class ApprovalAnswererTests: XCTestCase {
             write: { stored = $0 },
             delete: { stored = nil }
         ))
-        let endpoint = Endpoint()
-        endpoint.update(session: URLSession(configuration: configuration),
-                        baseURL: URL(string: "http://127.0.0.1:3081")!)
-        return RpcClient(endpoint: endpoint, credentials: store)
+        let session = URLSession(configuration: configuration)
+        return RpcClient(session: { session },
+                         baseURL: { URL(string: "http://127.0.0.1:3081")! },
+                         credentials: store)
     }
 
     /// 脚本：换票 + 一条 ok 的应答。

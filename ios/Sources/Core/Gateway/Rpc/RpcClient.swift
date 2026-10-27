@@ -28,9 +28,8 @@ import Foundation
 @Observable
 final class RpcClient {
 
-    /// 地址与传输的主人。本类只读它，不存副本 —— 两条链路读同一个实例，
-    /// 否则「组网激活换了这一份、那一份没换」会表现为「切了隧道仍往老地址打」。
-    private let endpoint: Endpoint
+    /// 往哪打：组网域产出的地址，本类只**问**它，不存副本。`nil` = 隧道没通。
+    private let baseURLProvider: () -> URL?
     /// 裸发层 —— 票闸在下面，它不认识票。
     private let http: HttpTransport
 
@@ -58,11 +57,13 @@ final class RpcClient {
     /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
     private(set) var isPaired: Bool
 
-    init(endpoint: Endpoint, credentials: CredentialStore? = nil) {
+    init(session: @escaping () -> URLSession,
+         baseURL: @escaping () -> URL?,
+         credentials: CredentialStore? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
         let store = credentials ?? .shared
-        self.endpoint = endpoint
-        self.http = HttpTransport(endpoint: endpoint)
+        self.baseURLProvider = baseURL
+        self.http = HttpTransport(session: session, baseURL: baseURL)
         self.credentials = store
         self.isPaired = store.hasDeviceToken
     }
@@ -174,8 +175,8 @@ final class RpcClient {
         _ request: Request,
         authenticated: Bool = true
     ) async throws -> Response {
-        // 未激活 = 没有地址可打：fail-fast，不猜地址。
-        guard let baseURL = endpoint.baseURL else { throw RpcClientError.notActivated }
+        // 隧道没通 = 没有地址可打：fail-fast，不猜地址。
+        guard let baseURL = baseURLProvider() else { throw RpcClientError.notActivated }
         // 手上有票才发。没有票照样发出去，换来的是一次注定被拒的往返 —— 服务端记一条
         // 「没有有效票」，客户端再换票重试，同一件事花两次。先换再发只多一次 wait，
         // 而在票还在的场景里（15 分钟内）它一次都不等。

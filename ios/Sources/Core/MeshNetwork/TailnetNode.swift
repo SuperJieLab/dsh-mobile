@@ -2,8 +2,8 @@
  * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
  * 只做「上游调用 + 结果归类成状态机事件」，迁移决策全部在纯状态机 `TailnetNodeState`。
- * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession` —— `MeshStore` 把它交给
- * `Endpoint.update(session:baseURL:)`，之后所有请求的流量都进 tailnet。
+ * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession` —— `MeshStore` 把它连同网关
+ * 地址一起收成 `route`，之后所有请求的流量都进 tailnet。
  *
  * 上游形状（libtailscale，`TailscaleNode.swift` 实读）：
  * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
