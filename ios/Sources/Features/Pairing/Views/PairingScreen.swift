@@ -2,10 +2,6 @@ import SwiftUI
 
 /// 配对屏的装配段：造容器、交给渲染段。容器随这一屏生死。
 ///
-/// **草稿不跨进出存活**：6 位码 10 分钟失效，输一半退出再进来看到上次那半截码是陷阱，
-/// 不是体贴。所以 `PairingState` 住 `@State` —— 由组合根给的闭包造（它才知道凭证在哪），
-/// 而容器本身的寿命跟这一屏。
-///
 /// 渲染段拿不到任何闭包：它只读 `PairingState`。
 struct PairingScreen: View {
     private let make: () -> PairingState
@@ -20,8 +16,8 @@ struct PairingScreen: View {
             if let state {
                 PairingBody(state: state)
             } else {
-                // 首帧：容器还没造出来。`@State` 的初值在 `init` 里求值，那一刻拿不到环境；
-                // 也不该由上一级替它造（那会每次重算白造一个，而 `@State` 只采用第一个）。
+                // 首帧由这行吸收。容器不在这里造（`@State` 只采用第一个），也不该由
+                // 上一级替它造 —— 那会每次重算白造一个。
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -33,11 +29,9 @@ struct PairingScreen: View {
 /// 配对页的渲染段：配对码 + 解除。零闭包，只读容器。
 ///
 /// 全 App 唯一需要用户「在场」的动作，也是唯一一段不需要身份的通信 —— 配对码本身就是凭证
-/// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。成功后设备凭证落沙盒，
-/// 之后一切请求静默带票。
+/// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。
 ///
-/// 组网（地址、接入密钥、节点五态）不在这里：那是换路径，这是换身份。两者在设置页里并列，
-/// 因为修法完全不同 —— 而配对的另一半（解除）在这一页，它是同一对迁移的反向。
+/// 组网不在这里：那是换路径，这是换身份。两者在设置页里并列。
 struct PairingBody: View {
     let state: PairingState
 

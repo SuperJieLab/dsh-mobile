@@ -1,19 +1,12 @@
 /**
- * 会话列表的状态：取一次列表，把结果落成三种面 —— 有内容 / 前置不满足 / 真失败。
+ * 会话列表的状态：取一次，把结果落成三种面 —— 有内容 / 前置不满足 / 真失败。
  *
- * 只回答「取回来是什么」，**不回答「什么时候取」**：触发点登记在 `SessionListView` ——
- * 放进这一层，它就得认识 SwiftUI 的生命周期。例外是事件流的代次：那是「恢复」这个
- * 事实本身（这条流不重放），不是用户手势，所以订阅走 `attach`（由组合根在启动时接）。
+ * 只回答「取回来是什么」，**不回答「什么时候取」**：触发点归 `SessionListView`，放进这一
+ * 层它就得认识 SwiftUI 的生命周期。唯一的例外是事件流的代次 —— 那是「恢复」这个事实本身，
+ * 不是用户手势，所以订阅走 `attach`，由组合根在启动时接。
  *
- * 三条纪律：
- * - 失败时**不清空**已有列表：能显示多少显示多少，错误挂在上面，文案是服务端的原文。
- * - **前置不满足不是错误**：隧道没通与没有身份归 `.blocked`（中性提示），其余归
- *   `.failed`（红条）。分界线与「缺什么」都由服务端原文给 —— 前端不另算一遍。
- * - **事件是增量，拉取是基线**：整表替换会把在途期间到达的变更抹掉，所以拉取落地时
- *   要把这一批账重放一遍（见 `reload` 与 `apply`）。
- *
- * 单飞：两次 `reload()` 撞在一起时只有一次请求，两次都等它的结果。没有单飞，
- * 「这批账归哪一次请求」就没有答案 —— 而重放的正确性全押在它上面。
+ * 三条纪律：失败**不清空**已有列表；前置不满足不是错误（`blocked` 而非 `failed`）；
+ * 事件是增量、拉取是基线（落地时要把在途的账重放一遍，否则它们被整表替换抹掉）。
  */
 import Foundation
 
@@ -21,15 +14,11 @@ import Foundation
 @Observable
 final class SessionListState {
 
-    /// 屏幕上要落成的三种面。两种带文案的，都**原样**显示服务端给的说法。
-    ///
-    /// `blocked` 与 `failed` 的区别不在严重程度，在**谁的问题**：前者是「这台机器还差一步
-    /// 配置」（用户去设置里做），后者是「这次请求坏了」（可能是暂时的，重试有意义）。
+    /// `blocked` 与 `failed` 的分界不在严重程度，在**谁的问题**：前者是这台机器还差一步
+    /// 配置（用户去设置里做），后者是这次请求坏了。两者的文案都是服务端原文。
     enum Outcome: Equatable {
         case ready
-        /// 前置不满足：隧道没通或没有身份。中性提示，不是错误。
         case blocked(String)
-        /// 真失败：网络、协议、服务端拒绝。
         case failed(String)
     }
 
@@ -42,10 +31,8 @@ final class SessionListState {
     private let fetch: () async throws -> [SessionSummary]
     /// 在途的那一次。单飞的落点，也是这批账的归属。
     private var inflight: Task<[SessionSummary], Error>?
-    /// 这一次在途期间到达的变更，按到达顺序 —— 落地时依次重放。
-    ///
-    /// 只有 `defer` 清它（`apply` 只在 `inflight != nil` 时入账，而 `inflight` 只在这个
-    /// 函数体内非 nil）⇒ 进 `reload` 时它必然是空的。
+    /// 这一次在途期间到达的变更，按到达顺序。进 `reload` 时必然为空 —— `apply` 只在
+    /// `inflight != nil` 时入账，而它只在 `reload` 体内非 nil。
     private var buffered: [SessionListChange] = []
     /// 是否已经听过事件流（`attach` 幂等）。
     private var attached = false
@@ -57,27 +44,21 @@ final class SessionListState {
         self.init { try await fetchSessions(client) }
     }
 
-    /// 要显示的失败文案；没有失败时是 `nil`。徽标与空态条件都读它 —— 它是三态里失败那一面的
-    /// 读法，不是第二份状态。
+    /// 失败面的读法，不是第二份状态。
     var failureText: String? {
         if case .failed(let text) = outcome { return text }
         return nil
     }
 
-    /// 前置不满足时的说法；满足时是 `nil`。与 `failureText` 对称 —— 两条面各有一个读法，
-    /// 视图据此决定画中性提示还是红条。
+    /// 前置那一面的读法；视图据此决定画中性提示还是红条。
     var blockedReason: String? {
         if case .blocked(let text) = outcome { return text }
         return nil
     }
 
 
-    /// 听事件流：每报到一次（含重连拿到相同代次、以及源失效）就重拉一次。
-    ///
-    /// 这条流不重放，所以「两次报到之间的事件」可能已经丢了 —— 而它在客户端唯一
-    /// 可观察的形式就是这一次报到。
-    ///
-    /// 幂等：视图重复出现时不该注册第二个听众（一次报到触发两次拉取，第二次是空跑）。
+    /// 听事件流。这条流不重放，所以「两次报到之间的事件」可能已经丢了 —— 报到这里是它在
+    /// 客户端唯一可观察的形式。幂等：视图重复出现时不该注册第二个听众。
     func attach(events: EventStream) {
         guard !attached else { return }
         attached = true
@@ -101,10 +82,8 @@ final class SessionListState {
 
     /// 一条列表增量。立即生效；在途时同时记进这一批账，等落地后重放到响应上。
     ///
-    /// **可见性在这里筛，两条路都筛**：拉取那一半在 `reload` 里过一遍
-    /// `SessionVisibility`，而事件推来的行若不过同一道，`blank`（在 Mac 上刚点新建、
-    /// 还没说话）与 `subagent` 会当场出现在列表上，下拉之后又消失。合并层不判可见性
-    /// （那是它的边界），所以这一层是唯一的落点。
+    /// **可见性两条路都要筛**：事件推来的行若不过 `SessionVisibility`，`blank`（在 Mac 上
+    /// 刚点新建、还没说话）与 `subagent` 会当场出现，下拉之后又消失。
     func apply(_ change: SessionListChange) {
         sessions = visible(SessionListMerger.apply(change, to: sessions))
         if inflight != nil { buffered.append(change) }
@@ -114,7 +93,7 @@ final class SessionListState {
         rows.filter(SessionVisibility.isVisible)
     }
 
-    /// 取一次。服务端给出事实（`blank` / `origin`），**显示哪些**由 `SessionVisibility` 答。
+    /// 服务端给出事实（`blank` / `origin`），**显示哪些**由 `SessionVisibility` 答。
     func reload() async {
 
         if let running = inflight {
@@ -134,8 +113,8 @@ final class SessionListState {
             // 先摆响应的顺序，再把这批账依次重放 —— 反过来会让事件带来的位置被响应冲掉。
             var merged = visible(rows)
             for change in buffered { merged = SessionListMerger.apply(change, to: merged) }
-            // 重放会把事件推来的行加回去，所以落地之后再筛一次 —— 只筛一次的话，
-            // 在途期间到达的 blank / subagent 行会从这一处漏进列表。
+            // 重放会把事件推来的行加回去，所以落地之后再筛一次 —— 只筛一次的话，在途
+            // 期间到达的 blank / subagent 会从这里漏进列表。
             sessions = visible(merged)
             outcome = .ready
         } catch {
@@ -155,9 +134,8 @@ final class SessionListState {
 extension SessionListState {
     /// 这个错误是不是「还差一步配置」而不是「这次请求坏了」。
     ///
-    /// 两个取值各有确定的原因：`notActivated` = 隧道产物还没有（组网没通）；
-    /// `unauthenticated` = 没有可用身份（没配对 / 被撤销）。其余（传输失败、状态码、
-    /// 协议拒绝）都不在此列 —— 它们是这一次请求的事，不是配置的事。
+    /// 只有两个取值在此列：隧道产物还没有、没有可用身份。其余（传输失败、状态码、协议
+    /// 拒绝）都是这一次请求的事 —— 把它们说成配置问题，用户会去改一件没坏的东西。
     static func isPrerequisite(_ error: RpcClientError) -> Bool {
         switch error {
         case .notActivated, .unauthenticated: return true

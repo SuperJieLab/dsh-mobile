@@ -16,7 +16,7 @@
  * 且含真正的回复内容、不含工具调用块。
  *
  * 上游那套「事件 → 节点」的注册表不复用也不照搬（它是给可插拔前端的扩展面），
- * 只需要这四条语义。断言在 `tests/TranscriptAssemblerTests.swift`。
+ * 只需要这四条语义。
  */
 
 import Foundation

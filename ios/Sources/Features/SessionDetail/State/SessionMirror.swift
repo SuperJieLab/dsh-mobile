@@ -19,7 +19,7 @@
  * `hasMore` 与 `model` 两个它不读的字段 —— **看得见但不进判定**，比再拆一份更便宜。
  *
  * 上游等价语义（`RemoteJournalStream` 的丢重复、拒缺口、钉 cut）是 TypeScript，照语义
- * 重写最小的一段。断言在 `tests/SessionMirrorTests.swift`。
+ * 重写最小的一段。
  */
 
 /// 一次被拒绝的响应。

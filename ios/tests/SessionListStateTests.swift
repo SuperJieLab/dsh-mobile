@@ -298,6 +298,8 @@ final class SessionListStateTests: XCTestCase {
         for (error, expected) in [(RpcClientError.notActivated, "组网尚未就绪 —— 等连接建立后再试。"),
                                   (RpcClientError.unauthenticated, "还没有配对，或配对已被 Mac 侧撤销 —— 请重新配对。")] {
             let fetch = FakeFetch()
+            // 不挂起：这几个用例只关心落成的面，不关心在途期间发生了什么。
+            fetch.holds = false
             fetch.result = .failure(error)
             let state = make(fetch)
             await state.reload()
@@ -310,6 +312,7 @@ final class SessionListStateTests: XCTestCase {
     /// 传输失败是真失败：红条，且不是「还差一步配置」。
     func testTransportFailureIsAFailure() async {
         let fetch = FakeFetch()
+        fetch.holds = false
         fetch.result = .failure(RpcClientError.transport(
             url: URL(string: "http://100.64.0.1:3081/rpc")!,
             underlying: URLError(.cannotConnectToHost)))

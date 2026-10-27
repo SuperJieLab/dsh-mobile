@@ -1,15 +1,11 @@
 import SwiftUI
 
-/// 会话列表 —— **全应用的首屏**。取数与「显示哪些」在 `SessionListState` 里；本文件只画，
-/// 以及登记四个触发点（下拉、回前台、组网就绪、工具栏按钮）—— 触发点是平台事件与用户手势，
-/// 只有视图拿得到。进屏首载在本文件（平台事件）；事件订阅的接线在根部（它造这个 state，
-/// 也就由它接）。按协议**排序是服务端的承诺**（这里一行排序代码都没有）。
+/// 会话列表 —— **全应用的首屏**。取数与「显示哪些」在 `SessionListState`；本文件只画，
+/// 加四个触发点（下拉、回前台、组网就绪、工具栏按钮）—— 触发点是平台事件与用户手势，
+/// 只有视图拿得到。排序是服务端的承诺，这里一行排序都没有。
 ///
-/// **它永远是根**：前置条件不满足时（隧道没通 / 没有身份）不换屏，只在顶部给一条提示 ——
-/// 否则正在读会话的人会被整屏弹走。用户要修配置，走齿轮。
-///
-/// 依赖全部在签名上，没有第二个通道：列表状态、连接域的只读投影、页脚那句地址。跳转只发
-/// `Destination` 值 —— 下一屏的依赖归组合根，本层不认识它们。
+/// **它永远是根**：前置条件不满足时不换屏，只在顶部给一条提示 —— 否则正在读会话的人会被
+/// 整屏弹走。修配置走齿轮。跳转只发 `Destination` 值，下一屏的依赖归组合根。
 struct SessionListView: View {
     let list: SessionListState
     /// 连接域的只读投影：`phase` 驱动「就绪即首载」，`meshPath` 给徽章。
@@ -84,8 +80,8 @@ struct SessionListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                // 只喂 `failureText`：它在 `.blocked` 时是 nil，于是「还差一步配置」不会
-                // 显示成「已断开」—— 网络本身可能好好的。
+                // 只喂 `failureText`：`.blocked` 时它是 nil，于是「还差一步配置」不会显示
+                // 成「已断开」—— 网络本身可能好好的。
                 ConnectionBadge(state: ConnectionBadge.Status(isLoading: list.isLoading,
                                                              lastFailure: list.failureText),
                                 meshPath: store.meshPath)
