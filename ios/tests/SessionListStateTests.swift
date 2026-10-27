@@ -287,7 +287,50 @@ final class SessionListStateTests: XCTestCase {
 
         XCTAssertEqual(state.sessions.map(\.id), ["a"], "失败不清空")
         XCTAssertEqual(state.sessions[0].updatedAt, 500, "失败之后事件仍然生效")
-        XCTAssertEqual(state.outcome, .waitingForMesh, "失败面如实")
+        XCTAssertEqual(state.blockedReason, "组网尚未就绪 —— 等连接建立后再试。",
+                       "前置不满足归中性提示，且文案是服务端原文")
+    }
+
+    // MARK: - L8b 三种面分得开
+
+    /// 两种前置说成两句不同的话 —— 服务端原文已经区分了，端上不再猜。
+    func testPrerequisitesAreNotFailures() async {
+        for (error, expected) in [(RpcClientError.notActivated, "组网尚未就绪 —— 等连接建立后再试。"),
+                                  (RpcClientError.unauthenticated, "还没有配对，或配对已被 Mac 侧撤销 —— 请重新配对。")] {
+            let fetch = FakeFetch()
+            fetch.result = .failure(error)
+            let state = make(fetch)
+            await state.reload()
+
+            XCTAssertEqual(state.blockedReason, expected, "\(error) 该落成中性提示")
+            XCTAssertNil(state.failureText, "\(error) 不该是红条 —— 用户没做错事")
+        }
+    }
+
+    /// 传输失败是真失败：红条，且不是「还差一步配置」。
+    func testTransportFailureIsAFailure() async {
+        let fetch = FakeFetch()
+        fetch.result = .failure(RpcClientError.transport(
+            url: URL(string: "http://100.64.0.1:3081/rpc")!,
+            underlying: URLError(.cannotConnectToHost)))
+        let state = make(fetch)
+        await state.reload()
+
+        XCTAssertNotNil(state.failureText, "传输失败要红条")
+        XCTAssertNil(state.blockedReason, "别把网络问题说成配置问题 —— 用户会去改一件没坏的东西")
+    }
+
+    /// 分类只看错误类型，不推算「现在缺什么」。
+    ///
+    /// 三个反例各是一种「看起来像前置、其实不是」的错误：状态码、协议拒绝、响应坏掉。
+    /// 它们都不该被归进中性提示 —— 那会让用户去设置里找一个不存在的开关。
+    func testOnlyTwoErrorsArePrerequisites() {
+        XCTAssertTrue(SessionListState.isPrerequisite(.notActivated))
+        XCTAssertTrue(SessionListState.isPrerequisite(.unauthenticated))
+        XCTAssertFalse(SessionListState.isPrerequisite(.badStatus(503)))
+        XCTAssertFalse(SessionListState.isPrerequisite(
+            .refused(GatewayFailure(code: "invalid-request", message: "x"))))
+        XCTAssertFalse(SessionListState.isPrerequisite(.malformedResponse(detail: "x")))
     }
 
     // MARK: - L7 换代次重拉

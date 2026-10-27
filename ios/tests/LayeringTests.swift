@@ -2161,7 +2161,7 @@ final class LayeringTests: XCTestCase {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
-            "Features/Pairing/Views/PairingView.swift",
+            "Features/Pairing/Views/PairingScreen.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
@@ -2193,7 +2193,7 @@ final class LayeringTests: XCTestCase {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
-            "Features/Pairing/Views/PairingView.swift",
+            "Features/Pairing/Views/PairingScreen.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
@@ -2241,7 +2241,7 @@ final class LayeringTests: XCTestCase {
         let views = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
-            "Features/Pairing/Views/PairingView.swift",
+            "Features/Pairing/Views/PairingScreen.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
@@ -2282,21 +2282,140 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 未配对时组网设置仍然可达 —— 「先配网、再配对」那条路的存在性。
+    /// 列表永远是根 —— 前置条件不满足时不换屏。
     ///
-    /// 为什么值得一条判据：组网配置页的两个入口里，常驻那个（设置页）只在列表里，而列表
-    /// 要求已配对；修复那个在选屏的「组网未就绪」那一支。缺了后者，新装用户就永远配不上
-    /// —— 而这件事没有编译错误、没有行为报错，只有真机上「配不上」一个症状。
+    /// 这条守的是一类具体的伤害：正在读会话时隧道抖一下，整屏被换成组网页。旧设计那样做，
+    /// 理由是「未就绪时只有一件事可做」，代价是把用户从正在做的事里弹走。
     ///
-    /// 锚落在组合根：那一支就在选屏的 `switch` 里。盲区：只证明两行都在同一份文件，证不了
-    /// 它们接在同一个分支上 —— 分支那半靠评审。
-    func testMeshSettingsIsReachableWithoutIdentity() throws {
+    /// 断法是**闭集计数**，不是禁写法。第一版数的是 `switch stage` / `case .needsMesh`
+    /// 这几个字面量 —— 变异实测能绕过：把分支写成 `if case .ready = store.phase` 就全绿，
+    /// 而伤害一模一样。禁写法守不住「换一种写法」，闭集才守得住。
+    ///
+    /// 全应用只有五处视图构造：根那一处（列表）+ 目的地注册那四处。多出第六处 ⇒ 有人在
+    /// 根上按条件挑了另一屏。
+    func testTheListIsAlwaysTheRoot() throws {
         let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(lines.contains { $0.1.contains("case .needsMesh") },
-                      "选屏没有「组网未就绪」那一支 —— 组网没配好时无处可去")
+
+        // 正控：确认读到了那个栈与列表，否则下面的计数守的是空气。
+        XCTAssertTrue(lines.contains { $0.1.contains("NavigationStack {") }, "没读到导航栈")
+        XCTAssertTrue(lines.contains { $0.1.contains("SessionListView(list: list") },
+                      "根不是列表 —— 首屏被别的面顶掉了")
+
+        // 五处，各一次：根 + 四个目的地。
+        let palette: [(name: String, expected: Int)] = [
+            ("SessionListView(", 1),      // 根
+            ("SessionDetailView(", 1),    // 目的地 .session
+            ("SettingsView(", 1),         // 目的地 .settings
+            ("MeshSettingsView(", 1),     // 目的地 .mesh
+            ("PairingScreen(", 1),        // 目的地 .pairing
+        ]
+        for (name, expected) in palette {
+            // 用左边界，不用裸 `contains`：`SettingsView(` 是 `MeshSettingsView(` 的后缀。
+            // 第一版就是裸 contains，实测把 `SettingsView` 数成 3 次（多出的两条来自
+            // `MeshSettingsView`），而那种假红会让人去改名字而不是改判据。
+            let sites = lines.filter { Self.mentionsType($0.1, name) }.map { "\($0.0)" }
+            XCTAssertEqual(sites.count, expected,
+                           "\(name) 在组合根里出现 \(sites.count) 次（应 \(expected)）：\(sites)"
+                           + " —— 多出来的那处是在根上按条件挑了另一屏")
+        }
+    }
+
+    /// 两个配置页只能从目的地清单进入 —— 没有第二个入口。
+    ///
+    /// 守的是「配置动作只在设置页」。多一个入口的症状不是崩溃，是**两处行为各走各的**：
+    /// 一处改了地址、另一处还按旧值显示。
+    ///
+    /// 断法：全仓 `MeshSettingsView(` 与 `PairingScreen(` 的构造点各恰好一处，且都在
+    /// 组合根的目的地注册里。列表与设置只发 `Destination` 值，不构造它们。
+    func testConfigScreensComeOnlyFromRoutes() throws {
+        let expectations: [(type: String, allowedFile: String)] = [
+            ("MeshSettingsView(", "DshMobileApp.swift"),
+            ("PairingScreen(", "DshMobileApp.swift"),
+        ]
+        var scanned = 0
+        for (type, allowed) in expectations {
+            var sites: [String] = []
+            for file in swiftFiles(under: sourcesRoot) {
+                let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, code) in codeLines(in: text) {
+                    scanned += 1
+                    // 只认**构造**：`MeshSettingsView(` 后面不是类型声明那一行。
+                    guard code.contains(type), !code.contains("struct \(type.dropLast())") else {
+                        continue
+                    }
+                    sites.append("\(relative):\(line)")
+                }
+            }
+            XCTAssertEqual(sites.count, 1, "\(type) 的构造点应恰好一处（根部注册），实际：\(sites)")
+            XCTAssertTrue(sites.first?.hasPrefix(allowed) == true,
+                          "\(type) 的构造点不在组合根：\(sites)")
+        }
+        XCTAssertGreaterThan(scanned, 1000, "扫到的行太少 —— 先怀疑路径推算")
+    }
+
+    /// 列表不持有它读不到的依赖。
+    ///
+    /// 「转手」是这一期消掉的主要形状：字段原样传给下一屏，本屏一次都不读。它没有编译
+    /// 错误、没有行为症状，只是把依赖面撑大，让「这一屏要什么」读不出来。
+    ///
+    /// 断法：每个字段名在**本文件**的其余位置必须至少出现一次（声明那一行不算）。
+    func testSessionListHoldsNoUnusedDependency() throws {
+        let path = "Features/SessionList/Views/SessionListView.swift"
+        let file = sourcesRoot.appendingPathComponent(path)
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+
+        // 字段声明：`let name: Type`（视图的属性）。
+        var fields: [(line: Int, name: String)] = []
+        for (line, code) in lines {
+            let trimmed = code.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("let "), let colon = trimmed.firstIndex(of: ":") else { continue }
+            let name = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 4)..<colon])
+                .trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !name.hasPrefix("@") else { continue }
+            fields.append((line, name))
+        }
+        XCTAssertGreaterThanOrEqual(fields.count, 3, "只扫到 \(fields.count) 个字段 —— 先怀疑推算")
+
+        for field in fields {
+            // 两边界都要：`\b` 会漏掉两种撞名，两种都实测命中过。
+            // - `list` 命中 `SessionListState`（后缀）→ 要右边界
+            // - `settings` 命中 `Destination.settings`（别的类型的成员）→ 要排除前置点号
+            // 后者尤其阴：字段没被读过，但同名字的枚举成员让判据看起来绿。
+            let name = NSRegularExpression.escapedPattern(for: field.name)
+            let pattern = "(?<![.\\w])" + name + "(?![\\w])"
+            let used = lines.contains { line, code in
+                line != field.line
+                    && code.range(of: pattern, options: .regularExpression) != nil
+            }
+            XCTAssertTrue(used, "\(path):\(field.line) 的 \(field.name) 从未被本屏读过 —— "
+                          + "它在转手，该删掉")
+        }
+    }
+
+    /// 组网配置在**任何前置条件下都可达** —— 「先配网、再配对」那条路的存在性。
+    ///
+    /// 为什么值得一条判据：组网页的入口只在设置里，而设置由列表的齿轮进入；列表永远在，
+    /// 所以这条路永远通。缺了它，新装用户就永远配不上 —— 而这件事没有编译错误、没有行为
+    /// 报错，只有真机上「配不上」一个症状。
+    ///
+    /// 锚落在两处 —— **清单**（`Destination.swift`）与**注册**（`DshMobileApp.swift`）。
+    /// 两者是同一份契约的两半：只查清单，删掉注册那行仍然绿；只查注册，清单丢了那支
+    /// 就没人发。
+    ///
+    /// 盲区：证不了注册真的匹配 `.mesh`（`switch` 分支那半靠评审）。
+    func testMeshSettingsIsReachableWithoutIdentity() throws {
+        let catalog = sourcesRoot.appendingPathComponent("Destination.swift")
+        let catalogLines = codeLines(in: try String(contentsOf: catalog, encoding: .utf8))
+        XCTAssertTrue(catalogLines.contains { $0.1.contains("case mesh") },
+                      "目的地清单里没有组网 —— 组网没配好时无处可去")
+
+        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
         XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsView(setup: meshSetup, store: store)") },
-                      "未就绪那一支不展示组网配置页 —— 「先配网、再配对」那条路断了")
+                      "组网那一支不展示配置页 —— 「先配网、再配对」那条路断了")
     }
 
     /// 配对屏与组网设置是两个视图：一个换身份，一个换路径。
@@ -2304,7 +2423,7 @@ final class LayeringTests: XCTestCase {
     /// 合在一起时，已配对状态打开组网设置会在标题「配对」的页面上挂着「输入 6 位配对码」——
     /// 而 `canPair` 不判是否已配对，按下去会真的再发一次配对请求。
     func testPairingAndMeshSettingsAreSeparate() throws {
-        let pairing = sourcesRoot.appendingPathComponent("Features/Pairing/Views/PairingView.swift")
+        let pairing = sourcesRoot.appendingPathComponent("Features/Pairing/Views/PairingScreen.swift")
         let mesh = sourcesRoot.appendingPathComponent("Features/MeshSettings/Views/MeshSettingsView.swift")
         let pairingLines = codeLines(in: try String(contentsOf: pairing, encoding: .utf8))
         let meshLines = codeLines(in: try String(contentsOf: mesh, encoding: .utf8))
@@ -2314,7 +2433,7 @@ final class LayeringTests: XCTestCase {
                       "扫错文件了 —— 组网设置不认识 MeshSetupState？")
         for (i, code) in pairingLines {
             for name in ["MeshSetupState", "MeshStore", "MeshConfig"] where code.contains(name) {
-                XCTFail("PairingView.swift:\(i) 出现 \(name) —— 配对屏只管换身份")
+                XCTFail("PairingScreen.swift:\(i) 出现 \(name) —— 配对屏只管换身份")
             }
         }
         for (i, code) in meshLines {
@@ -2333,8 +2452,12 @@ final class LayeringTests: XCTestCase {
     func testThePairedBranchStartsTheConnection() throws {
         let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(lines.contains { $0.1.contains(".task { onConnectionStart() }") },
-                      "已配对分支没有接上长连接 —— 配对之后事件流永远不连")
+        // 触发点是「身份成立」，而身份只有 `CredentialStore` 一处。用 `.task(id:)` 钉住
+        // 那个 id —— 写成无 id 的 `.task` 只在首帧跑一次，重新配对之后不会再来一次。
+        XCTAssertTrue(lines.contains { $0.1.contains(".task(id: identity.hasDeviceToken)") },
+                      "连接没有跟着身份走 —— 重新配对之后它不会再被拉起")
+        XCTAssertTrue(lines.contains { $0.1.contains("guard identity.hasDeviceToken else") },
+                      "没身份也去激活连接 —— 无票的连接会被传输层当终态收起")
         XCTAssertTrue(lines.contains { $0.1.contains("link.activate()") },
                       "onConnectionStart 成了空壳 —— 连接从未被激活")
         XCTAssertTrue(lines.contains { $0.1.contains("events.attach(to: link)") },

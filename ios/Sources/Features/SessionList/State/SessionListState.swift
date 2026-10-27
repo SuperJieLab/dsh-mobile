@@ -1,5 +1,5 @@
 /**
- * 会话列表的状态：取一次列表，把结果落成三种面 —— 有内容 / 失败 / 等待组网。
+ * 会话列表的状态：取一次列表，把结果落成三种面 —— 有内容 / 前置不满足 / 真失败。
  *
  * 只回答「取回来是什么」，**不回答「什么时候取」**：触发点登记在 `SessionListView` ——
  * 放进这一层，它就得认识 SwiftUI 的生命周期。例外是事件流的代次：那是「恢复」这个
@@ -7,7 +7,8 @@
  *
  * 三条纪律：
  * - 失败时**不清空**已有列表：能显示多少显示多少，错误挂在上面，文案是服务端的原文。
- * - `notActivated` 是组网就绪前的必经阶段，归入等待面而不是错误面。
+ * - **前置不满足不是错误**：隧道没通与没有身份归 `.blocked`（中性提示），其余归
+ *   `.failed`（红条）。分界线与「缺什么」都由服务端原文给 —— 前端不另算一遍。
  * - **事件是增量，拉取是基线**：整表替换会把在途期间到达的变更抹掉，所以拉取落地时
  *   要把这一批账重放一遍（见 `reload` 与 `apply`）。
  *
@@ -20,11 +21,16 @@ import Foundation
 @Observable
 final class SessionListState {
 
-    /// 屏幕上要落成的三种面。`failed` 带着要**原样**显示的文案。
+    /// 屏幕上要落成的三种面。两种带文案的，都**原样**显示服务端给的说法。
+    ///
+    /// `blocked` 与 `failed` 的区别不在严重程度，在**谁的问题**：前者是「这台机器还差一步
+    /// 配置」（用户去设置里做），后者是「这次请求坏了」（可能是暂时的，重试有意义）。
     enum Outcome: Equatable {
         case ready
+        /// 前置不满足：隧道没通或没有身份。中性提示，不是错误。
+        case blocked(String)
+        /// 真失败：网络、协议、服务端拒绝。
         case failed(String)
-        case waitingForMesh
     }
 
     private(set) var sessions: [SessionSummary] = []
@@ -57,6 +63,14 @@ final class SessionListState {
         if case .failed(let text) = outcome { return text }
         return nil
     }
+
+    /// 前置不满足时的说法；满足时是 `nil`。与 `failureText` 对称 —— 两条面各有一个读法，
+    /// 视图据此决定画中性提示还是红条。
+    var blockedReason: String? {
+        if case .blocked(let text) = outcome { return text }
+        return nil
+    }
+
 
     /// 听事件流：每报到一次（含重连拿到相同代次、以及源失效）就重拉一次。
     ///
@@ -126,11 +140,28 @@ final class SessionListState {
             outcome = .ready
         } catch {
             // 列表保留（事件带来的变化已经生效），只换失败面。
-            if let gatewayError = error as? RpcClientError, case .notActivated = gatewayError {
-                outcome = .waitingForMesh
+            //
+            // 分类只看错误的类型，**不去推算「现在缺什么」**：`FailureText` 已经把两种前置
+            // 说成了两句不同的话（组网未就绪 / 还没有配对），端上再猜一遍就会有两个说法。
+            if let gatewayError = error as? RpcClientError, Self.isPrerequisite(gatewayError) {
+                outcome = .blocked(error.localizedDescription)
             } else {
                 outcome = .failed(error.localizedDescription)
             }
+        }
+    }
+}
+
+extension SessionListState {
+    /// 这个错误是不是「还差一步配置」而不是「这次请求坏了」。
+    ///
+    /// 两个取值各有确定的原因：`notActivated` = 隧道产物还没有（组网没通）；
+    /// `unauthenticated` = 没有可用身份（没配对 / 被撤销）。其余（传输失败、状态码、
+    /// 协议拒绝）都不在此列 —— 它们是这一次请求的事，不是配置的事。
+    static func isPrerequisite(_ error: RpcClientError) -> Bool {
+        switch error {
+        case .notActivated, .unauthenticated: return true
+        default: return false
         }
     }
 }
