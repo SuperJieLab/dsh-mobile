@@ -9,16 +9,16 @@
  * 容器真要越界，长出来的必是 `Task {` 或一个 `async` 方法。
  *
  * 为什么需要它：这一屏有四个独立交互域（消息同步 / 模型目录 / 命令目录 / 输入条），
- * 而消费者要读的是「合起来的样子」（功能条那三格）。折法只在容器里一处：视图只接一个
- * 参数，不然「改一格显示什么」要在一份几百行的渲染代码里找。
+ * 而消费者要读的是「合起来的样子」（功能条那三格）。折法只在容器里一处，不然
+ * 「改一格显示什么」要在一份几百行的渲染代码里找。
  *
  * 它自己不带 `@Observable`：字段全是 `let`，它不发布任何东西。视图读
  * `detail.stripModel()` 时建立的是对**部件**的追踪（真正的可变状态在那里），
  * 所以刷新粒度与直接读部件一致。
  *
- * **引用 ≠ 拥有**：`meshSettings` 与 `approvals` 是根造的、与进程同寿。这一屏关掉不会
+ * **引用 ≠ 拥有**：`store` 与 `approvals` 是根造的、与进程同寿。这一屏关掉不会
  * 清空待答表（停在列表时它照样在收），也不会重置组网草稿；容器只是把它们放在一起，
- * 让渲染段只接一个参数。
+ * 让渲染段不必分别认识它们。
  *
  * 折值只在两种情形做：要**组合**两处（`stripModel` / `pendingApprovals` / `notice`），
  * 或同一个值被读两处以上（网络 sheet 的三连）。其余读穿到部件，不在这里抄一遍。
@@ -34,17 +34,17 @@ final class SessionDetailState {
     let commands: CommandDirectory
     let composer: ComposerState
     /// 组网事实的来源（节点五态、路径、配置读坏）—— 这一屏只读，配置入口在设置页。
-    let meshSettings: MeshSettingsState
+    let store: MeshStore
     /// App 级的待答表 —— 这一屏只读它按会话分出来的那一栏。
     let approvals: ApprovalStore
 
     init(client: RpcClient,
          session: SessionSummary,
          link: LongConnection,
-         meshSettings: MeshSettingsState,
+         store: MeshStore,
          approvals: ApprovalStore) {
         self.session = session
-        self.meshSettings = meshSettings
+        self.store = store
         self.approvals = approvals
         sync = SessionSync(client: client, sessionId: session.id, link: link)
         catalog = ModelCatalogState { try await fetchCatalog(client) }
@@ -79,9 +79,9 @@ final class SessionDetailState {
     var notice: String? { approvals.notice(for: session.id) }
 
     /// 徽章与网络 sheet 读的路径投影 —— 同一个值三处读，折在这里一处。
-    var meshPath: CarrierPath? { meshSettings.store.meshPath }
+    var meshPath: CarrierPath? { store.meshPath }
     /// 节点五态。
-    var nodeState: TailnetNodeState { meshSettings.store.nodeState }
+    var nodeState: TailnetNodeState { store.nodeState }
     /// 存过的组网配置读不出来。
-    var configDamaged: Bool { meshSettings.store.storedConfigDamaged }
+    var configDamaged: Bool { store.storedConfigDamaged }
 }

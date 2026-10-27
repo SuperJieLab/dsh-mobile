@@ -6,23 +6,24 @@ import SwiftUI
 /// 组网换**路径**（已配对之后照样要改地址、看节点起没起来）。挤在一个视图里时，
 /// 已配对状态打开这一页，标题是「配对」、上面还挂着「输入 6 位配对码」。
 ///
-/// 依赖只有 `state`：录入在 `setup`，节点事实在 `store` 的只读投影里。
+/// 这一页**没有容器**：依赖只有两样，各有明确归属（录入在 `setup`，节点事实在 `store`），
+/// 没有任何一条值是把两者组合出来的、或绑定了屏内输入的 ⇒ 收成一层只会得到转发。
 struct MeshSettingsView: View {
-    let state: MeshSettingsState
+    @Bindable var setup: MeshSetupState
+    /// 节点五态与「配置读坏了」的来源。只读 —— 动手的入口在 `setup`。
+    let store: MeshStore
 
-    @ViewBuilder
     var body: some View {
-        @Bindable var setup = state.setup
         Form {
             Section("组网") {
                 // 存过但读不出来：与「从没配过」分开说，否则用户会去查证书而不是重填。
-                if state.store.storedConfigDamaged {
+                if store.storedConfigDamaged {
                     Text("保存的组网配置读取失败，请重新填写下面两项再保存。")
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
 
-                switch state.store.nodeState {
+                switch store.nodeState {
                 case .noKey:
                     Text("输入组网服务地址与接入密钥（Mac 上 `headscale preauthkeys create` 生成）。")
                         .font(.footnote)
@@ -64,7 +65,7 @@ struct MeshSettingsView: View {
                     }
                     .disabled(!setup.canSubmit)
 
-                    if case .failed = state.store.nodeState {
+                    if case .failed = store.nodeState {
                         Button("重试") {
                             Task { await setup.retryMesh() }
                         }

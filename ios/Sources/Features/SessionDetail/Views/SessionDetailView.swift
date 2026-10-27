@@ -52,7 +52,7 @@ struct SessionDetailView: View {
     }
 }
 
-/// 详情屏的渲染段：一个参数（容器），零服务。
+/// 详情屏的渲染段：依赖全在容器里，零服务。
 private struct SessionDetailBody: View {
     let detail: SessionDetailState
 

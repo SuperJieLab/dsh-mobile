@@ -5,10 +5,17 @@ import SwiftUI
 /// 进屏首载在本文件（平台事件）；事件订阅的接线在根部（它造这个 state，也就由它接）。
 /// 按协议**排序是服务端的承诺**（这里一行排序代码都没有）。
 ///
-/// 依赖只有 `screen`：列表、连接域的只读投影、页脚那句地址都在它里面。`makeDetail` 是
-/// 「造下一屏的能力」，不是依赖对象 —— 它要 `sessionId`，只有点开那一行才知道。
+/// 依赖全部在签名上，没有第二个通道：列表状态、连接域的只读投影、设置页的依赖面、页脚那句
+/// 地址。`makeDetail` 与 `address` 是**能力**不是依赖对象 —— 前者的入参只有点开那一行才知道，
+/// 后者只需一句字，本层因此不认识通信域。
 struct SessionListView: View {
-    let screen: SessionListScreenState
+    let list: SessionListState
+    /// 连接域的只读投影：`phase` 驱动「就绪即首载」，`meshPath` 给徽章。
+    let store: MeshStore
+    /// 设置页的依赖面 —— 工具栏齿轮推它。
+    let settings: SettingsState
+    /// 页脚那句地址。给的是**读串的能力**，不是端点对象。
+    let address: () -> String
     /// 造下一屏的容器 —— 本屏只转交这个能力。
     let makeDetail: (SessionSummary) -> SessionDetailState
 
@@ -21,11 +28,11 @@ struct SessionListView: View {
 
     private var pairedList: some View {
         List {
-            if let failure = screen.list.failureText {
+            if let failure = list.failureText {
                 Section {
                     FailureBanner(text: failure)
                 }
-            } else if screen.list.outcome == .waitingForMesh {
+            } else if list.outcome == .waitingForMesh {
                 Section {
                     // 组网就绪前的必然等待：不是错误，中性显示。
                     Label("等待组网就绪…", systemImage: "antenna.radiowaves.left.and.right")
@@ -34,7 +41,7 @@ struct SessionListView: View {
                 }
             }
 
-            ForEach(screen.list.sessions) { session in
+            ForEach(list.sessions) { session in
                 NavigationLink(value: session) {
                     SessionRow(session: session)
                 }
@@ -43,7 +50,7 @@ struct SessionListView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("\(screen.list.sessions.count) 个会话 · \(screen.addressLine)")
+                Text("\(list.sessions.count) 个会话 · \(address())")
             }
         }
         .navigationTitle("会话")
@@ -51,9 +58,9 @@ struct SessionListView: View {
             SessionDetailView(session: session, make: makeDetail)
         }
         .overlay {
-            if screen.list.isLoading && screen.list.sessions.isEmpty {
+            if list.isLoading && list.sessions.isEmpty {
                 ProgressView("正在读 Mac 上的会话…")
-            } else if screen.list.sessions.isEmpty && screen.list.failureText == nil {
+            } else if list.sessions.isEmpty && list.failureText == nil {
                 ContentUnavailableView(
                     "还没有会话",
                     systemImage: "tray",
@@ -61,43 +68,43 @@ struct SessionListView: View {
                 )
             }
         }
-        .refreshable { await screen.list.reload() }
+        .refreshable { await list.reload() }
         // 进屏首载。事件订阅不在这里：它是 App 级的一次接线，挂在组合根上（那边造
         // 这个 state，也就由它接）。本屏只负责「什么时候取」——那是手势与平台事件。
-        .task { await screen.list.reload() }
+        .task { await list.reload() }
         // 组网就绪即首载：启动窗口内的请求会 fail-fast（端点还不存在），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。
         // 这里的 `guard case .ready` 只是省一次必然失败的请求；「未就绪」该怎么显示由
         // `SessionListState` 的等待面决定（与详情屏同一形状，见 SessionDetailView）。
-        .onChange(of: screen.phase) { _, phase in
+        .onChange(of: store.phase) { _, phase in
             guard case .ready = phase else { return }
-            Task { await screen.list.reload() }
+            Task { await list.reload() }
         }
         // 回前台立即刷新 —— 上游「恢复立即试」在列表域的对应。失败时旧列表照常保留。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { await screen.list.reload() }
+            Task { await list.reload() }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                ConnectionBadge(state: ConnectionBadge.Status(isLoading: screen.list.isLoading,
-                                                             lastFailure: screen.list.failureText),
-                                meshPath: screen.meshPath)
+                ConnectionBadge(state: ConnectionBadge.Status(isLoading: list.isLoading,
+                                                             lastFailure: list.failureText),
+                                meshPath: store.meshPath)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 // 设置是唯一常驻入口：组网与身份两行都在里面。未就绪时界面本身就是组网
                 // 配置页，不必从这里进。
                 NavigationLink {
-                    SettingsView(state: screen.settings)
+                    SettingsView(state: settings)
                 } label: {
                     Image(systemName: "gearshape")
                 }
                 Button {
-                    Task { await screen.list.reload() }
+                    Task { await list.reload() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .disabled(screen.list.isLoading)
+                .disabled(list.isLoading)
             }
         }
     }

@@ -14,7 +14,7 @@ struct SettingsView: View {
         Form {
             Section("接入") {
                 NavigationLink {
-                    MeshSettingsView(state: state.meshSettings)
+                    MeshSettingsView(setup: state.setup, store: state.store)
                 } label: {
                     LabeledContent("组网", value: state.meshSummary)
                 }

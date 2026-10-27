@@ -2097,9 +2097,8 @@ final class LayeringTests: XCTestCase {
     /// 构造点住组合根（单例）与 `makeDetail`（每会话一份）——
     /// 判据只数次数，不钉文件 —— 钉文件会在构造点移动时假红一次，而「几处」才是它要守的东西。
     func testEachScreenStateIsBuiltOnce() throws {
-        let names = ["SessionListState(", "SessionListScreenState(", "SessionDetailState(",
-                     "PairingState(", "MeshSettingsState(", "MeshSetupState(",
-                     "SettingsState("]
+        let names = ["SessionListState(", "SessionDetailState(",
+                     "PairingState(", "MeshSetupState(", "SettingsState("]
         var found: [String: [String]] = [:]
         var scanned = 0
         for file in swiftFiles(under: sourcesRoot) {
@@ -2125,8 +2124,8 @@ final class LayeringTests: XCTestCase {
     /// 视图确实在读连接域的四个投影（`phase` / `meshPath` / `nodeState` / `storedConfigDamaged`），
     /// 那是设计，不是泄漏 —— 界线是「认识的是事实还是实现」。
     ///
-    /// 所以这里只禁实现：拿到它们就等于知道「怎么发、怎么连、存哪儿」。依赖**几件事**由
-    /// `testRenderViewsTakeOneEntry` 守，两条各管一半。
+    /// 所以这里只禁实现：拿到它们就等于知道「怎么发、怎么连、存哪儿」。依赖**几条通道**由
+    /// `testRenderViewsTakeOneChannel` 守，两条各管一半。
     ///
     /// 盲区：类型名换了就认不出（漏报方向）；行内注释里出现算命中（误报方向，接受）。
     func testRenderViewsHoldNoServices() throws {
@@ -2152,17 +2151,16 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(scanned, 100, "扫到的行太少 —— 先怀疑路径推算")
     }
 
-    /// 渲染视图的依赖只有一个入口：一个容器，加一个「造下一屏的能力」闭包。
+    /// 渲染视图的依赖只有一条通道：构造参数。
     ///
-    /// 为什么不用黑名单：那个形状守的是「别用这几个名字」，换个名字就绕过去；而真正要守的
-    /// 是**依赖几件事**。两条合起来：
-    /// - 零 `@Environment(T.self)` —— 依赖只有一条通道（构造参数）。`@Environment(\.scenePhase)`
-    ///   这类平台值是系统给的，不在其列。
-    /// - 声明里以 `State` 结尾的存储属性恰好一个 —— 这一屏的容器。多个就是「容器 + 散装」，
-    ///   读者从签名看不出依赖面有多大。
+    /// 为什么只守通道、不数参数个数：个数是「显式」的代理指标。管个数就会为了凑数造转发层
+    /// —— 一屏的依赖都是两三个显式参数时，硬包一个容器只为了让签名看起来是一个。
+    /// 真正要守的是「没有第二条通道」：
+    /// - 零 `@Environment(T.self)` —— `@Environment(\.scenePhase)` 这类平台值是系统给的，不在其列。
     ///
-    /// 盲区：容器内部持有多少东西这条看不见 —— 那是各容器自己的判据（只持有与折值）。
-    func testRenderViewsTakeOneEntry() throws {
+    /// 盲区：参数之间有没有重复、有没有一个参数其实用不上，这条看不见 —— 那要靠评审；
+    /// 「容器自己是不是转发层」由 `testContainersEarnTheirKeep` 守，两条各管一半。
+    func testRenderViewsTakeOneChannel() throws {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
@@ -2174,34 +2172,85 @@ final class LayeringTests: XCTestCase {
         for path in files {
             let url = sourcesRoot.appendingPathComponent(path)
             let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
-            // 依赖的第二通道：只许平台值（`@Environment(\.scenePhase)`）。
             for (i, code) in lines where code.contains("@Environment(") {
                 guard code.contains("@Environment(\\.") else {
-                    XCTFail("\(path):\(i) 从环境取对象 —— 依赖走构造参数，一个容器")
+                    XCTFail("\(path):\(i) 从环境取对象 —— 依赖走构造参数，没有第二条通道")
                     continue
                 }
             }
-            // 依赖面的大小：以 `State` 结尾的存储属性恰好一个。
-            let stateFields = lines.compactMap { i, code -> String? in
-                guard let name = Self.declaredStateType(in: code) else { return nil }
-                return "\(i):\(name)"
-            }
-            XCTAssertEqual(stateFields.count, 1,
-                           "\(path) 的容器字段应为 1 个，实际 \(stateFields)")
             checked += 1
         }
         XCTAssertEqual(checked, files.count, "有个文件没扫到 —— 先怀疑路径推算")
     }
 
-    /// 一行声明里那个以 `State` 结尾的存储属性类型名。闭包返回类型（`-> XxxState`）不算：
-    /// 它是能力，不是依赖。
-    private static func declaredStateType(in code: String) -> String? {
-        let pattern = "^\\s*(?:@\\w+\\s+)*(?:let|var)\\s+\\w+\\s*:\\s*([A-Z]\\w*State)\\b"
-        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(code.startIndex..<code.endIndex, in: code)
-        guard let m = re.firstMatch(in: code, options: [], range: range),
-              let r = Range(m.range(at: 1), in: code) else { return nil }
-        return String(code[r])
+    /// 容器要有决定权：至少一条对外成员做了**绑定**或**组合**。
+    ///
+    /// 转发不只有「字段转发」一种形状。`var phase { store.phase }` 与 `let phase = store.phase`
+    /// 是同一件事，只是换了语法 —— 判据看成员做了什么，不看它写成了哪种形式。两种算做了事：
+    /// - **绑定**：把屏内固定的输入填进去（`approvals.pending(in: session.id)` —— 视图不必
+    ///   知道这一屏是哪个会话）；
+    /// - **组合**：多个输入合成新值（`meshSummary` = 阶段 + 路径 + 文案）。
+    ///
+    /// 零条的容器没有任何决定权，它是转发层 —— 删掉它，依赖直接进签名。
+    ///
+    /// **闭集来自消费侧**：候选是「渲染视图签名里出现过的 `*State` 类型」。这样新增一个容器
+    /// 必然先进某个视图的签名，才可能被当成依赖面 —— 点名单会让新长出来的转发层静默逃掉。
+    ///
+    /// 盲区（漏报方向）：只要求「至少一条」。一个容器四条成员里三条是读穿也能通过 ——「超过
+    /// 一半是搬运就该并回」（`RULES` 结构 7）这半条没有判据，靠评审。要收紧的话，判据得数
+    /// 成员总数并区分三类，而「读穿」在实现上难与「单值投影」分开（`sync.eventCount == 0`
+    /// 做了变换但只读一处）。
+    func testContainersEarnTheirKeep() throws {
+        // 纯成员访问链：`{ store.phase }` / `{ a.b.c }` —— 什么都没多做。
+        let passthrough = try NSRegularExpression(
+            pattern: "^[[:space:]]*(?:var|let)[[:space:]]+[[:alnum:]_]+[[:space:]]*:"
+                + "[^{]+\\{[[:space:]]*[[:alpha:]_][[:alnum:]_]*(?:\\.[[:alpha:]_][[:alnum:]_]*)*"
+                + "[[:space:]]*\\}[[:space:]]*$")
+        let typeName = try NSRegularExpression(pattern: "[A-Z][[:alnum:]_]*State\\b")
+
+        // 消费侧：渲染视图签名里出现过的 State 类型名。
+        let views = [
+            "Features/SessionList/Views/SessionListView.swift",
+            "Features/SessionDetail/Views/SessionDetailView.swift",
+            "Features/Pairing/Views/PairingView.swift",
+            "Features/MeshSettings/Views/MeshSettingsView.swift",
+            "Features/Settings/Views/SettingsView.swift",
+        ]
+        var asked = Set<String>()
+        for path in views {
+            let url = sourcesRoot.appendingPathComponent(path)
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            for m in typeName.matches(in: text, options: [], range: range) {
+                guard let r = Range(m.range, in: text) else { continue }
+                asked.insert(String(text[r]))
+            }
+        }
+        XCTAssertGreaterThan(asked.count, 3, "视图签名里一个 State 都没扫到 —— 先怀疑路径推算")
+
+        for name in asked.sorted() {
+            // 定义它的那个文件 —— 只有带 `class` 的类型才是状态对象，值类型跳过。
+            guard let file = swiftFiles(under: sourcesRoot).first(where: { url in
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+                return text.contains("class \(name)")
+            }) else { continue }
+            let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+            // 方法本身算「绑定」：它把一次调用落到具体的动作上，不是纯读。
+            let hasMethod = lines.contains {
+                $0.1.trimmingCharacters(in: .whitespaces).hasPrefix("func ")
+            }
+            let hasDecidingMember = hasMethod || lines.contains { _, code in
+                let range = NSRange(code.startIndex..<code.endIndex, in: code)
+                guard code.contains("var "), code.contains("{"),
+                      passthrough.firstMatch(in: code, options: [], range: range) == nil else {
+                    return false
+                }
+                return true
+            }
+            XCTAssertTrue(hasDecidingMember,
+                          "\(name)（\(file.lastPathComponent)）的成员全是转发 —— "
+                          + "容器没有决定权，依赖该直接进签名")
+        }
     }
 
     /// 未配对时组网设置仍然可达 —— 「先配网、再配对」那条路的存在性。
@@ -2217,7 +2266,7 @@ final class LayeringTests: XCTestCase {
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
         XCTAssertTrue(lines.contains { $0.1.contains("case .needsMesh") },
                       "选屏没有「组网未就绪」那一支 —— 组网没配好时无处可去")
-        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsView(state: screen.meshSettings)") },
+        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsView(setup: meshSetup, store: store)") },
                       "未就绪那一支不展示组网配置页 —— 「先配网、再配对」那条路断了")
     }
 
@@ -2232,8 +2281,8 @@ final class LayeringTests: XCTestCase {
         let meshLines = codeLines(in: try String(contentsOf: mesh, encoding: .utf8))
         XCTAssertTrue(pairingLines.contains { $0.1.contains("let state: PairingState") },
                       "扫错文件了 —— 配对屏不认识 PairingState？")
-        XCTAssertTrue(meshLines.contains { $0.1.contains("let state: MeshSettingsState") },
-                      "扫错文件了 —— 组网设置不认识 MeshSettingsState？")
+        XCTAssertTrue(meshLines.contains { $0.1.contains("@Bindable var setup: MeshSetupState") },
+                      "扫错文件了 —— 组网设置不认识 MeshSetupState？")
         for (i, code) in pairingLines {
             for name in ["MeshSetupState", "MeshStore", "MeshConfig"] where code.contains(name) {
                 XCTFail("PairingView.swift:\(i) 出现 \(name) —— 配对屏只管换身份")
@@ -2263,11 +2312,12 @@ final class LayeringTests: XCTestCase {
                       "连接活了但事件流没登记 —— 列表与审批都收不到")
     }
 
-    /// 这一行是不是**声明了**那个类型 —— 要有左边界。
+    /// 这一行是不是**提到了**那个类型 —— 要有左边界。
     ///
-    /// 为什么不能直接 `contains`：`SettingsState(` 是 `MeshSettingsState(` 的后缀，
-    /// 用 `contains` 数出来的「两处构造」里有一处是另一个类型。子串误匹配会让判据报出一个
-    /// 假的重复，然后为了消除它去改名字 —— 那是治错了地方。
+    /// 为什么不能直接 `contains`：`SettingsState(` 是 `MeshSettingsState(` 的后缀（后者后来
+    /// 因零决定权被删，但这种从属命名还会再出现：`XxxScreenState` / `XxxSectionState`）。
+    /// 用 `contains` 数出来的「两处构造」里会混进另一个类型，判据报出一个假的重复，然后有人
+    /// 为了消除它去改名字 —— 那是治错了地方。
     private static func mentionsType(_ code: String, _ name: String) -> Bool {
         let pattern = "(?<![A-Za-z0-9_])" + NSRegularExpression.escapedPattern(for: name)
         guard let re = try? NSRegularExpression(pattern: pattern) else { return false }
@@ -2377,7 +2427,7 @@ final class LayeringTests: XCTestCase {
 
         let list = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
         let listLines = codeLines(in: try String(contentsOf: list, encoding: .utf8))
-        XCTAssertTrue(listLines.contains { $0.1.contains("await screen.list.reload()") },
+        XCTAssertTrue(listLines.contains { $0.1.contains("await list.reload()") },
                       "扫错文件了：连首载都不在这份文件里")
     }
 
