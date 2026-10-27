@@ -105,8 +105,7 @@ final class MeshStore {
         }
         node.onNodeChanged = { [weak self] in self?.nodeChanged() }
         await node.launchNode(config: config)
-        reproject()
-        meshPath = node.carrierPath
+        nodeChanged()
     }
 
     /// 回前台探活：探活判定在节点层，失败如实落 failed、不自动重试（重试入口在设置页）。

@@ -112,6 +112,12 @@ struct SessionMirror {
     inFlight = false
   }
 
+  /// 新窗口自己的边界要与内容自洽 —— 同一条校验，`open` 与 `realign` 都过。
+  private static func isSelfConsistent(_ window: SessionPage) -> Bool {
+    guard let first = window.events.first else { return true }
+    return first.seq == window.pageStart
+  }
+
   /// 打开会话：用最新的一个窗口**替换**整个视图。「什么都没拿过」与「有内容但要刷新到最新」
   /// 都以服务端此刻给的窗口为准，所以共用一条路径。
   /// - Parameter window: `page` 的响应，不带 `beforeSeq` 的那一种。
@@ -119,10 +125,8 @@ struct SessionMirror {
   mutating func open(with window: SessionPage) -> Verdict {
     inFlight = false
 
-    if let first = window.events.first, first.seq != window.pageStart {
-      // 窗口的边界与它自己的内容对不上 —— 服务端给的这段不能用。
-      return .resetRequired(.gap)
-    }
+    // 窗口的边界与它自己的内容对不上时，服务端给的这段不能用。
+    guard Self.isSelfConsistent(window) else { return .resetRequired(.gap) }
 
     cursor = window.asOfSeq
     pageStart = window.pageStart
@@ -152,10 +156,7 @@ struct SessionMirror {
   mutating func realign(with window: SessionPage) -> Verdict {
     inFlight = false
 
-    // 新窗口自己的边界要与内容自洽 —— 与 `open` 同一条校验，合并前先过。
-    if let first = window.events.first, first.seq != window.pageStart {
-      return .resetRequired(.gap)
-    }
+    guard Self.isSelfConsistent(window) else { return .resetRequired(.gap) }
 
     // 手里什么都没有：这与「打开会话」是同一件事。
     guard !events.isEmpty else { return open(with: window) }

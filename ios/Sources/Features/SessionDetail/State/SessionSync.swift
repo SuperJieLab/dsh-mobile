@@ -164,7 +164,6 @@ final class SessionSync {
     ///
     /// - Returns: 是否**已受理**。调用方据此决定清不清草稿 —— 没送到时那行字还在输入框里，
     ///   用户可以直接重按一次。
-    @discardableResult
     private func sendPrompt(_ text: String) async -> Bool {
         // 与发送按钮的置灰读同一份判定 —— 「判空」与「取值」同源。
         guard let trimmed = PromptDraft.normalized(text) else { return false }
@@ -185,7 +184,6 @@ final class SessionSync {
     /// 把一行字送出去 —— 走哪条路由 `ComposerState` 判好交进来，这里只管送。
     ///
     /// - Returns: 是否**已受理**。调用方（`ComposerState`）据此决定清不清草稿。
-    @discardableResult
     func deliver(_ dispatch: SlashDispatch) async -> Bool {
         switch dispatch {
         case .command(let line): return await executeCommand(line)
@@ -202,7 +200,6 @@ final class SessionSync {
     ///
     /// - Returns: 是否**已受理**。`unknown-command`（名字打错 / 语法不对）是本期唯一
     ///   用户能自己改好的失败，所以那条路上草稿必须留着 —— 见调用方。
-    @discardableResult
     private func executeCommand(_ line: String) async -> Bool {
         do {
             try await runCommand(client, sessionId: sessionId, line: line)

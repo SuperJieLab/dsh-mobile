@@ -130,7 +130,7 @@ final class SessionListState {
         do {
             let rows = try await task.value
             // 先摆响应的顺序，再把这批账依次重放 —— 反过来会让事件带来的位置被响应冲掉。
-            var merged = rows.filter(SessionVisibility.isVisible)
+            var merged = visible(rows)
             for change in buffered { merged = SessionListMerger.apply(change, to: merged) }
             // 重放会把事件推来的行加回去，所以落地之后再筛一次 —— 只筛一次的话，
             // 在途期间到达的 blank / subagent 行会从这一处漏进列表。

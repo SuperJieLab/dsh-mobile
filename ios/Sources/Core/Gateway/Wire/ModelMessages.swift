@@ -56,5 +56,3 @@ struct ModelCatalogFailure: Decodable, Equatable {
     let name: String
     let message: String
 }
-
-/// `model-catalog` 请求：只带信封。

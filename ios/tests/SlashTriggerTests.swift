@@ -112,7 +112,7 @@ final class SlashTriggerTests: XCTestCase {
         XCTAssertEqual(CommandDirectory.match(commands(), query: "PER").map(\.name),
                        ["permission"], "大小写不敏感")
 
-        // "or" 出现在 export 里（包含），也出现在…… 构造一条前缀命中优先的例子：
+        // 构造一条「前缀命中优先于包含命中」的例子。
         let ordered = [CommandInfo(name: "restore", description: ""), CommandInfo(name: "store", description: "")]
         XCTAssertEqual(CommandDirectory.match(ordered, query: "st").map(\.name),
                        ["store", "restore"], "前缀命中排在包含命中之前")

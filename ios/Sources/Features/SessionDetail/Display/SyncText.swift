@@ -7,8 +7,9 @@
  * 三种句子同住一个文件，是因为它们同一个变化原因（本屏的措辞）且互相引用 —— 告知的两句
  * 都要重置理由的三种说法。
  *
- * ⚠️ 有几组「步 + 原因」目前到不了：`sending` / `selecting` / `streaming` 上的 `transport`
- * 与 `refusal`，以及 `opening` / `paging` / `syncing` 上的 `thrown` —— 那几条路径捕获到的
+ * ⚠️ 有几组「步 + 原因」目前到不了：`sending` / `selecting` / `streaming` / `executing`
+ * 上的 `transport` 与 `refusal`，以及 `opening` / `paging` / `syncing` 上的 `thrown`
+ * —— 那几条路径捕获到的
  * 错误一律包成 `.thrown`，协议拒绝走 `.refusal`，镜像只说「没成」走 `.transport`。它们仍要
  * 写全（switch 得穷尽），但不构成用户可见的说法；哪条路径改了，这几支就是现成的。
  */

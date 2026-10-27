@@ -68,6 +68,5 @@ struct ApprovalCard: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.orange.opacity(0.4), lineWidth: 1)
         )
-        .listRowSeparator(.hidden)
     }
 }

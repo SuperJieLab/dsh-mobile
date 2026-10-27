@@ -87,12 +87,13 @@ extension ModelCatalogState {
             })
         }
         let effective = effectiveEffortID(for: current, in: catalog)
+        let failures = catalog.failures ?? []
         return ModelMenu(
             groups: groups,
             levels: levels(for: current, in: catalog),
             selectedLevelID: effective,
-            failures: catalog.failures ?? [],
-            isEmpty: groups.allSatisfy { $0.choices.isEmpty } && (catalog.failures ?? []).isEmpty
+            failures: failures,
+            isEmpty: groups.allSatisfy { $0.choices.isEmpty } && failures.isEmpty
         )
     }
 

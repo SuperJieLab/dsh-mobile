@@ -33,6 +33,9 @@ struct DshMobileApp: App {
     /// 配对屏的 state。单实例、无运行期参数 ⇒ 同样归根部。
     /// 三条展示路径共用它（未配对时的整屏、列表的组网设置、详情的组网设置）。
     @State private var pairing: PairingState
+    /// 组网录入那一段的 state —— 同一屏的第二个部件（换路径，与换身份分开）。
+    /// 它也在这里造，于是「读一次盘」发生在启动时，而不是每次视图重建。
+    @State private var meshSetup: MeshSetupState
     /// 造会话详情容器的能力。它要 `sessionId`（点开那一行才知道），根造不了那一个，
     /// 但知道 `client` / `link` —— 于是把「造」交出去，把「用什么造」留在这里。
     private let makeDetail: (SessionSummary) -> SessionDetailState
@@ -57,6 +60,12 @@ struct DshMobileApp: App {
         let events = EventStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
         let pairing = PairingState(client: client)
+        // 组网段的两个动作都以闭包交给它：它不认识 `MeshStore`，只认识「提交一份」与
+        // 「按存下来的那份重试」。
+        let meshSetup = MeshSetupState(
+            submit: { [weak store] key, config in await store?.submitMeshKey(key, config: config) },
+            retry: { [weak store] config in await store?.retryMesh(config: config) }
+        )
         // 地址读的是通信域的只读投影：本层认识 `Endpoint`，列表那一层只收到一个返回串的能力。
         let listState = SessionListState(
             client: client,
@@ -74,6 +83,7 @@ struct DshMobileApp: App {
         _link = State(initialValue: link)
         _approvals = State(initialValue: approvals)
         _pairing = State(initialValue: pairing)
+        _meshSetup = State(initialValue: meshSetup)
         _listState = State(initialValue: listState)
     }
 
@@ -132,6 +142,7 @@ struct DshMobileApp: App {
             .environment(store)
             .environment(approvals)
             .environment(pairing)
+            .environment(meshSetup)
         }
     }
 }

@@ -48,15 +48,13 @@ enum SessionListMerger {
     /// 「标题真的被清空」要等下一次拉取才反映出来 —— 那比每次重发都闪一下好。
     private static func merge(_ incoming: SessionSummary, into rows: [SessionSummary]) -> SessionSummary {
         guard let existing = rows.first(where: { $0.id == incoming.id }) else { return incoming }
-        return SessionSummary(
-            id: incoming.id,
-            title: incoming.title ?? existing.title,
-            createdAt: incoming.createdAt ?? existing.createdAt,
-            updatedAt: incoming.updatedAt,
-            running: incoming.running,
-            blank: incoming.blank,
-            origin: incoming.origin ?? existing.origin
-        )
+        return copy(of: existing,
+                    title: incoming.title,
+                    createdAt: incoming.createdAt,
+                    origin: incoming.origin,
+                    updatedAt: incoming.updatedAt,
+                    running: incoming.running,
+                    blank: incoming.blank)
     }
 
     /// 插到第一个 `updatedAt <= 新值` 的位置；都比它新就排最后。
@@ -69,16 +67,35 @@ enum SessionListMerger {
     }
 
     private static func withRunning(_ row: SessionSummary, _ running: Bool) -> SessionSummary {
-        SessionSummary(
-            id: row.id, title: row.title, createdAt: row.createdAt,
-            updatedAt: row.updatedAt, running: running, blank: row.blank, origin: row.origin
-        )
+        copy(of: row, running: running)
     }
 
     private static func withUpdatedAt(_ row: SessionSummary, _ updatedAt: Double) -> SessionSummary {
-        SessionSummary(
-            id: row.id, title: row.title, createdAt: row.createdAt,
-            updatedAt: updatedAt, running: row.running, blank: row.blank, origin: row.origin
-        )
+        copy(of: row, updatedAt: updatedAt)
+    }
+
+    /// 从一行拷一行，只改传进来的那几格；没传的保持原值。
+    ///
+    /// 这是本文件**唯一**一处构造 `SessionSummary` —— 反复抄七个字段时，「没提到的字段该保留」
+    /// 与「该换成新值」在字面上长得一样，抄错任何一格都不会编译失败。只说要改什么，
+    /// 没提到的就不可能被抄错。
+    ///
+    /// `nil` 在这里表示「不改」。它与 `merge` 的意图逐字一致
+    /// （`incoming.title ?? existing.title`），
+    /// 但**不能**用来把一格清成 nil —— 今天没有那条路径（标题真的被清空要等下一次拉取才反映）。
+    private static func copy(of row: SessionSummary,
+                             title: String? = nil,
+                             createdAt: Double? = nil,
+                             origin: String? = nil,
+                             updatedAt: Double? = nil,
+                             running: Bool? = nil,
+                             blank: Bool? = nil) -> SessionSummary {
+        SessionSummary(id: row.id,
+                       title: title ?? row.title,
+                       createdAt: createdAt ?? row.createdAt,
+                       updatedAt: updatedAt ?? row.updatedAt,
+                       running: running ?? row.running,
+                       blank: blank ?? row.blank,
+                       origin: origin ?? row.origin)
     }
 }

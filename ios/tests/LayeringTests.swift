@@ -47,7 +47,7 @@ final class LayeringTests: XCTestCase {
     /// 线上形状不许认识的实现层：一元调用、长连接（WS + 流）、事件流收端。
     /// 纯判定不在此列 —— 它住消费方。
     ///
-    /// ⚠️ 这三个目录名是**字面量**：改名时这里不会编译失败，
+    /// ⚠️ 这四个目录名是**字面量**：改名时这里不会编译失败，
     /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。改名后必须回扫这一处。
     private var gatewayImplementationDirectories: [URL] {
         ["LongConnection", "Identity", "Rpc", "Events"]
@@ -89,24 +89,42 @@ final class LayeringTests: XCTestCase {
         swiftFiles(under: featuresRoot)
     }
 
-    // MARK: - 断言 1：每个界面都有 State/ 与 Views/
+    // MARK: - 断言 1：每个页面域都有 State/；Views/ 若存在必须非空
 
-    func testEveryInterfaceHasStateAndViews() throws {
+    /// 目录有 `Views/` ⟺ 它是一个**界面**；没有则它是**域**（只有事实与文案）。
+    ///
+    /// 渲染件跟着「唯一消费它的屏」走，不跟着值域走 —— 同一条规则在仓库里已有两个先例
+    /// （`SessionRow` 渲染线上形状、`MessageBubble` 渲染显示模型，都住在各自那一屏）。
+    /// 审批就是这个形状：表与文案住 `Features/Approval/`（App 级、跨屏存活），
+    /// 卡片住会话详情（它只有那一个展示位置）。
+    ///
+    /// 两半都查，缺一样就假绿：
+    /// - `State/` 必须存在且非空 —— 判定与编排永远有家；
+    /// - `Views/` 若存在必须非空 —— 空目录不是界面（文件还在旧位置上，形状是假的）。
+    func testEveryFeatureHasStateAndViewsAreNeverEmpty() throws {
         let interfaces = try interfaceDirectories()
-        XCTAssertFalse(interfaces.isEmpty, "一个界面目录都没扫到：\(featuresRoot.path)")
+        XCTAssertFalse(interfaces.isEmpty, "一个目录都没扫到：\(featuresRoot.path)")
+        var withViews = 0
         for interface in interfaces {
             let name = interface.lastPathComponent
-            for sub in ["State", "Views"] {
-                let dir = interface.appendingPathComponent(sub)
-                var isDirectory: ObjCBool = false
-                let exists = FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDirectory)
-                XCTAssertTrue(exists && isDirectory.boolValue,
-                              "\(name) 缺少 \(sub)/ —— 同类界面必须同构")
-            }
-            // 空目录不算分层：文件还在旧位置上，形状是假的。
-            let stateFiles = swiftFiles(under: interface.appendingPathComponent("State"))
-            XCTAssertFalse(stateFiles.isEmpty, "\(name)/State/ 是空的 —— 判定与编排不在这里")
+            var isDirectory: ObjCBool = false
+
+            let stateDir = interface.appendingPathComponent("State")
+            let stateExists = FileManager.default.fileExists(atPath: stateDir.path,
+                                                             isDirectory: &isDirectory)
+            XCTAssertTrue(stateExists && isDirectory.boolValue, "\(name) 缺少 State/")
+            XCTAssertFalse(swiftFiles(under: stateDir).isEmpty,
+                           "\(name)/State/ 是空的 —— 判定与编排不在这里")
+
+            let viewsDir = interface.appendingPathComponent("Views")
+            let viewsExist = FileManager.default.fileExists(atPath: viewsDir.path,
+                                                            isDirectory: &isDirectory)
+            guard viewsExist && isDirectory.boolValue else { continue }
+            withViews += 1
+            XCTAssertFalse(swiftFiles(under: viewsDir).isEmpty,
+                           "\(name)/Views/ 是空的 —— 空的 Views 不是界面，删掉它")
         }
+        XCTAssertGreaterThan(withViews, 2, "带 Views/ 的目录太少 —— 先怀疑路径推算")
     }
 
     // MARK: - 断言 2：State/ 不认识 SwiftUI
@@ -517,14 +535,6 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 3：Views 下的类型不被别的界面当零件用
 
-    /// 已知的跨界面复用。每一条都要有理由，且清单本身被断言（`testExceptionsAreStillReal`）——
-    /// 过期例外要删掉，不许让它悄悄扩大豁免面。
-    private static let crossInterfaceExceptions: [String: String] = [
-        "ApprovalCard": "审批面板物理上挂在会话详情的 composer 槽位（上游原生位置，"
-            + "SessionDetailView 的底栏）；移走它会让 Approval/Views/ 变空。"
-            + "重开条件：下次重划审批边界时一并决定它住哪。",
-    ]
-
     func testViewsDeclarationsAreNotSharedAcrossInterfaces() throws {
         let interfaces = try interfaceDirectories()
         let allFiles = allFeatureSwiftFiles()
@@ -540,7 +550,6 @@ final class LayeringTests: XCTestCase {
                     scanned += 1
                     // 界面根视图可以被别的界面当「子界面」用（列表在未配对时顶上配对屏）。
                     if type == interfaceName + "View" { continue }
-                    if Self.crossInterfaceExceptions[type] != nil { continue }
                     let user = firstUser(of: type, in: texts, excluding: interface)
                     if let user {
                         XCTFail("\(interfaceName)/Views/\(file.lastPathComponent) 的 \(type) 被 \(user) 引用"
@@ -551,28 +560,6 @@ final class LayeringTests: XCTestCase {
         }
         // 阳性读数：解析失效（正则写错、路径推算错）时这一条会先红，而不是让上面静默通过。
         XCTAssertGreaterThan(scanned, 0, "一个 Views 声明都没解析出来 —— 先怀疑正则或路径")
-    }
-
-    func testExceptionsAreStillReal() throws {
-        let interfaces = try interfaceDirectories()
-        let allFiles = allFeatureSwiftFiles()
-        let texts = try allFiles.map { ($0, try String(contentsOf: $0, encoding: .utf8)) }
-
-        for (type, reason) in Self.crossInterfaceExceptions {
-            var homestead: URL?
-            for interface in interfaces {
-                for file in swiftFiles(in: interface.appendingPathComponent("Views")) {
-                    let text = try String(contentsOf: file, encoding: .utf8)
-                    if Self.declaredTypes(in: text).contains(type) { homestead = interface }
-                }
-            }
-            guard let homestead else {
-                XCTFail("例外 \(type) 已不再声明于任何 Views/ 下 —— 删掉这条例外（理由原写：\(reason)）")
-                continue
-            }
-            let user = firstUser(of: type, in: texts, excluding: homestead)
-            XCTAssertNotNil(user, "例外 \(type) 已不再被其它界面引用 —— 删掉这条例外（理由原写：\(reason)）")
-        }
     }
 
     // MARK: - 断言 5–7：Core 与线上形状的方向
@@ -1169,9 +1156,10 @@ final class LayeringTests: XCTestCase {
 
     /// 流层的声明各住一处：`StreamMux.swift` 只留流表**与它那一行**。
     ///
-    /// 为什么 `LogicalStream` 不单独住一个文件：它的四个可变字段（编号 / 文本 / 退避档位 /
-    /// 在途标记）是 `fileprivate` —— 只有同一个文件里的流表能写，编译器替「业务侧改不到它们」
-    /// 把关。拆开就必须放宽成 `internal`，等于用一条编译期保证换目录整洁。所以这里钉的是
+    /// 为什么 `LogicalStream` 不单独住一个文件：它的六个可变字段（编号 / 文本 / 退避档位 /
+    /// 在途标记 / 是否开过 / 在途尝试）是 `fileprivate` —— 只有同一个文件里的流表能写，
+    /// 编译器替「业务侧改不到它们」把关。拆开就必须放宽成 `internal`，等于用一条编译期保证
+    /// 换目录整洁。所以这里钉的是
     /// 「别把跨层那个令牌也塞回来」：`StreamAttempt` 不掌握任何可变状态，住自己的文件。
     ///
     /// 失败模式：跨层声明与流表挤在一起时，读文件的人分不清哪些是「表的行为」、
@@ -2171,6 +2159,45 @@ final class LayeringTests: XCTestCase {
                       "onConnectionStart 成了空壳 —— 连接从未被激活")
         XCTAssertTrue(lines.contains { $0.1.contains("events.attach(to: link)") },
                       "连接活了但事件流没登记 —— 列表与审批都收不到")
+    }
+
+    /// 列表合并里的行拷贝只有一个入口。
+    ///
+    /// 逐字段重新构造时，「没提到的字段该保留」与「该换成新值」在字面上长得一样 ——
+    /// 抄错任何一格都不编译失败，症状是「某个会话的进行中标记不见了」这类极难归因的小错。
+    /// 收成一个 `copy(of:)` 之后，没被提到的字段不可能被抄错。
+    func testTheListMergerCopiesRowsInOnePlace() throws {
+        let file = sourcesRoot
+            .appendingPathComponent("Features/SessionList/State/SessionListMerger.swift")
+        let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
+        XCTAssertTrue(lines.contains { $0.1.contains("enum SessionListMerger") },
+                      "扫错文件了 —— 先怀疑路径")
+        let sites = lines.filter { $0.1.contains("SessionSummary(") }.map(\.0)
+        XCTAssertEqual(sites.count, 1, "构造行的地方不止一处（第 \(sites) 行）—— 走 copy(of:)")
+    }
+
+    /// 视图不认识持久化类型 —— 配置的读与写都在状态层。
+    ///
+    /// 这条规则原先在配对屏破了：`@State` 的初值里 `MeshConfig.load()`（`@State` 初值每次
+    /// 重建都求值，于是每重算一遍读两次盘），按钮闭包里 `save()`。视图因此既能读盘又能写盘，
+    /// 而这两件事本该由状态层做完再把值给出来。
+    func testViewsDoNotTouchPersistence() throws {
+        var violations: [String] = []
+        var scanned = 0
+        let roots = [sourcesRoot.appendingPathComponent("Features"),
+                     sourcesRoot.appendingPathComponent("SharedUI")]
+        for root in roots {
+            for file in swiftFiles(under: root) {
+                guard file.path.contains("/Views/") || file.path.contains("/SharedUI/") else { continue }
+                scanned += 1
+                for (line, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8))
+                where code.contains("MeshConfig") {
+                    violations.append("\(file.lastPathComponent):\(line)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 5, "扫到的视图文件太少 —— 先怀疑路径推算")
+        XCTAssertEqual(violations, [], "视图碰了持久化类型：\(violations) —— 读与写都归 State/")
     }
 
     /// 容器只造不取数：`SessionDetailState` 里没有 `Task`、没有 `async` 成员。

@@ -21,7 +21,7 @@ final class ComposerState {
     /// 草稿。`TextField` 双向绑定它。
     var text = ""
 
-    /// 正在投递 —— 发送按钮据此置灰，挡住连按。
+    /// 正在投递 —— 挡住连按（`canSubmit` 只判文本，不含它；按钮的置灰读 `canSubmit`）。
     private(set) var isSubmitting = false
 
     /// 投递一条：入参是已经分好流的那一行，返回值是**是否已受理**。

@@ -39,8 +39,8 @@ struct SessionDetailView: View {
         // 连接不归本屏：回前台与组网就绪的重连点在根部（`DshMobileApp`）—— 那是 App 级
         // 事件，关掉这一屏它照样该发生。
         .task {
-            let created = detail ?? make(session)
-            if detail == nil { detail = created }
+            if detail == nil { detail = make(session) }
+            guard let created = detail else { return }
             created.sync.startFollowing()
             // 目录进屏拉一次。挂在格子上的话，功能条每次因键盘收起而重建都会重拉一遍。
             await created.catalog.reload()
@@ -142,7 +142,7 @@ private struct SessionDetailBody: View {
                     }
                 }
 
-                if detail.sync.eventCount > 0 && detail.sync.nodes.isEmpty {
+                if detail.sync.nodes.isEmpty {
                     Text("这个会话里没有可显示的内容。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -275,18 +275,20 @@ private struct SessionDetailBody: View {
     /// 再往上推 132pt，而那正是「挤」的主因。卡本身仍在输入框上方：它必须一眼看见。
     @ViewBuilder
     private var approvalSection: some View {
-        if let first = pendingApprovals.first {
+        // 一次求值给这一节用 —— 它在 body 里被读三处（首张、计数、计数减一）。
+        let pending = pendingApprovals
+        if let first = pending.first {
             ApprovalCard(approval: first, state: approvals.state(for: first.eventId)) { allow in
                 Task { await approvals.answer(first, allow: allow) }
             }
             .padding(.horizontal, 4)
             .padding(.bottom, 6)
 
-            if pendingApprovals.count > 1 {
+            if pending.count > 1 {
                 Button {
                     activeSheet = .approvals
                 } label: {
-                    Text("还有 \(pendingApprovals.count - 1) 个待批准")
+                    Text("还有 \(pending.count - 1) 个待批准")
                         .font(.footnote)
                 }
                 .padding(.bottom, 6)

@@ -87,12 +87,16 @@ final class PairingRulesTests: XCTestCase {
     /// （`code.count >= 6`、`(code as NSString).length`）
     /// 认不出；只扫这两个文件 —— 将来第三个地方拼一遍判据，要靠新加的屏自己守住。
     func testRuleHasNoSecondCopy() throws {
-        let state = sourcesRoot.appendingPathComponent("Features/Pairing/State/PairingState.swift")
-        let view = sourcesRoot.appendingPathComponent("Features/Pairing/Views/PairingView.swift")
+        let dir = sourcesRoot.appendingPathComponent("Features/Pairing")
+        // 规则的两个消费者：两段输入各在自己的状态里读一次规则。
+        let holders = [dir.appendingPathComponent("State/PairingState.swift"),
+                       dir.appendingPathComponent("State/MeshSetupState.swift")]
+        // 视图只读状态给出的结论，不该再读一次规则 —— 但它照样要查碎片（抄回来的判据）。
+        let consumers = [dir.appendingPathComponent("Views/PairingView.swift")]
         let fragments = ["count == 6", "count >= 6", "key.isEmpty", "tailnetKey.isEmpty"]
 
         var scanned = 0
-        for file in [state, view] {
+        for file in holders + consumers {
             let text = try String(contentsOf: file, encoding: .utf8)
             var callsRule = 0
             for (line, code) in codeLines(in: text) {
@@ -105,11 +109,14 @@ final class PairingRulesTests: XCTestCase {
                             + " —— 判据只许住 PairingRules（E2）")
                 }
             }
-            XCTAssertGreaterThan(callsRule, 0,
-                                 "\(file.lastPathComponent) 没有一行在代码里读规则 —— "
-                                 + "注释里提到不算")
+            // 正控只对「持有输入的那两个状态」成立：视图该读的是结论，不是规则。
+            if holders.contains(file) {
+                XCTAssertGreaterThan(callsRule, 0,
+                                     "\(file.lastPathComponent) 没有一行在代码里读规则 —— "
+                                     + "注释里提到不算")
+            }
         }
-        XCTAssertGreaterThan(scanned, 0, "两个文件一行都没扫到 —— 先怀疑路径推算")
+        XCTAssertGreaterThan(scanned, 0, "三个文件一行都没扫到 —— 先怀疑路径推算")
     }
 
     // MARK: - 路径与扫描

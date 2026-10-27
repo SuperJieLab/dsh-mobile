@@ -9,5 +9,3 @@ struct CommandInfo: Decodable, Equatable {
     let description: String
     var inputHint: String? = nil
 }
-
-/// `command-catalog` 请求：列某个会话此刻能用的命令。

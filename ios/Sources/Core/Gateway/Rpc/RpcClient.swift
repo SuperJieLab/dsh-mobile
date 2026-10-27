@@ -58,14 +58,6 @@ final class RpcClient {
     /// 关系是否存在（设备凭证在沙盒里）。配对成功置真，被撤销置假。
     private(set) var isPaired: Bool
 
-    /// 协议里的唯一端点 —— 所有 op 都打这一个地址，靠信封里的 `op` 分派。
-    /// 多端点会把资源语义烧进 URL：客户端就得记住哪个资源走哪个地址，
-    /// 而这件事协议已经从请求体里回答过了。
-    nonisolated static let rpcPath = "/rpc"
-
-    /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
-    nonisolated static let timeout: TimeInterval = 10
-
     init(endpoint: Endpoint, credentials: CredentialStore? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
         let store = credentials ?? .shared
@@ -152,7 +144,7 @@ final class RpcClient {
             }
             Log.debug(Log.Module.session, "access ticket renewed")
             return .issued(
-                .init(token: token, expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
+                .init(token: token, expiresAt: epochMilliseconds(expiresAt))
             )
         } catch RpcClientError.unauthenticated {
             // 服务端不认这段关系了：撤销或凭证被替换。重试没有意义。

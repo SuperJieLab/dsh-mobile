@@ -25,7 +25,7 @@ struct ConnectionBadge: View {
     /// 归到 else。`CarrierPath` 住在 `Core/` 顶层，是三方共用的跨域小值（组网节点产出它、
     /// 连接域的窄面接口用它、呈现层按它选档位），所以这里不是新增耦合。
     let state: Status
-    var meshPath: CarrierPath? = nil
+    var meshPath: CarrierPath?
 
     /// 合成的逐成员初始化器会带上私有的 `@State` 而不可见，显式给一个。
     init(state: Status, meshPath: CarrierPath? = nil) {
@@ -44,15 +44,14 @@ struct ConnectionBadge: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             // 组网路径一行：独立于断连指示器 —— 已入网时它常在，
-            // 断连语义仍由上面的防闪烁窗口管。
+            // 断连语义仍由下面的防闪烁窗口管。
             if let meshPath {
                 let look = Self.look(of: meshPath)
                 Label(look.text, systemImage: look.icon)
                     .font(.caption2)
                     .foregroundStyle(look.tint)
             }
-            Group {
-                if let shown {
+            if let shown {
                 Label {
                     Text(caption(shown))
                 } icon: {
@@ -60,7 +59,6 @@ struct ConnectionBadge: View {
                 }
                 .font(.caption)
                 .foregroundStyle(tint(shown))
-            }
             }
         }
         .task(id: state) {

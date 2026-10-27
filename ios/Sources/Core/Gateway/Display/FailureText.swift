@@ -6,7 +6,8 @@
  *
  * 这一层在通信层之上，所以**不读传输层的常量** —— 超时那句因此不打印秒数。
  *
- * 消费者：`SessionSync`、`ApprovalStore`（读 `readableDescription`）；
+ * 消费者：`ApprovalStore` 与两处目录文案（`CatalogText` / `CommandText`）读
+ * `readableDescription`；
  * 各处 `error.localizedDescription`（走本文件的 `LocalizedError`）。
  */
 import Foundation

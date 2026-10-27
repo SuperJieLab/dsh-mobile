@@ -244,7 +244,7 @@ final class TranscriptAssemblerTests: XCTestCase {
             #"{"type":"turn/end","seq":145,"time":1450,"data":{"turn":14,"reason":{"kind":"completed"}}}"#,
         ])
         XCTAssertTrue(messages(in: toolish.nodes).isEmpty, "A9d 含工具调用的消息不出答案")
-        XCTAssertTrue(processes(in: toolish.nodes).first?.entries.contains { if case .text(let _, let text, _) = $0 { return text == "我去查一下" }; return false } == true, "A9e 它的文本进过程")
+        XCTAssertTrue(processes(in: toolish.nodes).first?.entries.contains { if case .text(_, let text, _) = $0 { return text == "我去查一下" }; return false } == true, "A9e 它的文本进过程")
 
         // A9f：该轮**最后一个 step 没有助手消息** → 本轮没有答案，
         // 不能拿前面 step 说过的话冒充最终回答。
@@ -257,7 +257,7 @@ final class TranscriptAssemblerTests: XCTestCase {
             #"{"type":"turn/end","seq":155,"time":1550,"data":{"turn":15,"reason":{"kind":"error"}}}"#,
         ])
         XCTAssertTrue(messages(in: noAnswer.nodes).isEmpty, "A9f 最后一步没有消息 → 本轮没有答案")
-        XCTAssertTrue(processes(in: noAnswer.nodes).first?.entries.contains { if case .text(let _, let text, _) = $0 { return text == "中间说过的话" }; return false } == true, "A9g 它落进过程，不丢")
+        XCTAssertTrue(processes(in: noAnswer.nodes).first?.entries.contains { if case .text(_, let text, _) = $0 { return text == "中间说过的话" }; return false } == true, "A9g 它落进过程，不丢")
 
         // A3 的补充：一轮里多步 —— 前一步收口只该影响那一步的调用，不能连累后一步还在跑的。
         report = assemble([

@@ -2,8 +2,8 @@
  * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
  * 只做「上游调用 + 结果归类成状态机事件」，迁移决策全部在纯状态机 `TailnetNodeState`。
- * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession`，`RpcClient` 注入它之后
- * 流量全部进 tailnet。
+ * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession` —— `MeshStore` 把它交给
+ * `Endpoint.update(session:baseURL:)`，之后所有请求的流量都进 tailnet。
  *
  * 上游形状（libtailscale，`TailscaleNode.swift` 实读）：
  * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
@@ -30,11 +30,11 @@ final class TailnetNode {
     /// 状态机当前状态（界面据此渲染；迁移判定全在 `TailnetNodeState.handle`）。
     private(set) var state: TailnetNodeState = .noKey
 
-    /// Running 后可用：全部流量进 tailnet 的 session，给 `RpcClient` 注入。
-    private(set) var gatewaySession: URLSession?
+    /// Running 后可用：全部流量进 tailnet 的 session，由 `MeshStore` 取走交给端点层。
+    private var gatewaySession: URLSession?
 
     /// 当前到网关对端的路径：Running 期间轮询刷新，其余状态为 nil。
-    /// 展示层的唯一数据源 —— `ConnectionBadge` 只吃这个值，不感知本类型。
+    /// 经 `MeshStore` 投影后给 `ConnectionBadge` —— 展示层不认识本类型。
     private(set) var meshPath: CarrierPath?
 
     /// 节点验证 Running、tailnet session 建成的那一刻（App 据此把传输切进虚拟网）。

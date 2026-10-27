@@ -37,8 +37,6 @@ struct SessionEvent: Decodable, Equatable {
     let data: JSONValue
 }
 
-/// 任意 JSON。存在的理由只有一条：**容忍不认识的字段** —— 声明成固定结构体的话，上游每加一个
-/// 字段我们就得跟着改，那正是「桥接而非翻译」要避免的。
 
 /// 一次快照的结果。`Equatable` 是状态机的需要：`Outcome` 要能比较，
 /// 而它装着这个类型。
