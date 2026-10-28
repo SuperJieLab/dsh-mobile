@@ -4,32 +4,21 @@ import SwiftUI
 /// 若需要改协议才跑得起来，说明协议没设计对。
 ///
 /// 根部三段，各只有一件事：
-/// - **造**：App 级对象与常驻 state 全在这里构造，别处不出现 `Xxx(`。
+/// - **造**：全部基础服务在 `AppServices` 里一次造好；三个会变的屏级状态在这一层造。
 /// - **接**：长连接只拿四个能力、不拿一元客户端本体；两张表（待答、列表）都在这里接上
 ///   事件流 —— 都是 App 级事件，与显示哪一屏无关。
 /// - **装配目的地**：`RootScreen` 里那张 `navigationDestination` 是全应用唯一一处把
 ///   `Destination` 换成屏的地方。屏只发值，下一屏要什么在这里给。
 @main
 struct DshMobileApp: App {
-    @State private var node: TailnetNode
-    @State private var store: MeshStore
-    /// 到网关的常驻连接。会话详情只在它上面开关流。
-    @State private var link: LongConnection
-    /// 请求门面（带票发一次）。不可观察 —— 身份的真值在 `credentials` 那里。
-    @State private var client: RpcClient
-    /// 身份的真值。设置页、配对页、`RpcClient` 换票都读它 —— 一个实例、没有副本。
-    private let credentials: CredentialStore
-    /// 连接级事件流的收端 —— App 级，与连接同寿。三个消费方：待答表、会话列表、
-    /// 列表的订阅接线。
-    private let events: EventStream
-    /// 待答审批。不随任何一屏生死：停在会话列表时它照样在收。
-    @State private var approvals: ApprovalStore
-    /// 列表的 state。进程级：它是栈根，离开详情再回来照旧在原地。
+    /// 全部基础服务。与进程同寿 —— 见 `AppServices` 头注释里那条前提。
+    private let services: AppServices
+    /// 列表的 state。它是栈根，离开详情再回来照旧在原地。
     @State private var listState: SessionListState
     /// 造配对页容器的工厂。**草稿不跨进出存活**：6 位码 10 分钟失效，留着上次那半截码
     /// 是陷阱 —— 所以不是单例，是「进屏造一个」。
     private let makePairing: () -> PairingState
-    /// 组网录入（换路径那一半）。在这里造，于是「读一次盘」发生在启动时。
+    /// 组网录入（换路径那一半）。
     @State private var meshSetup: MeshSetupState
     /// 设置页的依赖面。
     @State private var settings: SettingsState
@@ -38,31 +27,12 @@ struct DshMobileApp: App {
     private let makeDetail: (SessionSummary) -> SessionDetailState
 
     init() {
-        let node = TailnetNode()
-        // 组网域先造：隧道的产物（传输 + 地址）只住在它那里，两条链路向它取。
-        let store = MeshStore(node: node)
-        // 身份的真值：一个实例，两处读 —— `RpcClient` 换票时取凭证，各处闭包读
-        // 「有没有」。「已配对 ≡ 有凭证」因此是结构，不是纪律。
-        let credentials = CredentialStore.shared
-        let client = RpcClient(
-            session: { [weak store] in store?.route?.session ?? .shared },
-            baseURL: { [weak store] in store?.route?.baseURL },
-            credentials: credentials
-        )
-        // 长连接只拿四个能力，不拿一元客户端本体：票 / 换票 / 传输 / 地址都在这里接一次，
-        // 之后它再也不认识 `RpcClient`。四个参数必填 —— 漏接一个编译不过。
-        let link = LongConnection(
-            authorization: { [weak client] in client?.tickets.validToken() },
-            renewTicket: { [weak client] in
-                guard let client else { return .unavailable }
-                return await client.ticket()
-            },
-            // 两条链路读同一份产物：组网激活换的就是它，不存在第二份副本。
-            session: { [weak store] in store?.route?.session ?? .shared },
-            baseURL: { [weak store] in store?.route?.baseURL }
-        )
-        let events = EventStream()
-        let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
+        let services = AppServices()
+        // 身份的真值只有一处：`AppServices.credentials`。下面几处闭包都读它，「已配对 ≡
+        // 有凭证」因此是结构，不是纪律。
+        let credentials = services.credentials
+        let client = services.client
+        let store = services.store
         // 配对段的三件事都以闭包交出去：它不认识 `RpcClient`，也不认识凭证存在哪。
         let makePairing: () -> PairingState = {
             PairingState(
@@ -92,21 +62,15 @@ struct DshMobileApp: App {
         )
         let listState = SessionListState(client: client)
 
-        self.credentials = credentials
+        self.services = services
         self.makePairing = makePairing
-        self.events = events
         self.makeDetail = { session in
             SessionDetailState(client: client,
                                session: session,
-                               link: link,
+                               link: services.link,
                                store: store,
-                               approvals: approvals)
+                               approvals: services.approvals)
         }
-        _node = State(initialValue: node)
-        _store = State(initialValue: store)
-        _client = State(initialValue: client)
-        _link = State(initialValue: link)
-        _approvals = State(initialValue: approvals)
         _meshSetup = State(initialValue: meshSetup)
         _settings = State(initialValue: settings)
         _listState = State(initialValue: listState)
@@ -115,17 +79,17 @@ struct DshMobileApp: App {
     var body: some Scene {
         WindowGroup {
             RootScreen(
-                identity: credentials,
+                identity: services.credentials,
                 list: listState,
-                store: store,
+                store: services.store,
                 meshSetup: meshSetup,
                 settings: settings,
                 makeDetail: makeDetail,
                 makePairing: makePairing,
                 // 三条 App 级事件的执行体在根上（见 `RootScreen`）：它们只碰这两个能力，
                 // 于是收成字段而不是闭包 —— 闭包会把「何时发生」与「做什么」拆到两处。
-                link: link,
-                events: events
+                link: services.link,
+                events: services.events
             )
             // 启动编排挂在这里，不挂在某一屏上：组网要在用户还没进任何一屏时就跑起来，
             // 而根的身份是稳定的，所以编排只跑一次。
@@ -134,16 +98,17 @@ struct DshMobileApp: App {
             // 配置读坏了不交给节点：空配置只会换来一个误导的「不可达」。
             .task {
                 if case .damaged = MeshConfig.read() {
-                    store.reportDamagedConfiguration()
+                    services.store.reportDamagedConfiguration()
                 } else {
-                    await store.start(config: MeshConfig.load())
+                    await services.store.start(config: MeshConfig.load())
                 }
             }
             // 两张表的事件订阅是 App 级接线，不等身份成立：待答表停在列表页时也在收，
             // 列表要能看见别的设备上发生了什么。
             .task {
-                approvals.attach(events: events)
-                listState.attach(events: events)
+                services.approvals.attach(events: services.events)
+                listState.attach(events: services.events)
+                _ = 0
             }
         }
     }

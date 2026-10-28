@@ -2090,8 +2090,8 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "补偿逻辑还在：\(hits)")
     }
 
-    /// 待答表只有一个实例，且就建在根部 —— 它是 App 级的，多一个就有两张各说各话的表。
-    func testThePendingTableIsBuiltOnceAtTheRoot() throws {
+    /// 待答表只有一个实例，且就建在对象图里 —— 它是 App 级的，多一个就有两张各说各话的表。
+    func testThePendingTableIsBuiltOnceInTheGraph() throws {
         var found: [String] = []
         var scanned = 0
         for file in swiftFiles(under: sourcesRoot) {
@@ -2103,8 +2103,8 @@ final class LayeringTests: XCTestCase {
         }
         XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
         XCTAssertEqual(found.count, 1, "待答表只能有一个实例（App 级）：\(found)")
-        XCTAssertEqual(found.first?.split(separator: ":").first, "DshMobileApp.swift",
-                       "它该建在根部：\(found)")
+        XCTAssertEqual(found.first?.split(separator: ":").first, "AppServices.swift",
+                       "它该建在对象图里：\(found)")
     }
 
     /// 表不认识会话事件 —— 卡片只来自帧，不从日志算。
@@ -2615,7 +2615,7 @@ final class LayeringTests: XCTestCase {
     func testTheListStateIsSubscribedToTheEventStream() throws {
         let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
         let rootLines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(rootLines.contains { $0.1.contains("listState.attach(events: events)") },
+        XCTAssertTrue(rootLines.contains { $0.1.contains("listState.attach(events: services.events)") },
                       "根没有把事件流交给列表状态 —— 事件到不了列表")
 
         let list = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
