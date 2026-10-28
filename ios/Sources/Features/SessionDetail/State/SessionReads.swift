@@ -20,9 +20,7 @@ func readSnapshot(
     let response: SnapshotResponse = try await client.perform(
         SnapshotRequest(sessionId: sessionId, since: since)
     )
-    // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
-    // 报的是**缺了哪些字段**（不是一句拼好的话）：句子由 `Display/FailureText` 拼，
-    // 而字段名属于协议词汇，不随产品措辞变。
+    // 缺载荷抛错，不填默认值；报的是缺了哪个字段（句子归 `FailureText`）。
     guard let asOfSeq = response.asOfSeq, let events = response.events else {
         throw RpcClientError.malformedResponse(detail: "asOfSeq / events")
     }
@@ -50,7 +48,7 @@ func readPage(
     let response: PageResponse = try await client.perform(
         PageRequest(sessionId: sessionId, beforeSeq: beforeSeq)
     )
-    // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
+    // 同上：缺载荷抛错。
     guard let pageStart = response.pageStart,
           let asOfSeq = response.asOfSeq,
           let hasOlder = response.hasOlder,

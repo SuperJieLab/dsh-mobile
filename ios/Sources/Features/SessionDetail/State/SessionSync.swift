@@ -21,8 +21,8 @@ final class SessionSync {
 
     /// 状态行要说的事。**重置与失败必须说得出来** —— 那是用户唯一能察觉异常的地方。
     ///
-    /// 失败只说「哪一步 + 哪一类原因」，不说句子：句子随产品决定变，住 `Display/SyncText.swift`
-    ///。因此这个类型**不再可比较**（原因里带着抛出来的错误对象）。
+    /// 失败只说「哪一步 + 哪一类原因」，不说句子：句子随产品决定变，住 `Display/SyncText.swift`。
+    /// 因此它**不可比较** —— 原因里带着抛出来的错误对象。
     enum Status {
         case idle
         case syncing

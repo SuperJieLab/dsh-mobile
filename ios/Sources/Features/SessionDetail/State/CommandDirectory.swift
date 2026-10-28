@@ -88,8 +88,7 @@ func fetchCommands(_ client: RpcClient, sessionId: String) async throws -> [Comm
     let response: CommandCatalogResponse = try await client.perform(
         CommandCatalogRequest(sessionId: sessionId)
     )
-    // `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去 —— 那会把一次应答异常
-    // 显示成「这个会话没有可用的命令」（成功面），用户以为真没有。
+    // 缺载荷抛错，不填空数组 —— 理由见 `RpcClientError.malformedResponse`。
     guard let commands = response.commands else {
         throw RpcClientError.malformedResponse(detail: "commands")
     }
@@ -99,9 +98,8 @@ func fetchCommands(_ client: RpcClient, sessionId: String) async throws -> [Comm
 /// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的
 /// `command/run` / `command/done` 来 —— 这个回包不带执行结果。
 ///
-/// 回包里的 `commandId` 不返回：这一版没有任何一处按它对账（结果靠流里的
-/// `commandId` 与 `runCommand` 的 `command/run` 配对）。但它**必须有** ——
-/// `ok: true` 却没有载荷是服务端的错，不该被默认值悄悄盖过去。
+/// 回包里的 `commandId` 不返回：这一版没有一处按它对账（结果靠流里那个与 `command/run`
+/// 配对）。但它**必须有** —— 缺载荷就抛错。
 @MainActor
 func runCommand(_ client: RpcClient, sessionId: String, line: String) async throws {
     let response: CommandExecuteResponse = try await client.perform(

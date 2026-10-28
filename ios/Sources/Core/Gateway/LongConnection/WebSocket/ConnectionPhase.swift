@@ -12,7 +12,7 @@
 enum ConnectionPhase: Equatable {
     /// 没有连接，也没有排定的重试。
     case idle
-    /// 正在握手。开流不改它 —— 在已就绪的连接上开第二条流，屏幕不该闪「连接中」。
+    /// 正在握手。
     case connecting
     /// 这条连接已经通了：本代收到过至少一条可解析的帧。
     case ready
