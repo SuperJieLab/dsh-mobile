@@ -20,6 +20,11 @@ struct MeshConfig: Equatable, Codable {
 
     static let gatewayDefault = "http://100.64.0.1:3081"
 
+    /// 「从没配过」的形状：控制面地址空、网关地址给默认。`isComplete` 因此为假。
+    ///
+    /// 它是一个值而不是一次读盘 —— 需要「还没配」这个起点的调用方拿它，不必碰磁盘。
+    static let unconfigured = MeshConfig(controlURLString: "", gatewayURLString: gatewayDefault)
+
     /// 设置页可直接用：controlURL 为空 = 还没配过。
     var isComplete: Bool {
         URL(string: controlURLString)?.scheme == "https"
@@ -60,7 +65,7 @@ struct MeshConfig: Equatable, Codable {
     /// 的初值填充）；要把「坏了」当一回事的地方用 `read()`。
     static func load(_ defaults: UserDefaults = .standard) -> MeshConfig {
         if case .ok(let config) = read(defaults) { return config }
-        return MeshConfig(controlURLString: "", gatewayURLString: gatewayDefault)
+        return .unconfigured
     }
 
     /// 写入。编不出来就留痕 —— 静默失败会让界面显示新值、节点用旧值。

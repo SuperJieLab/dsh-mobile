@@ -48,7 +48,10 @@ struct DshMobileApp: App {
         }
         // 组网段的两个动作都以闭包交给它：它不认识 `MeshStore`，只认识「提交一份」与
         // 「按存下来的那份重试」。
+        //
+        // 起点是「还没配」而不是盘上那份：构造不读盘，读到的那份由下面的启动编排填进去。
         let meshSetup = MeshSetupState(
+            stored: .unconfigured,
             submit: { [weak store] key, config in await store?.submitMeshKey(key, config: config) },
             retry: { [weak store] config in await store?.retryMesh(config: config) }
         )
@@ -93,13 +96,17 @@ struct DshMobileApp: App {
             // 启动编排挂在这里，不挂在某一屏上：组网要在用户还没进任何一屏时就跑起来，
             // 而根的身份是稳定的，所以编排只跑一次。
             //
-            // 启动编排（兜底激活 → 组网 → 激活内化）全在 store.start。
-            // 配置读坏了不交给节点：空配置只会换来一个误导的「不可达」。
+            // 盘只读一次，三态各走各的：坏了不交给节点（空配置只会换来一个误导的「不可达」），
+            // 读到就把同一份交给组网页的草稿与节点。
             .task {
-                if case .damaged = MeshConfig.read() {
+                switch MeshConfig.read() {
+                case .damaged:
                     services.store.reportDamagedConfiguration()
-                } else {
-                    await services.store.start(config: MeshConfig.load())
+                case .missing:
+                    await services.store.start(config: .unconfigured)
+                case .ok(let config):
+                    meshSetup.adoptStored(config)
+                    await services.store.start(config: config)
                 }
             }
             // 两张表的事件订阅是 App 级接线，不等身份成立：待答表停在列表页时也在收，

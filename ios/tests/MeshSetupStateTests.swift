@@ -95,4 +95,21 @@ final class MeshSetupStateTests: XCTestCase {
         sut.gatewayURL = "http://100.64.0.1:3081"
         XCTAssertTrue(sut.canSubmit)
     }
+
+    /// 盘上那份填进来时，两格与「重试要用的那份」一起换。
+    ///
+    /// 三样都要断言：只测其中一样时，漏填的那两处照样全绿 —— 而它们的症状不同
+    /// （草稿空着会让人以为没配过，`stored` 没换则重试连的是旧地址）。
+    func testAdoptingStoredFillsBothFieldsAndTheStoredCopy() {
+        let sut = state()
+        XCTAssertEqual(sut.controlURL, "", "起点是未配置的形状")
+
+        let config = MeshConfig(controlURLString: "https://stored:8443",
+                                gatewayURLString: "http://stored:3081")
+        sut.adoptStored(config)
+
+        XCTAssertEqual(sut.controlURL, "https://stored:8443", "控制面那格要填")
+        XCTAssertEqual(sut.gatewayURL, "http://stored:3081", "网关那格要填")
+        XCTAssertEqual(sut.stored, config, "重试要用的那份也是它")
+    }
 }

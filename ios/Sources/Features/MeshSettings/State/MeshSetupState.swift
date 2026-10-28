@@ -6,7 +6,8 @@
  * 组网失败是节点起不来。一屏两个状态源，按部件划分。
  *
  * 三条纪律，都对着一段具体的坑：
- * - **构造时读一次盘**，不是每次视图重建读一次 —— 视图的 `@State` 初值每次重建都求值。
+ * - **构造不读盘**：`@State` 初值每次视图重建都求值，构造里有 I/O 就会在那几次里各留一道
+ *   痕迹。盘上的那份由调用方读到之后经 `adoptStored` 填进来。
  * - **同一份 `config` 既落盘又交给连接域**：分两次构造会出现「存的是 A、连的是 B」。
  * - **`tailnetKey` 先捕获再清空**：提交是异步的，顺序反了提交的永远是空串。
  *
@@ -32,7 +33,7 @@ final class MeshSetupState {
     private let submit: (String, MeshConfig) async -> Void
     private let retry: (MeshConfig) async -> Void
 
-    init(stored: MeshConfig = MeshConfig.load(),
+    init(stored: MeshConfig,
          save: @escaping (MeshConfig) -> Void = { $0.save() },
          submit: @escaping (String, MeshConfig) async -> Void,
          retry: @escaping (MeshConfig) async -> Void) {
@@ -42,6 +43,19 @@ final class MeshSetupState {
         self.save = save
         self.submit = submit
         self.retry = retry
+    }
+
+    /// 把盘上读到的那份填进来。**读盘不在这里**：构造必须能重入，而 `@State` 的初值表达式
+    /// 每次视图重建都求值一次 —— 构造里读盘会在那几次里各留一道痕迹。
+    ///
+    /// 无条件覆盖两格。适用前提是**调用时机在用户能输入之前**（启动编排里、或这一屏刚建好
+    /// 时）：草稿的生命周期短于「用户动手」，所以那一刻盘上那份永远是最新的。
+    /// 若将来要在从别处返回时重读，这条前提就破了，得改成「只在用户没动过时填」——
+    /// 而那时不能再按「格子里有没有字」判，因为起点那份自带一个非空的网关默认值。
+    func adoptStored(_ config: MeshConfig) {
+        stored = config
+        controlURL = config.controlURLString
+        gatewayURL = config.gatewayURLString
     }
 
     /// 现在这份输入构成的配置。地址与密钥是两段输入，合成一份才算「要连什么」。
