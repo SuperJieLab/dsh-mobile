@@ -2158,10 +2158,9 @@ final class LayeringTests: XCTestCase {
     ///
     /// 盲区：类型名换了就认不出（漏报方向）；行内注释里出现算命中（误报方向，接受）。
     ///
-    /// **`DshMobileApp.swift` 不在表里，是有一条界线而不是漏扫**：根的职责就是持服务
-    /// （造目的地要它们），把根加进来等于把「谁能持服务」这条线擦掉。表里这五个现在都
-    /// 只持「造容器的工厂闭包」或纯值 —— 谁改成直接持服务，谁就该从这张表移出去，
-    /// 而不是把禁令放宽。
+    /// **根的两个文件不在表里，是有一条界线而不是漏扫**：根的职责就是持服务（造目的地要
+    /// 它们），把根加进来等于把「谁能持服务」这条线擦掉。表里这五个现在都只持「造容器的
+    /// 工厂闭包」或纯值 —— 谁改成直接持服务，谁就该从这张表移出去，而不是把禁令放宽。
     func testRenderViewsHoldNoServices() throws {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
@@ -2299,7 +2298,7 @@ final class LayeringTests: XCTestCase {
     /// 全应用只有五处视图构造：根那一处（列表）+ 目的地注册那四处。多出第六处 ⇒ 有人在
     /// 根上按条件挑了另一屏。
     func testTheListIsAlwaysTheRoot() throws {
-        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
 
         // 正控：确认读到了那个栈与列表，否则下面的计数守的是空气。
@@ -2335,8 +2334,8 @@ final class LayeringTests: XCTestCase {
     /// 组合根的目的地注册里。列表与设置只发 `Destination` 值，不构造它们。
     func testConfigScreensComeOnlyFromRoutes() throws {
         let expectations: [(type: String, allowedFile: String)] = [
-            ("MeshSettingsView(", "DshMobileApp.swift"),
-            ("PairingScreen(", "DshMobileApp.swift"),
+            ("MeshSettingsView(", "RootScreen.swift"),
+            ("PairingScreen(", "RootScreen.swift"),
         ]
         var scanned = 0
         for (type, allowed) in expectations {
@@ -2406,7 +2405,7 @@ final class LayeringTests: XCTestCase {
     /// 所以这条路永远通。缺了它，新装用户就永远配不上 —— 而这件事没有编译错误、没有行为
     /// 报错，只有真机上「配不上」一个症状。
     ///
-    /// 锚落在两处 —— **清单**（`Destination.swift`）与**注册**（`DshMobileApp.swift`）。
+    /// 锚落在两处 —— **清单**（`Destination.swift`）与**注册**（`RootScreen.swift`）。
     /// 两者是同一份契约的两半：只查清单，删掉注册那行仍然绿；只查注册，清单丢了那支
     /// 就没人发。
     ///
@@ -2417,9 +2416,9 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(catalogLines.contains { $0.1.contains("case mesh") },
                       "目的地清单里没有组网 —— 组网没配好时无处可去")
 
-        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsView(setup: meshSetup, store: store)") },
+        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsView(setup: meshSetup, store: services.store)") },
                       "组网那一支不展示配置页 —— 「先配网、再配对」那条路断了")
     }
 
@@ -2462,7 +2461,7 @@ final class LayeringTests: XCTestCase {
     /// 形状是**结构**判据：它证明「那一行在那个修饰符的块里」，证明不了运行时真的被调。
     /// 块的范围按「下一个同级修饰符或结构体收尾」切，不按固定行数 —— 块变长不会假红。
     func testEveryAppLevelEventHasAnExecutor() throws {
-        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
 
         /// 锚点行之后、到下一个同级修饰符（8 空格的点）或结构体收尾（8 空格的右括号）之前。
@@ -2478,14 +2477,16 @@ final class LayeringTests: XCTestCase {
 
         // (锚, 块内必须出现的调用, 缺了会怎样)
         let palette: [(anchor: String, calls: [String], symptom: String)] = [
-            (".task(id: identity.hasDeviceToken)",
-             ["link.activate()", "link.reconnectNow()", "events.attach(to: link)"],
+            (".task(id: services.credentials.hasDeviceToken)",
+             ["services.link.activate()", "services.link.reconnectNow()",
+              "services.events.attach(to: services.link)"],
              "配对成功后列表静默不动、审批永不出现"),
-            (".onChange(of: store.phase)",
-             ["link.reconnectNow()"],
+            (".onChange(of: services.store.phase)",
+             ["services.link.reconnectNow()"],
              "组网就绪后空等一轮退避"),
             (".onChange(of: scenePhase)",
-             ["store.sceneActive()", "link.reconnectNow()", "events.attach(to: link)"],
+             ["services.store.sceneActive()", "services.link.reconnectNow()",
+              "services.events.attach(to: services.link)"],
              "回前台不探活，半死连接只能等判死窗口"),
         ]
         for item in palette {
@@ -2501,7 +2502,7 @@ final class LayeringTests: XCTestCase {
 
         // 触发条件单列：`.task(id:)` 的 id 必须是身份。写成无 id 的 `.task` 只在首帧跑
         // 一次，重新配对之后不会再来一次 —— 而「连接活了」这一半照样是绿的。
-        XCTAssertTrue(lines.contains { $0.1.contains("guard identity.hasDeviceToken else") },
+        XCTAssertTrue(lines.contains { $0.1.contains("guard services.credentials.hasDeviceToken else") },
                       "没身份也去激活连接 —— 无票的连接会被传输层当终态收起")
     }
 
@@ -2613,9 +2614,9 @@ final class LayeringTests: XCTestCase {
     /// 所以锚不在视图 —— 那一半（服务不进渲染视图的字段）由
     /// `testRenderViewsHoldNoServices` 守，两条各守一半。
     func testTheListStateIsSubscribedToTheEventStream() throws {
-        let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
+        let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
         let rootLines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(rootLines.contains { $0.1.contains("listState.attach(events: services.events)") },
+        XCTAssertTrue(rootLines.contains { $0.1.contains("list.attach(events: services.events)") },
                       "根没有把事件流交给列表状态 —— 事件到不了列表")
 
         let list = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
