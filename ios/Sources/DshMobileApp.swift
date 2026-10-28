@@ -33,8 +33,6 @@ struct DshMobileApp: App {
     @State private var meshSetup: MeshSetupState
     /// 设置页的依赖面。
     @State private var settings: SettingsState
-    /// 页脚那句地址。根知道隧道产物在哪，列表只收到「读一句字」的能力。
-    private let address: () -> String
     /// 造会话详情容器的能力。它要 `sessionId`（点开那一行才知道），根造不了那一个，
     /// 但知道 `client` / `link` —— 于是把「造」交出去，把「用什么造」留在这里。
     private let makeDetail: (SessionSummary) -> SessionDetailState
@@ -93,13 +91,10 @@ struct DshMobileApp: App {
             }
         )
         let listState = SessionListState(client: client)
-        // 地址读的是隧道产物的只读投影：本层知道它在哪，列表那一屏只收到「读一句字」的能力。
-        let address = { [weak store] in gatewayAddressLine(store?.route?.baseURL) }
 
         self.credentials = credentials
         self.makePairing = makePairing
         self.events = events
-        self.address = address
         self.makeDetail = { session in
             SessionDetailState(client: client,
                                session: session,
@@ -125,33 +120,12 @@ struct DshMobileApp: App {
                 store: store,
                 meshSetup: meshSetup,
                 settings: settings,
-                address: address,
                 makeDetail: makeDetail,
                 makePairing: makePairing,
-                // 身份成立时接上长连接。无票的连接会被传输层当终态收起、不会自己再试，
-                // 所以它必须跟着身份走，而不是在启动时接一次。
-                onConnectionStart: {
-                    // 两行都要：`activate` 是「第一次要一条连接」，它的闸只让第一次通过；
-                    // `reconnectNow` 覆盖另一条路径 —— 关系被撤销后重新配上时 `active`
-                    // 已是真，`activate` 会被挡掉，连接停在 idle 不动。
-                    link.activate()
-                    link.reconnectNow()
-                    events.attach(to: link)
-                },
-                // 回前台：探活 + 立即重连。上游「恢复立即试」的复现；已就绪 / 握手中的
-                // 连接不受影响，不会叠加。
-                onSceneActive: {
-                    Task { await store.sceneActive() }
-                    link.reconnectNow()
-                    // 被终态拒绝收起的那条流只在这一刻重建：重试同一个拒绝没有意义。
-                    // 它幂等 —— 正常情况 `attach` 的闸会直接放行。
-                    events.attach(to: link)
-                },
-                // 组网就绪即重连（与列表「就绪即首载」对称）：connecting 期间连接
-                // 在退避循环里空转（端点不存在），就绪此刻不必再等下一轮退避。
-                onMeshReady: {
-                    link.reconnectNow()
-                }
+                // 三条 App 级事件的执行体在根上（见 `RootScreen`）：它们只碰这两个能力，
+                // 于是收成字段而不是闭包 —— 闭包会把「何时发生」与「做什么」拆到两处。
+                link: link,
+                events: events
             )
             // 启动编排挂在这里，不挂在某一屏上：组网要在用户还没进任何一屏时就跑起来，
             // 而根的身份是稳定的，所以编排只跑一次。
@@ -175,11 +149,12 @@ struct DshMobileApp: App {
     }
 }
 
-/// 组合根的视图半边：**全应用唯一一处目的地装配**，加三条 App 级事件的重连点。
+/// 组合根的视图半边：**全应用唯一一处目的地装配**，加三条 App 级事件的执行体。
 ///
 /// 它在这里而不在 `App.body` 里，理由是可判的：Observation 的追踪只对 **View 的 body**
 /// 有文档保证（`App.body` 返回的是 `Scene`）。身份与 `store.phase` 都靠追踪才会重新求值
-/// —— 放在 Scene 里是「大概行」，放在 View 里是「一定行」。
+/// —— 放在 Scene 里是「大概行」，放在 View 里是「一定行」。同理 `.task` 只长在 `View` 上，
+/// `Scene` 没有这个修饰符，而启动编排与两张表的接线都靠它。
 ///
 /// **它认识全部服务，因为它是装配点**：四个目的地的依赖都在这里接上，屏只发 `Destination`
 /// 值。于是下一屏要什么不必穿透中间层。
@@ -191,23 +166,23 @@ private struct RootScreen: View {
     let store: MeshStore
     let meshSetup: MeshSetupState
     let settings: SettingsState
-    let address: () -> String
     let makeDetail: (SessionSummary) -> SessionDetailState
     /// 配对页的容器由它造（凭证在哪只有这一层知道）。
     let makePairing: () -> PairingState
-    /// 身份刚成立（或启动时已成立）：接上长连接（`activate` + 事件流登记）。
-    let onConnectionStart: () -> Void
-    /// 回前台：探活 + 重连。
-    let onSceneActive: () -> Void
-    /// 组网就绪：立刻重连，不等下一轮退避。
-    let onMeshReady: () -> Void
+    /// 长连接。三条 App 级事件里有两条半要它 —— 收成字段而不是闭包。
+    let link: LongConnection
+    /// 连接级事件流的收端。身份成立与回前台各接一次。
+    let events: EventStream
 
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         NavigationStack {
             // 列表永远是根。前置条件不满足时它只在顶部提示（那条提示由列表自己画）——
             // 正在读会话的人不会被整屏弹走，而修配置从齿轮开始。
-            SessionListView(list: list, store: store, address: address)
+            //
+            // 页脚那句地址在这里现算：列表只收「读一句字」的能力，而它不该为此认识 `MeshStore`。
+            SessionListView(list: list, store: store,
+                            address: { gatewayAddressLine(store.route?.baseURL) })
                 .navigationDestination(for: Destination.self) { route in
                     switch route {
                     case .session(let session):
@@ -221,19 +196,33 @@ private struct RootScreen: View {
                     }
                 }
                 // 连接在这里接：它必须有身份才有意义（无票可换时传输层把「无票」当终态
-                // 收起，不会自己再试），而「身份刚成立」正是这一刻。
+                // 收起，不会自己再试），而「身份刚成立」正是这一刻。用 `.task(id:)` 钉住
+                // 身份 —— 写成无 id 的 `.task` 只在首帧跑一次，重新配对之后不会再来一次。
                 .task(id: identity.hasDeviceToken) {
                     guard identity.hasDeviceToken else { return }
-                    onConnectionStart()
+                    // 两行都要：`activate` 是「第一次要一条连接」，它的闸只让第一次通过；
+                    // `reconnectNow` 覆盖另一条路径 —— 关系被撤销后重新配上时 `active`
+                    // 已是真，`activate` 会被挡掉，连接停在 idle 不动。
+                    link.activate()
+                    link.reconnectNow()
+                    events.attach(to: link)
                 }
         }
+        // 组网就绪即重连（与列表「就绪即首载」对称）：connecting 期间连接在退避循环里
+        // 空转（端点不存在），就绪此刻不必再等下一轮退避。
         .onChange(of: store.phase) { _, phase in
             guard case .ready = phase else { return }
-            onMeshReady()
+            link.reconnectNow()
         }
+        // 回前台：探活 + 立即重连。上游「恢复立即试」的复现；已就绪 / 握手中的连接
+        // 不受影响，不会叠加。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            onSceneActive()
+            Task { await store.sceneActive() }
+            link.reconnectNow()
+            // 被终态拒绝收起的那条流只在这一刻重建：重试同一个拒绝没有意义。
+            // 它幂等 —— 正常情况 `attach` 的闸会直接放行。
+            events.attach(to: link)
         }
     }
 }

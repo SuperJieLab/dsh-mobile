@@ -2157,6 +2157,11 @@ final class LayeringTests: XCTestCase {
     /// `testRenderViewsTakeOneChannel` 守，两条各管一半。
     ///
     /// 盲区：类型名换了就认不出（漏报方向）；行内注释里出现算命中（误报方向，接受）。
+    ///
+    /// **`DshMobileApp.swift` 不在表里，是有一条界线而不是漏扫**：根的职责就是持服务
+    /// （造目的地要它们），把根加进来等于把「谁能持服务」这条线擦掉。表里这五个现在都
+    /// 只持「造容器的工厂闭包」或纯值 —— 谁改成直接持服务，谁就该从这张表移出去，
+    /// 而不是把禁令放宽。
     func testRenderViewsHoldNoServices() throws {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
@@ -2443,25 +2448,61 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 已配对那一支出现时要接上长连接 —— 「配对之后一切实时」的唯一入口。
+    /// 根上三条 App 级事件，每一处都要有执行体。
     ///
-    /// 它没有任何行为判据能碰到（视图不在测试覆盖里），而删掉它的症状是**配对成功后
-    /// 列表页静默不更新、审批卡永不出现**：传输层把「无票」当终态（`activate` 的闸只让
-    /// 第一次通过），不会自己再试。真正救场的只有「进一次会话详情」—— 所以这种缺口
-    /// 会以间歇性报告的形式出现，极难归因。
-    func testThePairedBranchStartsTheConnection() throws {
+    /// 三处的共同点：**与「显示哪一屏」无关**，所以它们挂在根上；也**都没有任何行为判据
+    /// 能碰到**（视图不在测试覆盖里）。缺一条都不会编译失败，症状各是：
+    ///
+    /// - 身份成立没接线 → 配对成功后列表静默不动、审批卡永不出现（传输层把「无票」当
+    ///   终态，`activate` 的闸只让第一次通过，不会自己再试）。真正救场的只有「进一次
+    ///   会话详情」，所以会以间歇性报告的形式出现，极难归因。
+    /// - 组网就绪不重连 → 空等下一轮退避（connecting 期间连接在端点还不存在的循环里转）。
+    /// - 回前台不探活 → 半死连接只能等判满判死窗口。
+    ///
+    /// 形状是**结构**判据：它证明「那一行在那个修饰符的块里」，证明不了运行时真的被调。
+    /// 块的范围按「下一个同级修饰符或结构体收尾」切，不按固定行数 —— 块变长不会假红。
+    func testEveryAppLevelEventHasAnExecutor() throws {
         let root = sourcesRoot.appendingPathComponent("DshMobileApp.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        // 触发点是「身份成立」，而身份只有 `CredentialStore` 一处。用 `.task(id:)` 钉住
-        // 那个 id —— 写成无 id 的 `.task` 只在首帧跑一次，重新配对之后不会再来一次。
-        XCTAssertTrue(lines.contains { $0.1.contains(".task(id: identity.hasDeviceToken)") },
-                      "连接没有跟着身份走 —— 重新配对之后它不会再被拉起")
+
+        /// 锚点行之后、到下一个同级修饰符（8 空格的点）或结构体收尾（8 空格的右括号）之前。
+        func block(after anchor: String) -> String? {
+            guard let start = lines.firstIndex(where: { $0.1.contains(anchor) }) else { return nil }
+            var kept: [String] = []
+            for (_, text) in lines.dropFirst(start + 1) {
+                if text.hasPrefix("        .") || text.hasPrefix("        }") { break }
+                kept.append(text)
+            }
+            return kept.joined(separator: "\n")
+        }
+
+        // (锚, 块内必须出现的调用, 缺了会怎样)
+        let palette: [(anchor: String, calls: [String], symptom: String)] = [
+            (".task(id: identity.hasDeviceToken)",
+             ["link.activate()", "link.reconnectNow()", "events.attach(to: link)"],
+             "配对成功后列表静默不动、审批永不出现"),
+            (".onChange(of: store.phase)",
+             ["link.reconnectNow()"],
+             "组网就绪后空等一轮退避"),
+            (".onChange(of: scenePhase)",
+             ["store.sceneActive()", "link.reconnectNow()", "events.attach(to: link)"],
+             "回前台不探活，半死连接只能等判死窗口"),
+        ]
+        for item in palette {
+            guard let body = block(after: item.anchor) else {
+                XCTFail("根上找不到 \(item.anchor) —— 这条守的是它下面的块")
+                continue
+            }
+            for call in item.calls {
+                XCTAssertTrue(body.contains(call),
+                              "\(item.anchor) 的块里没有 \(call) —— \(item.symptom)")
+            }
+        }
+
+        // 触发条件单列：`.task(id:)` 的 id 必须是身份。写成无 id 的 `.task` 只在首帧跑
+        // 一次，重新配对之后不会再来一次 —— 而「连接活了」这一半照样是绿的。
         XCTAssertTrue(lines.contains { $0.1.contains("guard identity.hasDeviceToken else") },
                       "没身份也去激活连接 —— 无票的连接会被传输层当终态收起")
-        XCTAssertTrue(lines.contains { $0.1.contains("link.activate()") },
-                      "onConnectionStart 成了空壳 —— 连接从未被激活")
-        XCTAssertTrue(lines.contains { $0.1.contains("events.attach(to: link)") },
-                      "连接活了但事件流没登记 —— 列表与审批都收不到")
     }
 
     /// 这一行是不是**提到了**那个类型 —— 要有左边界。
