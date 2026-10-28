@@ -2399,6 +2399,75 @@ final class LayeringTests: XCTestCase {
         }
     }
 
+    /// 容器的字段都要有人读 —— 零读取的字段是「假依赖」。
+    ///
+    /// 为什么单列一条而不是扩充上面那条：上面那条守的是**渲染视图**的转手（字段原样传给
+    /// 下一屏），这一条守的是**容器**的死字段。两者症状不同 —— 转手让依赖面撑大，死字段
+    /// 更糟：它会让「A 依赖 B」这个判断有实物依据，而那个依据是空的，于是「两个屏共享一份
+    /// 状态」这类结论能在评审里站住。
+    ///
+    /// **「有人读」有两种形态，缺一不可**：
+    /// - 容器自己读（`store.phase`）—— 在自己的方法体里，不在 `init` 里；
+    /// - 视图读它（`detail.commands`）—— 在别的文件里以成员访问出现。
+    ///
+    /// 只查前者会误报「暴露给视图的子状态」（`SessionDetailState.commands` 实测被误报）；
+    /// 只查后者会漏掉「容器内部算出来的字段」。所以两者取或。
+    ///
+    /// `init` 那一块整个不算：形参声明（`init(setup: …)`）与赋值（`self.x = x`）都含字段名，
+    /// 但都不读它。实测：只按行匹配时，任何一个死字段都因为这两处判绿，撞过两轮。
+    func testContainerFieldsAreAllReadBySomeone() throws {
+        let allFiles = swiftFiles(under: sourcesRoot)
+        XCTAssertGreaterThan(allFiles.count, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
+        let allLines = try allFiles.map { file in
+            (url: file, lines: codeLines(in: try String(contentsOf: file, encoding: .utf8)))
+        }
+
+        let stateFiles = allLines.filter { $0.url.lastPathComponent.hasSuffix("State.swift") }
+        XCTAssertGreaterThanOrEqual(stateFiles.count, 5, "扫到的状态文件太少")
+
+        var scannedFields = 0
+        for (url, lines) in stateFiles {
+            let path = url.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+
+            var initRange: ClosedRange<Int>?
+            if let start = lines.firstIndex(where: { $0.1.contains("init(") }) {
+                let after = lines[(start + 1)...].firstIndex { $0.1 == "    }" } ?? lines.count - 1
+                initRange = lines[start].0...lines[after].0
+            }
+
+            for (line, code) in lines {
+                let trimmed = code.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("let ") || trimmed.hasPrefix("private let "),
+                      let colon = trimmed.firstIndex(of: ":") else { continue }
+                let head = trimmed.replacingOccurrences(of: "private let ", with: "let ")
+                let name = String(head[head.index(head.startIndex, offsetBy: 4)..<colon])
+                    .trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty, !name.contains(" ") else { continue }
+                scannedFields += 1
+
+                let escaped = NSRegularExpression.escapedPattern(for: name)
+                let bare = "(?<![.\\w])" + escaped + "(?![\\w])"
+                let member = "\\." + escaped + "(?![\\w])"
+
+                let readByOwner = lines.contains { otherLine, otherCode in
+                    otherLine != line
+                        && initRange?.contains(otherLine) != true
+                        && otherCode.range(of: bare, options: .regularExpression) != nil
+                }
+                let readByOther = allLines.contains { otherFile, otherLines in
+                    guard otherFile != url else { return false }
+                    return otherLines.contains { _, otherCode in
+                        otherCode.range(of: member, options: .regularExpression) != nil
+                    }
+                }
+                XCTAssertTrue(readByOwner || readByOther,
+                              "\(path):\(line) 的 \(name) 既没被容器自己读，也没被任何视图读 —— "
+                              + "它是假依赖，会让「谁依赖谁」的判断有实物依据而依据是空的")
+            }
+        }
+        XCTAssertGreaterThanOrEqual(scannedFields, 8, "扫到的字段太少 —— 先怀疑解析")
+    }
+
     /// 组网配置在**任何前置条件下都可达** —— 「先配网、再配对」那条路的存在性。
     ///
     /// 为什么值得一条判据：组网页的入口只在设置里，而设置由列表的齿轮进入；列表永远在，
