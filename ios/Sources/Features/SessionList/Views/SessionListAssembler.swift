@@ -5,8 +5,8 @@ import SwiftUI
 /// **状态由这一屏自己造**：它是栈根，`NavigationStack` 保留根视图，
 /// 推入详情再返回时 `@State` 不丢，列表停在原地、不重拉一遍。
 ///
-/// 订阅接线也跟着 state 走 —— 它以前挂在组合根上，唯一的理由是「根造这个 state」。
-/// 造的人变了，这条线就跟着变。
+/// 订阅接线跟着 state 走：造它的地方就是接它的地方。这根线挂在别处时，读的人要在两个
+/// 文件之间对「谁让它更新」，而两处任一改动都能让列表静默不更新。
 struct SessionListAssembler: View {
     private let client: RpcClient
     /// 订阅要它：列表「跟着别的设备动」全靠这条流。

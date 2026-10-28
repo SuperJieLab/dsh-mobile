@@ -7,7 +7,7 @@
  *
  * 三条纪律，都对着一段具体的坑：
  * - **构造不读盘**：`@State` 初值每次视图重建都求值，构造里有 I/O 就会在那几次里各留一道
- *   痕迹。盘上的那份由调用方读到之后经 `adoptStored` 填进来。
+ *   痕迹。盘上的那份由本类的 `adoptStoredFromDisk()` 读 —— 读盘归这一层，视图只决定时机。
  * - **同一份 `config` 既落盘又交给连接域**：分两次构造会出现「存的是 A、连的是 B」。
  * - **`tailnetKey` 先捕获再清空**：提交是异步的，顺序反了提交的永远是空串。
  *
@@ -61,8 +61,10 @@ final class MeshSetupState {
     /// 读一次盘，把那两份地址填进草稿。读坏了不填 —— 提示由 `store.storedConfigDamaged` 给。
     ///
     /// **读盘归这一层**：视图层（含装配段）不碰持久化类型，它只决定「什么时候读」。
-    func adoptStoredFromDisk() {
-        if case .ok(let config) = MeshConfig.read() { adoptStored(config) }
+    /// `defaults` 可注入，是为了让「读坏了不填」这一支能被断言 —— 真读 `UserDefaults.standard`
+    /// 时造不出损坏态，而它正是这条规则最容易写反的地方。
+    func adoptStoredFromDisk(_ defaults: UserDefaults = .standard) {
+        if case .ok(let config) = MeshConfig.read(defaults) { adoptStored(config) }
     }
 
     /// 现在这份输入构成的配置。地址与密钥是两段输入，合成一份才算「要连什么」。

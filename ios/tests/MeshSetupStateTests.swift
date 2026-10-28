@@ -112,4 +112,38 @@ final class MeshSetupStateTests: XCTestCase {
         XCTAssertEqual(sut.gatewayURL, "http://stored:3081", "网关那格要填")
         XCTAssertEqual(sut.stored, config, "重试要用的那份也是它")
     }
+
+    /// 从盘上读：读得到就填，读坏了不填。
+    ///
+    /// 两个方向都测，因为「读坏了也填」和「读坏了不填」在正常盘上都表现为「填了」——
+    /// 只有损坏态才分得开。而它的症状是误导：坏掉的配置被填进草稿，用户会以为
+    /// 「我配过了，是网不通」，实际该做的是重填。
+    func testAdoptingFromDiskFillsOnlyWhenItCanBeRead() {
+        let suite = UserDefaults(suiteName: "mesh-setup-test-\(UUID().uuidString)")!
+        defer { suite.removePersistentDomain(forName: suite.description) }
+
+        // ① 盘上什么都没有：草稿保持未配置的形状。
+        let empty = state()
+        empty.adoptStoredFromDisk(suite)
+        XCTAssertEqual(empty.controlURL, "", "没配过就不该凭空长出一个地址")
+
+        // ② 盘上是好的：填。
+        let config = MeshConfig(controlURLString: "https://disk:8443",
+                                gatewayURLString: "http://disk:3081")
+        config.save(suite)
+        let good = state()
+        good.adoptStoredFromDisk(suite)
+        XCTAssertEqual(good.controlURL, "https://disk:8443", "读得到就该填")
+        XCTAssertEqual(good.stored, config, "重试要用的那份也跟着换")
+
+        // ③ 盘上坏了：不填。
+        let key = suite.dictionaryRepresentation().keys.first { $0.hasPrefix("mesh.") }
+        XCTAssertNotNil(key, "先确认配置真的落盘了，否则这一支测的是空盘")
+        suite.set("not json", forKey: key!)
+        let damaged = state()
+        damaged.adoptStoredFromDisk(suite)
+        XCTAssertEqual(damaged.controlURL, "", "读坏了不该填 —— 那会让用户以为配过了")
+        XCTAssertEqual(damaged.stored, MeshConfig(controlURLString: "", gatewayURLString: ""),
+                       "坏配置也不能进「重试要用的那份」")
+    }
 }

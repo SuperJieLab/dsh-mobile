@@ -2132,6 +2132,40 @@ final class LayeringTests: XCTestCase {
         }
     }
 
+    /// 对象图里没有会变的东西：字段全 `let`、整个类型不参与观察。
+    ///
+    /// 为什么值得一条：`var` 一出现就可能是「两份真相」的起点（视图读一份、写入改另一份），
+    /// 而 `@Observable` 会把整个对象图变成被追踪的值 —— 那时改任意一个字段都会让读它的
+    /// 每一处重算，而观察本该落在具体服务上（`MeshStore` / `CredentialStore` 各自发布）。
+    ///
+    /// 盲区：`let x: [T]` 里的元素仍可变（值类型语义）。这一条只守字段本身不被整体替换。
+    func testTheGraphHoldsNoMutableState() throws {
+        let file = sourcesRoot.appendingPathComponent("AppServices.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let lines = codeLines(in: text)
+        XCTAssertTrue(lines.contains { $0.1.contains("struct AppServices") },
+                      "扫错文件了 —— 先怀疑路径")
+
+        let observed = lines.filter { $0.1.contains("@Observable") }.map(\.0)
+        XCTAssertEqual(observed, [],
+                       "对象图被标成可观察了（第 \(observed) 行）—— 观察该落在具体服务上")
+
+        var vars: [String] = []
+        var fields = 0
+        for (line, code) in lines {
+            let trimmed = code.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("let ") || trimmed.hasPrefix("var ") else { continue }
+            // 字段声明是 `let 名字: 类型`；`let store = MeshStore(node: node)` 里的冒号在实参上，
+            // 不能算 —— 要求「冒号存在，且它在等号之前（或没有等号）」。
+            guard let colon = trimmed.firstIndex(of: ":") else { continue }
+            if let equal = trimmed.firstIndex(of: "="), colon > equal { continue }
+            fields += 1
+            if trimmed.hasPrefix("var ") { vars.append("第 \(line) 行") }
+        }
+        XCTAssertGreaterThanOrEqual(fields, 6, "扫到的字段太少 —— 先怀疑解析")
+        XCTAssertEqual(vars, [], "对象图里出现了可变字段：\(vars) —— 会变的东西归某一屏的 @State")
+    }
+
     /// 表不认识会话事件 —— 卡片只来自帧，不从日志算。
     func testThePendingTableDoesNotReadSessionEvents() throws {
         let file = sourcesRoot.appendingPathComponent("Features/Approval/State/ApprovalTable.swift")
@@ -2311,34 +2345,53 @@ final class LayeringTests: XCTestCase {
             let rest = codeLines(in: text).filter { $0.0 > declaration.0 }
             XCTAssertTrue(rest.contains { $0.1.contains("== nil") },
                           "\(relative) 没有「还没造」的判断 —— 状态会在每次重算时白造一个")
-            let assignment = try NSRegularExpression(pattern: "(?<![.\\w])\(name)\\s*=\\s*\\S")
+            // 赋值要排除 `==`：`if list == nil` 这一行本身就长得像赋值（`=` 后面跟 `\S`），
+            // 不排除的话两个条件塌缩成一个，「声明了从不赋值」原样能过 —— 实测被审查抓到。
+            // 同时允许 `self.x = …`（`(?<![.\w])` 会把它挡掉）。
+            let assignment = try NSRegularExpression(
+                pattern: "(^|[^.\\w])(self\\.)?\(name)\\s*=(?!=)")
             XCTAssertTrue(rest.contains { assignment.firstMatch(
                 in: $0.1, range: NSRange($0.1.startIndex..., in: $0.1)) != nil },
                           "\(relative) 声明了 \(name) 却从不赋值 —— 屏永远画占位")
         }
 
-        // 反向：渲染段不许出现屏级状态的 `@State`。扫 `Features/*/Views/` 下**全部**文件，
-        // 不只 `*View.swift` —— 后缀可以换（`*Screen` 正是被换掉的那个），而「用 @State 造
-        // 一个 `*State` 类型的实例」这个动作与后缀无关。
+        // 反向：渲染段不许出现屏级状态的 `@State`；装配段可以声明，但不许**就地造**。
         //
-        // 断法不能用「取 `:` 之后的类型名」：`@State private var d = SessionDetailState(…)`
-        // 没有类型标注，`split(":")` 会取到实参那一截，然后判它「不以 State 结尾」而放过 ——
-        // 而这正是「在声明处就造」的写法，恰恰是装配段该做、渲染段不该做的事。
-        // 改成「这一行里出现 `<名字>State(` 的构造」。
+        // 两种违规形态都要抓，只抓一种会漏掉另一种：
+        // ① `@State private var d: SessionDetailState?` —— 带类型标注的声明。在渲染段里
+        //    即违规（那说明它自己成了装配段）；在装配段里合法。
+        // ② `@State private var d = SessionDetailState(…)` / `= SomeState(` —— 就地造。
+        //    **两处都违规**：渲染段不该造；装配段该在 `.task` 里造，声明处造会每次重算白造一个。
+        //
+        // 第一版只查 ②（「该行出现 `\w+State(`」），于是 ① 整类漏掉 —— 而 ① 正是最省事的
+        // 违规写法（声明一个可选状态、在 `.task` 里造）。两轮审查各抓到一半。
         let viewsRoot = sourcesRoot.appendingPathComponent("Features")
         for file in swiftFiles(under: viewsRoot) where file.path.contains("/Views/") {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-            let base = file.deletingPathExtension().lastPathComponent
+            let isAssembler = file.deletingPathExtension().lastPathComponent.hasSuffix("Assembler")
             for (line, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
                 let trimmed = code.trimmingCharacters(in: .whitespaces)
                 guard trimmed.hasPrefix("@State ") else { continue }
-                guard trimmed.range(of: "\\w+State\\s*\\(", options: .regularExpression) != nil else {
+
+                // ② 就地造：声明行里出现 `SomeState(`。
+                if trimmed.range(of: "\\w+State\\s*\\(", options: .regularExpression) != nil {
+                    XCTFail("\(relative):\(line) 在 @State 声明处就造了状态 —— "
+                            + (isAssembler
+                               ? "装配段该在 `.task` 里造（声明处造会每次重算白造一个）"
+                               : "渲染段不造屏级状态，这一屏该叫 Assembler"))
                     continue
                 }
-                XCTFail("\(relative):\(line) 用 @State 就地造了一个屏级状态 —— "
-                        + (base.hasSuffix("Assembler")
-                           ? "装配段该在 `.task` 里造，不要在声明处造（每次重算都会白造一个）"
-                           : "渲染段不造屏级状态，这一屏该叫 Assembler"))
+
+                // ① 带类型标注的声明。只在渲染段里违规。
+                guard !isAssembler else { continue }
+                // 取 `: ` 之后、`?` / `=` 之前的类型名。
+                guard let colon = trimmed.firstIndex(of: ":") else { continue }
+                let rest = trimmed[trimmed.index(after: colon)...]
+                    .prefix { $0 != "?" && $0 != "=" }
+                    .trimmingCharacters(in: .whitespaces)
+                guard rest.hasSuffix("State") else { continue }
+                XCTFail("\(relative):\(line) 用 @State 装了 \(rest) —— 屏级状态由装配段造，"
+                        + "这一屏该叫 Assembler")
             }
         }
     }
@@ -2454,14 +2507,28 @@ final class LayeringTests: XCTestCase {
                            + " —— 多出来的那处是在根上按条件挑了另一屏")
         }
 
-        // 另一半：**导航栈的第一个子视图必须是列表**。
+        // 另一半：**`body` 的第一条代码行是导航栈，栈里的第一条是列表**。
         //
         // 闭集计数只认五个已知名字，所以 `if phase == .ready { SessionListAssembler(…) }
         // else { 别的屏(…) }` 里那个第六个类型它看不见 —— 五个名字仍各一次，全绿。
-        // 而「按条件挑屏」必然让某个条件先于列表出现，于是直接钉「栈里第一条非注释代码就是它」。
+        // 而「按条件挑屏」必然让某个条件先于列表出现。两个位置都要钉：
+        // - 只钉「栈里第一条」时，条件可以写在栈**外面**（`if ready { NavigationStack { 列表 } }
+        //   else { 别的屏 }`）—— 栈里第一条仍是列表，全绿而整屏已被换掉。
+        // - 只钉「body 第一条」时，条件可以写在栈**里面**。
         //
         // 为什么不用「body 里零 if/switch」：`.task { switch MeshConfig.read() … }` 是配置三态
         // 分派，在 body 里但不是挑屏 —— 按形状禁会把这一处误伤（实测）。
+        guard let bodyLine = lines.firstIndex(where: { $0.1.contains("var body: some View {") }) else {
+            XCTFail("没读到 body")
+            return
+        }
+        let firstInBody = lines[(bodyLine + 1)...].first {
+            !$0.1.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        XCTAssertTrue(firstInBody?.1.contains("NavigationStack {") == true,
+                      "body 的第一条不是导航栈（第 \(firstInBody?.0 ?? -1) 行）"
+                      + " —— 条件包在栈外，整屏仍会被换掉")
+
         guard let stackLine = lines.firstIndex(where: { $0.1.contains("NavigationStack {") }) else {
             XCTFail("没读到导航栈")
             return
