@@ -53,7 +53,6 @@ struct DshMobileApp: App {
             retry: { [weak store] config in await store?.retryMesh(config: config) }
         )
         let settings = SettingsState(
-            setup: meshSetup,
             store: store,
             hasIdentity: { [weak credentials] in credentials?.hasDeviceToken ?? false },
             discardIdentity: { [weak client] in

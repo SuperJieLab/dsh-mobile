@@ -12,9 +12,7 @@ import Foundation
 
 @MainActor
 final class SettingsState {
-    /// 组网录入（地址、接入密钥、保存并接入）—— 设置页把它转交给组网配置页。
-    let setup: MeshSetupState
-    /// 节点五态与路径的来源。只读 —— 动手的入口在 `setup`。
+    /// 节点五态与路径的来源。只读 —— 动手改路径的入口在组网那一页。
     let store: MeshStore
 
     /// 有没有身份。**闭包而非字段**：闭包里读的是 `CredentialStore.hasDeviceToken`，
@@ -23,11 +21,9 @@ final class SettingsState {
     /// 解除配对。闭包而非客户端：这一层不该知道怎么发请求。
     private let discardIdentity: () -> Void
 
-    init(setup: MeshSetupState,
-         store: MeshStore,
+    init(store: MeshStore,
          hasIdentity: @escaping () -> Bool,
          discardIdentity: @escaping () -> Void) {
-        self.setup = setup
         self.store = store
         self.hasIdentity = hasIdentity
         self.discardIdentity = discardIdentity
