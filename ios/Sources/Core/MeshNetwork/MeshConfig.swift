@@ -61,13 +61,6 @@ struct MeshConfig: Equatable, Codable {
         return .ok(config)
     }
 
-    /// 读到的配置，读不出就给「未配置」的形状。只适合不关心损坏与否的调用者（如设置页
-    /// 的初值填充）；要把「坏了」当一回事的地方用 `read()`。
-    static func load(_ defaults: UserDefaults = .standard) -> MeshConfig {
-        if case .ok(let config) = read(defaults) { return config }
-        return .unconfigured
-    }
-
     /// 写入。编不出来就留痕 —— 静默失败会让界面显示新值、节点用旧值。
     func save(_ defaults: UserDefaults = .standard) {
         do {

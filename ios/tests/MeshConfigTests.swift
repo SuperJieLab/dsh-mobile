@@ -63,7 +63,6 @@ final class MeshConfigTests: XCTestCase {
         defaults.set("not json", forKey: written[0])
 
         XCTAssertEqual(MeshConfig.read(defaults), .damaged, "解不出来必须报 damaged")
-        XCTAssertFalse(MeshConfig.load(defaults).isComplete, "损坏时给的是未配置的形状")
     }
 
     /// 存进去再读出来，值一致。

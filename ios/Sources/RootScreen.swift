@@ -20,8 +20,8 @@ struct RootScreen: View {
         self.services = services
     }
 
-    /// 三个装配段要的闭包。**先用局部量再接闭包**：捕获列表里的标识符不走隐式 `self`，
-    /// 写成 `[x = services.x]` 编译不过。
+    /// 三个装配段要的闭包。**先取局部量再接闭包**：`[weak x]` 那一格只接受一个标识符，
+    /// 而 `services` 是属性 —— 拿属性的值得先落成局部量。
     private var hasIdentity: () -> Bool {
         let credentials = services.credentials
         return { credentials.hasDeviceToken }

@@ -48,14 +48,21 @@ final class MeshSetupState {
     /// 把盘上读到的那份填进来。**读盘不在这里**：构造必须能重入，而 `@State` 的初值表达式
     /// 每次视图重建都求值一次 —— 构造里读盘会在那几次里各留一道痕迹。
     ///
-    /// 无条件覆盖两格。适用前提是**调用时机在用户能输入之前**（启动编排里、或这一屏刚建好
-    /// 时）：草稿的生命周期短于「用户动手」，所以那一刻盘上那份永远是最新的。
+    /// 无条件覆盖两格。适用前提是**调用时机在用户能输入之前**（这一屏刚建好时）：草稿的生命
+    /// 周期短于「用户动手」，所以那一刻盘上那份永远是最新的。
     /// 若将来要在从别处返回时重读，这条前提就破了，得改成「只在用户没动过时填」——
     /// 而那时不能再按「格子里有没有字」判，因为起点那份自带一个非空的网关默认值。
     func adoptStored(_ config: MeshConfig) {
         stored = config
         controlURL = config.controlURLString
         gatewayURL = config.gatewayURLString
+    }
+
+    /// 读一次盘，把那两份地址填进草稿。读坏了不填 —— 提示由 `store.storedConfigDamaged` 给。
+    ///
+    /// **读盘归这一层**：视图层（含装配段）不碰持久化类型，它只决定「什么时候读」。
+    func adoptStoredFromDisk() {
+        if case .ok(let config) = MeshConfig.read() { adoptStored(config) }
     }
 
     /// 现在这份输入构成的配置。地址与密钥是两段输入，合成一份才算「要连什么」。

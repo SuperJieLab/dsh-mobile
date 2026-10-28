@@ -2,11 +2,10 @@ import SwiftUI
 
 /// 会话详情的装配段：造容器、接线（进屏开流、离屏关卡），交给渲染段。
 ///
-/// **容器由这一屏自己造**（R36 §2.1）：它要随这一屏生死（离开就丢，回来重取一个窗口），
+/// **容器由这一屏自己造**：它要随这一屏生死（离开就丢，回来重取一个窗口），
 /// 而 `@State` 是唯一能表达「跟视图身份走」的东西。
 ///
-/// 依赖在签名上看得见：四个服务。以前这里是一个不透明的 `make: (SessionSummary) -> State`
-/// 闭包 —— 签名说不出这一屏要什么，读的人得跳到组合根才知道。
+/// 依赖在签名上看得见：四个服务 —— 这一屏要什么，读签名就知道，不必跳到组合根。
 struct SessionDetailAssembler: View {
     private let session: SessionSummary
     private let client: RpcClient

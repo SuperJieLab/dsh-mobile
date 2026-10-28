@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 配对屏的装配段：造容器、交给渲染段。容器随这一屏生死（草稿不跨进出）。
 ///
-/// 三个动作以**闭包**注入，不持服务：按动作数分（R36 §2.4）—— 三件事各对应一个闭包，
+/// 三个动作以**闭包**注入，不持服务：三件事各对应一个闭包，
 /// 而它不需要 `RpcClient` 的任何其它能力。签名说不出凭证存在哪，也发不出请求。
 struct PairingAssembler: View {
     private let submit: (String) async throws -> Void

@@ -10,14 +10,19 @@ import Foundation
 /// 这条没有写进 Apple 的文档，是实践事实 —— 写在这里，因为它是这个形状成立的前提。
 ///
 /// **构造顺序即依赖**：`client` 要读 `store` 的隧道产物，`link` 要 `client` 的票。
-/// 构造里只存字段与接闭包，不读盘、不启动、不发请求 —— 它可能被多造几次而没人察觉，
-/// 副作用会在那几次里落到磁盘上。
 ///
-/// 内层闭包弱引用彼此，因此这里持有谁都不会成环。
+/// **构造里没有网络、没有启动、没有配置读写** —— 那些都由视图的 `.task` 驱动。唯一一处
+/// 构造期 I/O 是 `credentials` 的首次初始化：它是单例，`init` 读一次设备凭证。
+/// 这一处是**有意的**，理由与代价都写明：
+/// - 身份是启动第一帧就要知道的事实。改成启动后再读，首帧会先按「未配对」画一屏
+///   （浮条闪一下再消失），而用户要的是「打开就知道配没配」。
+/// - 代价是它让「构造纯」这条纪律破了一个洞，且这条例外**抓不到**：`SecretFile.read`
+///   的缺席是常态、不记日志，所以「构造两次看日志有没有 I/O」这种观测手段看不见它。
+///   ⇒ 它靠这条注释与评审守，不靠判据。要改的话，正解是让 `CredentialStore` 在 `.task`
+///   里读、首帧按「未知」画，那是一次独立的取舍。
 @MainActor
 struct AppServices {
-    let node: TailnetNode
-    /// 组网域：隧道的判据与产物都住它，两条链路向它取。
+    /// 组网域：隧道的判据与产物都住它，两条链路向它取。它的节点对象由它自己持有。
     let store: MeshStore
     /// 身份的真值。一个实例，`RpcClient` 换票与各处闭包都读它 —— 没有第二份。
     let credentials: CredentialStore
@@ -53,7 +58,6 @@ struct AppServices {
         let events = EventStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
 
-        self.node = node
         self.store = store
         self.credentials = credentials
         self.client = client

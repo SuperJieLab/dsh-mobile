@@ -2090,21 +2090,46 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "补偿逻辑还在：\(hits)")
     }
 
-    /// 待答表只有一个实例，且就建在对象图里 —— 它是 App 级的，多一个就有两张各说各话的表。
-    func testThePendingTableIsBuiltOnceInTheGraph() throws {
-        var found: [String] = []
+    /// 对象图里的每件服务**全仓各一个实例**，且都建在 `AppServices.swift`。
+    ///
+    /// 多一个实例的症状全是静默的：两个 `TailnetNode` 各起一份 Go 运行时；两个 `EventStream`
+    /// 各收一半事件；两张待答表各说各话。而**少一个**（有人就地 `EventStream()`）同样是
+    /// 静默的 —— 新造的那个没人喂事件，屏上表现为「永远不更新」。
+    ///
+    /// 表驱动而不是逐条写：加一件服务只加一行，漏加会以「扫到的服务太少」暴露
+    /// （下面的下界与这张表绑定）。`CredentialStore` 是单例，断法是「全仓只有一处取 `shared`」，
+    /// 不是「构造一处」—— 它的构造藏在 `static let` 里。
+    func testEveryServiceIsBuiltOnceInTheGraph() throws {
+        // (构造字面, 是否要求恰好一处)
+        let palette: [(needle: String, what: String)] = [
+            ("TailnetNode(", "组网节点"),
+            ("MeshStore(", "组网域"),
+            ("CredentialStore.shared", "身份真值（单例）"),
+            ("RpcClient(", "请求门面"),
+            ("LongConnection(", "长连接"),
+            ("EventStream(", "连接级事件流"),
+            ("ApprovalStore(", "待答表"),
+        ]
+        var found: [String: [String]] = [:]
         var scanned = 0
         for file in swiftFiles(under: sourcesRoot) {
             scanned += 1
             let text = try String(contentsOf: file, encoding: .utf8)
-            for (line, code) in codeLines(in: text) where code.contains("ApprovalStore(") {
-                found.append("\(file.lastPathComponent):\(line)")
+            for (line, code) in codeLines(in: text) {
+                for item in palette where code.contains(item.needle) {
+                    found[item.needle, default: []].append("\(file.lastPathComponent):\(line)")
+                }
             }
         }
         XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
-        XCTAssertEqual(found.count, 1, "待答表只能有一个实例（App 级）：\(found)")
-        XCTAssertEqual(found.first?.split(separator: ":").first, "AppServices.swift",
-                       "它该建在对象图里：\(found)")
+        for item in palette {
+            let sites = found[item.needle] ?? []
+            XCTAssertEqual(sites.count, 1,
+                           "\(item.what)只能有一个实例，实际 \(sites.count) 处：\(sites)"
+                           + " —— 多一份就多一条各走各的路")
+            XCTAssertEqual(sites.first?.split(separator: ":").first, "AppServices.swift",
+                           "\(item.what)该建在对象图里：\(sites)")
+        }
     }
 
     /// 表不认识会话事件 —— 卡片只来自帧，不从日志算。
@@ -2123,8 +2148,8 @@ final class LayeringTests: XCTestCase {
     /// 两个实例的症状都是静默的：列表那份各持一行序，事件只喂到其中一个，另一份一直显示
     /// 旧内容；详情那份则会让同一次操作发两条流。
     ///
-    /// 构造点住组合根（单例）与 `makeDetail`（每会话一份）——
-    /// 判据只数次数，不钉文件 —— 钉文件会在构造点移动时假红一次，而「几处」才是它要守的东西。
+    /// 判据只数次数、不钉文件 —— 钉文件会在构造点移动时假红一次，而「几处」才是它要守的东西。
+    /// 五个状态各住在自己那一屏的装配段里，每屏一个。
     func testEachScreenStateIsBuiltOnce() throws {
         let names = ["SessionListState(", "SessionDetailState(",
                      "PairingState(", "MeshSetupState(", "SettingsState("]
@@ -2265,32 +2290,55 @@ final class LayeringTests: XCTestCase {
 
             // 造状态那一步。**不按「状态类型名 = 前缀 + State」判**：`MeshSettingsAssembler`
             // 造的是 `MeshSetupState`，按名字耦合的判法会在这里假红一次（实测）。
-            // 只要求「有一个可选的 `@State`」+「判断了还没造」。
-            let optionalState = try NSRegularExpression(
-                pattern: "@State private var \\w+: \\w+\\?")
-            XCTAssertNotNil(
-                optionalState.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-                "\(relative) 没有可选状态的 `@State` —— 装配段不造状态，它凭什么存在")
-            XCTAssertTrue(text.contains("== nil"),
+            //
+            // 断法要落到「赋值」上，不能只查两个字符串 —— 只查 `@State x: T?` 与全文出现
+            // `== nil`，那么「声明了从不赋值」加任意一行含 `== nil` 的无关代码就能过，
+            // 而它守的正是「声明了没造，屏永远画占位」。所以：
+            // ① 有可选 `@State`；② 该行之后（代码行，注释已剥）出现 `== nil`；
+            // ③ 同一段里出现对**同名变量**的赋值 —— 缺了它，状态永远是 nil。
+            guard let declaration = codeLines(in: text).first(where: {
+                $0.1.range(of: "@State private var \\w+: \\w+\\?", options: .regularExpression) != nil
+            }) else {
+                XCTFail("\(relative) 没有可选状态的 `@State` —— 装配段不造状态，它凭什么存在")
+                continue
+            }
+            let name = (try NSRegularExpression(pattern: "@State private var (\\w+):"))
+                .firstMatch(in: declaration.1, range: NSRange(declaration.1.startIndex..., in: declaration.1))
+                .flatMap { Range($0.range(at: 1), in: declaration.1) }
+                .map { String(declaration.1[$0]) } ?? ""
+            XCTAssertFalse(name.isEmpty, "\(relative) 取不出状态名 —— 先怀疑解析")
+
+            let rest = codeLines(in: text).filter { $0.0 > declaration.0 }
+            XCTAssertTrue(rest.contains { $0.1.contains("== nil") },
                           "\(relative) 没有「还没造」的判断 —— 状态会在每次重算时白造一个")
+            let assignment = try NSRegularExpression(pattern: "(?<![.\\w])\(name)\\s*=\\s*\\S")
+            XCTAssertTrue(rest.contains { assignment.firstMatch(
+                in: $0.1, range: NSRange($0.1.startIndex..., in: $0.1)) != nil },
+                          "\(relative) 声明了 \(name) 却从不赋值 —— 屏永远画占位")
         }
 
-        // 反向：渲染段不许出现屏级状态的 `@State`。扫的是 `*View.swift` ——
-        // `*Assembler.swift` 正是要装那个可选状态的地方，它不在这一批里。
+        // 反向：渲染段不许出现屏级状态的 `@State`。扫 `Features/*/Views/` 下**全部**文件，
+        // 不只 `*View.swift` —— 后缀可以换（`*Screen` 正是被换掉的那个），而「用 @State 造
+        // 一个 `*State` 类型的实例」这个动作与后缀无关。
+        //
+        // 断法不能用「取 `:` 之后的类型名」：`@State private var d = SessionDetailState(…)`
+        // 没有类型标注，`split(":")` 会取到实参那一截，然后判它「不以 State 结尾」而放过 ——
+        // 而这正是「在声明处就造」的写法，恰恰是装配段该做、渲染段不该做的事。
+        // 改成「这一行里出现 `<名字>State(` 的构造」。
         let viewsRoot = sourcesRoot.appendingPathComponent("Features")
-        for file in swiftFiles(under: viewsRoot)
-        where file.deletingPathExtension().lastPathComponent.hasSuffix("View") {
+        for file in swiftFiles(under: viewsRoot) where file.path.contains("/Views/") {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            let base = file.deletingPathExtension().lastPathComponent
             for (line, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
                 let trimmed = code.trimmingCharacters(in: .whitespaces)
-                guard trimmed.hasPrefix("@State "), trimmed.contains(":") else { continue }
-                let type = trimmed.split(separator: ":").last.map(String.init) ?? ""
-                let head = type.split(separator: "=").first.map(String.init) ?? type
-                let name = head.trimmingCharacters(in: .whitespaces).trimmingCharacters(
-                    in: CharacterSet(charactersIn: "?"))
-                guard name.hasSuffix("State") else { continue }
-                XCTFail("\(relative):\(line) 用 @State 装了 \(name) —— 屏级状态由装配段造，"
-                        + "这一屏该叫 Assembler")
+                guard trimmed.hasPrefix("@State ") else { continue }
+                guard trimmed.range(of: "\\w+State\\s*\\(", options: .regularExpression) != nil else {
+                    continue
+                }
+                XCTFail("\(relative):\(line) 用 @State 就地造了一个屏级状态 —— "
+                        + (base.hasSuffix("Assembler")
+                           ? "装配段该在 `.task` 里造，不要在声明处造（每次重算都会白造一个）"
+                           : "渲染段不造屏级状态，这一屏该叫 Assembler"))
             }
         }
     }
@@ -2370,12 +2418,14 @@ final class LayeringTests: XCTestCase {
     /// 这条守的是一类具体的伤害：正在读会话时隧道抖一下，整屏被换成组网页。旧设计那样做，
     /// 理由是「未就绪时只有一件事可做」，代价是把用户从正在做的事里弹走。
     ///
-    /// 断法是**闭集计数**，不是禁写法。第一版数的是 `switch stage` / `case .needsMesh`
+    /// 断法是**闭集计数 + 零分支**，不是禁写法。第一版数的是 `switch stage` / `case .needsMesh`
     /// 这几个字面量 —— 变异实测能绕过：把分支写成 `if case .ready = store.phase` 就全绿，
     /// 而伤害一模一样。禁写法守不住「换一种写法」，闭集才守得住。
     ///
-    /// 全应用只有五处视图构造：根那一处（列表）+ 目的地注册那四处。多出第六处 ⇒ 有人在
-    /// 根上按条件挑了另一屏。
+    /// **闭集计数有一个自己承认的缺口**：它只数五个已知名字，所以
+    /// `if phase == .ready { SessionListAssembler(…) } else { 别的屏(…) }` 里那第六个类型它看不见
+    /// —— 五个名字仍各一次，全绿。补的那一半是「`body` 里不许有条件分支」：根的整体分支只有
+    /// `navigationDestination` 那一处 `switch`（它是 `Destination` 的穷尽分支，不是按条件挑屏）。
     func testTheListIsAlwaysTheRoot() throws {
         let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
@@ -2403,6 +2453,25 @@ final class LayeringTests: XCTestCase {
                            "\(name) 在组合根里出现 \(sites.count) 次（应 \(expected)）：\(sites)"
                            + " —— 多出来的那处是在根上按条件挑了另一屏")
         }
+
+        // 另一半：**导航栈的第一个子视图必须是列表**。
+        //
+        // 闭集计数只认五个已知名字，所以 `if phase == .ready { SessionListAssembler(…) }
+        // else { 别的屏(…) }` 里那个第六个类型它看不见 —— 五个名字仍各一次，全绿。
+        // 而「按条件挑屏」必然让某个条件先于列表出现，于是直接钉「栈里第一条非注释代码就是它」。
+        //
+        // 为什么不用「body 里零 if/switch」：`.task { switch MeshConfig.read() … }` 是配置三态
+        // 分派，在 body 里但不是挑屏 —— 按形状禁会把这一处误伤（实测）。
+        guard let stackLine = lines.firstIndex(where: { $0.1.contains("NavigationStack {") }) else {
+            XCTFail("没读到导航栈")
+            return
+        }
+        let firstChild = lines[(stackLine + 1)...].first {
+            !$0.1.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        XCTAssertTrue(firstChild?.1.contains("SessionListAssembler(") == true,
+                      "导航栈的第一个子视图不是列表（第 \(firstChild?.0 ?? -1) 行）"
+                      + " —— 中间插了条件，正在读会话的人会被弹走")
     }
 
     /// 两个配置页只能从目的地清单进入 —— 没有第二个入口。
@@ -2567,7 +2636,8 @@ final class LayeringTests: XCTestCase {
 
         let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsAssembler(store: services.store)") },
+        // 只认类型名，不钉实参：把 `services.store` 先落成局部量（一种推荐的写法）不该假红。
+        XCTAssertTrue(lines.contains { Self.mentionsType($0.1, "MeshSettingsAssembler(") },
                       "组网那一支不展示配置页 —— 「先配网、再配对」那条路断了")
     }
 
@@ -2685,9 +2755,9 @@ final class LayeringTests: XCTestCase {
 
     /// 视图不认识持久化类型 —— 配置的读与写都在状态层。
     ///
-    /// 这条规则原先在配对屏破了：`@State` 的初值里 `MeshConfig.load()`（`@State` 初值每次
-    /// 重建都求值，于是每重算一遍读两次盘），按钮闭包里 `save()`。视图因此既能读盘又能写盘，
-    /// 而这两件事本该由状态层做完再把值给出来。
+    /// 它管的是整个 `Views/`，**包括装配段**：装配段可以持服务，但不碰持久化。要读盘时
+    /// 由状态自己读（装配段只决定「什么时候读」）—— 两个理由：分层上视图不认识落盘格式；
+    /// 实践上 `@State` 初值每次重算都求值，读盘放在视图里就会每重算一遍读两次盘。
     func testViewsDoNotTouchPersistence() throws {
         var violations: [String] = []
         var scanned = 0
@@ -2759,8 +2829,8 @@ final class LayeringTests: XCTestCase {
     /// 这一行是整条链路的入口，而它没有任何行为判据能碰到（视图不在测试覆盖里）：
     /// 删掉它，两端的判据全绿而列表永远不动。结构判据是唯一守得住它的形式。
     ///
-    /// 锚落在**列表的装配段**：它造这个 state，也就由它接（R36 之前是组合根造，所以锚在根）。
-    /// 渲染视图的字段里没有 `EventStream`，所以锚不在视图 —— 那一半（服务不进渲染视图的
+    /// 锚落在**列表的装配段**：它造这个 state，也就由它接。渲染视图的字段里没有
+    /// `EventStream`，所以锚不在视图 —— 那一半（服务不进渲染视图的
     /// 字段）由 `testRenderViewsHoldNoServices` 守，两条各守一半。
     func testTheListStateIsSubscribedToTheEventStream() throws {
         let assembler = sourcesRoot.appendingPathComponent(
