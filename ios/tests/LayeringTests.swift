@@ -2158,14 +2158,15 @@ final class LayeringTests: XCTestCase {
     ///
     /// 盲区：类型名换了就认不出（漏报方向）；行内注释里出现算命中（误报方向，接受）。
     ///
-    /// **根的两个文件不在表里，是有一条界线而不是漏扫**：根的职责就是持服务（造目的地要
-    /// 它们），把根加进来等于把「谁能持服务」这条线擦掉。表里这五个现在都只持「造容器的
-    /// 工厂闭包」或纯值 —— 谁改成直接持服务，谁就该从这张表移出去，而不是把禁令放宽。
+    /// **表里只有渲染段，`*Assembler.swift` 与根都不在，这是界线不是漏扫**：装配的职责
+    /// 就是持服务（造状态要它们），把它们加进来等于把「谁能持服务」这条线擦掉。表里这五个
+    /// 只持状态对象与事实（`MeshStore` 的投影）—— 谁改成直接持服务，谁就该从这张表移出去，
+    /// 而不是把禁令放宽。
     func testRenderViewsHoldNoServices() throws {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
-            "Features/Pairing/Views/PairingScreen.swift",
+            "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
@@ -2197,7 +2198,7 @@ final class LayeringTests: XCTestCase {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
-            "Features/Pairing/Views/PairingScreen.swift",
+            "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
@@ -2214,6 +2215,84 @@ final class LayeringTests: XCTestCase {
             checked += 1
         }
         XCTAssertEqual(checked, files.count, "有个文件没扫到 —— 先怀疑路径推算")
+    }
+
+    /// 装配段与渲染段成对，且**状态真的由装配段造**。
+    ///
+    /// 三件事分开守，因为它们各自会独立坏：
+    /// 1. **成对**：有 `XxxAssembler.swift` 就有同目录的 `XxxView.swift` —— 拆一半时
+    ///    装配段造出来的状态没人画，症状是整屏停在占位。
+    /// 2. **装配段造状态**：它声明一个可选的状态，并且判断「还没造」——只声明不造，
+    ///    状态永远 nil，屏永远画占位。这两个字符串缺一不可：只查声明会放过「声明了没造」。
+    /// 3. **渲染段不造状态**：`*View.swift` 里出现「类型名以 `State` 结尾的 `@State`」即红
+    ///    —— 那时它已经是装配段了，名字在说谎。
+    ///
+    /// 盲区：名字本身没有编译器管。有人把一个持服务的屏叫 `View` 而不叫 `Assembler`，
+    /// 这三条都抓不到（第 1 条只从 `Assembler` 出发）。那一半只能靠评审。
+    ///
+    /// **扫描面限定在 `Features/*/Views/`**：`State/` 下有一个同后缀的旧类型
+    /// （`TranscriptAssembler`，它把事件折成显示节点，与「一屏的装配段」不是一件事）。
+    /// 按文件名全仓扫会把它当成缺 `TranscriptView.swift` 的装配段 —— 实测会假红一次。
+    func testAssemblersOwnTheStateAndPairWithAView() throws {
+        var assemblers: [(relative: String, base: String)] = []
+        let featuresRoot = sourcesRoot.appendingPathComponent("Features")
+        for dir in (try FileManager.default.contentsOfDirectory(
+            at: featuresRoot, includingPropertiesForKeys: nil
+        )) {
+            let viewsDir = dir.appendingPathComponent("Views")
+            guard FileManager.default.fileExists(atPath: viewsDir.path) else { continue }
+            for file in swiftFiles(under: viewsDir) {
+                let base = file.deletingPathExtension().lastPathComponent
+                guard base.hasSuffix("Assembler") else { continue }
+                assemblers.append((
+                    file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: ""), base
+                ))
+            }
+        }
+        XCTAssertGreaterThanOrEqual(assemblers.count, 5, "扫到的装配段太少 —— 先怀疑路径推算")
+
+        for (relative, base) in assemblers {
+            let url = sourcesRoot.appendingPathComponent(relative)
+            let viewName = String(base.dropLast("Assembler".count))
+            let sibling = url.deletingLastPathComponent()
+                .appendingPathComponent(viewName + "View.swift")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: sibling.path),
+                          "\(relative) 没有配对的 \(viewName)View.swift —— 拆了一半")
+
+            let text = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertTrue(text.contains("struct \(base): View"),
+                          "\(relative) 里没有 \(base) —— 文件名与类型名对不上")
+
+            // 造状态那一步。**不按「状态类型名 = 前缀 + State」判**：`MeshSettingsAssembler`
+            // 造的是 `MeshSetupState`，按名字耦合的判法会在这里假红一次（实测）。
+            // 只要求「有一个可选的 `@State`」+「判断了还没造」。
+            let optionalState = try NSRegularExpression(
+                pattern: "@State private var \\w+: \\w+\\?")
+            XCTAssertNotNil(
+                optionalState.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                "\(relative) 没有可选状态的 `@State` —— 装配段不造状态，它凭什么存在")
+            XCTAssertTrue(text.contains("== nil"),
+                          "\(relative) 没有「还没造」的判断 —— 状态会在每次重算时白造一个")
+        }
+
+        // 反向：渲染段不许出现屏级状态的 `@State`。扫的是 `*View.swift` ——
+        // `*Assembler.swift` 正是要装那个可选状态的地方，它不在这一批里。
+        let viewsRoot = sourcesRoot.appendingPathComponent("Features")
+        for file in swiftFiles(under: viewsRoot)
+        where file.deletingPathExtension().lastPathComponent.hasSuffix("View") {
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (line, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
+                let trimmed = code.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("@State "), trimmed.contains(":") else { continue }
+                let type = trimmed.split(separator: ":").last.map(String.init) ?? ""
+                let head = type.split(separator: "=").first.map(String.init) ?? type
+                let name = head.trimmingCharacters(in: .whitespaces).trimmingCharacters(
+                    in: CharacterSet(charactersIn: "?"))
+                guard name.hasSuffix("State") else { continue }
+                XCTFail("\(relative):\(line) 用 @State 装了 \(name) —— 屏级状态由装配段造，"
+                        + "这一屏该叫 Assembler")
+            }
+        }
     }
 
     /// 容器要有决定权：至少一条对外成员做了**绑定**或**组合**。
@@ -2245,7 +2324,7 @@ final class LayeringTests: XCTestCase {
         let views = [
             "Features/SessionList/Views/SessionListView.swift",
             "Features/SessionDetail/Views/SessionDetailView.swift",
-            "Features/Pairing/Views/PairingScreen.swift",
+            "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
@@ -2303,16 +2382,17 @@ final class LayeringTests: XCTestCase {
 
         // 正控：确认读到了那个栈与列表，否则下面的计数守的是空气。
         XCTAssertTrue(lines.contains { $0.1.contains("NavigationStack {") }, "没读到导航栈")
-        XCTAssertTrue(lines.contains { $0.1.contains("SessionListView(list: list") },
+        XCTAssertTrue(lines.contains { $0.1.contains("SessionListAssembler(") },
                       "根不是列表 —— 首屏被别的面顶掉了")
 
-        // 五处，各一次：根 + 四个目的地。
+        // 五处，各一次：根 + 四个目的地。数的是**装配段**：屏级状态由它们造，
+        // 所以「多出一个」就意味着根上按条件挑了另一屏。
         let palette: [(name: String, expected: Int)] = [
-            ("SessionListView(", 1),      // 根
-            ("SessionDetailView(", 1),    // 目的地 .session
-            ("SettingsView(", 1),         // 目的地 .settings
-            ("MeshSettingsView(", 1),     // 目的地 .mesh
-            ("PairingScreen(", 1),        // 目的地 .pairing
+            ("SessionListAssembler(", 1),      // 根
+            ("SessionDetailAssembler(", 1),    // 目的地 .session
+            ("SettingsAssembler(", 1),         // 目的地 .settings
+            ("MeshSettingsAssembler(", 1),     // 目的地 .mesh
+            ("PairingAssembler(", 1),          // 目的地 .pairing
         ]
         for (name, expected) in palette {
             // 用左边界，不用裸 `contains`：`SettingsView(` 是 `MeshSettingsView(` 的后缀。
@@ -2330,12 +2410,12 @@ final class LayeringTests: XCTestCase {
     /// 守的是「配置动作只在设置页」。多一个入口的症状不是崩溃，是**两处行为各走各的**：
     /// 一处改了地址、另一处还按旧值显示。
     ///
-    /// 断法：全仓 `MeshSettingsView(` 与 `PairingScreen(` 的构造点各恰好一处，且都在
+    /// 断法：全仓 `MeshSettingsAssembler(` 与 `PairingAssembler(` 的构造点各恰好一处，且都在
     /// 组合根的目的地注册里。列表与设置只发 `Destination` 值，不构造它们。
     func testConfigScreensComeOnlyFromRoutes() throws {
         let expectations: [(type: String, allowedFile: String)] = [
-            ("MeshSettingsView(", "RootScreen.swift"),
-            ("PairingScreen(", "RootScreen.swift"),
+            ("MeshSettingsAssembler(", "RootScreen.swift"),
+            ("PairingAssembler(", "RootScreen.swift"),
         ]
         var scanned = 0
         for (type, allowed) in expectations {
@@ -2487,7 +2567,7 @@ final class LayeringTests: XCTestCase {
 
         let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsView(setup: meshSetup, store: services.store)") },
+        XCTAssertTrue(lines.contains { $0.1.contains("MeshSettingsAssembler(store: services.store)") },
                       "组网那一支不展示配置页 —— 「先配网、再配对」那条路断了")
     }
 
@@ -2496,7 +2576,7 @@ final class LayeringTests: XCTestCase {
     /// 合在一起时，已配对状态打开组网设置会在标题「配对」的页面上挂着「输入 6 位配对码」——
     /// 而 `canPair` 不判是否已配对，按下去会真的再发一次配对请求。
     func testPairingAndMeshSettingsAreSeparate() throws {
-        let pairing = sourcesRoot.appendingPathComponent("Features/Pairing/Views/PairingScreen.swift")
+        let pairing = sourcesRoot.appendingPathComponent("Features/Pairing/Views/PairingView.swift")
         let mesh = sourcesRoot.appendingPathComponent("Features/MeshSettings/Views/MeshSettingsView.swift")
         let pairingLines = codeLines(in: try String(contentsOf: pairing, encoding: .utf8))
         let meshLines = codeLines(in: try String(contentsOf: mesh, encoding: .utf8))
@@ -2506,7 +2586,7 @@ final class LayeringTests: XCTestCase {
                       "扫错文件了 —— 组网设置不认识 MeshSetupState？")
         for (i, code) in pairingLines {
             for name in ["MeshSetupState", "MeshStore", "MeshConfig"] where code.contains(name) {
-                XCTFail("PairingScreen.swift:\(i) 出现 \(name) —— 配对屏只管换身份")
+                XCTFail("PairingView.swift:\(i) 出现 \(name) —— 配对屏只管换身份")
             }
         }
         for (i, code) in meshLines {
@@ -2679,14 +2759,15 @@ final class LayeringTests: XCTestCase {
     /// 这一行是整条链路的入口，而它没有任何行为判据能碰到（视图不在测试覆盖里）：
     /// 删掉它，两端的判据全绿而列表永远不动。结构判据是唯一守得住它的形式。
     ///
-    /// 锚落在**组合根**：它造这个 state，也就由它接。视图的字段里没有 `EventStream`，
-    /// 所以锚不在视图 —— 那一半（服务不进渲染视图的字段）由
-    /// `testRenderViewsHoldNoServices` 守，两条各守一半。
+    /// 锚落在**列表的装配段**：它造这个 state，也就由它接（R36 之前是组合根造，所以锚在根）。
+    /// 渲染视图的字段里没有 `EventStream`，所以锚不在视图 —— 那一半（服务不进渲染视图的
+    /// 字段）由 `testRenderViewsHoldNoServices` 守，两条各守一半。
     func testTheListStateIsSubscribedToTheEventStream() throws {
-        let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
-        let rootLines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
-        XCTAssertTrue(rootLines.contains { $0.1.contains("list.attach(events: services.events)") },
-                      "根没有把事件流交给列表状态 —— 事件到不了列表")
+        let assembler = sourcesRoot.appendingPathComponent(
+            "Features/SessionList/Views/SessionListAssembler.swift")
+        let assemblerLines = codeLines(in: try String(contentsOf: assembler, encoding: .utf8))
+        XCTAssertTrue(assemblerLines.contains { $0.1.contains("list?.attach(events: events)") },
+                      "装配段没有把事件流交给列表状态 —— 事件到不了列表")
 
         let list = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
         let listLines = codeLines(in: try String(contentsOf: list, encoding: .utf8))

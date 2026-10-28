@@ -1,38 +1,12 @@
 import SwiftUI
 
-/// 配对屏的装配段：造容器、交给渲染段。容器随这一屏生死。
-///
-/// 渲染段拿不到任何闭包：它只读 `PairingState`。
-struct PairingScreen: View {
-    private let make: () -> PairingState
-    @State private var state: PairingState?
-
-    init(make: @escaping () -> PairingState) {
-        self.make = make
-    }
-
-    var body: some View {
-        Group {
-            if let state {
-                PairingBody(state: state)
-            } else {
-                // 首帧由这行吸收。容器不在这里造（`@State` 只采用第一个），也不该由
-                // 上一级替它造 —— 那会每次重算白造一个。
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task { if state == nil { state = make() } }
-    }
-}
-
-/// 配对页的渲染段：配对码 + 解除。零闭包，只读容器。
+/// 配对页的**渲染段**：配对码 + 解除。零闭包，只读容器。
 ///
 /// 全 App 唯一需要用户「在场」的动作，也是唯一一段不需要身份的通信 —— 配对码本身就是凭证
 /// （一次性、10 分钟、错 5 次作废，限次与时效都在服务端）。
 ///
 /// 组网不在这里：那是换路径，这是换身份。两者在设置页里并列。
-struct PairingBody: View {
+struct PairingView: View {
     let state: PairingState
 
     /// 解除不可逆（要重新拿配对码），所以走一次确认。

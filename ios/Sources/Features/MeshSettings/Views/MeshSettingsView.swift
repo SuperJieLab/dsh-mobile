@@ -6,8 +6,7 @@ import SwiftUI
 /// 组网换**路径**（已配对之后照样要改地址、看节点起没起来）。挤在一个视图里时，
 /// 已配对状态打开这一页，标题是「配对」、上面还挂着「输入 6 位配对码」。
 ///
-/// 这一页**没有容器**：依赖只有两样，各有明确归属（录入在 `setup`，节点事实在 `store`），
-/// 没有任何一条值是把两者组合出来的、或绑定了屏内输入的 ⇒ 收成一层只会得到转发。
+/// 本文件只是渲染段：草稿由 `MeshSettingsAssembler` 造，节点事实由 `store` 给。
 struct MeshSettingsView: View {
     @Bindable var setup: MeshSetupState
     /// 节点五态与「配置读坏了」的来源。只读 —— 动手的入口在 `setup`。

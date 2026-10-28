@@ -5,13 +5,14 @@ import SwiftUI
 /// 只有视图拿得到。排序是服务端的承诺，这里一行排序都没有。
 ///
 /// **它永远是根**：前置条件不满足时不换屏，只在顶部给一条提示 —— 否则正在读会话的人会被
-/// 整屏弹走。修配置走齿轮。跳转只发 `Destination` 值，下一屏的依赖归组合根。
+/// 整屏弹走。修配置走齿轮。跳转只发 `Destination` 值，下一屏的依赖归装配段。
+///
+/// 依赖只有一个：连接域的**只读投影**。它是事实（`phase` / `meshPath` / `route`），
+/// 不是实现 —— 页脚那句地址也由它现算，不再经一层闭包转手。
 struct SessionListView: View {
     let list: SessionListState
-    /// 连接域的只读投影：`phase` 驱动「就绪即首载」，`meshPath` 给徽章。
+    /// `phase` 驱动「就绪即首载」，`meshPath` 给徽章，`route` 给页脚地址。
     let store: MeshStore
-    /// 页脚那句地址。给的是**读串的能力**，不是端点对象。
-    let address: () -> String
 
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
@@ -45,7 +46,7 @@ struct SessionListView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("\(list.sessions.count) 个会话 · \(address())")
+                Text("\(list.sessions.count) 个会话 · \(gatewayAddressLine(store.route?.baseURL))")
             }
         }
         .navigationTitle("会话")
@@ -62,8 +63,8 @@ struct SessionListView: View {
             }
         }
         .refreshable { await list.reload() }
-        // 进屏首载。事件订阅不在这里：它是 App 级的一次接线，挂在组合根上（那边造
-        // 这个 state，也就由它接）。本屏只负责「什么时候取」——那是手势与平台事件。
+        // 进屏首载。事件订阅不在这里：那是造这个 state 的装配段接的线（见
+        // `SessionListAssembler`）。本屏只负责「什么时候取」——那是手势与平台事件。
         .task { await list.reload() }
         // 组网就绪即首载：启动窗口内的请求会 fail-fast（隧道产物还不存在），
         // 就绪那一刻补一发，用户不必手动下拉。reload 幂等，重复触发无害。

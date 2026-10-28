@@ -1,59 +1,12 @@
 import SwiftUI
 
-/// 单个会话的消息视图。
+/// 单个会话的消息视图 —— 这一屏的**渲染段**。依赖全在容器里，零服务。
 ///
-/// 数据来自 `SessionDetailState` —— 这一屏的容器（消息同步 / 模型目录 / 命令目录 / 输入条）。
-/// 本文件分两段：**这一段只负责造容器与接线**（造一次、进屏开流、离屏关卡），
-/// 渲染在下面的 `SessionDetailBody`。
+/// 容器（消息同步 / 模型目录 / 命令目录 / 输入条）由 `SessionDetailAssembler` 造并接线；
+/// 本文件只画。两段分开之后渲染段拿不到服务：不是不写，是拿不到。
 ///
-/// 为什么分：容器要随这一屏生死（离开就丢，回来重取一个窗口），而 `@State` 是唯一能表达
-/// 「跟视图身份走」的东西 —— 于是造它的代码贴着这一屏，而它又需要 `client` 与 `link`。
-/// 两段分开，渲染那段拿不到服务：不是不写，是拿不到。
-///
-/// 容器由上一级给的闭包造（`make`）：根知道 `client` / `link`，本屏只需要「能造一个」。
+/// 首帧为 nil 的那一帧（容器还没造出来）由装配段吸收，这里只处理「容器在手里」的形态。
 struct SessionDetailView: View {
-    private let session: SessionSummary
-    private let make: (SessionSummary) -> SessionDetailState
-    /// 首帧为 nil：容器在 `.task` 里现造。`@State` 的初值在 `init` 里求值，那一刻拿不到环境；
-    /// 也不该由上一级的 body 替它造（那会每次重算白造一个，而 `@State` 只采用第一个）。
-    @State private var detail: SessionDetailState?
-
-    init(session: SessionSummary, make: @escaping (SessionSummary) -> SessionDetailState) {
-        self.session = session
-        self.make = make
-    }
-
-    var body: some View {
-        Group {
-            if let detail {
-                SessionDetailBody(detail: detail)
-            } else {
-                // 首帧：容器还没造出来。这一帧由这句吸收，与「正在同步」是同一个面。
-                ProgressView("正在同步…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        // 进屏即登记一条流：opening 给首屏，事件与未定稿实时推。
-        // 离屏即注销那一条。`sync()`（HTTP 全量对齐）只留作首屏兜底。
-        //
-        // 连接不归本屏：回前台与组网就绪的重连点在根部（`DshMobileApp`）—— 那是 App 级
-        // 事件，关掉这一屏它照样该发生。
-        .task {
-            if detail == nil { detail = make(session) }
-            guard let created = detail else { return }
-            created.sync.startFollowing()
-            // 目录进屏拉一次。挂在格子上的话，功能条每次因键盘收起而重建都会重拉一遍。
-            await created.catalog.reload()
-            // 离屏时这个 `.task` 会被取消。若 `onDisappear` 早于这里执行，它看到的
-            // `detail` 还是 nil，那条流就没人关 —— 关一次是幂等的，这里补上。
-            if Task.isCancelled { created.sync.stopFollowing() }
-        }
-        .onDisappear { detail?.sync.stopFollowing() }
-    }
-}
-
-/// 详情屏的渲染段：依赖全在容器里，零服务。
-private struct SessionDetailBody: View {
     let detail: SessionDetailState
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
