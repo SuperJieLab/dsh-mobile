@@ -27,17 +27,17 @@ struct MeshSettingsAssembler: View {
         }
         .task {
             guard setup == nil else { return }
-            // 取成局部量再进闭包：捕获列表要一个当前作用域的标识符。
+            // 取成局部量再进闭包：闭包要的是这一份 `store`，不是「视图是什么」。
+            //
+            // 闭包直接持有它（不弱化）：`store` 由 `AppServices` 持有、活满进程，而闭包
+            // 活不过视图 —— 弱捕获换来的是一个够不着的分支，而那个分支只能编一个假答案
+            // （`store` 没了不是「节点正在起」，不该拿这句话回答用户）。
             let store = self.store
             let created = MeshSetupState(
                 stored: .unconfigured,
-                submit: { [weak store] key, config in
-                    await store?.submitMeshKey(key, config: config) ?? .busy
-                },
-                retry: { [weak store] config in
-                    await store?.retryMesh(config: config) ?? .busy
-                },
-                isStarting: { [weak store] in store?.isStarting ?? false }
+                submit: { key, config in await store.submitMeshKey(key, config: config) },
+                retry: { config in await store.retryMesh(config: config) },
+                isStarting: { store.isStarting }
             )
             // 盘上的那份由状态自己读：读盘归它那一层，视图层只决定「什么时候读」。
             // 只在这一处读（`setup == nil` 那一支）—— 草稿建好之后 `.task` 若重跑，

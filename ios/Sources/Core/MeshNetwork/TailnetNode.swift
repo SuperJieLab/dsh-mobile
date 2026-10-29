@@ -116,17 +116,18 @@ final class TailnetNode {
 
     /// 设置页提交接入 key：进沙盒存储 → registering → 注册。
     ///
-    /// **正在起节点时拒绝**（`.busy`）：两条并发时，任一条的终局都会清掉另一条的产物 ——
-    /// `finishFailed` 清 `gatewaySession`、超时分支清 `self.node`，而先失败的那条还会
-    /// 把后成功的那条挡在 `.failed` 外面进不来。入口拒绝比事后补救便宜得多。
-    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome {
+    /// **正在起节点时拒绝**（`.refusedWhileNodeStarting`）：两条并发时，任一条的终局都会
+    /// 清掉另一条的产物 —— `finishFailed` 清 `gatewaySession`、超时分支清 `self.node`，
+    /// 而先失败的那条还会把后成功的那条挡在 `.failed` 外面进不来。
+    /// 入口拒绝比事后补救便宜得多。
+    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
         guard !isStarting else {
             Log.info(Log.Module.mesh, "submitKey: refused — node is starting")
-            return .busy
+            return .refusedWhileNodeStarting
         }
         Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
         guard !key.isEmpty else {
-            // 空提交不进状态机注册流程。
+            // 空提交不进状态机注册流程 —— 动作照样算「接下」，成不成由状态机给。
             transition(.registrationFailed(.badKey))
             return .accepted
         }
@@ -137,10 +138,10 @@ final class TailnetNode {
     }
 
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
-    func retry(config: MeshConfig) async -> MeshActionOutcome {
+    func retry(config: MeshConfig) async -> MeshActionAcceptance {
         guard !isStarting else {
             Log.info(Log.Module.mesh, "retry: refused — node is starting")
-            return .busy
+            return .refusedWhileNodeStarting
         }
         let key = TailnetKeyStore.load()
         Log.info(Log.Module.mesh, "retry: key=\(Self.keyHint(key))")

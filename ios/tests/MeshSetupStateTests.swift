@@ -15,8 +15,8 @@ final class MeshSetupStateTests: XCTestCase {
     private func state(
         stored: MeshConfig = MeshConfig(controlURLString: "", gatewayURLString: ""),
         saved: @escaping (MeshConfig) -> Void = { _ in },
-        submitted: @escaping (String, MeshConfig) -> MeshActionOutcome = { _, _ in .accepted },
-        retried: @escaping (MeshConfig) -> MeshActionOutcome = { _ in .accepted },
+        submitted: @escaping (String, MeshConfig) -> MeshActionAcceptance = { _, _ in .accepted },
+        retried: @escaping (MeshConfig) -> MeshActionAcceptance = { _ in .accepted },
         isStarting: @escaping () -> Bool = { false }
     ) -> MeshSetupState {
         MeshSetupState(stored: stored,
@@ -184,12 +184,12 @@ final class MeshSetupStateTests: XCTestCase {
         XCTAssertNotNil(sut.blockedReason, "被拒要给说法")
     }
 
-    /// 服务层回 `.busy` 时同样不能吞：密钥还给用户，并给说法。
+    /// 服务层回 `.refused` 时同样不能吞：密钥还给用户，并给说法。
     ///
     /// 这一支守的是「预判与提交之间被人插进一个挂起点」那类改动 —— 预判漏了，
     /// 也不能让用户以为提交成功。
-    func testABusyOutcomeFromTheServiceIsNotSwallowed() async {
-        let sut = state(submitted: { _, _ in .busy })
+    func testARefusalFromTheServiceIsNotSwallowed() async {
+        let sut = state(submitted: { _, _ in .refusedWhileNodeStarting })
         sut.controlURL = "https://example:8443"
         sut.gatewayURL = "http://100.64.0.1:3081"
         sut.tailnetKey = "hskey-auth-x"

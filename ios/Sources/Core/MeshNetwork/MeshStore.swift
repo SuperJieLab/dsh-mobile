@@ -18,13 +18,20 @@ import Foundation
 // （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
 // TailscaleKit，见 tests/MeshStoreTests.swift）。
 
-/// 组网管理动作（提交接入 key / 失败后重试）有没有被接下。
+/// 组网管理动作（提交接入 key / 失败后重试）有没有被**接下**。
 ///
-/// **`busy` 不是失败，是「此刻不接」**：节点正在起的时候再起一条，会让两条注册互相
-/// 清产物、让状态机的终局互相覆盖。入口如实说没接，怎么讲这件事归调用方。
-enum MeshActionOutcome: Equatable {
+/// 它回答的既不是「成不成」，也不是「系统现在什么状态」（那是 `MeshPhase`）：
+/// 接下之后照样可能落 `failed(badKey)`。它只回答**这一次调用**的去向 ——
+/// 调用方拿它决定「这一下要不要善后」，而它活不过本次调用，不能存成状态。
+///
+/// 被拒的**原因写在取值名里**，不另立一层「理由」类型：今天只有一道闸，一层类型只为装
+/// 一个 case；而那一层的名字（`Refusal`）已经被 `Features/` 里的同名类型占了 —— Core 再
+/// 定义一个，分层判据会读成「下层认识界面层的类型」（按名字判，分不出两个不同的东西）。
+/// 多一种原因就是多一个 case，`switch` 的穷尽性会逼着每个调用方处理它。
+enum MeshActionAcceptance: Equatable {
     case accepted
-    case busy
+    /// 没接：另一条起节点的路在跑。两条并发时，任一条的终局都会清掉另一条的产物。
+    case refusedWhileNodeStarting
 }
 
 /// 组网节点能力：`TailnetNode` 的窄面。状态仍由 `TailnetNodeState` 状态机判定，
@@ -47,9 +54,9 @@ enum MeshActionOutcome: Equatable {
     func launchNode(config: MeshConfig) async
     func reviveNode() async
     /// 组网管理动作（设置页）：提交接入 key / failed 后重试。判定仍在节点层状态机。
-    /// 节点正在起时返回 `.busy` —— 同一时刻只允许一条起节点的路。
-    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome
-    func retry(config: MeshConfig) async -> MeshActionOutcome
+    /// 节点正在起时回 `.refusedWhileNodeStarting` —— 同一时刻只允许一条起节点的路。
+    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance
+    func retry(config: MeshConfig) async -> MeshActionAcceptance
 }
 
 @MainActor
@@ -154,13 +161,14 @@ final class MeshStore {
     ///
     /// 不带参数是有意的：编排不知道「存的是哪一份」，也不该知道。让它传参就有两种可能
     /// （传存的那份 / 传手里的），而后者正是「旧 session 配上新地址」那类缺陷的入口。
-    func retryStored() async -> MeshActionOutcome {
-        guard let config else {
-            // 没存过配置 = 没有可重试的那一份。此刻 `phase` 也不可能是 `.failed`，
-            // 所以这条只是「接口对任何调用都答得出来」，不是一条真实的分支。
-            return .busy
-        }
-        return await retryMesh(config: config)
+    ///
+    /// **不回答「接没接」**：这是一次内部动作，没有第二方等回执（与设置页那几个按钮不同）。
+    /// 被拒时 `phase` 与 `isStarting` 会如实反映，编排读它们即可 —— 多一层返回值只是把
+    /// 同一事实讲两遍。没存过配置就直接不做事：此刻 `phase` 不可能是 `.failed`，
+    /// 这条不是真实分支，只是「对任何调用都答得出来」。
+    func retryStored() async {
+        guard let config else { return }
+        _ = await retryMesh(config: config)
     }
 
     /// 配置读坏了：不进节点层，把「要重新填」这件事如实说出来。
@@ -185,8 +193,8 @@ final class MeshStore {
     /// **预判在改 `config` 之前**：`config` 是 `onVerifiedRunning` 组装路径时读的那一格。
     /// 忙时若先把它换成新配置，正在起的那条旧配置一旦成功，就会拿旧 session 配上新地址 ——
     /// 「地址与传输同生共死」当场破掉。所以忙时整条动作都不做。
-    func submitMeshKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome {
-        guard !node.isStarting else { return .busy }
+    func submitMeshKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
+        guard !node.isStarting else { return .refusedWhileNodeStarting }
         self.config = config
         // 用户重填过了 —— 上一次的「读坏」到此为止。再坏会是下一次读盘的事。
         storedConfigDamaged = false
@@ -195,8 +203,8 @@ final class MeshStore {
         return outcome
     }
 
-    func retryMesh(config: MeshConfig) async -> MeshActionOutcome {
-        guard !node.isStarting else { return .busy }
+    func retryMesh(config: MeshConfig) async -> MeshActionAcceptance {
+        guard !node.isStarting else { return .refusedWhileNodeStarting }
         self.config = config
         let outcome = await node.retry(config: config)
         nodeChanged()

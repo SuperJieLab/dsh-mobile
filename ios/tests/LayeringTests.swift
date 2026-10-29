@@ -2880,6 +2880,34 @@ final class LayeringTests: XCTestCase {
                        "闸加到了注册面上 —— 全部订阅方的语义都会跟着变")
     }
 
+    /// 一次动作的回答**不许存成状态** —— 两个出口不打架的那条规矩。
+    ///
+    /// `MeshPhase` 答「现在怎么样」（观察面），`MeshActionAcceptance` 答「刚才那一下接没接」
+    /// （回执）。两者不冲突的前提是回执活不过本次调用：一旦有人把它收进属性，就多出
+    /// 「上一次点击的结果」这种既不是当下事实、又会被当成事实读的东西 —— 而那时
+    /// 「该消费哪个」就没有答案了。
+    ///
+    /// 局部量接住它是合法的（`MeshSetupState` 就这么做）—— 这条禁的只是**跨调用存活**。
+    /// 判据形状照 `: MeshActionAcceptance` 匹配，不经 `->`：函数签名与闭包属性都在说
+    /// 「这种调用会答什么」，与「存下来的答案」不是一回事。
+    func testAnActionAcceptanceNeverBecomesStoredState() throws {
+        let declaration = try NSRegularExpression(
+            pattern: "(var|let)\\s+\\w+\\s*:\\s*MeshActionAcceptance\\b")
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            scanned += 1
+            for (number, line) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
+                let whole = NSRange(line.startIndex..., in: line)
+                if declaration.firstMatch(in: line, range: whole) != nil {
+                    XCTFail("\(relative):\(number) 把动作回执存进了属性 —— "
+                            + "它只该活一次调用；「现在怎么样」由 MeshPhase 答")
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 20, "一个文件都没扫到 —— 这条判据在空转")
+    }
+
     /// 计划的三个动作之间有顺序契约，`StartupPlan` 自己守；这里只守**它还在**。
     ///
     /// 为什么值得一条结构判据：`StartupPlan` 一旦被内联回 `AppServices.start()` 的

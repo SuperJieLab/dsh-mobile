@@ -148,10 +148,10 @@ final class MeshStoreTests: XCTestCase {
         XCTAssertTrue(store.isStarting, "「正在起」要透传给设置页做提交前的判断")
 
         let outcome = await store.submitMeshKey("hskey-auth-new", config: new)
-        XCTAssertTrue(outcome == .busy, "起节点期间该明确拒绝，不能静默吞掉")
+        XCTAssertTrue(outcome == .refusedWhileNodeStarting, "起节点期间该明确拒绝，不能静默吞掉")
         XCTAssertEqual(node.submitCount, 0, "被拒的动作不该转交给节点层")
         let retryOutcome = await store.retryMesh(config: new)
-        XCTAssertTrue(retryOutcome == .busy, "重试同样要拒 —— 它也会再起一条节点")
+        XCTAssertTrue(retryOutcome == .refusedWhileNodeStarting, "重试同样要拒 —— 它也会再起一条节点")
 
         // 旧配置那条最终还是成功了：产物必须配旧地址，而不是用户刚敲的新地址。
         node.isStarting = false
@@ -172,9 +172,8 @@ final class MeshStoreTests: XCTestCase {
         let store = MeshStore(node: node)
         await store.start(config: stored)
 
-        let outcome = await store.retryStored()
+        await store.retryStored()
 
-        XCTAssertTrue(outcome == .accepted)
         XCTAssertEqual(node.retriedConfigs, [stored], "重试用的是 start 时存下的那份")
     }
 }
@@ -202,16 +201,16 @@ final class MeshStoreTests: XCTestCase {
         // 假件在事实变化点同样推送，回灌链路才被测到。
         onNodeChanged?()
     }
-    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome {
+    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
         // 计「转交次数」而不是「接下次数」：后者会被本守卫吃掉，恒为 0，
         // 于是「被拒的动作不该转交给节点层」这条断言永远绿。
         submitCount += 1
-        guard !isStarting else { return .busy }
+        guard !isStarting else { return .refusedWhileNodeStarting }
         return .accepted
     }
-    func retry(config: MeshConfig) async -> MeshActionOutcome {
+    func retry(config: MeshConfig) async -> MeshActionAcceptance {
         retriedConfigs.append(config)
-        guard !isStarting else { return .busy }
+        guard !isStarting else { return .refusedWhileNodeStarting }
         return .accepted
     }
 }

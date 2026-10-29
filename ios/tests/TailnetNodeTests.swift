@@ -112,7 +112,7 @@ final class TailnetNodeTests: XCTestCase {
         let config = completeConfig()
 
         // 第一条 up 走完成功路径：状态 running、session 建成 —— 这才有「探活」可言。
-        await node.submitKey("hskey-auth-first", config: config)
+        _ = await node.submitKey("hskey-auth-first", config: config)
         XCTAssertEqual(node.state, .running)
         XCTAssertFalse(node.isStarting)
 
@@ -135,7 +135,7 @@ final class TailnetNodeTests: XCTestCase {
                        "接入途中不该读状态 —— 读失败会把一次正常接入打成不可达")
 
         await backend.releaseUp()
-        await second.value
+        _ = await second.value
         XCTAssertFalse(node.isStarting, "接入结束，窗口收")
 
         let beforeProbe = await backend.statusJSONCalls()
@@ -157,7 +157,7 @@ final class TailnetNodeTests: XCTestCase {
 
         // 出口一：up() 抛出（key 被拒 = 不重试，一次结束）。
         await backend.configure(holdsUp: false, failure: "invalid authkey")
-        await node.submitKey("hskey-auth-bad", config: config)
+        _ = await node.submitKey("hskey-auth-bad", config: config)
         XCTAssertFalse(node.isStarting, "抛出之后窗口要收")
         XCTAssertEqual(node.state, .failed(.badKey), "按消息归类成 key 被拒")
 
@@ -168,7 +168,7 @@ final class TailnetNodeTests: XCTestCase {
         XCTAssertTrue(node.isStarting, "挂着时窗口开着")
 
         await backend.releaseUp()
-        await second.value
+        _ = await second.value
         XCTAssertFalse(node.isStarting, "返回之后窗口要收")
     }
 

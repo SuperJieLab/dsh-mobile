@@ -30,7 +30,7 @@ final class MeshSetupState {
     /// 「按钮亮着、点了却什么也没发生」。
     var blockedReason: BlockedReason?
 
-    /// 被拒的原因。与 `MeshActionOutcome.busy` 分开：那个是服务层的回答，
+    /// 被拒的原因。与 `MeshActionAcceptance.refused` 分开：那个是服务层的回答（接没接），
     /// 这个是这一页要讲给用户听的东西（措辞不在这里）。
     enum BlockedReason: Equatable {
         case nodeStarting
@@ -41,16 +41,16 @@ final class MeshSetupState {
     /// 落盘。**注入**是为了让「存的那份与交出去的那份是同一份」能被断言 —— 真写 UserDefaults
     /// 时断言不了，而这条正是最容易写错的：分两次构造就会出现「存的是 A、连的是 B」。
     private let save: (MeshConfig) -> Void
-    private let submit: (String, MeshConfig) async -> MeshActionOutcome
-    private let retry: (MeshConfig) async -> MeshActionOutcome
+    private let submit: (String, MeshConfig) async -> MeshActionAcceptance
+    private let retry: (MeshConfig) async -> MeshActionAcceptance
     /// 节点此刻是否正在起。只在这一页**动手前**问一次，不参与观察 ——
     /// 说法由可观察的 `blockedReason` 承担，不必让「忙」这个事实再流一遍。
     private let isStarting: () -> Bool
 
     init(stored: MeshConfig,
          save: @escaping (MeshConfig) -> Void = { $0.save() },
-         submit: @escaping (String, MeshConfig) async -> MeshActionOutcome,
-         retry: @escaping (MeshConfig) async -> MeshActionOutcome,
+         submit: @escaping (String, MeshConfig) async -> MeshActionAcceptance,
+         retry: @escaping (MeshConfig) async -> MeshActionAcceptance,
          isStarting: @escaping () -> Bool) {
         self.stored = stored
         self.controlURL = stored.controlURLString
@@ -97,7 +97,7 @@ final class MeshSetupState {
 
     /// 保存并接入：先落盘，再把**同一份**配置交给连接域。
     ///
-    /// **节点正在起时整条都不做**：服务层会拒掉（`.busy`），而若先把草稿落盘、把密钥
+    /// **节点正在起时整条都不做**：服务层会拒掉（`.refused`），而若先把草稿落盘、把密钥
     /// 清空，用户看到的是「保存了」，实际这份密钥从没进过沙盒 —— 它只在这个输入框里
     /// 活过。所以先问一句，把用户的输入原样留着，等接入结束再提交。
     func saveAndConnect() async {
@@ -111,7 +111,12 @@ final class MeshSetupState {
         stored = config
         let key = tailnetKey
         tailnetKey = ""
-        if await submit(key, config) == .busy {
+        // 写成 switch 而不是 `if == .refusedWhileNodeStarting`：多出一种被拒原因时，
+        // 这里会编译失败，而不是静默把它当成「成功了」。
+        switch await submit(key, config) {
+        case .accepted:
+            break
+        case .refusedWhileNodeStarting:
             // 预判与提交之间理论上插不进第二条起节点的路（都在 MainActor 上、中间没有
             // 挂起点），但「理论上」不是判据 —— 真被拒了就把钥匙还给用户，别说成功。
             tailnetKey = key
@@ -126,7 +131,10 @@ final class MeshSetupState {
             return
         }
         blockedReason = nil
-        if await retry(stored) == .busy {
+        switch await retry(stored) {
+        case .accepted:
+            break
+        case .refusedWhileNodeStarting:
             blockedReason = .nodeStarting
         }
     }
