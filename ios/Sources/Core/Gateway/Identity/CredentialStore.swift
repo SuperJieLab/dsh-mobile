@@ -2,15 +2,8 @@ import Foundation
 
 /**
  * 设备凭证的业务包装：它是什么、什么时候落盘、什么时候抹掉。
- *
- * **接口是「一个名字 + 一段字节」**（`SecretFile`），语义在这里：哪些字节能当凭证、什么时候
- * 该删、删了意味着什么。接入 key 同样，只是它的语义住在 `TailnetNode`。
- *
- * 设备凭证是**关系本体**：要经得起杀 App / 重启，被撤销才消失。访问票不在这里 ——
- * 它是 15 分钟的运行时产物，见 `TicketKeeper`。
- *
- * **它是「有没有配对」的唯一出处。** 不要在任何别处存一份 `isPaired` ——「已配对 ≡ 有凭证」
- * 是结构，不是靠手工同步维持的纪律。
+ * 接口是「一个名字 + 一段字节」（`SecretFile`），语义在这里：哪些字节能当凭证、删了意味着
+ * **它是「有没有配对」的唯一出处** —— 不要在任何别处存一份 `isPaired`。
  */
 @MainActor
 @Observable
@@ -40,11 +33,7 @@ final class CredentialStore {
     var hasDeviceToken: Bool { deviceToken != nil }
 
     /// 身份**刚变过**的那一刻 —— 供编排层接（配对成功后拉起连接）。
-    ///
     /// 与 `hasDeviceToken` 的分工同 `MeshStore.onPhaseReady`：那个回答「现在有没有」，
-    /// 视图读它画；这个回答「刚变了」，动作层读它做 —— 而「配对成功该去连」必须发生
-    /// even 当没有任何视图在渲染（例如配对页刚被弹掉、列表还没重算）。
-    ///
     /// **不参与观察**：它是接线不是状态，标上 `@ObservationIgnored` 免得视图白重算一次。
     @ObservationIgnored var onIdentityChanged: (() -> Void)?
 
@@ -54,12 +43,8 @@ final class CredentialStore {
     }
 
     /// 存下配对拿到的设备凭证。
-    ///
     /// **同一个值再存一次什么都不做**（连写盘一起跳过）：与 `deleteDeviceToken` 的守卫对称。
-    /// 重复通知会让编排层重走一遍「有身份」那几步，而那些步骤的闸都在下游，白跑一趟。
-    ///
-    /// 代价明写：盘上内容被外部改动时，重存同一个值修不回来 —— 这个文件只有本进程一个写者，
-    /// 所以那是「不可能发生」，不是「没处理」。
+    /// 代价是盘上内容被外部改动时修不回来 —— 本文件只有本进程一个写者，不需要那条路径。
     func saveDeviceToken(_ token: String) {
         guard token != deviceToken else { return }
         deviceToken = token

@@ -317,11 +317,6 @@ final class WebSocketConnectionTests: XCTestCase {
         XCTAssertEqual(transport.sentFrames, [], "也不记账")
         transport.deactivate()
     }
-}
-
-// MARK: - 由旧判据并入
-
-extension WebSocketConnectionTests {
 
     /// 一条流都没有也要连 —— 「常驻」的字面含义就是这句。
     ///

@@ -1,10 +1,7 @@
 import SwiftUI
 
 /// 一次工具调用的行。
-///
 /// 两级：这一行管「细节显示不显示」（点开看原始参数与工具结果），「本轮的过程显示不显示」
-/// 由外层 `TurnProcessRow` 管。形态对所有工具统一，不按类型做专用卡片 ——
-/// 窄屏上那点信息密度抵不过要维护的十几种形态。
 struct ToolRowView: View {
 
     let row: ToolRow

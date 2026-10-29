@@ -1,12 +1,8 @@
 /**
- * 命令目录的三面与过滤 —— 一次取数的**全部**结果，外加命令通道的两个调用
- * （`fetchCommands` 列目录、`runCommand` 执行一整行）。
+ * 命令目录的三面与过滤，外加命令通道的两个调用（`fetchCommands` / `runCommand`）。
  *
- * 三面与 `ModelCatalogState` 同构（等待 / 有内容 / 失败 + 原因），差别只在失败面带的是
- * 协议拒绝的原文而不是一句拼好的话：说法随产品变，原因随协议变。
- *
- * **不缓存跨会话**：命令集是 per-agent 的，还会随插件装卸变；把上一份留给下一次打开
- * 就等于显示一个已经不作数的列表。所以每次打开都重新取，失败就说失败。
+ * 三面与 `ModelCatalogState` 同构，差别只在失败面带协议拒绝的原文而不是拼好的话。
+ * **不缓存跨会话**：命令集是 per-agent 的，还随插件装卸变。
  */
 import Foundation
 
@@ -67,7 +63,6 @@ final class CommandDirectory {
 
     /// 按名字过滤。大小写不敏感的前缀匹配优先，其次是包含匹配，同档保持宿主给的顺序
     /// （宿主已按名字排好）。空查询返回全部 —— 刚敲 `/` 时应当看得见所有能用的命令。
-    ///
     /// 只匹配名字、不匹配说明：说明是给人读的一句话，拿它参与匹配会让「敲了 `per` 却命中
     /// 一条名字完全无关的命令」变成常态。
     static func match(_ commands: [CommandInfo], query: String) -> [CommandInfo] {
@@ -97,9 +92,7 @@ func fetchCommands(_ client: RpcClient, sessionId: String) async throws -> [Comm
 
 /// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的
 /// `command/run` / `command/done` 来 —— 这个回包不带执行结果。
-///
-/// 回包里的 `commandId` 不返回：这一版没有一处按它对账（结果靠流里那个与 `command/run`
-/// 配对）。但它**必须有** —— 缺载荷就抛错。
+/// 回包里的 `commandId` 不返回：这一版没有一处按它对账。
 @MainActor
 func runCommand(_ client: RpcClient, sessionId: String, line: String) async throws {
     let response: CommandExecuteResponse = try await client.perform(

@@ -985,13 +985,9 @@ final class LayeringTests: XCTestCase {
         // 正控：确认读到了本体。
         XCTAssertTrue(lines.contains { $0.1.contains("class SessionSync") }, "没读到状态源")
 
-        // 只为适配器开放的两个入口（`internal`，不带 `private`）。
-        let doors = ["func apply(_ reading: StreamReading)",
-                     "func recordPerf(_ reading: StreamReading"]
-        for door in doors {
-            XCTAssertTrue(lines.contains { $0.1.contains(door) },
-                          "入口不见了：\(door)")
-        }
+        // 两个入口的**存在性**不在这里断：`SessionBehavior` 在另一个文件里调
+        // `owner.apply(...)` / `owner.recordPerf(...)`，声明缺失或收窄成 `private` 都编译不过
+        // —— 断它只会验到编译器已经保证的事。这里只守顺序。
 
         // 适配器里两个调用的先后。
         let behavior = sourcesRoot.appendingPathComponent(
@@ -1111,28 +1107,27 @@ final class LayeringTests: XCTestCase {
     /// 两半一起断：① 类型名零命中 —— 它连「流」这个概念都不该出现；② `mux.` 零命中 ——
     /// 收帧改成交给注入的闭包之后，连接层对流表一个成员都不该访问。
     ///
-    /// 扫描面是两处：`WebSocket/`（`Channel` 住那里）与 `Connection/`（连接本体住那里）。
-    /// 两处都要扫，否则「扫空目录回空数组」会让这条判据静默变绿。
-    /// 正控：文件数少于预期时先怀疑路径推算。
+    /// 扫描面只有 `WebSocket/` 一处：`Channel` 与连接本体同住那里。（旧注释按「`WebSocket/`
+    /// 与 `Connection/` 两处」写过，而 `Connection/` 这个目录从来没有存在过 —— 目录名与
+    /// 代码不符时，这类判据会以为自己扫了两处。）
+    /// 正控：文件数少于预期时先怀疑路径推算 —— 扫空目录回空数组，零命中与合规同形。
     func testTheWebSocketLayerKnowsNoStreamVocabulary() throws {
-        let roots = webSocketLayerRoots
+        let root = webSocketLayerRoot
         let streamVocabulary = ["StreamMux", "LogicalStream", "StreamBehavior",
                                 "StreamFactory", "StreamReply", "StreamPort"]
         var scanned = 0
         var nameHits: [String] = []
         var muxHits: [String] = []
 
-        for root in roots {
-            for file in swiftFiles(under: root) {
-                scanned += 1
-                let text = try String(contentsOf: file, encoding: .utf8)
-                let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-                for (line, code) in codeLines(in: text) {
-                    for name in streamVocabulary where code.contains(name) {
-                        nameHits.append("\(relative):\(line) \(name)")
-                    }
-                    if code.contains("mux.") { muxHits.append("\(relative):\(line)") }
+        for file in swiftFiles(under: root) {
+            scanned += 1
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (line, code) in codeLines(in: text) {
+                for name in streamVocabulary where code.contains(name) {
+                    nameHits.append("\(relative):\(line) \(name)")
                 }
+                if code.contains("mux.") { muxHits.append("\(relative):\(line)") }
             }
         }
 
@@ -1143,9 +1138,8 @@ final class LayeringTests: XCTestCase {
     }
 
     /// WebSocket 层的扫描面：`Channel` 与连接本体同住 `WebSocket/`。
-    private var webSocketLayerRoots: [URL] {
-        ["Core/Gateway/LongConnection/WebSocket"]
-            .map { sourcesRoot.appendingPathComponent($0) }
+    private var webSocketLayerRoot: URL {
+        sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/WebSocket")
     }
 
     /// 装配只有一处：造流表、接 `Channel`、接收帧闭包都在统筹对象里各一次。
@@ -1167,16 +1161,14 @@ final class LayeringTests: XCTestCase {
 
     /// 两个反应由流层订阅：连接层只发事件，不直接动流表。
     ///
-    /// 两半都要断：只删调用不补发出，行为会静默消失（换代次后流不重开）；只补发出不删调用，
-    /// 等于同一件事有两条路径（换号两次）。所以「调用没了」与「发出点各一个」写在一起。
+    /// 「不直接动流表」那一半**不在本方法里**：`testTheWebSocketLayerKnowsNoStreamVocabulary`
+    /// 禁的是整个 `mux.` 前缀，比点名 `reopenAll` / `closeAll` 更宽，也带文件数门槛。
+    /// 这里只剩「发出点各一个」—— 漏了它，换代次后流不重开；补成两处，又等于同一件事有两条
+    /// 路径（换号两次）。
     func testTheConnectionEmitsInsteadOfTouchingTheTable() throws {
         let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/WebSocket/WebSocketConnection.swift")
         let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
 
-        XCTAssertFalse(lines.contains { $0.1.contains("mux.reopenAll(") },
-                       "重新开流由事件触发，不由连接层调用")
-        XCTAssertFalse(lines.contains { $0.1.contains("mux.closeAll(") },
-                       "清表同理")
         XCTAssertEqual(lines.filter { $0.1.contains("onGenerationChange?()") }.count, 1,
                        "换代次只在这一处发出")
         XCTAssertEqual(lines.filter { $0.1.contains("onStopped?()") }.count, 1,
@@ -1320,6 +1312,8 @@ final class LayeringTests: XCTestCase {
         let lines = try swiftFiles(under: dir).flatMap { file -> [(Int, String)] in
             codeLines(in: try String(contentsOf: file, encoding: .utf8))
         }
+        // `Unscoped` 在同一张表里：无编号帧的收货人是连接级的，一旦出现在流层，就有人
+        // 替某条流代收，「归谁」随之变成登记顺序的函数。它曾单独一条判据，被这张表吸收。
         let forbidden = [
             "URLSession", "WebSocketConnection", "Unscoped", "GatewayErrorCode",
             "\"follow\"", "\"events\"", "握手", "心跳", "代次",
@@ -1359,18 +1353,6 @@ final class LayeringTests: XCTestCase {
             }
         }
         XCTAssertEqual(hits, [], "传输层开始管流了（它只该答「线还在不在」）：\(hits)")
-    }
-
-    /// 无编号帧的收货人不进流层的签名：它不属于任何一条流。
-    ///
-    /// 这一条单独守，因为它与上面那张单元表方向相反 —— 收货人是「连接级」的，
-    /// 一旦它出现在流层，就会有人给某条流代收，而「归谁」随之变成登记顺序的函数。
-    func testUnscopedFramesNeverEnterTheStreamLayer() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/LongConnection/Stream/StreamMux.swift")
-        let text = try String(contentsOf: file, encoding: .utf8)
-
-        XCTAssertTrue(text.contains("final class StreamMux"), "先怀疑路径或改名")
-        XCTAssertFalse(text.contains("Unscoped"), "流层出现了无编号帧的收货人")
     }
 
     /// 一条流的可变状态只有流表能写：四个字段声明成 `fileprivate(set)`，构造入口
@@ -1464,6 +1446,9 @@ final class LayeringTests: XCTestCase {
             // 层界与命名那一期作废的名字：作用域词与「宿主」都不再说它是什么。
             "GatewayHost", "GatewayConnection", "ConnectionEventStream",
             "ConnectionEventReader", "ConnectionEventReading", "StreamPort",
+            // 逐字段搬运窗口那一期：`Window` 与那三个字段一起没了，剩下两条墓碑判据
+            // 并进这张名单。带括号是为了不误伤 `livenessWindow` / `flushWindowNanos`。
+            "Window(", "activate(session:",
         ]
         var hits: [String] = []
         var scanned = 0
@@ -1925,6 +1910,24 @@ final class LayeringTests: XCTestCase {
                        "「直连 / 中继」应只声明一次，实际：\(declarations.sorted())")
     }
 
+    /// 路径的两个说法只在一处出现。
+    ///
+    /// 判决依据是「同一事实不该有两个词」：同一份 `CarrierPath` 在两块屏上出现两个说法时，
+    /// 没有任何东西会红。守的是**字面量的集中度**而不是某个文件路径：挪文件时只改这一行指向。
+    func testThePathWordingLivesInOnePlace() throws {
+        var sites: [String] = []
+        for file in swiftFiles(under: sourcesRoot) {
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (line, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8))
+            where code.contains("\"直连\"") || code.contains("\"中继\"") {
+                sites.append("\(relative):\(line)")
+            }
+        }
+        XCTAssertEqual(sites.count, 2, "「直连 / 中继」的字面量应恰好两处：\(sites)")
+        let files = Set(sites.compactMap { $0.split(separator: ":").first.map(String.init) })
+        XCTAssertEqual(files.count, 1, "路径文案散在多个文件：\(files.sorted())")
+    }
+
     /// 这一行若是 `enum 名字 {`（可带修饰与协议），返回名字。
     private static let enumDeclaration = try! NSRegularExpression(
         pattern: #"^(?:@[A-Za-z0-9_]+\s+)*(?:public |internal |private |fileprivate )?"#
@@ -1984,43 +1987,6 @@ final class LayeringTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(scanned, 20, "状态机只扫到 \(scanned) 行 —— 先怀疑路径或读取")
-    }
-
-    /// 编排里不再逐字段构造窗口 —— 那次构造本身就是「同一形状两份」的症状。
-    ///
-    /// 两半都要查（只查前一半会假绿：类型删掉之后，逐字段构造那两个同名字段仍然编译通过）：
-    /// - 没有 `Window(` 构造；
-    /// - 编排文件里不出现「`pageStart` / `asOfSeq` / `hasOlder` 三个实参挤在同一段构造里」——
-    ///   认的是这三个名字在同一行，或同一行起的连续三行内相继出现（那种搬运一定是竖着写的）。
-    func testNoFieldByFieldWindowCopy() throws {
-        var hits = 0
-        for file in swiftFiles(under: sourcesRoot) {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            for (line, code) in codeLines(in: text) where contains("Window", in: code) {
-                guard code.contains("Window(") else { continue }
-                hits += 1
-                let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-                XCTFail("\(relative):\(line) 还在构造 Window —— 直接用 SessionPage")
-            }
-        }
-        XCTAssertEqual(hits, 0, "还有逐字段搬运的窗口构造")
-
-        let sync = sourcesRoot
-            .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
-        let lines = try String(contentsOf: sync, encoding: .utf8)
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map(String.init)
-        var copies = 0
-        for start in 0..<max(0, lines.count - 2) {
-            let triple = lines[start] + lines[start + 1] + lines[start + 2]
-            let looksLikeCopy = triple.contains("pageStart:") && triple.contains("asOfSeq:")
-                && triple.contains("hasOlder:")
-            guard looksLikeCopy else { continue }
-            copies += 1
-            XCTFail("SessionSync.swift:\(start + 1) 起三行内又在逐字段构造窗口"
-                    + " —— 用 SessionPage(opening:)")
-        }
-        XCTAssertEqual(copies, 0, "编排里还有三个字段的搬运")
     }
 
     // MARK: - 断言 16：界面 Views/ 不直接认识编排

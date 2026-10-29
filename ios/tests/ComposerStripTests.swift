@@ -29,7 +29,7 @@ final class ComposerStripTests: XCTestCase {
             (.connecting, .relay, "连接中…", "arrow.triangle.2.circlepath", .normal),
             (.connecting, nil, "连接中…", "arrow.triangle.2.circlepath", .normal),
             (.ready, .direct, "直连", "arrow.left.arrow.right", .normal),
-            (.ready, .relay, "经中继", "personalhotspot", .attention),
+            (.ready, .relay, "中继", "personalhotspot", .attention),
             (.ready, nil, "已连接", "checkmark.circle", .normal),
             (.waiting(ms: 3_000), .direct, "重连中…", "wifi.slash", .attention),
             (.waiting(ms: 3_000), .relay, "重连中…", "wifi.slash", .attention),

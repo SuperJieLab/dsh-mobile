@@ -28,8 +28,8 @@ struct UsagePayload: Decodable, Equatable {
 /// 东西，正在显示的旧值应当被清掉。
 
 struct UsageSnapshot: Decodable, Equatable {
-    /// 这份读数取自日志的哪个水位。⚠️ 与窗口的 `cursor` 是两条轴，**不要相减** —— 窗口按消息数切，
-    /// 可能落后或领先投影折叠到的位置。
+    /// 这份读数取自日志的哪个水位。⚠️ 与窗口的 `cursor` 是两条轴，**不要相减** —— 窗口按
+    /// 消息数切，可能落后或领先投影折叠到的位置。
     let asOfSeq: Int
     /// 缺省 = 这个水位上没有可显示的东西（构造时可省略，理由同 `UsagePayload.breakdown`）。
     var usage: UsagePayload? = nil

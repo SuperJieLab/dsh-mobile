@@ -1,8 +1,7 @@
 /**
- * 组网状态的句子 —— 设置页那一行的副标题读它。
+ * 组网状态的句子 —— 设置页的副标题读它。
  *
- * 住在 `Display/` 而不是 `State/`：`State/` 里不许出现用户可见的中文（那是产品决定，
- * 不是协议事实），而「未配置」这四个字正是产品决定。
+ * 住 `Display/`：`State/` 不放用户可见的中文，「未配置」是产品决定。
  */
 import Foundation
 
@@ -17,21 +16,10 @@ func meshPhaseText(_ phase: MeshPhase) -> String {
     }
 }
 
-/// 路径名：直连还是中继。没有路径时什么都不说（未就绪时那一行另有话说）。
-func carrierPathText(_ path: CarrierPath?) -> String? {
-    switch path {
-    case .direct: "直连"
-    case .relay: "中继"
-    case nil: nil
-    }
-}
-
-/// 节点五态的一句话 —— 连接的详情页读它。
+/// 节点五态的一句话 —— 连接详情页读它。
 ///
-/// 与 `meshPhaseText` 是两种事实、两种措辞：那个说的是「这台机器跟网关通不通」（阶段），
-/// 这个说的是「组网节点自己起没起来」。所以 `.registering` 写「注册中」而不是「连接中…」。
-/// **但两个函数住在同一处**：两者都是组网域的文案，分开住会让「未配置」「已入虚拟网」
-/// 这些词在仓库里长出第二份。
+/// 与 `meshPhaseText` 是两种事实（网关通不通 / 节点起没起来），所以 `.registering` 不写
+/// 「连接中…」；两个函数仍住一处，免得这些词长出第二份。
 func nodeStateText(_ state: TailnetNodeState) -> String {
     switch state {
     case .noKey: "未配置"
@@ -42,10 +30,8 @@ func nodeStateText(_ state: TailnetNodeState) -> String {
     }
 }
 
-/// 组网设置页「提交被拒」的那句话。
-///
-/// 说清**在等什么**（接入结束，最长约 49 秒），而不是只说「不行」—— 用户才知道该等
-/// 还是该去查地址。措辞住这里，`State/` 只给原因。
+/// 组网设置页「提交被拒」的那句话：说清在等什么（接入结束，最长约 49 秒），
+/// 而不是只说「不行」。措辞住这里，`State/` 只给原因。
 extension MeshSetupState.BlockedReason {
     var text: String {
         switch self {

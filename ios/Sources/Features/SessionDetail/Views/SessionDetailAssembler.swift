@@ -1,10 +1,7 @@
 import SwiftUI
 
 /// 会话详情的装配段：造容器、接线（进屏开流、离屏关卡），交给渲染段。
-///
 /// **容器由这一屏自己造**：它要随这一屏生死（离开就丢，回来重取一个窗口），
-/// 而 `@State` 是唯一能表达「跟视图身份走」的东西。
-///
 /// 依赖在签名上看得见：四个服务 —— 这一屏要什么，读签名就知道，不必跳到组合根。
 struct SessionDetailAssembler: View {
     private let session: SessionSummary
@@ -41,9 +38,7 @@ struct SessionDetailAssembler: View {
         }
         // 进屏即登记一条流：opening 给首屏，事件与未定稿实时推。
         // 离屏即注销那一条。`sync()`（HTTP 全量对齐）只留作首屏兜底。
-        //
-        // 连接不归本屏：回前台与组网就绪的重连点在组合根上 —— 那是 App 级事件，
-        // 关掉这一屏它照样该发生。
+        // 连接不归本屏：回前台与组网就绪的重连点在组合根上 —— 那是 App 级事件。
         .task {
             if detail == nil {
                 detail = SessionDetailState(client: client,

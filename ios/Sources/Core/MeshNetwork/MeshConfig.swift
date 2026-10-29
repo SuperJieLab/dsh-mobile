@@ -1,14 +1,8 @@
 /**
  * 组网配置：headscale 控制面地址 + 网关 tailnet 地址。
  *
- * 为什么不在源码里硬编码：controlURL 内嵌 VPS 公网 IP（隐私纪律 —— 仓库是公开的，
- * 真实值只存在于设备本地 UserDefaults 与用户输入时刻）；gateway 地址是 tailnet 内的
- * CGNAT 段 IP，出了网没有意义，给默认值（沿用「硬编码一行」的先例）。
- *
- * 改动入口在设置页的组网那一页（`MeshSettingsView`）；换 VPS/换 IP = 改这里 + 重装信任证书。
- *
- * 读写都不许静默失败：「存过但读不出来」与「从来没配过」是两件事，混成一件会让用户
- * 按错误的提示去查另一样东西（配置坏了却被告知「组网服务不可达，检查 CA 证书」）。
+ * controlURL 不硬编码：它内嵌 VPS 公网 IP，而仓库是公开的 —— 真实值只存在于设备本地与用户
+ * 输入时刻。读写都不许静默失败：「存过但读不出来」与「从来没配过」是两件事。
  */
 import Foundation
 
@@ -37,10 +31,7 @@ struct MeshConfig: Equatable, Codable {
     // MARK: - UserDefaults 持久化（App 沙盒本地，不进仓库）
 
     /// 读盘的结果 —— **三态，不是「配置或默认值」**。
-    ///
-    /// `damaged` 必须单独存在：把它并进 `missing` 会让「存过但坏了」表现成「干净首启」，
-    /// 于是拿到空配置去起节点，节点层报不可达，界面引导用户去查 VPS 与证书 ——
-    /// 而归因从一开始就错了。
+    /// `damaged` 必须单独存在：并进 `missing` 会让「存过但坏了」表现成「干净首启」。
     enum ReadOutcome: Equatable {
         /// 从来没配过：键不存在，干净首启。
         case missing

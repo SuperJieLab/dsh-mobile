@@ -1,12 +1,8 @@
 /**
  * 会话列表的状态：取一次，把结果落成三种面 —— 有内容 / 前置不满足 / 真失败。
  *
- * 只回答「取回来是什么」，**不回答「什么时候取」**：触发点归 `SessionListView`，放进这一
- * 层它就得认识 SwiftUI 的生命周期。唯一的例外是事件流的代次 —— 那是「恢复」这个事实本身，
- * 不是用户手势，所以订阅走 `attach`，由造这个状态的装配段接（它就在这一屏旁边）。
- *
- * 三条纪律：失败**不清空**已有列表；前置不满足不是错误（`blocked` 而非 `failed`）；
- * 事件是增量、拉取是基线（落地时要把在途的账重放一遍，否则它们被整表替换抹掉）。
+ * 只回答「取回来是什么」，**不回答「什么时候取」**：触发点归视图。唯一的例外是事件流的代次
+ * （那是「恢复」这个事实本身）。失败不清空已有列表；前置不满足是 `blocked` 而非 `failed`。
  */
 import Foundation
 
@@ -64,9 +60,7 @@ final class SessionListState {
         attached = true
         // 两件都接：逐条的增量（改一行），与每一次报到（重拉基线）。少接一条的症状是
         // 「列表不自己动」或「断线之后再也不对齐」—— 都不编译失败。
-        //
-        // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。与判读器的「未知 kind」是
-        // 两种事 —— 这里说的是「这一条坏了」，那一处说的是「这一版不认识它」。
+        // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。
         events.onCargo("session-list") { [weak self] payload in
             guard let change = payload["change"].flatMap(SessionListChange.decode) else {
                 Log.warn(Log.Module.session,
@@ -150,9 +144,7 @@ func fetchSessions(_ client: RpcClient) async throws -> [SessionSummary] {
     let response: ListSessionsResponse = try await client.perform(ListSessionsRequest())
     // clock 采样：服务端时钟与本地收到时刻的一对。两端 offset 由这一对估出来，
     // 才能修正跨机的 t3 段与端到端 —— 直接相减会把这个 offset 算进延迟里。
-    //
     // 采样点在这里而不是更上层：`serverTime` 只出现在这个回包里，而「收到的时刻」
-    // 越贴近解码越准。挪动这个函数就等于挪动采样点。
     if let serverTime = response.serverTime {
         Log.perf(Log.Module.gateway, PerfRecord(
             seg: .clock, t: PerfRecord.nowMs(),

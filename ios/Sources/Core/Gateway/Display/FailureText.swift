@@ -1,14 +1,8 @@
 /**
- * 失败怎么说给用户听 —— 错误码解释、可读描述、错误渲染。
+ * 失败怎么说给用户听 —— 错误码解释与可读描述。
  *
- * 与 `Rpc/RpcClientError.swift` 的分工：那边是词汇（有哪些失败），这边是句子与取舍
- * （怎么说）。改一句话不需要动线上形状。
- *
+ * 与 `Rpc/RpcClientError` 的分工：那边是词汇（有哪些失败），这边是句子（怎么说）。
  * 这一层在通信层之上，所以**不读传输层的常量** —— 超时那句因此不打印秒数。
- *
- * 消费者：`ApprovalStore` 与两处目录文案（`CatalogText` / `CommandText`）读
- * `readableDescription`；
- * 各处 `error.localizedDescription`（走本文件的 `LocalizedError`）。
  */
 import Foundation
 

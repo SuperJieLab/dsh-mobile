@@ -3,9 +3,7 @@ import SwiftUI
 /// composer 上方那一排：网络 / 模型 / 占用。
 ///
 /// 三格的显示值由 `ComposerStripModel` 承载（纯值，宿主算好传进来），本视图只把它们画出来。
-/// 它不认识 `SessionSync` —— 认识的话，判定与取数就会一起落进视图。
-///
-/// 固定高度：布局的稳定性就靠它，输入框不随连接态、占用多少上下跳。键盘弹起时由宿主整条收起。
+/// 固定高度：输入框不随连接态、占用多少上下跳。
 struct ComposerStrip: View {
 
     let model: ComposerStripModel
@@ -94,7 +92,7 @@ struct ComposerStripModel: Equatable {
     enum Tone: Equatable {
         /// 常态：次要色。
         case normal
-        /// 需要看一眼：橙色。断连与经中继都用它。
+        /// 需要看一眼：橙色。断连与中继都用它。
         case attention
     }
 
@@ -121,19 +119,10 @@ extension ComposerStripModel {
                            usageIsEmpty: usage == nil)
     }
 
-    /// 网络格。`.waiting` 一律写「重连中…」而不是保留「直连」：32pt 的格里图标与颜色的
-    /// 面积都太小，异常必须靠**文字**传出来，否则小屏上一眼扫过去会以为是正常态。
-    /// `.ready` 而路径未知时写「已连接」—— 路径未知不等于断开。逐 case 列举，加取值时编译失败。
-    ///
-    /// **`.awaitingMesh` 的说法取决于组网那边为什么没就绪。** 「等」只在真的在注册时才准确；
-    /// 组网已经失败、或者根本没配，再写「等」就是让用户等一个不会来的东西。
-    /// 组网是这整条链路的底座（一元请求与长连接都从它取地址），所以它的问题要在这里说清。
-    ///
-    /// `mesh` 传 `nil` 表示**消费方另有地方说组网**（连接详情下面那一节），此时这一格
-    /// 只报连接层自己的事实，不抢着解释原因。
-    ///
-    /// 内部而非私有：连接详情里「状态」那一行也要它（传 `carrier: nil` 拿到的正是状态说法），
-    /// 一份映射两个消费者，不另写第二份 case。
+    /// 网络格。`.waiting` 一律写「重连中…」而不是保留「直连」：32pt 的格里图标与颜色的面积
+    /// 都太小，异常必须靠**文字**传出来。`.ready` 而路径未知时写「已连接」—— 路径未知不等于
+    /// **`.awaitingMesh` 的说法取决于组网为什么没就绪**：「等」只在真在注册时准确，组网已
+    /// 内部而非私有：连接详情的「状态」那一行也读它（传 `carrier: nil`）。
     static func network(phase: ConnectionPhase,
                         mesh: MeshPhase?,
                         carrier: CarrierPath?) -> Network {
@@ -149,13 +138,11 @@ extension ComposerStripModel {
         case .ready:
             switch carrier {
             case .relay:
-                // 路径文案走 `ConnectionBadge.look` —— 连接详情里那一行也读它，
-                // 一份说法只写一次，改文案时不会只改到一半。
-                return Network(text: ConnectionBadge.look(of: .relay).text,
+                return Network(text: carrierPathText(.relay),
                                systemImage: "personalhotspot",
                                tone: .attention)
             case .direct:
-                return Network(text: ConnectionBadge.look(of: .direct).text,
+                return Network(text: carrierPathText(.direct),
                                systemImage: "arrow.left.arrow.right",
                                tone: .normal)
             case nil:

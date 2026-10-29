@@ -1,19 +1,8 @@
 /**
  * 未定稿帧通道 —— 流式输出的独立状态机，与 `SessionMirror` 平行互不触碰。
  *
- * 未定稿帧（`assistant-stream`）没有 `seq`，只有 attemptId / revision / index，不进水位
- * 体系：推进游标等于把「没落盘的东西」当成「已读到的位置」。
- *
- * `revision` 来自 agent 级全局单调计数器，start / chunk / end 每帧 +1、跨 attempt 连续，
- * 是断号校验的对象；`index` 是 attempt 内 chunk 的位置。校验即每帧 `revision` **正好等于**
- * 期望值（上帧 + 1，或基线 + 1），`index` 等于 attempt 内已累积的 chunk 数 —— 早期把它当成
- * attempt 恒定代次，会第一帧就误判 broken（流式输出不逐字）。
- *
- * 任一不满足 ⇒ `broken`：后续 chunk 是**增量**，基线已丢，唯一正确动作是**重开流取新基线**
- * （新 opening 的 `assistantStream` 带已累积内容），与上游「断号即重连」同构。
- *
- * chunk 是上游模型流的 JSON：只拼 `type == "text-delta"` 的 `.text`，其余原样跳过 ——
- * 与 `SessionEvent.displayMessage` 同一条显示规则。断言在 `tests/TransientChannelTests.swift`。
+ * 未定稿帧没有 `seq`，不进水位体系。每帧要求 `revision` 等于期望值、`index` 等于已累积 chunk 数；
+ * 任一不满足即 `broken`：后续 chunk 是增量、基线已丢，唯一正确的动作是重开流取新基线。
  */
 
 /// opening 里带的未定稿基线（上游 `SessionAssistantStreamBaseline`）：revision 与

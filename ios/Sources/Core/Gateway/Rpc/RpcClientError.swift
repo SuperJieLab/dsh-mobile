@@ -16,9 +16,7 @@ enum RpcClientError: Error {
     case badStatus(Int)
     /// 回来了、200，但不是我们能读的报文。`detail` 写**缺了哪个字段** —— 那是协议词汇，
     /// 不随产品措辞变；句子由 `FailureText` 拼。
-    ///
     /// **`ok: true` 却缺载荷，绝不能填默认值盖过去**：那会把一次应答异常显示成「本来就没有」
-    /// （成功面），用户以为真没有。
     case malformedResponse(detail: String)
     /// 响应的 `v` 不是本客户端认识的版本。
     case versionMismatch(Int)

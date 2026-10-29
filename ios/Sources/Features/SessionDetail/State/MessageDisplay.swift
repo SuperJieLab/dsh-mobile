@@ -1,12 +1,8 @@
 /**
  * 哪些事件能变成一条消息、取哪个文本块 —— 显示取舍，不是协议规则。
  *
- * 它是判定而不是文案：读 `JSONValue`、按事件类型分支、可能给不出消息，与 `SessionMirror`
- * 同源（都随上游事件形状变）。`DisplayMessage` 与 `Role` 是它的输出形状，不是线上形状 ——
- * 协议给的是事件体，这两个类型是为「画一条气泡」折叠出来的，随判定同处。
- *
- * 消费者：`SessionSync`（`mirror.events.compactMap(\.displayMessage)`）、
- * `TranscriptAssembler`（逐条事件取值）、`SessionDetailView`（拿 `DisplayMessage` 画气泡）。
+ * `DisplayMessage` 与 `Role` 是它的输出形状，不是线上形状。消费者是 `TranscriptAssembler`
+ * 与 `SessionDetailView`；消息条数由装配好的节点数出来，不遍历事件另算一份。
  */
 import Foundation
 
@@ -27,13 +23,9 @@ struct DisplayMessage: Hashable {
 
 extension SessionEvent {
 
-    /// 一次命令的生命周期。上游把它记成两条配对事件（`command/run` 与 `command/done`，
-    /// 由 `commandId` 关联），两者都是 **log-only**：不进模型 transcript，但进会话日志 ——
-    /// 所以手机能从订阅流里看到「按了什么、结果如何」。
-    ///
-    /// 与 `displayMessage` 分开：命令不是对话消息（不该套气泡、不该被当作某人的发言），
-    /// 它的展示形状是「一行命令 + 结果」。判定仍住这里，理由同 `displayMessage` ——
-    /// 它随上游事件形状变。
+    /// 一次命令的生命周期。上游记成两条配对事件（`command/run` 与 `command/done`，由
+    /// `commandId` 关联），都是 **log-only**：不进模型 transcript。
+    /// 与 `displayMessage` 分开：命令不是对话消息，不套气泡、不算某人的发言。
     var commandLifecycle: CommandLifecycle? {
         switch type {
         case "command/run":
@@ -71,16 +63,8 @@ enum CommandOutcome: Equatable {
 
 extension SessionEvent {
     /// 把一条事件变成一条可显示的消息；变不出来就是 `nil`。
-    ///
-    /// ⚠️ **两种事件的消息不是一个形状**：
-    /// - `user/message` —— 消息对象直接在 `data` 上：`data.content` / `data.role` / `data.source`
-    /// - `assistant/message` —— 消息包在 `data.message` 里，与 `data.usage` / `data.stream` 并列
-    ///
-    /// 当成对称处理，症状是**用户消息被静默吞掉**。两条显示规则（都是显示决策，不是协议规则）：
-    /// - 只取 `text` 块（`reasoning` 与 `tool-call` 属于过程，不属于对话内容）；`user/message` 只认
-    /// `source.kind == "user"` —— 插件注入的运行时上下文也走这个事件类型
-    /// （`kind == "plugin"`，整段
-    /// 沙箱与审批策略），不是人打的字，不该进对话流。
+    /// ⚠️ **两种事件的消息不在同一处**：`user/message` 在 `data` 上，`assistant/message` 在
+    /// `data.message` 上。只取 `text` 块（`reasoning` 与工具块不上屏）。
     var displayMessage: DisplayMessage? {
         switch type {
         case "user/message":

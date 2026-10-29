@@ -12,8 +12,7 @@ let gatewayProtocolVersion = 2
 /// 失败信封里的错误码（协议 v2 七个 + `unauthenticated` + `unknown-approval` /
 /// `invalid-request` + `session/model-unavailable` + `window-too-large` + `unknown-command`）。
 /// 收的时候刻意用 `String` 而非本枚举：上游加码时照原样显示，不能解不出来就崩。
-/// `CaseIterable` 只为那一条「取值只写一处」的检查（`tests/ErrorCodeLiteralTests.swift`）：
-/// 判据遍历 `allCases`，不必去解析源码猜协议里有哪些码。生产代码不遍历它。
+/// `CaseIterable` 只为那一条「取值只写一处」的检查（`tests/ErrorCodeLiteralTests.swift`）。
 
 enum GatewayErrorCode: String, CaseIterable {
     case unsupportedVersion = "unsupported-version"

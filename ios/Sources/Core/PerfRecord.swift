@@ -1,14 +1,9 @@
 import Foundation
 
 /**
- * 性能记录 —— 与网关 `mac-gateway/src/perf.ts` 的 `PerfRecord` 同构：
- * `seg` / `t` / `sessionId` / `seq` 是公共字段，其余按 seg 不同（iOS 侧只产 `dev` 与 `clock`）。
- * 字段集与语义是**两端契约**：改字段要两边一起改，否则分析器读到的是一半的记录。
- *
- * 缺的字段整个缺席，不填默认值 —— 「这一条不适用」与「值为零」是两件事。
- *
- * **验证方式的边界**：采集与落盘要靠真机跑一遍才看得出来 —— 把出口摘成空实现，单元测试
- * 一条都不会红；它们只覆盖拼写与门控，不覆盖采集链路。
+ * 性能记录 —— 与网关 `mac-gateway/src/perf.ts` 的 `PerfRecord` 同构：`seg` / `t` /
+ * `sessionId` / `seq` 是公共字段，其余按 seg 不同（iOS 侧只产 `dev` 与 `clock`）。
+ * 缺的字段整个缺席，不填默认值 ——「这一条不适用」与「值为零」是两件事。
  */
 struct PerfRecord {
 

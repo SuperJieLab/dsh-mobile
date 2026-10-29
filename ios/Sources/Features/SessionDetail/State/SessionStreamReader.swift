@@ -1,12 +1,8 @@
 import Foundation
 
 /**
- * 一帧的判读结论：「它是什么」与「这条流接下来怎么办」。
- *
- * 这两个值都由订阅这条流的一侧给出（见 `SessionStreamReader`），流表只读它们决定动作 ——
- * 于是流表不需要认识帧类型的取值。「建成」也不是由谁通报的：它随这一帧一起回来，
- * 由流表在**收到每一帧时**读一次。让上层主动报「我建成了」的写法漏调一次就没有信号：
- * 这条流会一直被当成还没开成，退避不归零、开流超时照旧计时，于是被反复重开。
+ * 一帧的判读结论：「它是什么」与「这条流接下来怎么办」。流表只读它们决定动作。
+ * 「建成」随这一帧一起回来，不由上层主动通报 —— 漏调一次那条流就永远开不成。
  */
 struct StreamReading {
 
@@ -52,31 +48,12 @@ struct StreamReading {
 
 /**
  * 把一帧线上文本判成 `StreamReading` —— 纯函数，不碰 socket、不持状态。
- *
- * 之所以要能不建连接就回答：判读错了不会编译失败，也不会有哪条测试红 —— 它认的是上游的
- * 事件形状，一份会漂移的东西。做成静态函数，是它唯一能被断言的形式。它不持有状态、
- * 不碰 socket；副作用只有一行日志：解不出打开帧的那一帧（开流超时的第一现场）。
- *
- * 判据与网关侧的帧语义逐条对齐（两端协定的订阅流一节）：
- *
- * | 输入 | 判成 | 判据 |
- * |---|---|---|
- * | `item`，载荷有 `sessionId` + `cursor` + `events` | 打开帧 | 三个都在才算，缺一不进 |
- * | `item`，载荷 `type` 是 `assistant-stream` | 未定稿帧 | 载荷里的 `frame` 原样转出 |
- * | `item`，载荷有 `type` + `seq` | 事件帧 | 载荷本体就是一条事件；解不出如实丢弃 |
- * | `usage` | 占用读数 | 载荷 `sessionId` 必须等于本流的会话，否则丢弃 |
- * | `error` | 拒绝 | 载荷是 `{code, message}` |
- * | `end` | 收尾 | —— |
- *
- * 顺序不是随意排的：打开帧的判据最严，必须先试；未定稿帧带 `type` 但不带 `seq`，
- * 所以排在事件帧之前。
+ * 做成静态函数是它唯一能被断言的形式：判读认的是上游的事件形状，错了既不编译失败、也不会有断言红。
  */
 enum SessionStreamReader {
 
     /// - Parameters:
-    ///   - envelope: 已解出的帧外壳（`type` / `streamId` / `payload`）。
-    ///   - raw: 帧的原始字节 —— typed 载荷（打开帧、事件、占用）从它直解一次，
-    ///     不经 `JSONValue` 往返。
+    ///   - raw: 帧原始字节 —— typed 载荷从它直解一次，不经 `JSONValue` 往返。
     ///   - sessionId: 本流的会话。占用帧要核它：帧串流时会画出别人的占用。
     static func read(envelope: MuxServerEnvelope, raw: Data, sessionId: String) -> StreamReading {
         switch envelope.type {
@@ -84,8 +61,8 @@ enum SessionStreamReader {
             guard let payload = envelope.payload else { return StreamReading(content: .ignored) }
             if payload["sessionId"] != nil && payload["cursor"] != nil && payload["events"] != nil {
                 guard let opening = OpeningFrame.decode(raw) else {
-                    // 留痕在这一跳：解不出打开帧的那一帧，正是开流超时的第一现场，
-                    // 而 `.ignored` 不携带原因 —— 少了这一行，超时日志里就没有线索。
+                    // 留痕在这一跳：
+                    // 解不出打开帧的那一帧正是开流超时的第一现场，而 `.ignored` 不携带原因。
                     Log.warn(Log.Module.session,
                              "opening unparsable (first 120 chars): \(String(decoding: raw.prefix(120), as: UTF8.self))")
                     return StreamReading(content: .ignored)
@@ -133,13 +110,8 @@ enum SessionStreamReader {
     }
 
     /**
-     * 再开这条流有没有意义 —— `true` 表示这是会话级终态：再开只会得到同一个结果。
-     *
-     * `window-too-large` 属于这一类：那个窗口不会因为再开而变小，反复尝试只会把一次确定的
-     * 拒绝变成一串无用的请求。**未知码按可重试处理** —— 白名单之外的码不该让会话卡死。
-     *
-     * 这条判断住这里而不是连接层：连接层只按答复执行（默认什么都不做，最坏的偏离是「该停的
-     * 多试几次」，看得见）；要不要停由订阅方说。
+     * 再开这条流有没有意义 —— `true` 表示会话级终态：再开只会得到同一个结果。
+     * 未知码按可重试处理（白名单之外的码不该让会话卡死）；这个判断住这里，因为要不要停由订阅方说。
      */
     static func isTerminal(code: String) -> Bool {
         code == GatewayErrorCode.unknownSession.rawValue

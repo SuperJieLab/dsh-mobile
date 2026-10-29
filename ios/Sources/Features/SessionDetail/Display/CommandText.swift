@@ -32,10 +32,7 @@ extension CommandDirectory {
 extension CommandInfo {
 
     /// 候选行上「这条命令怎么用」：名字，以及宿主声明的参数占位。
-    ///
-    /// 占位提示就来自宿主的 `input.hint` —— 客户端不知道任何一条命令该带什么参数，
-    /// 也不该知道（那样插件换个写法，提示就骗人）。`hint` 缺席或为空时只给名字：
-    /// 补一个凭空的 `<参数>` 会把「不用参数」说成「要参数」。
+    /// 占位来自宿主的 `input.hint` —— 客户端不知道任何一条命令该带什么参数。
     var invocation: String {
         guard let inputHint, !inputHint.isEmpty else { return "/\(name)" }
         return "/\(name) \(inputHint)"

@@ -1,11 +1,8 @@
 /**
- * 节点状态机：iOS 侧唯一的新逻辑，纯函数、不持网络对象、不 import UI。
- * 迁移表唯一源 = 状态机状态图；断言 = tests/MeshNodeStateTests.swift。
+ * 节点状态机：纯函数、不持网络对象、不 import UI。迁移表的唯一源就是这里的状态图。
  *
- * 纪律映射：
- * - Failed 的 badKey ≠ unreachable 必须可区分（界面文案据此分叉）；
- * - App 挂起不迁移（停摆由 tsnet 前台复活 + 重连接力吸收）；
- * - 状态目录损坏一律回 noKey（fail-closed，与凭证损坏同口径）。
+ * 三条纪律：Failed 的 badKey ≠ unreachable 必须可区分（界面文案据此分叉）；App 挂起不迁移
+ * （停摆由 tsnet 前台复活 + 重连吸收）；状态目录损坏一律回 noKey（fail-closed，与凭证同口径）。
  */
 import Foundation
 

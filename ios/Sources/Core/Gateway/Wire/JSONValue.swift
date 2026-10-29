@@ -1,9 +1,13 @@
 /**
  * 任意 JSON 值 —— 载荷里「字段由上游决定」的那部分用它承载。
+ *
+ * **只解码，不编码**：客户端往回发的帧都是定形请求（`MuxOpenFrame` / `MuxCancelFrame` 等），
+ * 没有一处要把「任意形状」编回去。真需要往回流任意形状时再加 —— 预先留着会让下一个读它的人
+ * 以为存在发任意帧的那条路。
  */
 import Foundation
 
-enum JSONValue: Decodable, Encodable, Equatable {
+enum JSONValue: Decodable, Equatable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -30,20 +34,6 @@ enum JSONValue: Decodable, Encodable, Equatable {
                 in: container,
                 debugDescription: "not null, number, bool, string, array or object"
             )
-        }
-    }
-
-    /// 对称的编码：跟解码一样按实际类型走 —— `JSONValue` 要能在两个方向上
-    /// 原样表示任意 JSON（订阅流要往回发帧）。
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .string(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
-        case .bool(let value): try container.encode(value)
-        case .null: try container.encodeNil()
-        case .array(let value): try container.encode(value)
-        case .object(let value): try container.encode(value)
         }
     }
 

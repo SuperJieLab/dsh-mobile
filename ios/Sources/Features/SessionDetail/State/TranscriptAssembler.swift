@@ -1,22 +1,9 @@
 /**
  * 会话详情组装器 —— 事件窗口 → 显示节点：输入一段事件，输出「这一屏要画什么」。
- * 不碰网络、UI 与磁盘。
  *
- * 单独拿出来是因为**配对与分组最容易错**（工具调用跨两条事件、轮次边界要收口悬挂的调用、
- * 窗口边界切出半截形态），缠进视图就没法单独验。
- *
- * 出去的是**有序**节点：用户消息、一轮的过程、一轮的最终答案，顺序恒等于事件顺序 ——
- * 思考块与工具调用不按类型分组，否则交替场景（思考 → 工具 → 思考）会串位。
- *
- * 四条判定照**运行时产物**实读（`@deepseek-ai/dsh-client-ui-chat` 的 `node_modules` 副本），
- * 不照仓库源码 —— 两者在 `isError` 的读法上并不一致，照源码写会判错成败：
- * 配对键 `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`；成败看
- * `tool/result.data.message.isError`（在 `message` 上，不在 `content[0]`）；中断 = 所在
- * step / turn 已关闭而这条 call 一直没有结果；「最终答案」= 该轮最后一个 step 的助手消息，
- * 且含真正的回复内容、不含工具调用块。
- *
- * 上游那套「事件 → 节点」的注册表不复用也不照搬（它是给可插拔前端的扩展面），
- * 只需要这四条语义。
+ * 出去的是有序节点，顺序恒等于事件顺序（思考与工具调用不按类型分组，否则交替场景会串位）。
+ * 配对键 `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`，成败看
+ * `tool/result.data.message.isError`（在 `message` 上，不在 `content[0]`）。
  */
 
 import Foundation
@@ -29,16 +16,11 @@ enum TranscriptNode: Equatable {
     case message(DisplayMessage)
     /// 一轮的过程：思考、工具调用、中间文本，按事件顺序。
     case process(NodeProcess)
-    /// 一次命令：按了什么、结果如何。它不是对话消息（不套气泡），也不是某一轮的过程
-    /// （命令不占轮次）。
+    /// 一次命令：按了什么、结果如何。不套气泡，也不占轮次。
     case command(CommandRun)
 }
 
-/// 一次命令在屏幕上的那一行。
-///
-/// 身份用 `commandId` 而不是首条事件的 `seq`：配对发生在 `command/done` 到达时，
-/// 那一行本身要被**原地更新**（执行中 → 结果）。拿 seq 当身份会让结果更新变成一次
-/// 「删一行、加一行」，列表会把那一行重挂载。
+/// 一次命令在屏幕上的那一行。身份用 `commandId`：结果到达时要原地更新，`seq` 会让列表重挂载。
 struct CommandRun: Equatable {
     let commandId: String
     let name: String
@@ -53,13 +35,8 @@ struct CommandRun: Equatable {
 }
 
 extension TranscriptNode: Identifiable {
-    /// 列表里的身份。取**这一组首个过程**的身份，不取节点数组里的序号 —— 往回翻是往前面插
-    /// 内容，序号会整体错位，屏上的行就会被全部重挂载。
-    ///
-    /// ⚠️ **适用范围**：前插只落在窗口头部那一组 —— 其余各组的
-    /// `turn/start` 都在窗口里，前插排在它们之前，碰不到，身份逐条不变。头部那一组本身会被
-    /// 前插改（见 `ProcessEntry`），但它由「无头」变「有头」时形态本就变了、重挂载没有状态
-    /// 可丢 —— 无头组不可展开（`TurnProcessRow` 的 `hasHeader` 分支）。
+    /// 列表里的身份 —— 取这一组首个过程的身份，不取数组序号：往回翻是往前插，序号会整体错位。
+    /// 前插只落在窗口头部那一组，其余各组的身份逐条不变。
     var id: String {
         switch self {
         case .message(let message):
@@ -81,16 +58,12 @@ extension TranscriptNode: Identifiable {
 struct NodeProcess: Equatable {
     /// 这一轮的编号。`nil` = 连编号都取不到。
     let turn: Int?
-    /// 这一组的开头（`turn/start`）在不在窗口里 —— 不在就不画折叠头。窗口边界会把一轮切掉
-    /// 半截：过程仍如实显示（不丢行），但缺了开头，画「本轮摘要」等于假装这一轮完整。
+    /// 这一组的开头在不在窗口里 —— 不在就不画折叠头（窗口边界会把一轮切掉半截）。
     let hasHeader: Bool
     let entries: [ProcessEntry]
 
     /// 折叠头上的一句话；没有可说的就是 `nil`。
-    ///
-    /// 两组计数、**只写非零的那些**（零是噪音，不是信息）；两个数都是 0 而这一轮确实有过程
-    /// （只想了没做）时用兜底文案。文案照上游 locale（`message.turnProcess.toolCalls` /
-    /// `.messages` / `.thoughtForAWhile` / `.separator`）。
+    /// 只写非零的计数；都是 0 而确实有过程时用兜底文案。
     var summary: String? {
         var toolCalls = 0
         var midMessages = 0
@@ -122,11 +95,8 @@ enum ProcessEntry: Equatable {
 }
 
 extension ProcessEntry: Identifiable {
-    /// 这一行的身份。取**事件 seq**，不取组内偏移 —— 往回翻会往这一组插入更早的行，偏移
-    /// 整体挪位（行被重挂载，展开的工具行与思考会自己收回去），seq 不会。理由同节点身份。
-    ///
-    /// 前缀带上种类：同一条助手消息能同时产出「思考」与「文本」两行、seq 相同，带种类才在
-    /// 组内唯一（`tool` 那行只可能来自它自己那条事件）。
+    /// 取事件 seq，不取组内偏移 —— 往回翻会插入更早的行，偏移整体挪位，seq 不会。
+    /// 前缀带种类：同一条助手消息能同时产出「思考」与「文本」两行。
     var id: String {
         switch self {
         case .thinking(let seq, _, _): return "thinking-\(seq)"
@@ -136,16 +106,14 @@ extension ProcessEntry: Identifiable {
     }
 }
 
-    /// 一次工具调用的显示行。四种状态齐全，半截配对如实退化、不猜：有结果且
-    /// `isError` 假 → 成功；真 → 失败；只有调用 → 运行中；轮次关闭而始终没有结果 → 中断。
+    /// 一次工具调用的显示行。四种状态齐全，半截配对如实退化、不猜。
 struct ToolRow: Equatable {
 
     enum Status: Equatable {
         case running
         case succeeded
         case failed
-        /// 轮次 / 步骤已关闭，这条调用一直没有结果 —— 上游合成为一条
-        /// `error.code = 'interrupted'` 失败结果，这里独立成态：它说的不是「工具失败」。
+        /// 轮次已关闭而这条调用一直没有结果；上游把它合成为一条 `interrupted` 失败结果。
         case interrupted
     }
 
@@ -171,20 +139,16 @@ struct ToolRow: Equatable {
 
 // MARK: - 组装器
 
-    /// 把一段事件组装成显示节点。**纯状态机**：不 import SwiftUI / UIKit。两处状态都是
-    /// 缓存性质的 ——「已上报过哪些不认识的类型」（按类型去重，每次重放整段窗口只留一条痕）
-    /// 与工具参数摘要（按 seq 缓存，见 `summaryCache`）；两者都不改变输出。
+    /// 把一段事件组装成显示节点。纯状态机，不 import SwiftUI / UIKit。
+    /// 两处缓存（不认识的类型、参数摘要）都不改变输出。
 struct TranscriptAssembler {
 
     /// 出现不认识的 `type` 时调一次（按类型去重）—— 会话照常显示，日志里留线索。
     private let onUnknownEventType: ((String) -> Void)?
     private var reportedUnknownTypes: Set<String> = []
 
-    /// 工具参数摘要的缓存，键是 `tool/call` 的 seq；空串表示「这一行确实没有摘要」。
-    ///
-    /// 摘要要把参数 JSON 解一遍，而**每次刷新都重放整段窗口** —— 历史里所有工具调用都在这段
-    /// 里。翻历史时窗口只增不减，不缓存就等于每翻一页把全部历史的参数重解一遍：越翻越慢，
-    /// 那正是「小卡一下」的来源。同一 seq 的事实不会变（事件是持久的），所以它永不过期。
+    /// 摘要缓存，键是 `tool/call` 的 seq；空串表示「确实没有摘要」。
+    /// 每次刷新重放整段窗口，不缓存就等于每翻一页把全部历史的参数重解一遍。
     private var summaryCache: [Int: String] = [:]
 
     init(onUnknownEventType: ((String) -> Void)? = nil) {
@@ -198,11 +162,7 @@ struct TranscriptAssembler {
         var draft: ProcessDraft?
 
         /// 收口：把攒下的过程行变成节点（空的不产生节点）。
-        ///
-        /// - Parameter endingTurn: 这一轮是不是就此结束。**用户消息夹在 `turn/start` 与助手
-        /// 首个输出之间是常态**，那时过程要收口（否则用户那句会排到过程后面），但这一轮
-        /// 并未结束 —— 「有头」这身份得留着（一起清掉会让窗口里 13 个
-        /// `turn/start` 全被判成无头）。
+        /// 用户消息常夹在 `turn/start` 与助手首个输出之间：过程要收口，但「有头」得留着。
         func flush(endingTurn: Bool = false) {
             if let current = draft, !current.entries.isEmpty {
                 nodes.append(.process(NodeProcess(turn: current.turn, hasHeader: current.hasHeader, entries: current.entries)))
@@ -211,8 +171,7 @@ struct TranscriptAssembler {
             if endingTurn { draft = nil }
         }
 
-        /// 确保有一个可写的草稿。事件里带的 `turn` 是**真实轮次号**，但这一组开头不在窗口里 ——
-        /// 故「无头」。
+        /// 确保有一个可写的草稿。事件带的 `turn` 是真实轮次号，但这一组开头不在窗口里 ⇒ 无头。
         func open(turn: Int?) {
             if draft == nil { draft = ProcessDraft(turn: turn, hasHeader: false) }
         }
@@ -275,8 +234,7 @@ struct TranscriptAssembler {
                     }
                 } else {
                     // `command/run` 不在窗口里（往回翻的边界）：命令名与参数都取不到，
-                    // 只能用 id 出一行「结果」。**不编造名字** —— 那会是屏幕上唯一一条
-                    // 说不清按了什么的记录。
+                    // 只能用 id 出一行结果。不编造名字。
                     nodes.append(.command(CommandRun(commandId: commandId, name: "", args: nil,
                                                      outcome: outcome)))
                 }
@@ -294,8 +252,7 @@ struct TranscriptAssembler {
                         draft?.entries[index] = .tool(toolRow(row, settledBy: event))
                     }
                 } else {
-                    // `tool/call` 不在窗口里（往回翻的边界）—— 用结果自带的信息出一行，
-                    // 参数与工具名留空。
+                    // `tool/call` 不在窗口里 —— 用结果自带的信息出一行，参数与工具名留空。
                     draft?.entries.append(.tool(toolRow(fromResult: event)))
                 }
 
@@ -359,13 +316,9 @@ private extension TranscriptAssembler {
         }
     }
 
-    /// 每个 `turn` 的「最终答案」事件 seq。照上游 `latestAnswer`，两步：
-    /// 1. 先定这一轮的**最后一个 step**（由 `step/start` 与助手消息共同界定 —— 一个 step
-    /// 存不存在不取决于它有没有产出一条消息）；
-    /// 2. 再在那个 step 里找助手消息，它必须（a）含真正的回复内容、（b）不含工具调用块。
-    ///
-    /// 两步缺一不可：只做第 2 步的话，「最后一步开了头就出事」的轮次会拿前面 step 说过的
-    /// 话冒充最终回答 —— 那是**编出来一条回答**，比不显示更坏。
+    /// 每个 `turn` 的「最终答案」事件 seq，照上游 `latestAnswer`。
+    /// 先定这一轮最后一个 step，再在这个 step 里找「含真回复、不含工具调用」的助手消息。
+    /// 少第一步，「最后一步开了头就出事」的轮次会拿前面 step 的话冒充最终回答。
     static func answerSeqs(in events: [SessionEvent]) -> Set<Int> {
         var lastStep: [Int: Int] = [:]
         for event in events {
@@ -494,8 +447,7 @@ private extension TranscriptAssembler {
 
     // MARK: 参数摘要
 
-    /// 候选键，**有序**（照上游运行时的列表）—— 取第一个规范化后非空的值；顺序即规则：`description`
-    /// 比 `command` 可读。
+    /// 候选键，有序（照上游运行时列表）—— 取第一个规范化后非空的值。
     static let detailKeys = [
         "title", "description", "objective", "task", "task_name", "name",
         "question", "questions", "prompt", "message", "command", "cmd",
@@ -523,10 +475,7 @@ private extension TranscriptAssembler {
         return fallback.isEmpty ? nil : fallback
     }
 
-    /// 摘要的缓存入口 —— 组装时走这条，纯计算的部分仍在 `summary` 里。
-    ///
-    /// 缓存把「没有摘要」也当结果存起来（空串）：否则那些行每次重放都要重解一遍 JSON，
-    /// 只为再得出同一个 `nil`。
+    /// 摘要的缓存入口；空串也存，否则那些行每次重放都要重解一遍 JSON 只为再得出 `nil`。
     mutating func cachedSummary(seq: Int, name: String?, argumentsRaw: String?) -> String? {
         if let cached = summaryCache[seq] { return cached.isEmpty ? nil : cached }
         let value = Self.summary(name: name, argumentsRaw: argumentsRaw)
@@ -569,9 +518,8 @@ private extension TranscriptAssembler {
 
     // MARK: 事件类型的认识范围
 
-        /// 会话日志里必然出现、但归别的链路管的事件类型前缀（审批、投影、沙箱、子代理、用量…）。
-        /// 这不是「支持的清单」，是**降噪的清单** —— 没有它「不认识就上报」会让每次打开会话变成
-        /// 一片噪音，真正该看见的那条新类型反而被埋了。
+        /// 会话日志里必然出现、但归别的链路管的事件类型前缀（审批、投影、沙箱、子代理…）。
+        /// 这是降噪清单，不是支持清单 —— 没有它每次打开会话都是一片噪音。
     static let knownBypassPrefixes = [
         "approval/", "session/", "session-log", "request/", "agent/",
         "web/", "sandbox/", "permission/", "system/", "assistant/",

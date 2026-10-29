@@ -1,24 +1,19 @@
 /**
  * 待答审批的宿主：持表、发布给界面、把一次应答的三种结局翻成卡片状态。
  *
- * 判定在 `ApprovalTable`。这里只做三件：把帧转给表并发布结果、把「去答一个」发出去
- * （在途守卫 + 幂等键）、按结局改状态与说明。它与 App 同寿 —— 停在列表时表照样在长。
- *
- * 每次应答都带客户端生成的 `answerId`：回包丢了重试，网关回放第一次的结果，绝不二次投递。
+ * 判定在 `ApprovalTable`。它与 App 同寿 —— 停在列表时表照样在长。每次应答都带客户端生成的
+ * `answerId`：回包丢了重试，网关回放第一次的结果，绝不二次投递。
  */
 import Foundation
 
-/// 发一次应答。收成一行是为了三种结局能被分别注入 —— 它们只在网络那一层分得开，
-/// 而「卡留不留、说明什么」全按结局分支。
+/// 发一次应答。收成一行是为了三种结局能被分别注入。
 @MainActor
 protocol ApprovalAnswering {
     func answer(eventId: String, allow: Bool, answerId: String) async throws
 }
 
 /// 生产实现：走既有的一次 HTTP 应答。
-///
-/// `ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。失败如实上抛：
-/// `unknown-approval` 表示这条审批已经不在了。
+/// `ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。
 @MainActor
 struct GatewayApprovalAnswerer: ApprovalAnswering {
     let client: RpcClient
@@ -33,12 +28,7 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 }
 
 /// 待答表要的订阅面：三种事件、两个入口。
-///
-/// 收窄的理由不是「少几个方法」，而是**闸要能红**：`EventStream` 的注册表是 private，
-/// 类型又是具体类，替不进去 —— 于是「挂了第二次有没有再注册」只能数注册次数，
-/// 而数它需要一个能替身的窄面。
-///
-/// 它与 `MeshNodeControlling` 同形：消费者只认自己用得到的那条面，不认整个容器。
+/// 收窄不是为了少方法，而是让闸能红 —— `EventStream` 的注册表是 private、类型是具体类，替不进去。
 @MainActor
 protocol ApprovalEventSink {
     func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void)
@@ -70,12 +60,8 @@ final class ApprovalStore {
 
     private let answerer: any ApprovalAnswering
 
-    /// 已经挂过听众没有。**不是给视图看的状态**，是一次性闸的存放处 —— 重复挂载会让同一条
-    /// 待答调用被收两遍（今天被 `ApprovalTable.absorb` 按 `eventId` 覆盖吸收掉了，所以没有
-    /// 红点，也就一直没人守这条）。
-    ///
-    /// 闸是**永久的**：挂过之后不再重挂。全仓只有一个 `EventStream` 实例（`LayeringTests`
-    /// 的「各一个实例」盯着），换实例的场景不存在；真出现时再加一个 detach。
+    /// 已经挂过听众没有。**不是给视图看的状态**，是一次性闸的存放处。
+    /// 闸是永久的：全仓只有一个 `EventStream` 实例，换实例的场景不存在；真出现时再加 detach。
     @ObservationIgnored private var attached = false
 
     init(answerer: any ApprovalAnswering) {
@@ -95,17 +81,10 @@ final class ApprovalStore {
         notices[sessionId]
     }
 
-    /// 两处接线一次接完：待答调用的两条货物、源失效清空。
-    ///
-    /// 两处各自能单独坏，而且坏了都不编译失败 —— 症状分别是「审批永不显示」与
-    /// 「网关的上游没了之后留着一张按不动的卡」。
-    ///
-    /// **每一条 `ready` 都清空**（不论代次值）：网关在 `ready` 之后紧跟着重放当前集合，
-    /// 两者在同一个帧序列里相邻、客户端同步处理，界面上看不到中间态。这样表就没有跨代
-    /// 状态 —— 与上游「句柄表是局部变量、代际更替随函数消失」同一个形态。
-    ///
-    /// **只生效一次**：入口不唯一（启动编排、身份到来、将来任何恢复路径），而注册本身不幂等。
-    /// 闸在发起这次注册的人身上，不在订阅面上 —— `EventStream.on` 的「同名追加」是别人的契约。
+    /// 两处接线一次接完：待答调用的两条货物、源失效清空。两处各自能单独坏，坏了都不编译失败。
+    /// **每一条 `ready` 都清空**（网关随后重放当前集合，两帧相邻，界面看不到中间态）⇒
+    /// 表没有跨代状态。
+    /// **只生效一次**：入口不唯一而注册本身不幂等；闸在发起注册的人身上，不在订阅面上。
     func attach(sink: any ApprovalEventSink) {
         guard !attached else { return }
         attached = true
@@ -174,10 +153,8 @@ final class ApprovalStore {
         }
     }
 
-    /// 结局已定：撤卡、写一句说明。
-    ///
-    /// 等待期间这一条可能已被上游的 `cancel` 撤掉（那时状态行也跟着清空了）——
-    /// 卡都不在了，这句话就成了没有指代的一句，所以只在它仍是自己那一张时才写。
+    /// 结局已定：撤卡、写一句说明（只在它仍是自己那一张时才写 —— 等待期间可能已被
+    /// `cancel` 撤掉）。
     private func settle(_ entry: ApprovalTable.Entry, notice: String) {
         table.remove(eventId: entry.eventId)
         guard states[entry.eventId] == .sending else { return }

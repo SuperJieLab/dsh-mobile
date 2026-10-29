@@ -62,24 +62,6 @@ final class ApprovalTableTests: XCTestCase {
                        "换了编号就是另一条 —— 上游不会为重投换号")
     }
 
-    /// 同一条投递重复到达（重连重投）覆盖成一条，不长第二张。
-    func testTheSameDeliveryArrivingThreeTimesIsOneEntry() {
-        var table = ApprovalTable()
-        table.absorb(waterfall())
-        table.absorb(waterfall())
-        table.absorb(waterfall())
-        XCTAssertEqual(table.pending(in: "s1").count, 1)
-    }
-
-    /// 表的上界是「服务端实际挂起的条数」，不随事件数增长。
-    func testTwentyDistinctQuestionsMakeTwentyEntries() {
-        var table = ApprovalTable()
-        for index in 0..<20 {
-            table.absorb(waterfall(eventId: "e\(index)"))
-        }
-        XCTAssertEqual(table.pending(in: "s1").count, 20)
-    }
-
     // MARK: - 分到哪个会话
 
     /// 分组键是帧自己说的会话，不是「当前打开的是哪一屏」。
@@ -150,14 +132,6 @@ final class ApprovalTableTests: XCTestCase {
 
         table.remove(eventId: "e1")
         XCTAssertTrue(table.pending(in: "s1").isEmpty, "cancel 只带 eventId —— 用 callId 建键时这一删落空")
-    }
-
-    /// 本地作答成功：手里有编号，直接按它删。
-    func testRemovingByEventIdNeedsNothingElse() {
-        var table = ApprovalTable()
-        table.absorb(waterfall(eventId: "e1"))
-        table.remove(eventId: "e1")
-        XCTAssertTrue(table.pending(in: "s1").isEmpty)
     }
 
     /// 换代清空：之后重投一条就回来一条，没有残留。

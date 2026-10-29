@@ -1,27 +1,9 @@
 /**
  * Markdown 解析器 —— 源文 → `[Block]`，纯状态机，不 import SwiftUI / UIKit。
  *
- * 自写而不引包：引任何 Swift 包都会把编译验证链从「一条命令」撑成
- * 「包 + app 两套构建」。**分层是为留门** —— 将来换成熟库只替换这一层，把库的 AST
- * 映射成同一个 `[Block]`，渲染与流式策略不动。渲染层只认 `[Block]`，不认源文。
- *
- * 它的变化原因是**载体标准**（Markdown 子集怎么解析），与任何一屏的同步进度无关。
- * 现在只有一个文件，所以平铺；长到三个以上再按载体建 `Markdown/`。
- *
- * ## 子集（六种，其余不做）
- *
- * 围栏代码块（```）· 标题（`#` 1–6 级）· 无序列表（`-` `*` `+`）· 有序列表（`1.` / `1)`）·
- * 引用（`>`）· 分隔线（`---` `***` `___`）。**不做**（显示为纯文本）：表格 / 嵌套列表 /
- * 任务列表 / 脚注 / 数学公式 / 原始 HTML / setext 标题（`标题` 下行 `---` 会读成段落 +
- * 分隔线）/ 引用式链接定义（行内片段逐个单独解析，收不到别处定义）。
- *
- * ## 流式：尾部冻结
- *
- * **除尾部之外全部冻结，每 chunk 只重解析尾部** —— 上游按两块、我们按一块（它要处理引用式
- * 定义与脚注的双向依赖，我们的子集里新内容只影响最后一块）。「冻结」是**结果上的**：
- * `parse(_:extending:)` 收下上一次的结果，新源文是旧源文前缀时搬运冻结段、只从冻结边界
- * 之后重扫（`reparsedFrom` 记下重扫起点，供断言）；源文以空行结尾时最后一块也已封口，可
- * 一起冻结。未闭合围栏**当场按代码块渲染**，其身份（源偏移）在生长过程中稳定、界面不闪。
+ * 子集：围栏代码块、标题、无序 / 有序列表、引用、分隔线；其余（表格、嵌套列表、任务列表、
+ * 脚注、数学、原始 HTML、setext 标题、引用式定义）显示为纯文本。
+ * 流式只重解析尾部：新源文是旧源文前缀时搬运冻结段、从冻结边界之后重扫。
  */
 
 import Foundation
@@ -29,9 +11,7 @@ import Foundation
 // MARK: - 块
 
 /// 一个块级元素。
-///
-/// `offset` 是**起始行在源文里的字符偏移**，也是它的身份 —— 渲染层用它做 key，冻结块的
-/// offset 不变，SwiftUI 便不重挂载、不重排。
+/// `offset` 是起始行偏移，也是它的身份 —— 渲染层拿它做 key，冻结块的 offset 不变便不重挂载。
 struct Block: Equatable {
 
     enum Kind: Equatable {
@@ -52,11 +32,8 @@ struct Block: Equatable {
     let kind: Kind
     /// 块的正文。代码块是代码原文（不含围栏），列表项是项文本（不含标记）。
     let text: String
-    /// 行内排版的结果（粗体 / 斜体 / 行内码 / 链接）。
-    ///
-    /// **在解析时算一次**。渲染层若在 `body` 里现调 `attributed`，每次重算都重跑一遍行内
-    /// 正则 —— 滚动时每一行都在付这笔钱，那是滚动掉帧的直接来源。代码块不做行内解析
-    /// （代码里的 `*` 是字面量），它的 `inline` 就是纯文本。
+    /// 行内排版结果（粗体 / 斜体 / 行内码 / 链接），**解析时算一次**。
+    /// 渲染层在 `body` 里现调会每帧重跑行内正则，那是滚动掉帧的直接来源；代码块不做行内解析。
     let inline: AttributedString
     /// 起始行偏移 —— 也是这一块的身份。
     let offset: Int
@@ -75,8 +52,7 @@ struct MarkdownParseResult: Equatable {
     let blocks: [Block]
     /// 前 `frozenCount` 个块已经封口，下次喂新内容时原样搬运、不重解析。
     let frozenCount: Int
-    /// 这次解析**从哪个字符偏移开始扫**。全量解析恒为 0；增量解析时它等于冻结边界
-    /// 之后第一块的起点 —— 断言「只重解析尾部」的直接证据。
+    /// 这次从哪个字符偏移开始扫：全量恒为 0，增量等于冻结边界之后第一块的起点。
     let reparsedFrom: Int
 }
 
@@ -96,10 +72,7 @@ enum MarkdownParser {
                              reparsedFrom: 0)
     }
 
-    /// 增量解析：`previous` 是同一份文本更早的解析结果。
-    ///
-    /// 新源文是旧源文的前缀延长时，冻结段原样搬运、只重扫尾部；否则老实全量重解 ——
-    /// 宁可多算，不可算错。
+    /// 增量解析：新源文是旧源文的前缀延长时搬运冻结段、只重扫尾部；否则全量重解。
     static func parse(_ source: String, extending previous: MarkdownParseResult) -> MarkdownParseResult {
         guard source.hasPrefix(previous.source) else { return parse(source) }
 
@@ -119,12 +92,8 @@ enum MarkdownParser {
                              reparsedFrom: resume)
     }
 
-    /// 行内：一段行内 markdown → 富文本。
-    ///
-    /// 块级自己做（系统在 `Text` 上不做块级排版），行内**交给系统**（粗体 / 斜体 / 行内码 /
-    /// 链接）。它是纯函数（`AttributedString` 来自 Foundation），故进 CLI 断言。
-    /// `inlineOnlyPreservingWhitespace` 是关键：**只解行内**、空白原样保留，于是「一段里既有
-    /// 文字又有标记」时不会被系统重新断行。
+    /// 行内：一段行内 markdown → 富文本。块级自己做，行内交给系统。
+    /// `inlineOnlyPreservingWhitespace` 只解行内、空白原样保留，否则系统会重新断行。
     static func attributed(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
@@ -147,8 +116,7 @@ enum MarkdownParser {
         let offset: Int
     }
 
-    /// 按 `\n` 切行，逐行记住起始偏移。`omittingEmptySubsequences: false` 有意 ——
-    /// 空行是分段的依据。
+    /// 按 `\n` 切行并记住起始偏移。`omittingEmptySubsequences: false` 有意 —— 空行是分段依据。
     private static func lines(of source: String) -> [SourceLine] {
         var result: [SourceLine] = []
         var offset = 0
@@ -162,8 +130,7 @@ enum MarkdownParser {
 
     // MARK: - 扫描
 
-    /// 从第 `start` 行开始扫描出块。增量解析时 `start` 就是冻结边界之后那一行 ——
-    /// 这就是「只重解析尾部」。
+    /// 从第 `start` 行开始扫出块；增量解析时它就是冻结边界之后那一行。
     private static func scan(_ lines: [SourceLine], from start: Int) -> [Block] {
         var blocks: [Block] = []
         var index = start
@@ -206,7 +173,7 @@ enum MarkdownParser {
                 continue
             }
 
-            // 分隔线。**要排在列表前面**：`- - -` 也是分隔线，而按列表记号看它是三项
+            // 分隔线。**要排在列表前面**：`- - -` 也是分隔线，而按列表记号看它是三项。
             if isDivider(trimmed) {
                 blocks.append(Block(kind: .divider, text: "",
                                     inline: AttributedString(""), offset: line.offset))

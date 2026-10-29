@@ -1,15 +1,8 @@
 /**
- * 会话列表的增量合并：一条变更落到一串行上，只这一个入口。
+ * 会话列表的增量合并：一条变更落到一串行上，只这一个入口。纯值类型，不认识网络与视图。
  *
- * 纯值类型，不认识网络与视图 —— 于是「顺序只有一条规则」能被单独断言。
- *
- * **顺序**：拉取结果原样采用（那是服务端的承诺），这里只负责把事件带来的行放到
- * `updatedAt` 该在的位置。同一时间的两行，新来的排在已有那行之前 —— 「刚发生的」
- * 先被看见。
- *
- * **不做的三件事**：不判断可见性（`blank` / `subagent` 归 `SessionVisibility`，
- * 由状态层两半各过一遍）、不删拉取给的行（只有 `removed` 删）、不新增未知 id 的
- * `status` / `activity`（它们说的是「已经有一行」的事，凭空造行等于替拉取做主）。
+ * 拉取结果原样采用（那是服务端的承诺），这里只把事件带来的行放到 `updatedAt` 该在的位置；
+ * 同一时间的两行，新来的排在前面。可见性、删除、未知 id 都不在这里判。
  */
 import Foundation
 
@@ -41,11 +34,7 @@ enum SessionListMerger {
     // MARK: - 行
 
     /// 事件行叠加到已有行上：它知道的那几格取新的，不知道的保留旧值。
-    ///
     /// **`title` 缺席也保留旧值**，尽管协议里「缺席」同时表示「无标题」与「投影不可用」。
-    /// 取保留：上游每次 `agent/created` / `agent/disposed` 都重发 `added`，若一律覆盖，
-    /// 一次没有投影的重发就会把已知标题抹成「（无标题）」，直到下一次拉取。代价是
-    /// 「标题真的被清空」要等下一次拉取才反映出来 —— 那比每次重发都闪一下好。
     private static func merge(_ incoming: SessionSummary, into rows: [SessionSummary]) -> SessionSummary {
         guard let existing = rows.first(where: { $0.id == incoming.id }) else { return incoming }
         return copy(of: existing,
@@ -75,14 +64,8 @@ enum SessionListMerger {
     }
 
     /// 从一行拷一行，只改传进来的那几格；没传的保持原值。
-    ///
     /// 这是本文件**唯一**一处构造 `SessionSummary` —— 反复抄七个字段时，「没提到的字段该保留」
-    /// 与「该换成新值」在字面上长得一样，抄错任何一格都不会编译失败。只说要改什么，
-    /// 没提到的就不可能被抄错。
-    ///
-    /// `nil` 在这里表示「不改」。它与 `merge` 的意图逐字一致
-    /// （`incoming.title ?? existing.title`），
-    /// 但**不能**用来把一格清成 nil —— 今天没有那条路径（标题真的被清空要等下一次拉取才反映）。
+    /// `nil` 在这里表示「不改」，与 `merge` 的意图逐字一致，但不能用来把一格清成 nil。
     private static func copy(of row: SessionSummary,
                              title: String? = nil,
                              createdAt: Double? = nil,

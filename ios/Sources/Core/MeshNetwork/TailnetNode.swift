@@ -1,19 +1,9 @@
 /**
  * TailscaleKit 的包装层：节点生命周期 → `TailnetNodeState` 事件。
  *
- * 只做「上游调用 + 结果归类成状态机事件」，迁移决策全部在纯状态机 `TailnetNodeState`。
- * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession` —— `MeshStore` 把它连同网关
- * 地址一起收成 `route`，之后所有请求的流量都进 tailnet。
- *
- * **它不认识上游类型**：起、关、读状态、建 session 四件事在 `TailnetBackend`
- * （`TailnetBackend.swift`），本文件只认那条窄面。于是接入窗口这类判据能被假件构造出来，
- * 换上游版本时改动面也收在一个文件里。
- *
- * 上游形状（libtailscale，`TailscaleNode.swift` 实读）：
- * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
- * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册；
- * - `TailscaleError` 没有结构化的 key 错误分支，badKey / unreachable 只能按错误消息归类
- *   —— 这里是薄翻译层。
+ * 只做「上游调用 + 结果归类成状态机事件」，迁移决策全在纯状态机。注册成功的副产物是一只
+ * 走 SOCKS5 回环的 `gatewaySession`，由 `MeshStore` 收成 `route`。
+ * 上游类型只在 `TailnetBackend` 出现，本文件只认那条窄面。
  */
 import Foundation
 
@@ -21,8 +11,7 @@ import Foundation
 @Observable
 final class TailnetNode {
 
-    /// key 的可核对形式：头 11 位（`hskey-auth-`）+ 尾 6 位 —— 足以和 headscale
-    /// 日志里的 auth id / VPS preauthkeys list 对号，又不整串刷屏。
+    /// key 的可核对形式：头 11 位 + 尾 6 位，够对上 headscale 的 auth id，又不整串刷屏。
     private static func keyHint(_ key: String?) -> String {
         guard let key else { return "nil" }
         guard !key.isEmpty else { return "<empty>" }
@@ -33,28 +22,23 @@ final class TailnetNode {
     /// 状态机当前状态（界面据此渲染；迁移判定全在 `TailnetNodeState.handle`）。
     private(set) var state: TailnetNodeState = .noKey
 
-    /// 起节点那段（`up()`）还在跑。**与 `state` 是两件事**：状态目录健康时
-    /// `launch` 一上来就把状态置成 `.running`，而真正的接入还要跑最长约 49 秒。
-    /// 设置页据此在提交前拒绝，`revive()` 据此避开这段窗口（接入途中读状态会误判成不可达）。
+    /// 起节点那段（`up()`）还在跑。**与 `state` 是两件事**：状态目录健康时 `launch` 一上来
+    /// 就是 `.running`，而真正的接入还要跑最长约 49 秒。设置页与 `revive()` 都据此避让。
     private(set) var isStarting = false
 
     /// Running 后可用：全部流量进 tailnet 的 session，由 `MeshStore` 取走交给端点层。
     private var gatewaySession: URLSession?
 
-    /// 当前到网关对端的路径：Running 期间轮询刷新，其余状态为 nil。
-    /// 经 `MeshStore` 投影后给 `ConnectionBadge` —— 展示层不认识本类型。
+    /// 当前到网关对端的路径：Running 期间轮询刷新，其余为 nil。
     private(set) var meshPath: CarrierPath?
 
-    /// 节点验证 Running、tailnet session 建成的那一刻（App 据此把传输切进虚拟网）。
-    /// 同值迁移不触发 SwiftUI onChange，激活只能挂回调。
+    /// 节点验证 Running、tailnet session 建成的那一刻（同值迁移不触发 onChange）。
     var onVerifiedRunning: ((URLSession) -> Void)?
 
-    /// 对外可见事实变化的推送通道（连接域唯一消费者）：状态迁移与路径刷新处调用。
-    /// 通知本身零成本，重复通知由接收方的投影吸收。
+    /// 对外可见事实变化的推送通道（状态迁移与路径刷新处调用），连接域是唯一消费者。
     var onNodeChanged: (() -> Void)?
 
-    /// 造后端的那一步。默认造真件；测试注入假件 —— 接入窗口那两条判据只有「让 `up()` 挂住」
-    /// 才构造得出来，而 `isStarting` 是 `private(set)`，外部设不进去。
+    /// 造后端那一步：默认造真件，测试注入假件（`isStarting` 是 `private(set)`，外部设不进去）。
     private let makeBackend: BackendFactory
 
     private var node: (any TailnetBackend)?
@@ -64,8 +48,7 @@ final class TailnetNode {
         self.makeBackend = makeBackend
     }
 
-    // MARK: - 接入 key（App 沙盒而非 Keychain：Keychain 跨卸载存活且无法随卸载清除，
-    // 与「卸载即失效」冲突；沙盒随卸载蒸发）
+    // MARK: - 接入 key（沙盒而非 Keychain：沙盒随卸载蒸发）
 
     enum TailnetKeyStore {
         private static let fileName = "tailnet-key"
@@ -94,20 +77,17 @@ final class TailnetNode {
         case .registering:
             await up(key: key, config: config)
         case .running:
-            // 幂等：同一进程内二次 launch 会把旧 socket 全杀掉 —— socks5 / localapi
-            // 随即报 use of closed network connection，徽章上的路径标签也一起掉。
-            // 所以节点已验证 Running 且组网 session 还活着时不再 re-up，只把激活
-            // 回调补到位。冷启动（新进程、gatewaySession 必为 nil）不受影响。
+            // 幂等：二次 launch 会把旧 socket 全杀掉，socks5 / localapi 随即报 closed，
+            // 路径标签也掉。
+            // 已验证 Running 且 session 还在时不再 re-up。
             if let session = gatewaySession {
                 Log.info(Log.Module.mesh, "launch: node already running with live session — skip re-up")
                 onVerifiedRunning?(session)
                 startPathPolling()
                 return
             }
-            // 重开也照喂 key（在才喂）：状态目录健康 ≠ 注册完成——上次起节点可能只写
-            // 了目录就退出，残缺状态 + 不喂 key ⇒ 注册请求不带 key，headscale 落
-            // 交互注册回 AuthURL，永远不上节点表。后端已 Running 时
-            // 上游自行忽略 key（tsnet.go「Ignoring authkey」分支），无副作用。
+            // 重开也照喂 key：状态目录健康 ≠ 注册完成，残缺状态不喂 key 会让 headscale 落
+            // 交互注册。后端已 Running 时上游自行忽略 key。
             await up(key: key, config: config)
         default:
             break
@@ -115,11 +95,7 @@ final class TailnetNode {
     }
 
     /// 设置页提交接入 key：进沙盒存储 → registering → 注册。
-    ///
-    /// **正在起节点时拒绝**（`.refusedWhileNodeStarting`）：两条并发时，任一条的终局都会
-    /// 清掉另一条的产物 —— `finishFailed` 清 `gatewaySession`、超时分支清 `self.node`，
-    /// 而先失败的那条还会把后成功的那条挡在 `.failed` 外面进不来。
-    /// 入口拒绝比事后补救便宜得多。
+    /// 正在起节点时拒绝：两条并发时，任一条的终局都会清掉另一条的产物。
     func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
         guard !isStarting else {
             Log.info(Log.Module.mesh, "submitKey: refused — node is starting")
@@ -152,15 +128,9 @@ final class TailnetNode {
         return .accepted
     }
 
-    /// 回前台的探活（节点复活场景的节点层侧）：tsnet 的复活是上游行为（状态在
-    /// 进程内，前台即恢复），这里只探测状态是否仍可读。读不了 = 节点已死 → 如实落
-    /// Failed(unreachable)，不自动重试（异常点表：不做重试风暴，重试入口在设置页）。
-    ///
-    /// **起节点期间不探活，判据就在这里**：状态目录健康时状态一上来就是 `.running`，
-    /// 而节点此刻还没验证过 —— 这时读 `statusJSON` 多半报错，会把一次正常接入打成
-    /// `failed(unreachable)`，而 `.failed` 之后成功进不来（迁移表里没有那一格）。
-    /// 这条依据的是「节点还没验证过」，只有节点自己知道；放在调用方等于要求每个调用方
-    /// 都记住它，而调用方会越来越多。
+    /// 回前台的探活：只探测状态是否仍可读，读不了就落 `failed(unreachable)`，不自动重试。
+    /// 起节点期间不探活：那时读 `statusJSON` 多半报错，会把正常接入打成失败，而 `.failed`
+    /// 之后成功进不来。
     func revive() async {
         guard !isStarting else { return }
         guard case .running = state, let node else { return }
@@ -258,23 +228,17 @@ final class TailnetNode {
 
     // MARK: - 节点起停（上游调用 + 事件归类）
 
-    /// 一次尝试的上限。
-    ///
-    /// 上游 `tailscale_up` **没有自己的超时**：连不上控制面时它一直等，而头文件给出的取消
-    /// 方式就是 `tailscale_close`（Swift 侧 `close()`）。没有这个上限，界面永远停在
-    /// 「注册中」，既看不到失败、也拿不到重试入口 —— 而「一直转圈」正是最糟的一种失败表现：
-    /// 用户不知道该等还是该修。
+    /// 一次尝试的上限。上游 `tailscale_up` 没有超时，连不上控制面时一直等；
+    /// 没有上限，界面永远停在「注册中」，既看不到失败也拿不到重试入口。
     private static let upTimeoutSeconds: TimeInterval = 15
 
-    /// 一次启动最多试几回（首发 + 重试）。上限而非无限：地址写错或 CA 没信任时，
-    /// 每次尝试都必然失败，无限重试只是把一个静态错误变成一串噪音。
+    /// 一次启动最多试几回；地址写错时无限重试只是把静态错误变成一串噪音。
     private static let upAttemptLimit = 3
 
     /// 两次尝试之间的下限。组网启动本身要几秒，立即重试只是把同一次失败再问一遍。
     private static let upRetryFloorMs = 2_000
 
-    /// 一次尝试的结果。**归因决定要不要再试** —— 这是它与「失败」分开的理由：
-    /// 环境问题（超时 / 不可达）值得退避后再来一次，而 key 被拒再来一次只会消耗限次。
+    /// 一次尝试的结果 —— 归因决定要不要再试：环境问题值得，key 被拒只会消耗限次。
     private enum UpOutcome {
         case ready
         case retryable(TailnetNodeFailure)
@@ -284,9 +248,7 @@ final class TailnetNode {
     /// 起 tsnet 节点并等登录完成；环境类失败自动重试。key 空表示本机没存过 key
     /// （上游对 Running 后端会自行忽略 key）。
     private func up(key: String?, config: MeshConfig) async {
-        // **单飞**：同一时刻只允许一条起节点的路，这个标志就是那条不变式的存放处。
-        // 两个入口（`submitKey` / `retry`）据此拒绝，`revive()` 据此避开探活。
-        // `defer` 而不是在每个终局写一遍 —— `up` 有四条 return，漏一条就永久卡在忙。
+        // **单飞**：同一时刻只允许一条起节点的路；`defer` 复位（`up` 有四条 return）。
         isStarting = true
         defer { isStarting = false }
 
@@ -297,9 +259,7 @@ final class TailnetNode {
             case .ready:
                 transition(.registrationSucceeded)
                 startPathPolling()
-                // 根部激活回调：App 的 onChange(of: state) 在同值迁移
-                // （running→running）时不触发，隧道组网的激活只能挂在「session 刚建成」
-                // 这个确定性时点上，不能靠状态 diff。
+                // 根部激活回调：同值迁移不触发 onChange，激活只能挂在「session 刚建成」这个时点。
                 if let session = gatewaySession { onVerifiedRunning?(session) }
                 return
 
@@ -327,9 +287,7 @@ final class TailnetNode {
     }
 
     /// 一次尝试：造节点 → 等 up（带超时）→ 确认后端真的 Running。
-    ///
-    /// **不在这里迁移状态**：重试期间状态该停在 `registering`（界面说的是「正在注册」，
-    /// 而不是每隔十几秒闪一次失败）。迁移只在终局由 `up` 做。
+    /// 不在这里迁移状态：重试期间停在 `registering`，迁移只在终局做。
     private func attemptUp(key: String?, config: MeshConfig) async -> UpOutcome {
         guard config.isComplete, let controlURL = config.controlURL else {
             // 配置没填全：视同不可达（界面提示去设置页补地址）。重试不会补上地址。
@@ -373,8 +331,8 @@ final class TailnetNode {
             return Self.outcome(forMessage: message)
 
         case .returned:
-            // 闭合信号：up() 返回 ≠ 注册完成 —— 后端停在 NeedsLogin、控制面回 AuthURL 时
-            // up() 也返回。只有 statusJSON 报 BackendState == Running 才认成功。
+            // 闭合信号：up() 返回 ≠ 注册完成（停在 NeedsLogin 时它也返回），
+            // BackendState == Running 才算。
             let backendNow = await Self.backendState(of: node) ?? "<unreadable>"
             Log.info(Log.Module.mesh,
                      "up: returned, BackendState=\(backendNow) (waiting up to 3s for Running)")
@@ -397,8 +355,7 @@ final class TailnetNode {
         }
     }
 
-    /// 跑一次 `up()`，到点就放弃。**两个任务同处一组**：谁先回来算谁，
-    /// 超时那一支由调用方 `close` 收尾 —— 单纯取消 Task 不会中断 Go 侧的等待。
+    /// 跑一次 `up()`，到点就放弃；超时那一支由调用方 `close` 收尾（取消 Task 中断不了 Go 侧等待）。
     private enum UpStep: Sendable {
         case returned
         case failed(String)
@@ -425,8 +382,7 @@ final class TailnetNode {
         }
     }
 
-    /// 失败归因：key 相关的判据 = 错误消息含 authkey 字样（上游没有结构化的分支）；
-    /// 其余（连不上控制面、证书没信任）一律 unreachable —— 文案引导查描述文件。
+    /// 失败归因：消息含 authkey 字样 = key 被拒；其余（连不上、证书没信任）一律 unreachable。
     private static func outcome(forMessage message: String) -> UpOutcome {
         let lower = message.lowercased()
         let keyRejected = lower.contains("authkey") || lower.contains("auth key")

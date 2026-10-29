@@ -1,33 +1,17 @@
 /**
  * 组网域的唯一宿主：把「节点状态」收敛为「能不能发请求」，并持有隧道的唯一产物。
  *
- * 迁移判定仍在纯状态机 `TailnetNodeState`，这里不做第二台 —— `MeshPhase.resolve`
- * 只是它加「隧道是否建成」这一个输入后的**投影**。VerifiedRunning 激活与回前台要动的两个
- * 动作（探活 / 按存下的那份配置重试）住在这里；「什么时候动」不在这里 —— 那是编排的事。
- *
- * **产物也住这里**：隧道通了之后「往哪打、走哪条传输」由 `route` 一次给全，不再有第二个
- * 对象存着它的一半。地址与传输同生共死 —— 没有「有地址但没有传输」这种态。
- *
- * 业务调用面照旧直接消费 `RpcClient`：组网域不吞身份域。
+ * 迁移判定在纯状态机，`MeshPhase.resolve` 只是加「隧道是否建成」之后的投影。
+ * 动作（探活 / 重试）住这里，「什么时候动」在编排。
  */
 import Foundation
 
-// MARK: - 注入接缝
-//
-// store 只认一个协议，不认具体类型 —— 真实类型的适配住在 `MeshStoreAdapters.swift`
-// （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
-// TailscaleKit，见 tests/MeshStoreTests.swift）。
+// MARK: - 注入接缝（真实类型的适配住 `MeshStoreAdapters.swift`）
 
-/// 组网管理动作（提交接入 key / 失败后重试）有没有被**接下**。
+/// 组网管理动作（提交接入 key / 失败后重试）有没有被接下。
 ///
-/// 它回答的既不是「成不成」，也不是「系统现在什么状态」（那是 `MeshPhase`）：
-/// 接下之后照样可能落 `failed(badKey)`。它只回答**这一次调用**的去向 ——
-/// 调用方拿它决定「这一下要不要善后」，而它活不过本次调用，不能存成状态。
-///
-/// 被拒的**原因写在取值名里**，不另立一层「理由」类型：今天只有一道闸，一层类型只为装
-/// 一个 case；而那一层的名字（`Refusal`）已经被 `Features/` 里的同名类型占了 —— Core 再
-/// 定义一个，分层判据会读成「下层认识界面层的类型」（按名字判，分不出两个不同的东西）。
-/// 多一种原因就是多一个 case，`switch` 的穷尽性会逼着每个调用方处理它。
+/// 它不回答「成不成」（那是状态与订阅流的回答），只回答这一次调用的去向，活不过本次调用。
+/// 原因写在取值名里 —— `Refusal` 已被 `Features/` 占用，Core 再定义会被分层判据读成跨层。
 enum MeshActionAcceptance: Equatable {
     case accepted
     /// 没接：另一条起节点的路在跑。两条并发时，任一条的终局都会清掉另一条的产物。
@@ -40,16 +24,13 @@ enum MeshActionAcceptance: Equatable {
     var nodeState: TailnetNodeState { get }
     /// 当前到网关对端的路径；Running 期间由节点层轮询刷新，其余为 nil。
     var carrierPath: CarrierPath? { get }
-    /// 节点正在起（`up()` 那段还没跑完）。**与 `nodeState` 不是一回事**：
-    /// 状态目录健康时 `nodeState` 一上来就是 `.running`，而节点可能正卡在连控制面。
-    /// 设置页据此在提交前就说清「此刻改不了」，不必等提交被拒才知道。
+    /// 节点正在起。**与 `nodeState` 不是一回事**：状态目录健康时它一上来是 `.running`，
+    /// 而接入可能还在跑。
     var isStarting: Bool { get }
     /// 节点验证 Running、tailnet session 建成的那一刻（同值迁移不触发 onChange，
     /// 所以激活只能挂回调，不能靠观察状态变化）。
     var onVerifiedRunning: ((URLSession) -> Void)? { get set }
-    /// 节点侧任何对外可见事实变化（状态迁移 / 路径刷新）的推送通道：视图不直接观察
-    /// 节点，store 的投影靠它回灌 —— 没有它，轮询探到的失败与
-    /// direct↔relay 切换会冻结在最近一次 store 调用的快照上。
+    /// 节点侧事实变化的推送通道 —— 没有它，探到的失败与 direct↔relay 切换会冻结在快照上。
     var onNodeChanged: (() -> Void)? { get set }
     func launchNode(config: MeshConfig) async
     func reviveNode() async
@@ -63,32 +44,22 @@ enum MeshActionAcceptance: Equatable {
 @Observable
 final class MeshStore {
 
-    /// 对外连接阶段 —— 视图读连接态的唯一出处。**算出来的，不存**：它的两个输入
-    /// （节点状态、隧道是否建成）各有唯一出处，再存一份就是第三个存放处。
+    /// 对外连接阶段 —— 视图读连接态的唯一出处。**算出来的，不存**。
     var phase: MeshPhase {
         MeshPhase.resolve(nodeState: nodeState, hasGatewaySession: route != nil)
     }
-    /// 节点层状态的细粒度透传：`phase` 把 registering 与 running-未组网都折进
-    /// connecting，组网管理屏要区分这两态，故单独暴露（读取面仍唯一出处）。
+    /// 节点层状态透传：组网管理屏要区分 registering 与 running-未组网。
     private(set) var nodeState: TailnetNodeState
-    /// 直连 / 中继；非 ready 期为 nil。徽章路径那一行的独立数据源 —— 它不折进
-    /// `phase`，因为「连上了」与「走的是哪条路」是两个不同的变化原因。
+    /// 直连 / 中继；非 ready 期为 nil。不折进 `phase`（两个变化原因）。
     private(set) var meshPath: CarrierPath?
-    /// 读盘时发现组网配置损坏（存过，但解不出来）。节点不会启动 —— 详情见
-    /// `reportDamagedConfiguration`。界面据此说「重新填写」，而不是「检查证书」。
+    /// 读盘时发现组网配置损坏（存过但解不出来）；节点不会启动。
     private(set) var storedConfigDamaged = false
 
-    /// 组网**刚刚**就绪的那一刻 —— 供编排层接（叫醒连接）。
-    ///
-    /// 与 `phase` 的分工：`phase` 回答「现在是什么」，视图读它画；这个回调回答
-    /// 「它刚变成 ready」，动作层读它做。**两者不能互相替代** —— 观察 `phase` 只能
-    /// 在渲染时顺便发生，而「组网好了该去连」必须发生 even 当没有任何视图在渲染。
-    ///
-    /// 只在「变成 `.ready` 且上一次不是」时调，不是每次回灌都调。
+    /// 组网**刚刚**就绪的那一刻 —— 动作层读它做，视图读 `phase` 画。
+    /// 只在「变成 `.ready` 且上一次不是」时调。
     var onPhaseReady: (() -> Void)?
 
-    /// 上一次通知过的阶段。判「变成」用 —— `phase` 是算出来的，没有别的变化可挂钩。
-    /// **不对外暴露**：读它会读到过期值，那正好是别人该用 `phase` 的场合。
+    /// 上一次通知过的阶段 —— `phase` 是算出来的，没有别的变化可挂钩。
     private var lastNotifiedPhase: MeshPhase?
 
     /// 隧道的产物：往哪打、走哪条传输。**地址与传输同生共死** —— 没有「有地址但没有
@@ -101,23 +72,18 @@ final class MeshStore {
     /// 节点验证 Running 那一刻拿到的产物。唯一写入点是 `onVerifiedRunning`。
     private var verifiedRoute: Route?
 
-    /// 此刻能不能发、往哪发 —— 没有第二条路径能拿到这个答案。
-    ///
-    /// **守卫在读数上**：`nodeState` 不是 `.running` 就一定 nil，哪怕 `verifiedRoute`
-    /// 还留着上一次的值。于是「`route != nil` ⟺ `phase == .ready`」是算出来的，
-    /// 不靠谁记得清 —— 没有「清」这个动作可忘。
+    /// 此刻能不能发、往哪发。**守卫在读数上**：`nodeState` 不是 `.running` 就一定 nil，
+    /// 于是「`route != nil` ⟺ `phase == .ready`」是算出来的，没有「清」这个动作可忘。
     var route: Route? {
         guard case .running = nodeState else { return nil }
         return verifiedRoute
     }
 
     private let node: MeshNodeControlling
-    /// 组网配置的当前值：start 存底，组网管理动作（submitKey / retry）刷新 ——
-    /// VerifiedRunning 回调读它而不是读 start 时刻的快照，否则换了地址之后重入
-    /// 仍然打到旧地址。
+    /// 组网配置的当前值：start 存底，submitKey / retry 刷新。
+    /// VerifiedRunning 读它而不是 start 时的快照，否则换地址后重入仍打旧地址。
     private var config: MeshConfig?
-    /// 启动编排的进程内幂等闸：列表页 `.task` 会随视图重入重放，二次 start 会经
-    /// node.launch 重启 tsnet、杀掉活连接并清掉路径展示。
+    /// 进程内幂等闸：二次 start 会重启 tsnet、杀掉活连接并清掉路径。
     private var started = false
 
     init(node: MeshNodeControlling) {
@@ -125,9 +91,8 @@ final class MeshStore {
         self.nodeState = node.nodeState
     }
 
-    /// 启动编排：挂回调 + 拉起节点。激活只发生在 VerifiedRunning 回调里，没有兜底激活 ——
-    /// 激活前 App 不持有任何网关地址。
-    /// 判定逻辑全部在节点层状态机，这里只管调用顺序。
+    /// 启动编排：挂回调 + 拉起节点；激活只发生在 VerifiedRunning 回调里。
+    /// 判定全在节点层状态机，这里只管调用顺序。
     func start(config: MeshConfig) async {
         // 幂等：启动编排一次进程只该走一遍。重入（视图重放 .task）只刷新投影，
         // 不重拉节点。回前台的恢复走 `AppServices.sceneActive`，与此无关。
@@ -147,35 +112,23 @@ final class MeshStore {
         nodeChanged()
     }
 
-    /// 探活一次：节点还活着就从它那里重读路径，读不出就如实落 `failed(unreachable)`。
-    ///
-    /// **只回答「能不能做」，不回答「现在该不该做」** —— 「回前台了」这个触发条件不在本类型
-    /// 的知识里（平台事件的判定在 `AppServices.sceneActive`）。接入途中不探活那条不变式
-    /// 也不在这里：它由节点自己守（只有它知道接入进度）。
+    /// 探活一次：节点还活着就重读路径，读不出就落 `failed(unreachable)`。
+    /// 只回答「能不能做」；「该不该做」在编排，接入途中不探活由节点自己守。
     func revive() async {
         await node.reviveNode()
         nodeChanged()
     }
 
     /// 按**存下来的那份**配置重走一次注册。
-    ///
-    /// 不带参数是有意的：编排不知道「存的是哪一份」，也不该知道。让它传参就有两种可能
-    /// （传存的那份 / 传手里的），而后者正是「旧 session 配上新地址」那类缺陷的入口。
-    ///
-    /// **不回答「接没接」**：这是一次内部动作，没有第二方等回执（与设置页那几个按钮不同）。
-    /// 被拒时 `phase` 与 `isStarting` 会如实反映，编排读它们即可 —— 多一层返回值只是把
-    /// 同一事实讲两遍。没存过配置就直接不做事：此刻 `phase` 不可能是 `.failed`，
-    /// 这条不是真实分支，只是「对任何调用都答得出来」。
+    /// 不带参数是有意的：让编排传参就有两种可能，而「旧 session 配新地址」正是那样来的。
+    /// 不回答「接没接」：内部动作，没有第二方等回执。
     func retryStored() async {
         guard let config else { return }
         _ = await retryMesh(config: config)
     }
 
-    /// 配置读坏了：不进节点层，把「要重新填」这件事如实说出来。
-    ///
-    /// 不走 `start` 的理由：`start` 会把配置交给节点，而损坏的配置只能回落成空配置 ——
-    /// 空配置过不了 `isComplete`，节点层于是报「不可达」，界面引导用户去查 VPS 与证书。
-    /// 归因从第一步就错了，而用户按那个提示查不出任何东西。
+    /// 配置读坏了：不进节点层，把「要重新填」如实说出来。
+    /// 交给 `start` 会回落成空配置 → 报「不可达」→ 用户去查 VPS 与证书，归因从第一步就错。
     func reportDamagedConfiguration() {
         guard !started else { return }
         started = true
@@ -189,10 +142,7 @@ final class MeshStore {
     var isStarting: Bool { node.isStarting }
 
     /// 提交接入 key 并接入。
-    ///
-    /// **预判在改 `config` 之前**：`config` 是 `onVerifiedRunning` 组装路径时读的那一格。
-    /// 忙时若先把它换成新配置，正在起的那条旧配置一旦成功，就会拿旧 session 配上新地址 ——
-    /// 「地址与传输同生共死」当场破掉。所以忙时整条动作都不做。
+    /// **预判在改 `config` 之前**：忙时先换配置，旧配置一旦成功就会拿旧 session 配新地址。
     func submitMeshKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
         guard !node.isStarting else { return .refusedWhileNodeStarting }
         self.config = config
@@ -211,13 +161,8 @@ final class MeshStore {
         return outcome
     }
 
-    /// 节点侧事实变化的统一回灌口：重读节点状态 + 刷路径。
-    ///
-    /// 只读一个输入 —— 阶段与「能不能发」都由 `nodeState` 与 `route` 在读数上算出来，
-    /// 这里不再算第二遍。
-    ///
-    /// 「刚就绪」的通知也挂在这里：它是节点侧事实的唯一回灌口（状态迁移与路径刷新都经过），
-    /// 放这儿不会漏；而 `phase` 是算出来的，没有别的「变化」可挂。
+    /// 节点侧事实变化的统一回灌口（状态迁移与路径刷新都经过，所以「刚就绪」也挂这里）。
+    /// 只读一个输入 —— 阶段与「能不能发」都在读数上算出来。
     private func nodeChanged() {
         nodeState = node.nodeState
         meshPath = node.carrierPath
@@ -225,8 +170,7 @@ final class MeshStore {
         let now = phase
         let was = lastNotifiedPhase
         lastNotifiedPhase = now
-        // 只在**跨进** ready 那一次通知。保持 ready 不动时不重复 —— 否则每一次路径刷新
-        // 都会让连接重连一次，而那条连接可能正好好的。
+        // 只在**跨进** ready 那一次通知：每次路径刷新都重连一次，而那条连接可能正好好的。
         if case .ready = now, !(was == .ready) {
             onPhaseReady?()
         }

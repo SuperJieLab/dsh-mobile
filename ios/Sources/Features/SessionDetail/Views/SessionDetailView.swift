@@ -1,11 +1,7 @@
 import SwiftUI
 
 /// 单个会话的消息视图 —— 这一屏的**渲染段**。依赖全在容器里，零服务。
-///
-/// 容器（消息同步 / 模型目录 / 命令目录 / 输入条）由 `SessionDetailAssembler` 造并接线；
-/// 本文件只画。两段分开之后渲染段拿不到服务：不是不写，是拿不到。
-///
-/// 首帧为 nil 的那一帧（容器还没造出来）由装配段吸收，这里只处理「容器在手里」的形态。
+/// 容器由 `SessionDetailAssembler` 造并接线；首帧为 nil 那种形态由装配段吸收。
 struct SessionDetailView: View {
     let detail: SessionDetailState
 
@@ -19,20 +15,17 @@ struct SessionDetailView: View {
     var body: some View {
         Group {
             if detail.isTranscriptEmpty {
-                // 内容还没到：**不挂 List**。空列表先出现、再一次性插入几十行，会让列表
-                // 在顶部完成初始布局；随后任何补滚都是一次看得见的位移 —— 那就是
-                // 「刷新出来、再滚下去」的来源。列表等有内容再创建，首次布局就在底部。
-                //
-                // 这一屏必须自己撑满：`safeAreaInset` 的底栏贴在被修饰视图的**下边界**上，
-                // 而 ProgressView 的固有高度只有一行 —— 不撑满时底栏会跟着浮到屏幕中间。
+                // 内容没到时不挂 List：空列表先出现再插几十行，会让「刷新出来、
+                // 再滚下去」变成看得见的位移。
+                // 这段还要自己撑满：`safeAreaInset` 的底栏贴在视图下边界，
+                // ProgressView 只有一行高，底栏会浮到屏幕中间。
                 ProgressView("正在同步…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 transcript
             }
         }
-        // 命令目录：**每次开始敲命令时重拉一次**（`onChange` 里判「刚进入 querying」）。
-        // 挂在面板上会让每敲一个字都拉一遍；只在打开那一刻拉，刚好够用。
+        // 每次开始敲命令时重拉一次；挂在面板上会让每敲一个字都拉一遍。
         .onChange(of: isCommandPaletteOpen) { _, open in
             guard open else { return }
             Task { await detail.commands.reload() }
@@ -42,8 +35,8 @@ struct SessionDetailView: View {
         }
         .navigationTitle(detail.session.title ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
-        // 四个展开面共用一个 `.sheet(item:)`：两个独立的 `.sheet` 在同一事务里
-        // 「关一个、开一个」（连接详情 → 全部待批）时，第二个经常不 present。
+        // 四个面共用一个 `.sheet(item:)`：两个独立 sheet 在同一事务里「关一个开一个」时，
+        // 第二个经常不 present。
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .network:
@@ -63,14 +56,12 @@ struct SessionDetailView: View {
         }
     }
 
-    /// 有内容之后才挂的那一屏。**它的创建时机就是「一进去停在最底部」的判据**：
-    /// 列表不在空状态下先出现，初始布局才有机会落在底部。
+    /// 有内容之后才挂的那一屏 —— 创建时机就是「一进去停在最底部」的判据。
     private var transcript: some View {
         ScrollViewReader { proxy in
             List {
-                // 翻页是自动的（见 List 上的 `onScrollGeometryChange`），这里只画
-                // 「正在拉」的占位。等待期间给三行骨架而不是转圈：用户往上拉就是在找更早的
-                // 内容，一片空白加个小转圈会让人以为到头了。高度按一行消息估，替换时不跳。
+                // 翻页是自动的，这里只画「正在拉」的占位。给三行骨架而不是转圈：
+                // 一片空白加个小转圈会让人以为到头了。
                 if detail.sync.hasOlder && detail.sync.isPagingOlder {
                     ForEach(0..<3, id: \.self) { _ in
                         RoundedRectangle(cornerRadius: 14)
@@ -102,9 +93,8 @@ struct SessionDetailView: View {
                     }
                 }
 
-                // 流式输出：正在生成的回复。它不在镜像里 —— 未定稿内容没有 seq，不属于「已读到的
-                // 位置」（镜像的第一条纪律）。它逐 chunk 增长，源文变化时 `MarkdownText` 只重
-                // 解析尾部、已渲染的块原样留着。
+                // 流式输出不在镜像里 —— 未定稿内容没有 seq，不属于「已读到的位置」。
+                // 源文变化时 `MarkdownText` 只重解析尾部。
                 if !detail.sync.transientText.isEmpty {
                     Text("DSH 正在输入…")
                         .font(.caption2)
@@ -124,9 +114,8 @@ struct SessionDetailView: View {
                     Text("共 \(detail.sync.eventCount) 条事件，其中 \(detail.sync.messageCount) 条消息 · \(detail.sync.status.line)")
                 }
 
-                // 滚动锚点：**必须在 footer 之后**。`scrollTo(…, anchor: .bottom)` 对齐的是
-                // 视口底部，锚点摆在 footer 之前时，那条说明会被挤出可视区 —— 进屏那一刻
-                // 正好压在底栏后面，看起来像没滚到底。
+                // 滚动锚点**必须在 footer 之后**：摆在 footer
+                // 之前时那条说明会被挤出可视区，看起来像没滚到底。
                 Color.clear
                     .frame(height: 1)
                     .listRowSeparator(.hidden)
@@ -135,12 +124,10 @@ struct SessionDetailView: View {
             .listStyle(.plain)
             // 首次布局就锚在底部。列表是**有内容之后才创建**的，所以此刻它算「初始布局」。
             .defaultScrollAnchor(.bottom)
-            // 往回翻是往**顶部**插行。这一次变化不走隐式动画 —— 一次插入几十行的布局动画
-            // 在长会话上很贵，而用户并不需要看见内容「长出来」。`eventCount` 与内容同步变，
-            // 用它当 key 能覆盖「插入了不产生节点的事件」这种情形。
+            // 往回翻是往顶部插行，不走隐式动画：一次插几十行的布局动画很贵，
+            // 用户也不需要看见内容长出来。
             .animation(nil, value: detail.sync.eventCount)
-            // 滑到接近顶部就自动往回翻。只认**进入**边沿：前插之后内容总高变大、离顶更远，
-            // 条件自然复位，用户继续往上滑才会触发下一次 —— 这就是分页的节奏，不会一口气拉完。
+            // 滑到接近顶部就自动往回翻。只认进入边沿：前插后内容变高、离顶更远，条件自然复位。
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.contentInsets.top <= Self.topTriggerDistance
             } action: { wasNear, isNear in
@@ -154,21 +141,16 @@ struct SessionDetailView: View {
                 didInitialScroll = true
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
-            // 不用 `.refreshable`：它的语义是「拉最新」，却只能挂在列表**顶部** —— 而顶部
-            // 该做的是往回翻历史，手势方向与内容方向正好相反。两头都交给上面那条
-            // `onScrollGeometryChange`（顶部翻历史、底部对齐最新）。
-            // 打字时滚动列表即收键盘 —— 与配对屏同口径；这是功能条回来的唯一手势
-            // （发送也会收，见 `composerRow`）。
+            // 不用 `.refreshable`：它的语义是「拉最新」却只能挂在顶部，而顶部该做的是往回翻。
+            // 打字时滚动列表即收键盘 —— 与配对屏同口径；这是功能条回来的手势。
             .scrollDismissesKeyboard(.immediately)
         }
     }
 
     // MARK: - 底栏
 
-    /// 底栏分五段：审批卡（条件）→ 告知（有事才出现）→ 命令候选（在敲命令时）→ 功能条 → 输入行。
-    ///
-    /// 命令候选排在功能条之上、输入框紧邻：它是「当前这一行」的补充，离输入框越近越好；
-    /// 功能条在打字时收起（原本就有），所以候选出现时那一行高度刚好让给它。
+    /// 底栏分五段：审批卡 → 告知 → 命令候选 → 功能条 → 输入行。
+    /// 命令候选贴近输入框：它是「当前这一行」的补充。
     private var bottomBars: some View {
         VStack(spacing: 0) {
             approvalSection
@@ -204,9 +186,7 @@ struct SessionDetailView: View {
     }
 
     /// 待批卡：只露第一张，其余折成一行计数。
-    ///
-    /// 审批是串行的 —— 批完一张才该看下一张。同时露两张不提供额外判断信息，只会把输入框
-    /// 再往上推 132pt，而那正是「挤」的主因。卡本身仍在输入框上方：它必须一眼看见。
+    /// 审批是串行的：同时露两张不提供额外信息，只会把输入框再往上推 132pt。
     @ViewBuilder
     private var approvalSection: some View {
         // 一次求值给这一节用 —— 它在 body 里被读三处（首张、计数、计数减一）。
@@ -237,9 +217,9 @@ struct SessionDetailView: View {
         }
     }
 
-    /// 「内容没能接上 / 已被清空重来」的告知。它挂在**不随内容滚动**的底栏里 ——
-    /// 同步状态行那句在 List 的 footer（跟着内容一起滚），用户往回翻时正好看不见，
-    /// 而那正是最需要看见的时候。非模态、不需用户点掉，一直显示到重新建立。
+    /// 「内容没能接上 / 已清空重来」的告知，挂在**不随内容滚动**的底栏里。
+    /// 同步状态行在 List 的 footer（跟着内容滚），用户往回翻时正好看不见，
+    /// 而那正是最需要看见的时候。
     private func noticeRow(_ notice: ResyncNotice) -> some View {
         Label {
             Text(notice.line)
@@ -253,9 +233,7 @@ struct SessionDetailView: View {
         .padding(.bottom, 4)
     }
 
-    /// 输入行：宽度全给输入框，发送键在最右。
-    ///
-    /// 输入框**不带自己的边框**：它坐在玻璃上，再加一圈描边就成了两层皮。
+    /// 输入行：宽度全给输入框，发送键在最右。输入框不带边框 —— 它坐在玻璃上，再加描边就是两层皮。
     @ViewBuilder
     private var composerRow: some View {
         // 局部 `@Bindable`：`@State` 的 `$` 只到对象这一层，取属性绑定要再包一次。
@@ -279,21 +257,15 @@ struct SessionDetailView: View {
         .padding(.vertical, 2)
     }
 
-    /// 命令面板此刻开着没有 —— 只用来取「刚打开」那个边沿，好触发一次重拉。
-    ///
-    /// 读的是**归一化之后**的草稿，与 `send` 的分流同一份输入：各读一份原始草稿时，
-    /// `" /permission"`（前导空格）会让这里判「不在敲命令」（不弹、不重拉）而发送判「是命令」。
+    /// 命令面板此刻开着没有 —— 只用来取「刚打开」那个边沿。
+    /// 读的是归一化之后的草稿，与发送分流同一份输入。
     private var isCommandPaletteOpen: Bool {
         detail.composer.paletteQuery != nil
     }
 
-    /// 发送：一行字走哪条路，判定在 `SlashTrigger.dispatch` —— 视图只照它的结论办事。
-    ///
-    /// **草稿在「已受理」之后才清**：命令名字打错（`unknown-command`）是唯一用户能自己改好的
-    /// 失败，那条路上把输入框清掉等于让人重打整行。
-    ///
-    /// **代价**：以 `/` 开头的普通消息发不出去（会被当命令）。与 Web UI 同 —— 它把整个
-    /// 斜杠前缀交给了命令系统。
+    /// 发送：走哪条路判定在 `SlashTrigger.dispatch`，视图只照它的结论办事。
+    /// **草稿在「已受理」之后才清**：命令名打错是用户能自己改好的失败，清掉等于让人重打整行。
+    /// 代价：以 `/` 开头的普通消息发不出去（与 Web UI 同）。
     private func send() {
         // 发送即收键盘：功能条跟着回来，用户能看到它接下来的连接态与占用。
         // 草稿由 `composer` 按「是否受理」决定留不留 —— 失败了那行字还在，改个字就能重按。
@@ -312,7 +284,8 @@ struct SessionDetailView: View {
                      onRetry: { detail.sync.retry() })
     }
 
-    /// 折叠起来的那些卡。**不含**上方已经露出的第一张 —— 文案说「还有 N 个」，列出来的就该是 N 个。
+    /// 折叠起来的那些卡。**不含**上方已经露出的第一张 —— 文案说「还有 N 个」，列出来的就该
+    /// 是 N 个。
     private var allApprovalsSheet: some View {
         let rest = Array(detail.pendingApprovals.dropFirst())
         return NavigationStack {
@@ -376,10 +349,8 @@ struct SessionDetailView: View {
     }
 }
 
-/// 底栏的材质：iOS 26 起用玻璃（Liquid Glass），以下退回 `.bar` 材质。
-///
-/// 抽成 modifier 而不是写在 `bottomBars` 里：availability 分支夹在 body 中间时，
-/// 读者会以为两态的布局不同 —— 它们只是材质不同，内容与尺寸完全一致。
+/// 底栏材质：iOS 26 起用玻璃，以下退回 `.bar`。
+/// 抽成 modifier：availability 分支夹在 body 里会让人以为两态布局不同，其实只是材质。
 private struct ComposerSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {

@@ -1,41 +1,23 @@
 /**
- * 订阅流通道的线上形状 —— 与网关 `mac-gateway/src/wire/mux.ts` 按文件名对着看。
+ * 订阅流通道的线上形状 —— 与网关 `mac-gateway/src/wire/mux.ts` 对着看，改字段那边必须同改。
  *
- * 网关那一份写着「手机端有一份对应定义 —— 改字段那边必须同改」。这里的每一件都对应
- * `mux.ts` 里的一个接口：
- * - `MuxServerEnvelope` ↔ 服务端帧外壳（`type` / `streamId` / `payload`）；
- * - `FollowRequest` ↔ `FollowRequest`（开一条订阅流的参数）；
- * - `EventsRequest` ↔ `openRequestOf` 的 `events` 那一支（开一条连接级事件流，不绑会话）；
- * - `MuxOpenFrame` ↔ 客户端开流帧（`MuxClientFrame` 里 `type: "open"` 那一支）；
- * - `MuxCancelFrame` ↔ 同一联合里的 `type: "cancel"` 那一支；
- * - `OpeningFrame` ↔ `FollowOpening`（打开帧的载荷）。
- *
- * 只声明客户端真收发的那几条，不是把网关的全套抄过来。
- *
- * 这个目录只放形状与编解码，不放「这条打开装哪些事件」那类判断：那属于连接层。
+ * 只声明客户端真收发的那几条，不是把网关全套抄过来。这个目录只放形状与编解码，
+ * 「这条打开装哪些事件」那类判断归连接层。
  */
 import Foundation
 
 // MARK: - 流编号
 
 /**
- * 一条逻辑流的编号 —— **开流那一刻现造，此后不复用**。
- *
- * 类型是字符串而不是整数，是为了让它没有可读含义：编号一旦能被解释（「1 是会话流、
- * 2 是审批流」），复用就跟着来 —— 而复用会让旧流的收尾删到新流的登记、旧流的残帧
- * 与新流同号。网关只要求它非空，怎么造归客户端（`StreamMux` 是唯一的造号点）。
+ * 一条逻辑流的编号 —— 开流那一刻现造，此后不复用。
+ * 类型是字符串是为了让它没有可读含义：编号一旦能被解释，复用就跟着来。
  */
 typealias StreamId = String
 
 // MARK: - 帧外壳
 
-/// 服务端帧的外壳：`{type, streamId, payload?}`。
-///
-/// 三个字段都声明，但**谁都不解释它们**：`type` 只被原样转发给订阅方，`streamId` 只作为
-/// 「这条帧属于哪条流」的键，`payload` 是内容本身。
-///
-/// `streamId` **必填**：协议里没有不带编号的帧。这一条是契约的一半 —— 帧只有一种形态，
-/// 客户端因此只需要一套消费入口（`StreamMux`）。
+/// 服务端帧外壳：`{type, streamId, payload?}`。三个字段都声明，但谁都不解释它们。
+/// `streamId` **必填** —— 协议里没有不带编号的帧，于是客户端只需一套消费入口。
 struct MuxServerEnvelope: Decodable {
     let type: String
     let streamId: StreamId
@@ -44,13 +26,9 @@ struct MuxServerEnvelope: Decodable {
 
 // MARK: - 开流请求
 
-/// 开一条订阅流的请求体 —— 网关侧的同名接口。
-///
-/// 与网关那份**不同形**：网关的 `FollowRequest` 不含 `op`（`op` 的校验在 `followRequestOf`
-/// 里单独一句），客户端这一侧在**编码时写出** `op`。类型自身不存 `op`：存了之后谁都能构造一个
-/// `op` 不对的 follow 请求，而那条线上路径不存在。
-///
-/// 网关另有可选参数 `maxMessages`（打开帧携带的条数上界），客户端从不发它 —— 取服务端默认值。
+/// 开一条订阅流的请求体（网关侧同名接口）。
+/// 与网关那份不同形：类型自身不存 `op`，编码时写出 —— 存了之后谁都能构造出 `op` 不对的请求。
+/// 网关另有可选 `maxMessages`，客户端从不发它（取服务端默认值）。
 struct FollowRequest: Encodable {
     let sessionId: String
 
@@ -63,12 +41,9 @@ struct FollowRequest: Encodable {
     }
 }
 
-/// 开一条连接级事件流的请求体：`{"op":"events"}` —— 载荷里只有 `op`。
-///
-/// 与 `FollowRequest` 同一条纪律（`op` 由类型自己写出，调用方给不出错的值），但**没有会话
-/// 字段**才是要害：这条流不属于任何一个会话，说的是「这台机器上发生了什么」。带一个
-/// `sessionId` 不会被网关拒（`openRequestOf` 只看 `op`），却会让两端对「它绑不绑会话」的
-/// 理解分岔 —— 所以这里连字段都不给它留。
+/// 开一条连接级事件流的请求体：`{"op":"events"}`。
+/// **没有会话字段**才是要害：带一个 `sessionId` 不会被网关拒，
+/// 却会让两端对「绑不绑会话」的理解分岔。
 struct EventsRequest: Encodable {
 
     private enum CodingKeys: String, CodingKey { case op }
@@ -79,17 +54,11 @@ struct EventsRequest: Encodable {
     }
 }
 
-/// 开流帧：`{type: "open", streamId: "<编号>", payload: <载荷>}`。
-///
-/// 构造入口只有两个工厂 —— `following(sessionId:streamId:)` 与 `events(streamId:)`。形状自己
-/// 决定 `op` 与外壳两层，调用方只给「要哪一种流 + 这条流叫什么号」。
-///
-/// 载荷声明成私有的两支而不是泛型或 `Any`：op 与载荷是一起变的（`follow` 要会话、`events`
-/// 什么都不要），拆成两个自由度就能构造出「op 与载荷不配」的帧 —— 那种帧网关认不出，
-/// 客户端会等到超时。
-///
-/// 编号由连接层造（它是唯一知道「这条连接上哪些号在用」的地方），文本由状态层拼（`op`
-/// 是协议词，连接层不认识）—— 两者在 `StreamMux.makeStream(_:)` 的注入处对接。
+/// 开流帧：`{type: "open", streamId: <编号>, payload: <载荷>}`。
+/// 构造入口只有两个工厂（`following` / `events`），op 与外壳由形状自己决定。
+/// 载荷声明成私有的两支而不是泛型：op 与载荷一起变，拆成两个自由度就能构造出「op 与载荷
+/// 不配」的帧，而那种帧网关认不出。
+/// 编号由连接层造、文本由状态层拼 —— 两者在 `StreamMux.makeStream(_:)` 的注入处对接。
 struct MuxOpenFrame: Encodable {
 
     let streamId: StreamId
@@ -129,10 +98,8 @@ struct MuxOpenFrame: Encodable {
     }
 }
 
-/// 取消帧：`{type: "cancel", streamId: "<本流>"}`。
-///
-/// 关一条流只发这一帧，**不断开连接**。它是单向的：服务端回什么都不代表这条流的状态，
-/// 所以发完即算关（等确认只会多一个会卡住的状态）。
+/// 取消帧：`{type: "cancel", streamId: <本流>}`。关一条流只发这一帧，**不断开连接**。
+/// 它是单向的：发完即算关（等确认只会多一个会卡住的状态）。
 struct MuxCancelFrame: Encodable {
 
     let streamId: StreamId
@@ -150,10 +117,7 @@ struct MuxCancelFrame: Encodable {
     }
 }
 
-/// 把一帧编成线上文本 —— 两种帧共用的那一条纪律。
-///
-/// `.sortedKeys` 不是风格问题：字典走 `JSONEncoder` 时键序随哈希，同一份输入连编两次会得到
-/// 不同字节 —— 排序之后「同一输入两次编码相同」才是一条能常驻的断言。
+/// 把一帧编成线上文本。`.sortedKeys` 不是风格问题：不排序时键序随哈希，同一输入两次编码不同字节。
 private func muxText<Frame: Encodable>(of frame: Frame) throws -> String {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
@@ -163,17 +127,9 @@ private func muxText<Frame: Encodable>(of frame: Frame) throws -> String {
 // MARK: - 打开帧的载荷
 
 /**
- * opening 帧的 typed 形状（网关侧的 `FollowOpening`）：帧原文**就地解码一次**，
- * 不经 `JSONValue → Data → typed` 的往返 —— 那条路上每一步都可能悄悄改掉一次取值。
- *
- * 只解字段、不做改名：`cursor`（订阅流的说法，已读到的位置）到 `SessionPage.asOfSeq`
- * （窗口的说法，窗口末尾、不含）的改名由持有目标名字的一侧做 —— `SessionPage.init(opening:)`。
- *
- * 字段语义（与既有 JSONValue 判读逐字对齐）：
- * - `events` 走 `FailableDecodable` —— 坏事件单条跳过，其余照常显示；
- * - `model` / `occupancy` 用「Optional 包 FailableDecodable」区分
- *   「字段不在 = 服务端读不出，不猜」与「字段在 = 落地或丢弃」两件事；
- * - `assistantStream` 保持 `JSONValue` 原样 —— `parseBaseline` 只认声明字段，量小。
+ * opening 帧的 typed 形状（网关侧的 `FollowOpening`）：帧原文**就地解码一次**，不经
+ * `JSONValue → Data → typed` 的往返 —— 那条路上每一步都可能悄悄改掉一次取值。
+ * 坏事件单条跳过（`FailableDecodable`），坏模型 / 坏占用整段忽略。
  */
 struct OpeningFrame {
     let sessionId: String
@@ -185,8 +141,7 @@ struct OpeningFrame {
     let model: ModelSelection?
     let occupancy: UsageSnapshot?
 
-    /// 从 item 帧原文解码。形状不是 opening（缺 sessionId / cursor / events）返回 nil——
-    /// 路由判据与既有 JSONValue 检查一致，误判不允许发生。
+    /// 从 item 帧原文解码；形状不是 opening（缺 sessionId / cursor / events）返回 nil。
     static func decode(_ data: Data) -> OpeningFrame? {
         struct Envelope: Decodable {
             struct Payload: Decodable {
@@ -221,10 +176,7 @@ struct OpeningFrame {
 
 // MARK: - 两类带 typed 载荷的整帧信封
 
-/// 事件帧的 typed 信封：payload 本体就是 SessionEvent。
-///
-/// 「整帧 typed 解一次」是既有做法：先解成 `JSONValue` 再编回去重解，那条路上每一步都可能
-/// 悄悄改掉一次取值。
+/// 事件帧的 typed 信封：payload 本体就是 SessionEvent（整帧 typed 解一次，不经往返）。
 struct FrameWithEvent: Decodable {
     let payload: FailableDecodable<SessionEvent>?
 }

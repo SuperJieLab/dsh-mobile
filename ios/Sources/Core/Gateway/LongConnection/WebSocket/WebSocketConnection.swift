@@ -1,15 +1,8 @@
 /**
  * 一条 socket：握手、成帧循环、心跳、退避重连、代次、连接阶段。
  *
- * 存活范围是一条 socket。它自己决定「连不连 / 等多久 / 判不判死 / 迟到的回调算不算数」，
- * 失败经接口或阶段迁移交出；它**不认识流** —— 不造编号、不建表、不按编号分支，
- * 收帧之后把外壳与原始字节交给注入的闭包，谁接、接了做什么都不知道。反过来，
- * 外面要发文本、要连接，都经它实现的 `Channel` 进来。
- *
- * 判活只用本层看得见的两样证据：**收到一条可解析的帧**、**我们 ping 的 pong 回来了**。
- * 系统没有「已连接」回调，也没有字节级进度（`countOfBytesReceived` 对 WS 任务恒为零），
- * 所以这两样就是全部，不向流层要任何输入。`.ready` 与「还活着」因此是同一个信号 ——
- * 代价是窗口必须长过最慢一帧的传输时间（见 `livenessWindow`）。
+ * 存活范围是一条 socket；它不认识流 —— 收帧后把外壳与原始字节交给注入的闭包。
+ * 判活只用两样证据：收到一条可解析的帧、我们 ping 的 pong 回来了。
  */
 import Foundation
 
@@ -19,8 +12,7 @@ final class WebSocketConnection: Channel {
     /// 本网关提供流协议的精确路径。
     static let streamPath = "/rpc/stream"
 
-    /// 单帧接收上限 —— 网关承诺打开帧不超过 4 MiB，这里取它的两倍：覆盖任何非窗口帧，
-    /// 并留出两端读数差异的余量。系统默认只有 1 MiB，那正是「某个会话打不开」的成因。
+    /// 单帧上限 —— 网关承诺打开帧不超过 4 MiB，这里取两倍；系统默认 1 MiB 会让大窗口打不开。
     static let maximumMessageSize = 8 * 1024 * 1024
 
     /// 心跳节拍，与网关的 `PING_INTERVAL_MS` 配套：单边改会让两端判死时机不一致。
@@ -28,18 +20,11 @@ final class WebSocketConnection: Channel {
 
     /// 判死窗口：多久没有任何证据就当这条连接死了。
     ///
-    /// **60 秒不是拍的**：打开帧上界 4 MiB，慢链路上传一大帧约 34 秒；而大消息传输期间
-    /// `receive` 一次都不触发、pong 也排在消息之后（实测 4 MiB / 400 KB/s 下延迟 10 秒以上），
-    /// 窗口必须长过它，否则正常传输会被判死。
-    ///
-    /// 它还必须**显著大于**流层的开流超时（45 秒）：两者同值时会在同一刻触发，
-    /// 「只重开那一条流」来不及执行，行为退化成整条连接重连。
-    ///
-    /// 做成可写不是为了灵活，是让这条路径**能被观测**：拨到几秒，测试里就看得见它发生。
+    /// 60 秒必须长过最慢一帧的传输（4 MiB 在慢链路上约 34 秒），且显著大于流层的开流
+    /// 超时（45 秒）；可写是为了让这条路径能被测试观测。
     var livenessWindow: TimeInterval = 60
 
-    /// 这个窗口允许连失几拍 —— 判死发生在第 `窗口 ÷ 节拍` 拍（向上取整：宁可多等，不可早判）。
-    /// 窗口小于两拍时 `max(1, …)` 把它抬到两拍：那一区间不再线性可控，只会更保守。
+    /// 这个窗口允许连失几拍（向上取整）；窗口不足两拍时抬到两拍。
     static func attemptLimit(for window: TimeInterval) -> Int {
         max(1, Int((window / pingInterval).rounded(.up)) - 1)
     }
@@ -62,9 +47,7 @@ final class WebSocketConnection: Channel {
 
     // MARK: - 状态
 
-    /// 连接阶段。通知挂在 setter 上：`connect`、收到可解析帧、退避等待、换票失败、
-    /// `deactivate` 都会改它，手写必定漏接一处。**开流不改它** —— 在已就绪的连接上
-    /// 开第二条流，屏幕不该闪「连接中」。
+    /// 连接阶段；通知挂在 setter 上，开流不改它。
     private(set) var phase: ConnectionPhase = .idle {
         didSet {
             guard phase != oldValue else { return }
@@ -84,14 +67,10 @@ final class WebSocketConnection: Channel {
     /// 是否要有一条连接 —— 只有它决定连不连，与「要开哪几条流」无关。
     private var active = false
 
-    /// 已交给 socket 的帧文本（只有开流与取消两种，都是事务、量小且可数）。
-    /// 对测试可读：判据要问「注销时到底发没发帧、发的是哪个编号」。
+    /// 已交给 socket 的帧文本（开流与取消两种）；对测试可读。
     private(set) var sentFrames: [String] = []
 
-    /// 收到一帧（外壳 + 原始字节）。**接线由外面做**：本层不知道谁接、接了以后做什么。
-    ///
-    /// 收帧是数据不是事实，所以它是注入的闭包而不是 `Channel` 上的事件 —— 做成事件，
-    /// 订阅方还得从事件里再取原始字节，等于多一层包装。
+    /// 收到一帧（外壳 + 原始字节）。接线由外面做，本层不知道谁接。
     var onFrame: ((MuxServerEnvelope, Data) -> Void)?
 
     // MARK: - Channel
@@ -105,9 +84,7 @@ final class WebSocketConnection: Channel {
         // 没有连接就什么都没发：不记账，也不假装发过。
         guard let sentTask = task else { return }
         sentFrames.append(text)
-        // 发起时的代次与传输要捕捉下来：回调回来时它们可能已经过时。被取代的 send 以取消
-        // 告终，而那个回调若还算数，就会把刚建立的新连接关掉、再排一次重连 ——
-        // 新连接又被下一次重连掐回来，每 2 秒一转、永不恢复。
+        // 发起时的代次与传输要捕捉：回调回来时它们可能已经过时，过时的回调会把新连接关掉。
         let sentGeneration = generation
         sentTask.send(.string(text)) { [weak self] error in
             Task { @MainActor [weak self] in
@@ -120,8 +97,7 @@ final class WebSocketConnection: Channel {
                               + " (now g\(self.generation)): \(error)")
                     return
                 }
-                // 握手没完成或连接已死时 send 会在这里失败 —— 这是
-                // 「发了开流内容却收不到任何帧」最常见的原因，必须留痕。
+                // 握手没完成或连接已死时 send 会失败 —— 「发了开流内容却收不到帧」最常见的原因。
                 Log.warn(Log.Module.session, "g\(sentGeneration) send failed: \(error)")
                 self.closeTask()
                 self.scheduleReconnect()
@@ -157,23 +133,14 @@ final class WebSocketConnection: Channel {
         phase = .idle
     }
 
-    /// 立刻要一次重连（跳过退避）。已在握手或就绪的连接不受影响，不叠加。
-    ///
-    /// - Parameter reason: 谁在要。这个动作有四个触发点（回前台 / 组网刚就绪 / 身份刚成立 /
-    ///   换到新票），**不写原因时排障看到的是一串一模一样的行** —— 而「谁在掐连接」
-    ///   正是这类问题唯一要回答的事。
+    /// 立刻要一次重连（跳过退避）；已在握手或就绪的连接不受影响。
+    /// - Parameter reason: 谁在要 —— 四个触发点，不写原因排障时看到一串一模一样的行。
     func reconnectNow(reason: String) {
         guard active else { return }
         guard phase != .ready, phase != .connecting else { return }
-        // 「跳过退避」的前提是**有东西可跳**。没有地址时这一句既跳不了什么、也连不上，
-        // 唯一正确的动作是**什么都不做** —— 等组网就绪那一刻再来。
-        //
-        // 这条不能并进上面那句 guard：组网就绪时 `phase` 正好是 `.awaitingMesh`，
-        // 而那正是本方法**必须**放行的场景。判据只能是「此刻有没有地址」。
-        //
-        // 它不只是措辞问题：缺了这一条时，本方法会先 `cancel()` 掉排着的定时器
-        // 再连不上而被 `connect` 挡回 —— 于是那一拍退避被吃掉且不再重排，
-        // 连接就永久停在那里（`.awaitingMesh` 自己不排定时器，没有人会再叫它）。
+        // 「跳过退避」的前提是有东西可跳：没有地址时什么都不做，等组网就绪那一刻再来。
+        // 这条不能并进上面的 guard —— 组网就绪时 `phase` 正好是 `.awaitingMesh`，那里必须放行。
+        // 缺了它，本方法会先 cancel 掉排着的定时器再连不上，那一拍退避被吃掉且不再重排。
         guard baseURLProvider() != nil else {
             Log.info(Log.Module.session,
                      "reconnect now (\(reason)) — no endpoint yet, still waiting for mesh")
@@ -187,22 +154,11 @@ final class WebSocketConnection: Channel {
 
     // MARK: - 连接
 
-    /// 起一次连接（新代次）。
-    ///
-    /// 对内可见（不 `private`）与 `handleMessage` / `livenessTick` 同理：这里有一条
-    /// 只有在此处才断言得到的契约 —— 换代次之后每条登记着的流都要用自己的新编号重开。
+    /// 起一次连接（新代次）。对内可见是为了断言「换代次后每条流都要用新编号重开」。
     func connect() {
         guard active else { return }
-        // 无端点（组网未就绪）：**不猜地址，也不进退避**。
-        //
-        // 这一支原来调 `scheduleReconnect()`，于是「外面还没有可连的地址」被记成了一次
-        // 网络失败：档位一路爬到上限，等到组网真就绪时第一发就要等 10 秒 —— 而那一刻
-        // 恰恰是用户刚打开 App、最不该等的时候。
-        //
-        // 现在的分工是**谁的条件谁等**：组网自己重试到就绪（那是它的活），本层停在
-        // `.awaitingMesh` 不动、不排定时器；组网就绪那一刻由根上的组网阶段观察调用
-        // `reconnectNow` 把本层叫醒。组网失败时本层也不动 —— 没有可连的地址，
-        // 重试只是空转。
+        // 无端点（组网未就绪）：不猜地址，也不进退避 —— 谁的条件谁等。
+        // 就绪那一刻由 `reconnectNow` 叫醒；在这里退避会把「没有地址」记成网络失败。
         guard let endpoint = baseURLProvider() else {
             guard phase != .awaitingMesh else { return }
             reconnectWorkItem?.cancel()
@@ -212,13 +168,10 @@ final class WebSocketConnection: Channel {
             phase = .awaitingMesh
             return
         }
-        // 不在这里清零 reconnectAttempt —— 退避档位必须随失败次数爬升，
-        // 否则握手持续失败时会退化成每秒一次的疯狂循环。
+        // 不清零 reconnectAttempt：档位必须随失败次数爬升，否则退化成每秒一次。
         generation += 1
         let current = generation
-        // 心跳的判据随代次清零：连失数与「活过」的证据都不继承。上一代的欠账算到这一代
-        // 头上会自锁 —— 一次没建成的连接把连失数攒到上限之后，此后每一代都在第一个心跳
-        // 节拍就被判死，2 秒一转、永不恢复。
+        // 心跳判据随代次清零：上一代的连失数算到这一代头上会自锁，此后每代都在第一拍被判死。
         missedPongs = 0
         heardFromPeer = false
         phase = .connecting
@@ -227,8 +180,7 @@ final class WebSocketConnection: Channel {
             fields: ["kind": .text("connect-init"), "gen": .number(Double(current))]
         ))
 
-        // 上一代次的连接必须先关掉：不关的话旧 socket 的 receive / heartbeat 还在
-        //（回调虽被代次拦住，连接本身泄漏），且系统的连接行为会互相干扰。
+        // 上一代的连接先关掉：否则旧 socket 仍在泄漏，且系统的连接行为会互相干扰。
         if task != nil {
             Log.debug(Log.Module.session, "g\(current) closing previous task before connecting")
             closeTask()
@@ -259,8 +211,7 @@ final class WebSocketConnection: Channel {
         Log.info(Log.Module.session, "connect g\(current) → \(components.url!)")
         webSocketTask.resume()
 
-        // 握手由系统完成。换代次之后谁要发帧、发什么，由订阅方自己决定 ——
-        // 没有流时事件照发，什么都不会发生。
+        // 换代次之后谁要发帧、发什么，由订阅方自己决定。
         onGenerationChange?()
 
         // 开流超时不在这里起 —— 它挂在每一次开流尝试上（见 `StreamMux.armOpenTimeout`）。
@@ -285,8 +236,7 @@ final class WebSocketConnection: Channel {
                 guard let self, self.generation == current, self.task === webSocketTask else { return }
                 switch result {
                 case .failure(let error):
-                    // 连接死了：清场走退避重连。打印具体原因 —— ATS / LNP /
-                    // 路由器隔离都会在这里留下各自的错误码。
+                    // 连接死了：清场走退避重连。打印具体原因 —— ATS / 路由器隔离各有错误码。
                     Log.warn(Log.Module.session, "g\(current) receive failed: \(error)")
                     self.closeTask()
                     self.scheduleReconnect()
@@ -300,13 +250,9 @@ final class WebSocketConnection: Channel {
     }
 
     /// 一帧到了：先记「对面还活着」的证据，再按编号归流。
-    ///
-    /// 对内可见（不 `private`）与 `connect` 同理：这里有一条只能在此处断言的**顺序** ——
-    /// 「收到任何东西」先于「按编号归流」。它关乎一条健康连接会不会被自己的心跳判死。
+    /// 对内可见是为了断言这个顺序 —— 它关乎健康连接会不会被自己的心跳判死。
     func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
-        // 收到任何一帧都是「对端还活着」的证据 —— 由心跳那一拍消费。
-        // 证据不必等到「某条流建成」：本层不判编号的含义，也没有比这更细的信号 ——
-        // 系统不暴露字节进度，一条大帧传输期间 `receive` 一次都不回调（见窗口的取值）。
+        // 收到任何一帧都是「对端还活着」的证据，由心跳那一拍消费 —— 系统不暴露字节进度。
         heardFromPeer = true
         guard case .string(let text) = message else {
             Log.debug(Log.Module.session, "g\(current) non-text frame ignored")
@@ -320,10 +266,7 @@ final class WebSocketConnection: Channel {
         }
         Log.debug(Log.Module.session, "g\(current) frame: \(frame.type)")
 
-        // 一条可解析的帧 = 这一代连接真的通了：退避归零、连失清零、阶段就绪。
-        //
-        // 判据是「收到一条可解析的帧」，不是「某条流建成」—— 后者要靠流层告诉本层，
-        // 而那时本层已经知道收到东西了。就绪与存活在这里合成同一个信号。
+        // 一条可解析的帧 = 这一代真的通了：退避归零、连失清零、阶段就绪。就绪与存活是同一个信号。
         reconnectAttempt = 0
         missedPongs = 0
         phase = .ready
@@ -369,11 +312,8 @@ final class WebSocketConnection: Channel {
         case dead
     }
 
-    /// 一拍：消费本拍证据、算出判定。**心跳只调这一个方法。**
-    ///
-    /// 判定与「证据从哪来」在这里合流，`livenessWindow` 也只在这里被读。为什么不把它拆成
-    /// 「纯函数 + 适配器」：那样断言的只是适配器读了窗口，心跳那一跳照样可以绕开它、
-    /// 自己拼一个写死的窗口 —— 而那正是「窗口可拨」要防的退化。这里被断言，就证明得了。
+    /// 一拍：消费本拍证据、算出判定。心跳只调这一个方法，`livenessWindow` 也只在这里被读 ——
+    /// 拆成「纯函数 + 适配器」时心跳那一跳仍可绕开它，被断言的就不是这件事。
     func livenessStep() -> Liveness {
         let heard = heardFromPeer
         heardFromPeer = false
@@ -419,16 +359,11 @@ final class WebSocketConnection: Channel {
         generation == current && sameTask
     }
 
-    /// 没有票时的那一步：去换，然后按结果安排下一步。
-    ///
-    /// 三种结果三种走向，**不能合并**：
-    /// - 换到 → 立刻重连（跳过这次退避 —— 它挡着的正是刚刚被解决的那个问题）
-    /// - 等一等就好（网络不通 / 网关不在）→ 继续退避，状态没坏
-    /// - 拿不到且不会自己好（未配对 / 关系被撤销）→ **停**。再试是纯空转
+    /// 没有票时的那一步：去换，再按结果安排下一步。三种结果不能合并 —— 换到就立刻重连
+    /// （跳过退避），等一等就好就继续退避，拿不到且不会自己好就停（再试是空转）。
     private func renewThenRetry() {
         guard active else { return }
-        // 必须先离开 `.connecting`：这一代没有建出连接，而 `connect` 早在前几步就把它置成了
-        // `.connecting`。留着它，换到票之后 `reconnectNow` 会以「正在握手」为由拒绝。
+        // 先离开 `.connecting`：留着它，换到票之后 `reconnectNow` 会以「正在握手」为由拒绝。
         phase = .idle
         guard let ticketRenewer else {
             // 没接换票器（预览 / 单测的裸实例）：退回退避，不假装自己会换。
@@ -443,8 +378,7 @@ final class WebSocketConnection: Channel {
                 Log.info(Log.Module.session, "ticket renewed — reconnecting now")
                 self.reconnectNow(reason: "ticket renewed")
             case .retryLater:
-                // 留痕：「没票、等一等」与「没端点、等组网」在日志里必须分得开 ——
-                // 不带这一行时两者都是凭空一条 `reconnect in …`，分不出该去查身份还是查隧道。
+                // 留痕：「没票、等一等」与「没端点、等组网」在日志里必须分得开。
                 Log.info(Log.Module.session, "no ticket yet (retry later) — backing off")
                 self.scheduleReconnect()
             case .unavailable:
@@ -458,8 +392,7 @@ final class WebSocketConnection: Channel {
     /// 退避重连 —— 延迟由 `Backoff` 决定。
     private func scheduleReconnect() {
         guard active else { return }
-        // 单飞：本拍取代尚未触发的那一拍。不取代的话两个定时器各起一条连接，后起的那条把
-        // 先起的掐死、先起的失败回调再排一次，于是 attempt 编号跳着走、退避爬不到上限。
+        // 单飞：本拍取代尚未触发的那一拍，否则两个定时器各起一条连接、退避爬不到上限。
         reconnectWorkItem?.cancel()
         reconnectAttempt += 1
 

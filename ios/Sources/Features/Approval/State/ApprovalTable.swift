@@ -1,14 +1,8 @@
 /**
- * 待答审批的表：按会话分组存着「还挂着的项」，随帧增删，不随界面生死。
+ * 待答审批的表：按会话分组存着「还挂着的项」，随帧增删，不随界面生死。纯值类型。
  *
- * 纯值类型，不认识客户端、连接与界面 —— 喂它一条待答调用的载荷，它回答「现在挂着哪几条、
- * 分别属于哪个会话」。它是卡片唯一的来源：会话日志不参与建卡。
- *
- * **两个动作改变它**：收下（`absorb`）与移除（`remove` / `clear`）。收下按身份覆盖，
- * 于是重连重放不产生第二张卡；移除只有一条寻址 —— `eventId`。
- *
- * 身份就是 `eventId`：宿主生成、**跨代稳定**（重放同一批待答项时用的还是它），也是 `cancel`
- * 唯一携带的字段。用别的字段当身份，`cancel` 就删不掉以它建的那一条。
+ * 两个动作改变它：收下（按身份覆盖，于是重连重放不产生第二张卡）与移除。
+ * 身份就是 `eventId` —— 它跨代稳定，也是 `cancel` 唯一携带的字段。
  */
 import Foundation
 
@@ -30,10 +24,7 @@ struct ApprovalTable {
     private(set) var entries: [Entry] = []
 
     /// 收下一条待答调用的载荷：按 `eventId` 覆盖或追加。
-    ///
-    /// 载荷是上游 waterfall 的四个字段原样（`event` / `eventId` / `agentId` / `request`），
-    /// 网关只搬不改 —— 所以卡上要的两个字段（工具名、理由）在这一层从 `request` 里取。
-    /// 读不出来的不建项：没有归属只能放错会话，没有地址的卡按不下去。
+    /// 载荷是上游 waterfall 的四个字段原样（`event` / `eventId` / `agentId` / `request`）。
     mutating func absorb(_ payload: JSONValue) {
         guard let eventId = payload["eventId"]?.string, !eventId.isEmpty,
               let sessionId = payload["agentId"]?.string, !sessionId.isEmpty,

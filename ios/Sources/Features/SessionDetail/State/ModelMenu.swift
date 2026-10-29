@@ -1,14 +1,8 @@
 /**
  * 模型选择面的预构数据 —— 模型列表、等级列表、以及两者的选中态。
  *
- * 判定全部在这里完成：点哪一项该发什么选择，由 `selection` 随身携带 —— 视图不拼
- * `ModelSelection`，所以「换模型用新模型的默认档」这条规则只有一个地方可写。
- *
- * 与 `ModelCatalogState` 的分工：那边只管目录的三面（等待 / 有内容 / 失败）与取数，
- * 这里只管「拿这份目录画成什么」。等级名的解析两处共用同一份私有实现，不另写一遍。
- *
- * 本文件不出现用户可见文案（`LayeringTests.testStateHasNoUserFacingStrings`）：
- * 「不指定」叫什么由 `Display/CatalogText.swift` 决定。
+ * 判定全部在这里完成：点哪一项该发什么选择由 `selection` 随身携带（视图不拼 `ModelSelection`）。
+ * 本文件不出现用户可见文案 —— 说法在 `Display/CatalogText.swift`。
  */
 import Foundation
 
@@ -106,10 +100,8 @@ extension ModelCatalogState {
 
     /// 当前**实际生效**的那一档的 id —— 等级列表的勾、设置页那一行的值、功能条上的等级名
     /// 三处都从它派生。
-    ///
-    /// 兜底顺序：显示值（且这一档还在目录里）→ 该模型的默认档 → 「不指定」（仅当模型没声明
-    /// 默认档）。**这一处不许各算一遍**：算两遍就会出现「行里写着高、菜单里勾在低」——
-    /// 显示值指向一个已撤下的档时，两边对「哪一项算选中」的答案本来就不一样。
+    /// 兜底顺序：显示值（且这一档还在目录里）→ 该模型的默认档 → 「不指定」。
+    /// **这一处不许各算一遍**：算两遍就会出现「行里写着高、菜单里勾在低」。
     private func effectiveEffortID(for selection: ModelSelection?, in catalog: ModelCatalog) -> String? {
         guard let selection, let reasoning = catalog.reasoning(provider: selection.provider, model: selection.model) else {
             return nil
@@ -121,14 +113,10 @@ extension ModelCatalogState {
     }
 
     /// 该档位菜单的内容。模型没有 `reasoning` → 空（设置页那一行换成说明）。
-    ///
-    /// 两条规则照上游：模型没声明 `defaultEffort` 时首项是「不指定」（选中它 = 让宿主
-    /// 决定）；声明了就只列各档 —— 默认档本身就是其中一项，再给「不指定」会造出两个
-    /// 发同样请求的选项。
-    ///
-    /// **不带选中标记**：`Picker` 按 `id` 与 `selectedLevelID` 匹配来画勾，再存一份
-    /// `isSelected` 就是同一件事的第二个答案 —— 两边不一致时屏幕听 Picker 的，那个字段
-    /// 只会在测试里绿。
+    /// 两条规则照上游：没声明 `defaultEffort` 时首项是「不指定」（选中它 = 让宿主决定）；
+    /// 声明了就只列各档 —— 再给「不指定」会造出两个发同样请求的选项。
+    /// **不带选中标记**：`Picker` 按 `id` 与 `selectedLevelID` 匹配画勾，再存一份
+    /// `isSelected` 就是同一件事的第二个答案。
     private func levels(for selection: ModelSelection?,
                         in catalog: ModelCatalog) -> [EffortChoice] {
         guard let selection, let reasoning = catalog.reasoning(provider: selection.provider, model: selection.model) else {

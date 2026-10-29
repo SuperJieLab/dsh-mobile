@@ -52,9 +52,9 @@ struct NetworkSheet: View {
         .presentationDetents([.medium])
     }
 
-    /// 路径：复用 `ConnectionBadge.look` 的三件套里的说法，不另写一份 case 映射。
+    /// 路径：拿不到时写「未知」—— 与「直连」分开，后者是已经确认的事实。
     private var carrierText: String {
-        carrier.map { ConnectionBadge.look(of: $0).text } ?? "未知"
+        carrier.map(carrierPathText) ?? "未知"
     }
 
     /// 状态：传 `nil` 路径给同一个映射 —— 拿到的正是「状态」视角的说法

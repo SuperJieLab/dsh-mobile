@@ -1,11 +1,9 @@
 /**
  * 会话列表的一条增量 —— 线上第三种 item 载荷（`{kind:"session-list", change:{…}}`）。
  *
- * 上游的词汇（`api-session/added` 之类）不出网关：网关把它翻成这四支，所以这里只认识
- * 自己的名字。分派是穷举 switch，认不出的返回 `nil` 而不是「默认当成新增」——
- * 网关将来加一种时，猜一个比丢掉更坏。
- *
- * 判据在 `tests/SessionListMergerTests.swift`。
+ * 上游的词汇（`api-session/added` 之类）不出网关：网关把它翻成这四支，所以这里只认识自己
+ * 的名字。分派是穷举 switch，认不出的返回 `nil` 而不是「默认当成新增」—— 网关将来加一种
+ * 时，猜一个比丢掉更坏。
  */
 import Foundation
 

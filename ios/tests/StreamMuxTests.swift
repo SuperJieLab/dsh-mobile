@@ -355,12 +355,6 @@ final class StreamMuxTests: XCTestCase {
         XCTAssertEqual(channel.sent.count, sentBefore, "收尾不发帧")
     }
 
-}
-
-// MARK: - 由旧判据并入
-
-extension StreamMuxTests {
-
     /// `.stop` 只收起被拒的那一条 —— 另一条与连接本身都不动。
     ///
     /// 这一条防的是「一条流被拒就把同一条连接上的另一条一起拽断」：那种错法在只有一条流

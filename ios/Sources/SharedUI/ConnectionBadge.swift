@@ -1,13 +1,8 @@
 import SwiftUI
 
 /// 连接态指示器 —— 上游 `connecting` / `disconnected` 指示器的复现。
-///
 /// 两半语义照抄上游：断连要诚实（如实标注、旧内容照常展示、不清屏不弹错误页）；短尝试要
-/// 防闪烁（一旦显示至少停留 `minDisplaySeconds`，期间恢复也不一闪而过）。
-///
-/// 状态由调用方自己映射后传入，本组件不知道领域：列表域看刷新请求成败
-/// （`isLoading` / `failure`）。消费方一处：`SessionListView` —— 详情屏那一格由
-/// `ComposerStrip` 画（`ComposerStripModel.network`）。
+/// 状态由调用方自己映射后传入，本组件不知道领域：列表域看刷新请求成败。
 struct ConnectionBadge: View {
     enum Status: Equatable {
         /// 数据源可达 —— 不显示。
@@ -18,12 +13,9 @@ struct ConnectionBadge: View {
         case offline
     }
 
-    /// 到网关对端的连接方式：running 时显示一行「直连 / 经中继」。
-    ///
-    /// 取值类型用连接域的 `CarrierPath`，不在这里另声明一份 —— 同值同义的两个枚举只能靠
-    /// 手写映射相连，而那类映射（`x == .direct ? .direct : .relay`）加第三个取值时会静默
-    /// 归到 else。`CarrierPath` 住在 `Core/` 顶层，是三方共用的跨域小值（组网节点产出它、
-    /// 连接域的窄面接口用它、呈现层按它选档位），所以这里不是新增耦合。
+    /// 到网关对端的连接方式：running 时显示一行「直连 / 中继」。
+    /// 取值用连接域的 `CarrierPath`，不在这里另声明 —— 同值同义的两个枚举只能靠手写映射，
+    /// 而那种映射加第三个取值时会静默归到 else。
     let state: Status
     var meshPath: CarrierPath?
 
@@ -108,12 +100,7 @@ struct ConnectionBadge: View {
 
 extension ConnectionBadge.Status {
     /// 列表域：刷新在途 = 连接中；上次刷新失败 = 已断开（旧列表照常可读）。
-    ///
-    /// **详情域不吃这个组件**：它那三格（网络 / 模型 / 占用）由 `ComposerStrip` 画，
-    /// 判定在 `ComposerStripModel` 上。两屏能拿到的信号本来就不同 —— 列表只有一元刷新的
-    /// `isLoading` / `lastFailure`，详情才有订阅流的相位（`idle` / `connecting` / `ready` /
-    /// `waiting`）。合成一个入口只能让调用方给另一半传 `nil`，那等于把「这一屏没有这个
-    /// 信号」伪装成「这个信号现在是空值」。
+    /// **详情域不吃这个组件**：它那三格（网络 / 模型 / 占用）由 `ComposerStrip` 画。
     init(isLoading: Bool, lastFailure: String?) {
         if lastFailure != nil {
             self = .offline
@@ -130,16 +117,21 @@ extension ConnectionBadge.Status {
 
 extension ConnectionBadge {
 
-    /// 连接方式的三件套：文案、图标、颜色。
+    /// 图标与颜色。文案不在这里 —— 三块屏都说这件事，那份住 `carrierPathText`。
     ///
     /// `switch` 逐个列举，**不用 `default`**：`CarrierPath` 加第三个取值时这里编译失败，
-    /// 而不是静默落到 else（三元写法正是那样吞掉新取值的）。
+    /// 而不是静默落到 else。
     static func look(of path: CarrierPath) -> (text: String, icon: String, tint: Color) {
+        let icon: String
+        let tint: Color
         switch path {
         case .direct:
-            return ("直连", "arrow.left.arrow.right", Color.secondary)
+            icon = "arrow.left.arrow.right"
+            tint = .secondary
         case .relay:
-            return ("经中继", "personalhotspot", Color.orange)
+            icon = "personalhotspot"
+            tint = .orange
         }
+        return (carrierPathText(path), icon, tint)
     }
 }

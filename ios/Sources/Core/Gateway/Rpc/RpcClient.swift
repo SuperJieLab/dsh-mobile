@@ -1,20 +1,7 @@
 import Foundation
 
-/// 与 Mac 侧网关的**请求门面**：带票发一次，并维护票的生命周期。它**不认识任何 op** ——
-/// 请求怎么拼、回包怎么读归各功能（`Features/*/State/`）。
-///
-/// **身份不在这里。** 「关系还在不在」的真值是 `CredentialStore.deviceToken`，它自己可
-/// 观察。本类只在需要凭证时去问（换票的入参、断关系时清掉它），不持有任何身份状态。
-///
-/// **发字节那半在 `HttpTransport`**，它不认识票 —— 于是「换票那一发不带票」不是纪律，而是
-/// 结构上拿不到票源。401 的两种读法（「换票再来」与「关系断了」）仍只在本类判：裸发层只
-/// 把「这是一次鉴权请求」这个事实传上来。
-///
-/// **用之前先确认，不等 401 再换**：票只活在内存里，冷启动后或过期后手上就是没有。纯反应式
-/// 会让每次这样的处境都先发一发注定被拒的请求。撞上 401 仍会换一次并重试（覆盖「本地以为
-/// 有票、服务端不认」，如 Mac 重启）；两条路分工，不是冗余。
-///
-/// `class` 而非 `struct`：票与凭证是可变的共享状态，值语义会在视图间复制出各自为政的副本。
+/// 与 Mac 侧网关的**请求门面**：带票发一次，并维护票的生命周期。它**不认识任何 op**。
+/// 身份不在这里（真值是 `CredentialStore.deviceToken`）；发字节那半在 `HttpTransport`。
 @MainActor
 final class RpcClient {
 
@@ -25,11 +12,8 @@ final class RpcClient {
 
     private let credentials: CredentialStore
 
-    /// 票的生命周期。换票动作 `renewTicket` 在本类 —— 它要线路与协议，而票那一层不该认识。
-    ///
-    /// **必须 `lazy`**：构造它要一个读 `self.renewTicket` 的闭包，而 Swift 要求闭包捕获
-    /// `self` 时所有存储属性已初始化 —— 包括这一条自己。语言层的环，`lazy` 是唯一的直说
-    /// 方式（不同于「先塞假值、稍后替换」：那种写法存在「票层是假的」的阶段）。
+    /// 票的生命周期。换票动作在本类 —— 它要线路与协议，票那一层不该认识。
+    /// **必须 `lazy`**：构造它要一个读 `self.renewTicket` 的闭包，而那要求所有存储属性已初始化。
     private(set) lazy var tickets = TicketKeeper { [weak self] deviceToken in
         guard let self else { return .retryLater }
         return await self.renewTicket(deviceToken: deviceToken)
@@ -47,12 +31,8 @@ final class RpcClient {
     // MARK: - 关系结束
 
     /// **关系结束了**：本机不再持有这张凭证，手上的票也一并作废。
-    ///
-    /// **两半必须一起做** —— 这是本方法存在的理由：只删凭证不清票会留下「有票没凭证」的
-    /// 窗口，请求带着未过期的票照常成功，而用户以为关系已经解除。这两半分别住在
-    /// `CredentialStore` 与 `TicketKeeper`，只有本类同时持有。
-    ///
-    /// 收 `reason` 只为日志分得清：「用户自己点的」与「被服务端踢下线」排障时完全不同。
+    /// 两半必须一起做：只删凭证不清票会留下「有票没凭证」的窗口，请求照常成功而用户以为关系已解除。
+    /// 两半分别住在 `CredentialStore` 与 `TicketKeeper`，只有本类同时持有。
     func discardIdentity(reason: Reason) {
         Log.warn(Log.Module.gateway, "identity discarded (\(reason.logWord)) — token and ticket cleared")
         credentials.deleteDeviceToken()
@@ -73,23 +53,15 @@ final class RpcClient {
 
     // MARK: - 票
 
-    /// 换一张票：有就立刻给，没有就去换（并发时搭同一趟）。三种结果各有各的处置，
-    /// 见 `AccessTicket`。
-    ///
-    /// **凭证按参传入，不让票那一层自己去取**：它是一台纯状态机，输入只有换票动作与这一枚
-    /// 凭证，所以每条断言只给这两样。换成注入读取器，它每次调用都要读可变外部状态。
-    ///
-    /// **只有这个方法留在本类**：换票是**组合**（把凭证接给票层，而两者只有这里同时拿得到）。
-    /// 只读现状直接用 `tickets.validToken()` —— 包一层只是多一个名字。
+    /// 换一张票：有就立刻给，没有就去换（并发搭同一趟）。
+    /// 凭证按参传入，不让票层自己取：它是纯状态机，输入只有换票动作与这一枚凭证。
+    /// 只有这个方法留在本类 —— 换票是**组合**；只读现状直接用 `tickets.validToken()`。
     func ticket() async -> AccessTicket {
         await tickets.ticket(deviceToken: credentials.deviceToken)
     }
 
-    /// **换票动作本身** —— 票那一层注入的就是它。线路与协议在这里，票的生命周期在那边。
-    ///
-    /// **直接走裸发层，不走 `perform`** —— 这是死锁的落点：`perform` 会先问票层要票，而此刻
-    /// 票层正等在这次换票上 ⇒ 问它就是等自己。走裸发层则结构上拿不到票（`authorization`
-    /// 传 nil），那条回环不存在。
+    /// 换票动作本身。**直接走裸发层，不走 `perform`** —— 后者会先问票层要票，
+    /// 而票层正等在这次换票上。
     private func renewTicket(deviceToken: String) async -> TicketKeeper.Renewal {
         do {
             let response: RefreshResponse? = try await http.send(
@@ -126,12 +98,9 @@ final class RpcClient {
     // MARK: - 发一次请求
 
     /// 唯一的出网入口：带上票发一次，被 401 拒了就换票再试恰好一次。
-    ///
-    /// 回包已过 `validate()` —— 版本不符、`ok` 为假都在这里抛。**这条校验只写在这里**：
-    /// op 散到各功能之后，少写一次既不会编译报错、也不会让断言变红，只会静默接受一份失败回包。
-    ///
-    /// - Parameter authenticated: 要不要票，**配对是唯一的 `false`**；401 该怎么读也由它定
-    ///   （见 `HttpTransport.send`）—— 两件事同源，所以只收一个参数。
+    /// 回包已过 `validate()` —— **这条校验只写在这里**：op 散到各功能后，少写一次既不报错
+    /// 也不变红。
+    /// - Parameter authenticated: 要不要票，**配对是唯一的 `false`**；401 该怎么读也由它定。
     func perform<Request: Encodable, Response: GatewayResponse>(
         _ request: Request,
         authenticated: Bool = true
@@ -147,12 +116,11 @@ final class RpcClient {
         )
         if let first { return first }
         // 走到这里 = 业务请求被 401 拒了。换一张票（单飞），恰好重试一次。
-        //
-        // 换不到时按处境说不同的话：`.unavailable` 是「未配对 / 关系被撤销」，
-        // `.retryLater` 是「这次没连上」—— 后者说成前者，用户会去查一件没发生的事。
+        // 换不到时按处境说不同的话：`.unavailable` 与 `.retryLater` 说反了，
+        // 用户会去查一件没发生的事。
         guard authenticated else { throw RpcClientError.unauthenticated }
-        // 调 `renewAnyway` 而不是 `ticket()`：本地那张被服务端否认了，读缓存只会把同一枚
-        // 死票再发一遍。设备凭证在这里现取 —— 它是这一刻的事实，不缓存在票那一层。
+        // 调 `renewAnyway` 而不是 `ticket()`：本地那张被服务端否认了，
+        // 读缓存只会把同一枚死票再发一遍。
         switch await tickets.renewAnyway(deviceToken: credentials.deviceToken) {
         case .granted(let fresh):
             let retried: Response? = try await http.send(
