@@ -59,8 +59,10 @@ struct NetworkSheet: View {
 
     /// 状态：传 `nil` 路径给同一个映射 —— 拿到的正是「状态」视角的说法
     /// （已连接 / 连接中… / 重连中…），与功能条那一格同源。
+    /// 状态行只说连接层自己的事实 —— 组网为什么没就绪由下面「组网」那一节回答
+    /// （它有节点五态与配置读坏两条更准的信息），两处都说会变成两个说法。
     private var phaseText: String {
-        ComposerStripModel.network(phase: phase, carrier: nil).text
+        ComposerStripModel.network(phase: phase, mesh: nil, carrier: nil).text
     }
 
     private func row(_ label: String, _ value: String) -> some View {

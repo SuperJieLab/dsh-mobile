@@ -234,6 +234,47 @@ final class WebSocketConnectionTests: XCTestCase {
         waiting.deactivate()
     }
 
+    /// 没有地址时 `reconnectNow` **什么都不做** —— 尤其不该把排着的那一拍退避悄悄取消掉。
+    ///
+    /// 契约是「跳过退避立刻重连」，而这句话的前提是有地方可连。没有地址时它无避可跳、
+    /// 也无处可连，此时唯一正确的行为是保持原样，等组网就绪那一刻再来。
+    ///
+    /// 为什么值得一条判据：删掉那个早退时**最终**的 `phase` 也会变成 `.awaitingMesh`
+    /// （`connect` 的 nil 分支会走到），两种实现看起来收敛到同一个终点 —— 差异只在
+    /// 「那拍定时器还在不在」。所以断言必须落在**中途**：调完之后那一拍仍排着。
+    func testReconnectNowChangesNothingWithoutAnEndpoint() async throws {
+        let transport = WebSocketConnection()
+        var endpoint: URL? = URL(string: "http://127.0.0.1:1")
+        transport.baseURLProvider = { endpoint }
+        transport.authorizationProvider = { "ticket" }
+        transport.sessionProvider = { .shared }
+
+        transport.activate()
+        // 等握手失败、排上第一拍退避（250–500ms 之后）。
+        var waited = 0
+        while waited < 40 {
+            if case .waiting = transport.phase { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+            waited += 1
+        }
+        guard case .waiting = transport.phase else {
+            XCTFail("没等到退避拍 —— 先怀疑端点还能连上")
+            return
+        }
+
+        // 组网掉了：地址消失。此刻叫它「立刻重连」。
+        endpoint = nil
+        transport.reconnectNow(reason: "test")
+
+        // 还在等那一拍：说明没有被动过。若早退被删，这里会变成 .awaitingMesh。
+        guard case .waiting = transport.phase else {
+            XCTFail("无地址时 reconnectNow 动了状态：\(transport.phase)"
+                    + " —— 它把排着的退避取消掉了，而那句话此刻无避可跳")
+            return
+        }
+        transport.deactivate()
+    }
+
     // MARK: - U6：退避与代次由传输层自己决定
 
     /// 连不上时：阶段按 `connecting → waiting(ms) → connecting` 循环，每一代都重新来一遍。

@@ -109,11 +109,12 @@ extension ComposerStripModel {
 
     /// 三格的**唯一**映射入口 —— 视图与测试都从这里拿值。
     static func make(phase: ConnectionPhase,
+                     mesh: MeshPhase,
                      carrier: CarrierPath?,
                      usage: UsagePayload?,
                      modelName: String,
                      effortName: String? = nil) -> ComposerStripModel {
-        ComposerStripModel(network: network(phase: phase, carrier: carrier),
+        ComposerStripModel(network: network(phase: phase, mesh: mesh, carrier: carrier),
                            modelName: modelName,
                            effortName: effortName,
                            usageText: usage?.percentText ?? "--",
@@ -124,20 +125,21 @@ extension ComposerStripModel {
     /// 面积都太小，异常必须靠**文字**传出来，否则小屏上一眼扫过去会以为是正常态。
     /// `.ready` 而路径未知时写「已连接」—— 路径未知不等于断开。逐 case 列举，加取值时编译失败。
     ///
-    /// `.awaitingMesh` 写「等组网…」而不是「重连中…」：两者对用户是**不同的行动**——
-    /// 前者要等（或去修组网地址），后者只能等它自己好。合成一句就等于把
-    /// 「组网没起来」说成「网络在抖」。
+    /// **`.awaitingMesh` 的说法取决于组网那边为什么没就绪。** 「等」只在真的在注册时才准确；
+    /// 组网已经失败、或者根本没配，再写「等」就是让用户等一个不会来的东西。
+    /// 组网是这整条链路的底座（一元请求与长连接都从它取地址），所以它的问题要在这里说清。
+    ///
+    /// `mesh` 传 `nil` 表示**消费方另有地方说组网**（连接详情下面那一节），此时这一格
+    /// 只报连接层自己的事实，不抢着解释原因。
     ///
     /// 内部而非私有：连接详情里「状态」那一行也要它（传 `carrier: nil` 拿到的正是状态说法），
     /// 一份映射两个消费者，不另写第二份 case。
     static func network(phase: ConnectionPhase,
-                                carrier: CarrierPath?) -> Network {
+                        mesh: MeshPhase?,
+                        carrier: CarrierPath?) -> Network {
         switch phase {
         case .awaitingMesh:
-            // 中性色：用户没做错任何事，只是组网这一步还没走完。
-            return Network(text: "等组网…",
-                           systemImage: "antenna.radiowaves.left.and.right",
-                           tone: .normal)
+            return awaitingMeshCell(mesh)
         case .waiting:
             return Network(text: "重连中…", systemImage: "wifi.slash", tone: .attention)
         case .connecting, .idle:
@@ -159,6 +161,37 @@ extension ComposerStripModel {
             case nil:
                 return Network(text: "已连接", systemImage: "checkmark.circle", tone: .normal)
             }
+        }
+    }
+
+    /// 「还没有可连的地址」这一格该说什么 —— 由组网那一步的处境定。
+    ///
+    /// 三档的区别是**用户该做什么**：`.connecting` 只需等；`needsSetup` 要去填地址；
+    /// `failed` 要去查配置或证书。合成一句「等组网…」就把后两种说成了第一种。
+    private static func awaitingMeshCell(_ mesh: MeshPhase?) -> Network {
+        guard let mesh else {
+            // 消费方另有地方说组网：这里只报「没连上」这个连接层事实。
+            return Network(text: "未连接", systemImage: "bolt.horizontal.circle", tone: .attention)
+        }
+        switch mesh {
+        case .needsSetup:
+            return Network(text: "未配置组网", systemImage: "gearshape", tone: .attention)
+        case .connecting:
+            return Network(text: "等组网…",
+                           systemImage: "antenna.radiowaves.left.and.right",
+                           tone: .normal)
+        case .ready:
+            // 矛盾态：组网已就绪却还没有地址 —— 下一拍 `connect` 就会拿到。
+            // 说成「连接中」而不是「等组网」：等的对象已经没有了。
+            return Network(text: "连接中…",
+                           systemImage: "arrow.triangle.2.circlepath",
+                           tone: .normal)
+        case .failed(.badKey):
+            return Network(text: "组网密钥无效", systemImage: "key.slash", tone: .attention)
+        case .failed(.unreachable):
+            return Network(text: "组网不可达",
+                           systemImage: "wifi.exclamationmark",
+                           tone: .attention)
         }
     }
 }

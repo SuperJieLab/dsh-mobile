@@ -165,6 +165,20 @@ final class WebSocketConnection: Channel {
     func reconnectNow(reason: String) {
         guard active else { return }
         guard phase != .ready, phase != .connecting else { return }
+        // 「跳过退避」的前提是**有东西可跳**。没有地址时这一句既跳不了什么、也连不上，
+        // 唯一正确的动作是**什么都不做** —— 等组网就绪那一刻再来。
+        //
+        // 这条不能并进上面那句 guard：组网就绪时 `phase` 正好是 `.awaitingMesh`，
+        // 而那正是本方法**必须**放行的场景。判据只能是「此刻有没有地址」。
+        //
+        // 它不只是措辞问题：缺了这一条时，本方法会先 `cancel()` 掉排着的定时器
+        // 再连不上而被 `connect` 挡回 —— 于是那一拍退避被吃掉且不再重排，
+        // 连接就永久停在那里（`.awaitingMesh` 自己不排定时器，没有人会再叫它）。
+        guard baseURLProvider() != nil else {
+            Log.info(Log.Module.session,
+                     "reconnect now (\(reason)) — no endpoint yet, still waiting for mesh")
+            return
+        }
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         Log.info(Log.Module.session, "reconnect now (\(reason)) — skipping backoff")

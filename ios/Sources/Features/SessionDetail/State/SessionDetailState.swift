@@ -62,6 +62,9 @@ final class SessionDetailState {
         let shown = sync.displayedModel ?? catalog.lastKnownDefault
         return ComposerStripModel.make(
             phase: sync.phase,
+            // 组网那一步的处境：`.awaitingMesh` 时这一格的说法由它定 ——
+            // 「等」只在真的在注册时才准确。
+            mesh: store.phase,
             carrier: meshPath,
             usage: sync.usage,
             modelName: modelDisplayName(shown),
