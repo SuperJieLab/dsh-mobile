@@ -40,7 +40,7 @@ struct UsageSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(usage.percent)%")
+                    Text(usage.percentText)
                         .font(.largeTitle.monospacedDigit().weight(.semibold))
                     Text(usage.figures)
                         .font(.footnote)

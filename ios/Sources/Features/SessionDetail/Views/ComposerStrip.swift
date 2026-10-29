@@ -116,7 +116,7 @@ extension ComposerStripModel {
         ComposerStripModel(network: network(phase: phase, carrier: carrier),
                            modelName: modelName,
                            effortName: effortName,
-                           usageText: usage.map { "\($0.percent)%" } ?? "--",
+                           usageText: usage?.percentText ?? "--",
                            usageIsEmpty: usage == nil)
     }
 

@@ -25,3 +25,19 @@ func carrierPathText(_ path: CarrierPath?) -> String? {
     case nil: nil
     }
 }
+
+/// 节点五态的一句话 —— 连接的详情页读它。
+///
+/// 与 `meshPhaseText` 是两种事实、两种措辞：那个说的是「这台机器跟网关通不通」（阶段），
+/// 这个说的是「组网节点自己起没起来」。所以 `.registering` 写「注册中」而不是「连接中…」。
+/// **但两个函数住在同一处**：两者都是组网域的文案，分开住会让「未配置」「已入虚拟网」
+/// 这些词在仓库里长出第二份。
+func nodeStateText(_ state: TailnetNodeState) -> String {
+    switch state {
+    case .noKey: "未配置"
+    case .registering: "注册中"
+    case .running: "已入虚拟网"
+    case .failed(.badKey): "密钥无效或过期"
+    case .failed(.unreachable): "组网服务不可达"
+    }
+}

@@ -29,7 +29,7 @@ struct NetworkSheet: View {
                 }
 
                 Section("组网") {
-                    row("节点", nodeText)
+                    row("节点", nodeStateText(nodeState))
                     if configDamaged {
                         Text("保存的组网配置读取失败，请到设置里重新填写。")
                             .font(.footnote)
@@ -61,16 +61,6 @@ struct NetworkSheet: View {
     /// （已连接 / 连接中… / 重连中…），与功能条那一格同源。
     private var phaseText: String {
         ComposerStripModel.network(phase: phase, carrier: nil).text
-    }
-
-    private var nodeText: String {
-        switch nodeState {
-        case .noKey: return "未配置"
-        case .registering: return "注册中"
-        case .running: return "已入虚拟网"
-        case .failed(.badKey): return "密钥无效或过期"
-        case .failed(.unreachable): return "组网服务不可达"
-        }
     }
 
     private func row(_ label: String, _ value: String) -> some View {

@@ -22,6 +22,10 @@ extension UsagePayload {
     /// 面板上那一串读数：`~52.3K / 128K`。**「约」无条件加** —— 上游把它硬写在
     /// 模板里，不区分这个数来自哪个投影字段。
     var figures: String { "~\(formatTokens(usedTokens)) / \(formatTokens(contextWindow))" }
+
+    /// 那一个大字百分比。`"\(percent)%"` 这种拼法有两个消费方（详情面板与功能条那一格），
+    /// 各自拼一遍就会在「要不要空格」「要不要四舍五入」上分叉。
+    var percentText: String { "\(percent)%" }
 }
 
 /// 紧凑 token 数：`517` / `12.2K` / `517K` / `1.2M`。尾数 ≥100
