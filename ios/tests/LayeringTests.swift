@@ -2764,14 +2764,14 @@ final class LayeringTests: XCTestCase {
         // (锚, 块内必须出现的调用, 缺了会怎样)
         let palette: [(anchor: String, calls: [String], symptom: String)] = [
             (".task(id: services.credentials.hasDeviceToken)",
-             ["services.link.activate()", "services.link.reconnectNow()",
+             ["services.link.activate()", "services.link.reconnectNow(reason: \"identity-ready\")",
               "services.events.attach(to: services.link)"],
              "配对成功后列表静默不动、审批永不出现"),
             (".onChange(of: services.store.phase)",
-             ["services.link.reconnectNow()"],
+             ["services.link.reconnectNow(reason: \"mesh-ready\")"],
              "组网就绪后空等一轮退避"),
             (".onChange(of: scenePhase)",
-             ["services.store.sceneActive()", "services.link.reconnectNow()",
+             ["services.store.sceneActive()", "services.link.reconnectNow(reason: \"foreground\")",
               "services.events.attach(to: services.link)"],
              "回前台不探活，半死连接只能等判死窗口"),
         ]

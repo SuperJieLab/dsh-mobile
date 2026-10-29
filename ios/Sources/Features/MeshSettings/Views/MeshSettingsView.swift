@@ -32,8 +32,16 @@ struct MeshSettingsView: View {
                     HStack { ProgressView(); Text("注册中…") }
 
                 case .running:
-                    Label("已入虚拟网", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                    // `.running` 只说明「上次注册过、这次不必重新注册」—— 冷启动时状态机在
+                    // `up()` **之前**就给出它（判据只是状态目录可读），而 tsnet 此刻可能正
+                    // 卡在连控制面。**绿勾必须等隧道真的建成**，判据是 `phase`：
+                    // `.running` 加「还没有隧道产物」会被折成 `.connecting`。
+                    if case .ready = store.phase {
+                        Label("已入虚拟网", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        HStack { ProgressView(); Text("正在接入虚拟网…") }
+                    }
 
                 case .failed(.badKey):
                     Text("密钥无效或过期，请在 VPS 上重新生成后重试。")

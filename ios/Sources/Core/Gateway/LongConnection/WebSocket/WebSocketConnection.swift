@@ -157,13 +157,17 @@ final class WebSocketConnection: Channel {
         phase = .idle
     }
 
-    /// 回前台立即触发一次重连（跳过退避）。已在握手或就绪的连接不受影响，不叠加。
-    func reconnectNow() {
+    /// 立刻要一次重连（跳过退避）。已在握手或就绪的连接不受影响，不叠加。
+    ///
+    /// - Parameter reason: 谁在要。这个动作有四个触发点（回前台 / 组网刚就绪 / 身份刚成立 /
+    ///   换到新票），**不写原因时排障看到的是一串一模一样的行** —— 而「谁在掐连接」
+    ///   正是这类问题唯一要回答的事。
+    func reconnectNow(reason: String) {
         guard active else { return }
         guard phase != .ready, phase != .connecting else { return }
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
-        Log.info(Log.Module.session, "foreground — reconnecting immediately (skipping backoff)")
+        Log.info(Log.Module.session, "reconnect now (\(reason)) — skipping backoff")
         connect()
     }
 
@@ -178,6 +182,11 @@ final class WebSocketConnection: Channel {
         // 无端点（组网未激活）：不猜地址，也不动代次与阶段的连接语义，直接进退避 ——
         // 激活后下一轮自动连上。
         guard let endpoint = baseURLProvider() else {
+            // 留痕：「等组网」与「连不上」在日志里必须分得开 —— 两者的症状都是
+            // 「屏上一直转圈」，而处置完全不同（等它自己好 vs 去查地址与证书）。
+            // ⚠️ 已知未尽：它仍会经 `scheduleReconnect` 累加 attempt，于是等待被记成失败、
+            // 退避爬到上限。改那个语义要动调度，等能跑测试的一轮再做（已登记）。
+            Log.info(Log.Module.session, "connect skipped — no endpoint yet (mesh not ready)")
             scheduleReconnect()
             return
         }
@@ -410,8 +419,11 @@ final class WebSocketConnection: Channel {
             switch outcome {
             case .granted:
                 Log.info(Log.Module.session, "ticket renewed — reconnecting now")
-                self.reconnectNow()
+                self.reconnectNow(reason: "ticket renewed")
             case .retryLater:
+                // 留痕：「没票、等一等」与「没端点、等组网」在日志里必须分得开 ——
+                // 不带这一行时两者都是凭空一条 `reconnect in …`，分不出该去查身份还是查隧道。
+                Log.info(Log.Module.session, "no ticket yet (retry later) — backing off")
                 self.scheduleReconnect()
             case .unavailable:
                 Log.warn(Log.Module.session,

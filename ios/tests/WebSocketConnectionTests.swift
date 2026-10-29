@@ -315,7 +315,7 @@ extension WebSocketConnectionTests {
         // 换到的票要经 `authorizationProvider` 再取一次 —— 这里换的是同一份闭包，
         // 所以第二问必须拿得到票，否则它只会再等一轮。
         renewed.authorizationProvider = { "fresh" }
-        renewed.reconnectNow()
+        renewed.reconnectNow(reason: "test")
         XCTAssertEqual(handshakes, 1, "换到票之后立刻握手")
         renewed.deactivate()
 

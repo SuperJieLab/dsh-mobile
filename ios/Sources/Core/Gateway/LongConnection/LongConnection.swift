@@ -63,10 +63,13 @@ final class LongConnection: StreamFactory {
         transport.activate()
     }
 
-    /// 回前台 / 组网就绪：立即重连（跳过退避）。**连接级动作** —— 只给根部与组网就绪那条
-    /// 触发用，屏幕手里没有这个成员。
-    func reconnectNow() {
-        transport.reconnectNow()
+    /// 立刻要一条连接（跳过退避）。**连接级动作** —— 只给根部与组网就绪那条触发用，
+    /// 屏幕手里没有这个成员。
+    ///
+    /// - Parameter reason: 谁在要。日志据此分辨触发点 —— 四个触发点共用这一个动作，
+    ///   不写原因时排障看到的是一串一模一样的行。
+    func reconnectNow(reason: String) {
+        transport.reconnectNow(reason: reason)
     }
 
     /// 造一条流。屏幕与 App 级订阅方各调一次 —— 两者平级，谁都不占谁的位。

@@ -74,7 +74,7 @@ struct RootScreen: View {
                     // `reconnectNow` 覆盖另一条路径 —— 关系被撤销后重新配上时 `active`
                     // 已是真，`activate` 会被挡掉，连接停在 idle 不动。
                     services.link.activate()
-                    services.link.reconnectNow()
+                    services.link.reconnectNow(reason: "identity-ready")
                     services.events.attach(to: services.link)
                 }
         }
@@ -82,14 +82,14 @@ struct RootScreen: View {
         // 空转（端点不存在），就绪此刻不必再等下一轮退避。
         .onChange(of: services.store.phase) { _, phase in
             guard case .ready = phase else { return }
-            services.link.reconnectNow()
+            services.link.reconnectNow(reason: "mesh-ready")
         }
         // 回前台：探活 + 立即重连。上游「恢复立即试」的复现；已就绪 / 握手中的连接
         // 不受影响，不会叠加。
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await services.store.sceneActive() }
-            services.link.reconnectNow()
+            services.link.reconnectNow(reason: "foreground")
             // 被终态拒绝收起的那条流只在这一刻重建：重试同一个拒绝没有意义。
             // 它幂等 —— 正常情况 `attach` 的闸会直接放行。
             services.events.attach(to: services.link)
