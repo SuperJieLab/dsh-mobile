@@ -125,3 +125,23 @@ struct AppServices {
         }
     }
 }
+
+// MARK: - 回前台的判定
+
+/// 回前台该动哪一步 —— 只由 `MeshPhase` 决定。判定与它的唯一调用点（`sceneActive`）同住：
+/// 只有这个类型同时认识「组网阶段」与「App 回到前台」。
+enum ForegroundAction: Equatable {
+    /// 只探活：节点可能还活着，而重开会把一条正好好的连接杀掉。
+    case revive
+    /// 按存下来的那份配置重走一次注册。
+    case retryStored
+}
+
+extension ForegroundAction {
+
+    /// key 被拒不重试：同样的 key 再问一次答案不会变。
+    static func of(phase: MeshPhase) -> ForegroundAction {
+        if case .failed(.unreachable) = phase { return .retryStored }
+        return .revive
+    }
+}
