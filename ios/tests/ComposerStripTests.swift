@@ -15,10 +15,14 @@ import XCTest
 
 final class ComposerStripTests: XCTestCase {
 
-    /// 四条 `phase` × 三条路径 = 十二条，列全表。手写枚举追不上组合数 ——
+    /// 五条 `phase` × 三条路径 = 十五条，列全表。手写枚举追不上组合数 ——
     /// 少列一条，那种组合就永远没人管。
     func testNetworkCellForEveryShape() {
         let cases: [(ConnectionPhase, CarrierPath?, String, String, ComposerStripModel.Tone)] = [
+            // 等组网：与 `.waiting` 必须说成两件事 —— 「等组网」能去修地址，「重连中」只能等。
+            (.awaitingMesh, .direct, "等组网…", "antenna.radiowaves.left.and.right", .normal),
+            (.awaitingMesh, .relay, "等组网…", "antenna.radiowaves.left.and.right", .normal),
+            (.awaitingMesh, nil, "等组网…", "antenna.radiowaves.left.and.right", .normal),
             (.idle, .direct, "连接中…", "arrow.triangle.2.circlepath", .normal),
             (.idle, .relay, "连接中…", "arrow.triangle.2.circlepath", .normal),
             (.idle, nil, "连接中…", "arrow.triangle.2.circlepath", .normal),

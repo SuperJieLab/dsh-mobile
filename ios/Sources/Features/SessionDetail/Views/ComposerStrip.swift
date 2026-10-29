@@ -124,11 +124,20 @@ extension ComposerStripModel {
     /// 面积都太小，异常必须靠**文字**传出来，否则小屏上一眼扫过去会以为是正常态。
     /// `.ready` 而路径未知时写「已连接」—— 路径未知不等于断开。逐 case 列举，加取值时编译失败。
     ///
+    /// `.awaitingMesh` 写「等组网…」而不是「重连中…」：两者对用户是**不同的行动**——
+    /// 前者要等（或去修组网地址），后者只能等它自己好。合成一句就等于把
+    /// 「组网没起来」说成「网络在抖」。
+    ///
     /// 内部而非私有：连接详情里「状态」那一行也要它（传 `carrier: nil` 拿到的正是状态说法），
     /// 一份映射两个消费者，不另写第二份 case。
     static func network(phase: ConnectionPhase,
                                 carrier: CarrierPath?) -> Network {
         switch phase {
+        case .awaitingMesh:
+            // 中性色：用户没做错任何事，只是组网这一步还没走完。
+            return Network(text: "等组网…",
+                           systemImage: "antenna.radiowaves.left.and.right",
+                           tone: .normal)
         case .waiting:
             return Network(text: "重连中…", systemImage: "wifi.slash", tone: .attention)
         case .connecting, .idle:

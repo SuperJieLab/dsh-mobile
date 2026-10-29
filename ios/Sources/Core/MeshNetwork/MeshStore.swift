@@ -113,10 +113,20 @@ final class MeshStore {
         nodeChanged()
     }
 
-    /// 回前台探活：探活判定在节点层，失败如实落 failed、不自动重试（重试入口在设置页）。
-    /// 路径刷新以节点推送为准 —— revive 成功路径的刷新是异步的，这里只兜一次同步读。
+    /// 回前台：探活；上一轮判定为不可达的，**顺手重试一次**。
+    ///
+    /// - 已就绪 / 注册中：只探活（`reviveNode`）。节点活着时重开会杀掉旧 socket，
+    ///   而那条连接可能正好好的。
+    /// - 判定不可达：探活没有意义（本来就不通），直接重走一次注册。
+    ///   「用户回来了」是重新尝试最可靠的信号 —— 比后台定时器省电，时机也更准
+    ///   （后台重试的成功率低：iOS 会限制后台网络，而失败次数会白白消耗）。
+    /// - key 被拒：**不重试**。同样的 key 再问一次答案不会变，而 authkey 有使用次数限制。
     func sceneActive() async {
-        await node.reviveNode()
+        if case .failed(.unreachable) = nodeState, let config {
+            await node.retry(config: config)
+        } else {
+            await node.reviveNode()
+        }
         nodeChanged()
     }
 

@@ -179,15 +179,23 @@ final class WebSocketConnection: Channel {
     /// 只有在此处才断言得到的契约 —— 换代次之后每条登记着的流都要用自己的新编号重开。
     func connect() {
         guard active else { return }
-        // 无端点（组网未激活）：不猜地址，也不动代次与阶段的连接语义，直接进退避 ——
-        // 激活后下一轮自动连上。
+        // 无端点（组网未就绪）：**不猜地址，也不进退避**。
+        //
+        // 这一支原来调 `scheduleReconnect()`，于是「外面还没有可连的地址」被记成了一次
+        // 网络失败：档位一路爬到上限，等到组网真就绪时第一发就要等 10 秒 —— 而那一刻
+        // 恰恰是用户刚打开 App、最不该等的时候。
+        //
+        // 现在的分工是**谁的条件谁等**：组网自己重试到就绪（那是它的活），本层停在
+        // `.awaitingMesh` 不动、不排定时器；组网就绪那一刻由根上的组网阶段观察调用
+        // `reconnectNow` 把本层叫醒。组网失败时本层也不动 —— 没有可连的地址，
+        // 重试只是空转。
         guard let endpoint = baseURLProvider() else {
-            // 留痕：「等组网」与「连不上」在日志里必须分得开 —— 两者的症状都是
-            // 「屏上一直转圈」，而处置完全不同（等它自己好 vs 去查地址与证书）。
-            // ⚠️ 已知未尽：它仍会经 `scheduleReconnect` 累加 attempt，于是等待被记成失败、
-            // 退避爬到上限。改那个语义要动调度，等能跑测试的一轮再做（已登记）。
-            Log.info(Log.Module.session, "connect skipped — no endpoint yet (mesh not ready)")
-            scheduleReconnect()
+            guard phase != .awaitingMesh else { return }
+            reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
+            Log.info(Log.Module.session,
+                     "connect skipped — waiting for mesh (no endpoint yet); not backing off")
+            phase = .awaitingMesh
             return
         }
         // 不在这里清零 reconnectAttempt —— 退避档位必须随失败次数爬升，

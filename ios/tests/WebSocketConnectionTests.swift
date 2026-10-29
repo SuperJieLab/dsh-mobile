@@ -203,6 +203,37 @@ final class WebSocketConnectionTests: XCTestCase {
         transport.deactivate()
     }
 
+    // MARK: - 等组网：不自己退避
+
+    /// 没有可连的地址时停在「等组网」，**不进退避、不烧退避档位**。
+    ///
+    /// 两件事分别会坏，所以两条都断言：
+    /// ① 若它仍走 `scheduleReconnect`，等待期间会出现 `.waiting` 与第二次 `.connecting`
+    ///    —— 症状是组网真就绪时第一发就要等 10 秒（档位已被空转烧到上限）；
+    /// ② 若它永不醒，组网就绪后界面永远停在「等组网」—— 症状是组网明明好了却连不上。
+    func testNoEndpointWaitsForMeshInsteadOfBackingOff() async throws {
+        let waiting = WebSocketConnection()
+        var endpoint: URL?
+        waiting.baseURLProvider = { endpoint }
+        waiting.authorizationProvider = { "ticket" }
+        waiting.sessionProvider = { .shared }
+        var phases: [ConnectionPhase] = []
+        waiting.onPhaseChange = { phases.append($0) }
+
+        waiting.activate()
+        XCTAssertEqual(phases, [.awaitingMesh], "没有地址就该说「等组网」，而不是「连接中」")
+
+        // 等够一拍退避的时间窗：若它偷偷退避，这段时间足够出现 waiting 与下一代 connecting。
+        try await Task.sleep(nanoseconds: 900_000_000)
+        XCTAssertEqual(phases, [.awaitingMesh], "等组网期间不该自己退避：\(phases)")
+
+        // 组网就绪：地址出现，根部观察组网阶段之后调 reconnectNow 把它叫醒。
+        endpoint = URL(string: "http://127.0.0.1:1")
+        waiting.reconnectNow(reason: "mesh-ready")
+        XCTAssertEqual(phases.last, .connecting, "叫醒之后立刻握手：\(phases)")
+        waiting.deactivate()
+    }
+
     // MARK: - U6：退避与代次由传输层自己决定
 
     /// 连不上时：阶段按 `connecting → waiting(ms) → connecting` 循环，每一代都重新来一遍。

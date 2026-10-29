@@ -76,7 +76,7 @@ final class TailnetNode {
 
         switch state {
         case .registering:
-            await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
+            await up(key: key, config: config)
         case .running:
             // 幂等：同一进程内二次 launch 会把旧 socket 全杀掉 —— socks5 / localapi
             // 随即报 use of closed network connection，徽章上的路径标签也一起掉。
@@ -92,7 +92,7 @@ final class TailnetNode {
             // 了目录就退出，残缺状态 + 不喂 key ⇒ 注册请求不带 key，headscale 落
             // 交互注册回 AuthURL，永远不上节点表。后端已 Running 时
             // 上游自行忽略 key（tsnet.go「Ignoring authkey」分支），无副作用。
-            await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
+            await up(key: key, config: config)
         default:
             break
         }
@@ -108,7 +108,7 @@ final class TailnetNode {
         }
         TailnetKeyStore.save(key)
         transition(.keySubmitted)
-        await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
+        await up(key: key, config: config)
     }
 
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
@@ -117,7 +117,7 @@ final class TailnetNode {
         Log.info(Log.Module.mesh, "retry: key=\(Self.keyHint(key))")
         transition(.retry(keyPresent: key != nil))
         if case .registering = state {
-            await up(key: key, config: config, onAuthkeyError: { .registrationFailed($0) })
+            await up(key: key, config: config)
         }
     }
 
@@ -220,17 +220,85 @@ final class TailnetNode {
 
     // MARK: - 节点起停（上游调用 + 事件归类）
 
-    /// 起 tsnet 节点并等登录完成。key 空表示本机没存过 key（上游对 Running 后端会自行忽略 key）。
-    private func up(key: String?, config: MeshConfig, onAuthkeyError: ((TailnetNodeFailure) -> TailnetNodeState.Event)? = nil) async {
-        guard config.isComplete, let controlURL = config.controlURL else {
-            // 配置没填全：视同不可达（界面提示去设置页补地址）。
-            Log.info(Log.Module.mesh, "up: config incomplete → registrationFailed(unreachable)")
-            transition(.registrationFailed(.unreachable))
-            return
+    /// 一次尝试的上限。
+    ///
+    /// 上游 `tailscale_up` **没有自己的超时**：连不上控制面时它一直等，而头文件给出的取消
+    /// 方式就是 `tailscale_close`（Swift 侧 `close()`）。没有这个上限，界面永远停在
+    /// 「注册中」，既看不到失败、也拿不到重试入口 —— 而「一直转圈」正是最糟的一种失败表现：
+    /// 用户不知道该等还是该修。
+    private static let upTimeoutSeconds: TimeInterval = 15
+
+    /// 一次启动最多试几回（首发 + 重试）。上限而非无限：地址写错或 CA 没信任时，
+    /// 每次尝试都必然失败，无限重试只是把一个静态错误变成一串噪音。
+    private static let upAttemptLimit = 3
+
+    /// 两次尝试之间的下限。组网启动本身要几秒，立即重试只是把同一次失败再问一遍。
+    private static let upRetryFloorMs = 2_000
+
+    /// 一次尝试的结果。**归因决定要不要再试** —— 这是它与「失败」分开的理由：
+    /// 环境问题（超时 / 不可达）值得退避后再来一次，而 key 被拒再来一次只会消耗限次。
+    private enum UpOutcome {
+        case ready
+        case retryable(TailnetNodeFailure)
+        case fatal(TailnetNodeFailure)
+    }
+
+    /// 起 tsnet 节点并等登录完成；环境类失败自动重试。key 空表示本机没存过 key
+    /// （上游对 Running 后端会自行忽略 key）。
+    private func up(key: String?, config: MeshConfig) async {
+        var attempt = 0
+        while true {
+            attempt += 1
+            switch await attemptUp(key: key, config: config) {
+            case .ready:
+                transition(.registrationSucceeded)
+                startPathPolling()
+                // 根部激活回调：App 的 onChange(of: state) 在同值迁移
+                // （running→running）时不触发，隧道组网的激活只能挂在「session 刚建成」
+                // 这个确定性时点上，不能靠状态 diff。
+                if let session = gatewaySession { onVerifiedRunning?(session) }
+                return
+
+            case .fatal(let failure):
+                Log.info(Log.Module.mesh, "up: not retrying (\(failure)) — retrying cannot change it")
+                finishFailed(failure)
+                return
+
+            case .retryable(let failure):
+                guard attempt < Self.upAttemptLimit else {
+                    Log.info(Log.Module.mesh,
+                             "up: giving up after \(attempt) attempts (\(failure))")
+                    finishFailed(failure)
+                    return
+                }
+                let delay = max(Self.upRetryFloorMs,
+                                Backoff.delayMs(attempt: attempt,
+                                                random: Double.random(in: 0..<1)))
+                Log.info(Log.Module.mesh,
+                         "up: attempt \(attempt)/\(Self.upAttemptLimit) failed (\(failure))"
+                         + " — retrying in \(delay)ms")
+                try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+            }
         }
+    }
+
+    /// 一次尝试：造节点 → 等 up（带超时）→ 确认后端真的 Running。
+    ///
+    /// **不在这里迁移状态**：重试期间状态该停在 `registering`（界面说的是「正在注册」，
+    /// 而不是每隔十几秒闪一次失败）。迁移只在终局由 `up` 做。
+    private func attemptUp(key: String?, config: MeshConfig) async -> UpOutcome {
+        guard config.isComplete, let controlURL = config.controlURL else {
+            // 配置没填全：视同不可达（界面提示去设置页补地址）。重试不会补上地址。
+            Log.info(Log.Module.mesh, "up: config incomplete → unreachable")
+            return .fatal(.unreachable)
+        }
+        Log.info(Log.Module.mesh,
+                 "up: start hostname=dsh-iphone controlURL=\(controlURL.absoluteString)"
+                 + " key=\(Self.keyHint(key))")
+
+        let node: TailscaleNode
         do {
-            Log.info(Log.Module.mesh, "up: start hostname=dsh-iphone controlURL=\(controlURL.absoluteString) key=\(Self.keyHint(key))")
-            let node = try TailscaleNode(
+            node = try TailscaleNode(
                 config: Configuration(
                     hostName: "dsh-iphone",
                     path: Self.stateDir.path,
@@ -239,44 +307,94 @@ final class TailnetNode {
                 ),
                 logger: nil
             )
-            self.node = node
-            try await node.up()
-            // 闭合信号：up() 返回 ≠ 注册完成 —— 后端停在
-            // NeedsLogin、控制面回 AuthURL 时 up() 也返回。只有 statusJSON 报
-            // BackendState == Running 才认成功；否则按 key 有无归因（有 key 还
-            // 停在 NeedsLogin = key 被拒）。
-            let backendNow = await Self.backendState(of: node) ?? "<unreadable>"
-            Log.info(Log.Module.mesh, "up: returned, BackendState=\(backendNow) (waiting up to 3s for Running)")
-            if await Self.backendRunning(node) {
-                Log.info(Log.Module.mesh, "up: verified Running → registrationSucceeded")
-                gatewaySession = try await TailnetURLSession.makeSession(for: node)
-                transition(.registrationSucceeded)
-                startPathPolling()
-                // 根部激活回调：App 的 onChange(of: state) 在同值迁移
-                // （running→running）时不触发，隧道组网的激活只能挂在「session 刚建成」
-                // 这个确定性时点上，不能靠状态 diff。
-                onVerifiedRunning?(gatewaySession!)
-            } else {
-                Log.info(Log.Module.mesh, "up: NOT Running after 3s → registrationFailed(key=\(key == nil ? "absent→unreachable" : "present→badKey"))")
-                transition(.registrationFailed(key == nil ? .unreachable : .badKey))
-            }
         } catch {
+            let message = String(describing: error)
+            Log.info(Log.Module.mesh, "up: init threw \(message)")
+            return Self.outcome(forMessage: message)
+        }
+        self.node = node
+
+        switch await Self.runUp(node) {
+        case .timedOut:
+            Log.info(Log.Module.mesh,
+                     "up: no answer in \(Int(Self.upTimeoutSeconds))s"
+                     + " — closing this node (upstream has no timeout of its own)")
+            // `close` 是上游指定的取消手段：它让卡住的 `up()` 收尾，不留一条还在跑的 Go 侧节点。
+            try? await node.close()
             self.node = nil
-            gatewaySession = nil
-            stopPathPolling()
-            Log.info(Log.Module.mesh, "up: threw \(String(describing: error))")
-            transition(Self.classify(error, onto: onAuthkeyError))
+            return .retryable(.unreachable)
+
+        case .failed(let message):
+            Log.info(Log.Module.mesh, "up: threw \(message)")
+            self.node = nil
+            return Self.outcome(forMessage: message)
+
+        case .returned:
+            // 闭合信号：up() 返回 ≠ 注册完成 —— 后端停在 NeedsLogin、控制面回 AuthURL 时
+            // up() 也返回。只有 statusJSON 报 BackendState == Running 才认成功。
+            let backendNow = await Self.backendState(of: node) ?? "<unreadable>"
+            Log.info(Log.Module.mesh,
+                     "up: returned, BackendState=\(backendNow) (waiting up to 3s for Running)")
+            if await Self.backendRunning(node) {
+                Log.info(Log.Module.mesh, "up: verified Running")
+                do {
+                    gatewaySession = try await TailnetURLSession.makeSession(for: node)
+                } catch {
+                    Log.info(Log.Module.mesh,
+                             "up: session build threw \(String(describing: error))")
+                    self.node = nil
+                    return .retryable(.unreachable)
+                }
+                return .ready
+            }
+            // 有 key 却停在 NeedsLogin = key 被拒；没有 key = 环境问题（可以补 key 后再试）。
+            Log.info(Log.Module.mesh,
+                     "up: NOT Running after 3s (key=\(key == nil ? "absent" : "present"))")
+            return key == nil ? .retryable(.unreachable) : .fatal(.badKey)
         }
     }
 
-    /// 上游错误 → 状态机事件。key 相关的判据 = 错误消息含 authkey 字样；
+    /// 跑一次 `up()`，到点就放弃。**两个任务同处一组**：谁先回来算谁，
+    /// 超时那一支由调用方 `close` 收尾 —— 单纯取消 Task 不会中断 Go 侧的等待。
+    private enum UpStep: Sendable {
+        case returned
+        case failed(String)
+        case timedOut
+    }
+
+    private static func runUp(_ node: TailscaleNode) async -> UpStep {
+        await withTaskGroup(of: UpStep.self) { group in
+            group.addTask {
+                do {
+                    try await node.up()
+                    return .returned
+                } catch {
+                    return .failed(String(describing: error))
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(upTimeoutSeconds * 1_000_000_000))
+                return .timedOut
+            }
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// 失败归因：key 相关的判据 = 错误消息含 authkey 字样（上游没有结构化的分支）；
     /// 其余（连不上控制面、证书没信任）一律 unreachable —— 文案引导查描述文件。
-    private static func classify(_ error: Error, onto event: ((TailnetNodeFailure) -> TailnetNodeState.Event)?) -> TailnetNodeState.Event {
-        let message = String(describing: error).lowercased()
-        let reason: TailnetNodeFailure = message.contains("authkey") || message.contains("auth key")
-            ? .badKey
-            : .unreachable
-        return event?(reason) ?? .nodeUnreachable
+    private static func outcome(forMessage message: String) -> UpOutcome {
+        let lower = message.lowercased()
+        let keyRejected = lower.contains("authkey") || lower.contains("auth key")
+        return keyRejected ? .fatal(.badKey) : .retryable(.unreachable)
+    }
+
+    /// 落失败并清掉只有成功才该留的东西。**只在终局调用** —— 重试期间保持原状态。
+    private func finishFailed(_ failure: TailnetNodeFailure) {
+        gatewaySession = nil
+        stopPathPolling()
+        transition(.registrationFailed(failure))
     }
 
     private func transition(_ event: TailnetNodeState.Event) {
