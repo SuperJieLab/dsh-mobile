@@ -2733,63 +2733,78 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 根上三条 App 级事件，每一处都要有执行体。
+    /// 编排住在服务层，**不住在根视图的渲染副作用里**。
     ///
-    /// 三处的共同点：**与「显示哪一屏」无关**，所以它们挂在根上；也**都没有任何行为判据
-    /// 能碰到**（视图不在测试覆盖里）。缺一条都不会编译失败，症状各是：
+    /// 这是「编排归服务层」换掉的那件事。以前三条 App 级事件长在 `RootScreen` 的
+    /// `.task(id: hasDeviceToken)` / `.onChange(store.phase)` 上 —— 那是渲染的副作用：
+    /// 视图不渲染就不发生、删一个装饰器就静默失效、且测不了。现在它们在
+    /// `AppServices`（`start` / `sceneActive` / `wireCrossServiceTriggers`）。
     ///
-    /// - 身份成立没接线 → 配对成功后列表静默不动、审批卡永不出现（传输层把「无票」当
-    ///   终态，`activate` 的闸只让第一次通过，不会自己再试）。真正救场的只有「进一次
-    ///   会话详情」，所以会以间歇性报告的形式出现，极难归因。
-    /// - 组网就绪不重连 → 空等下一轮退避（connecting 期间连接在端点还不存在的循环里转）。
-    /// - 回前台不探活 → 半死连接只能等判满判死窗口。
+    /// 两半都要守，缺一半就退回去：
+    /// - **正向**：根视图里**不许**再出现「按 store.phase / 身份变化去动连接」的装饰器。
+    ///   留着它们不会错，但它们会让「编排在哪」变成两个答案。
+    /// - **负向**：服务层那几处必须真的在 —— 否则删了根上的又没接线，症状是
+    ///   「组网就绪后连接永远等」，而它不编译失败。
     ///
-    /// 形状是**结构**判据：它证明「那一行在那个修饰符的块里」，证明不了运行时真的被调。
-    /// 块的范围按「下一个同级修饰符或结构体收尾」切，不按固定行数 —— 块变长不会假红。
-    func testEveryAppLevelEventHasAnExecutor() throws {
+    /// 形状是**结构**判据：证明「那段代码在那个文件里」，证明不了运行时真的被调。
+    /// 运行时那一半由 `MeshStoreTests`（通知会发）与 `StartupPlanTests`（计划对不对）
+    /// 各守一端，中间那根线靠真机（它没有自动化判据，见方案文档的验证缺口）。
+    func testStartupOrchestrationLivesInServicesNotInTheRootView() throws {
+        // 正向：根视图只剩一处平台事件转发，不再有编排。
         let root = sourcesRoot.appendingPathComponent("RootScreen.swift")
-        let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
+        let rootLines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
+        let forbidden = [".task(id: services.credentials.hasDeviceToken)",
+                         ".onChange(of: services.store.phase)"]
+        for needle in forbidden {
+            XCTAssertFalse(rootLines.contains { $0.1.contains(needle) },
+                           "根视图里还有 \(needle) —— 编排已归 AppServices.start()，"
+                           + "留两处会让「编排在哪」有两个答案")
+        }
+        // 唯一允许留下的：回前台的转发。它没有顺序、没有依赖，是平台事件的接入点。
+        XCTAssertTrue(rootLines.contains { $0.1.contains(".onChange(of: scenePhase)") },
+                      "回前台的转发没了 —— 半死连接只能等判死窗口")
+        XCTAssertTrue(rootLines.contains { $0.1.contains("services.sceneActive()") },
+                      "回前台没转给服务")
 
-        /// 锚点行之后、到下一个同级修饰符（8 空格的点）或结构体收尾（8 空格的右括号）之前。
-        func block(after anchor: String) -> String? {
-            guard let start = lines.firstIndex(where: { $0.1.contains(anchor) }) else { return nil }
-            var kept: [String] = []
-            for (_, text) in lines.dropFirst(start + 1) {
-                if text.hasPrefix("        .") || text.hasPrefix("        }") { break }
-                kept.append(text)
-            }
-            return kept.joined(separator: "\n")
+        // 负向：服务层那几处必须都在。
+        let services = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent("AppServices.swift"),
+                           encoding: .utf8))
+        let required = ["func start() async", "func sceneActive() async",
+                        "store.onPhaseReady", "credentials.onIdentityChanged"]
+        for needle in required {
+            XCTAssertTrue(services.contains { $0.1.contains(needle) },
+                          "AppServices 里没有 \(needle) —— 编排少接了一根线")
         }
 
-        // (锚, 块内必须出现的调用, 缺了会怎样)
-        let palette: [(anchor: String, calls: [String], symptom: String)] = [
-            (".task(id: services.credentials.hasDeviceToken)",
-             ["services.link.activate()", "services.link.reconnectNow(reason: \"identity-ready\")",
-              "services.events.attach(to: services.link)"],
-             "配对成功后列表静默不动、审批永不出现"),
-            (".onChange(of: services.store.phase)",
-             ["services.link.reconnectNow(reason: \"mesh-ready\")"],
-             "组网就绪后空等一轮退避"),
-            (".onChange(of: scenePhase)",
-             ["services.store.sceneActive()", "services.link.reconnectNow(reason: \"foreground\")",
-              "services.events.attach(to: services.link)"],
-             "回前台不探活，半死连接只能等判死窗口"),
-        ]
-        for item in palette {
-            guard let body = block(after: item.anchor) else {
-                XCTFail("根上找不到 \(item.anchor) —— 这条守的是它下面的块")
-                continue
-            }
-            for call in item.calls {
-                XCTAssertTrue(body.contains(call),
-                              "\(item.anchor) 的块里没有 \(call) —— \(item.symptom)")
-            }
-        }
+        // 负向：启动的触发点在进程入口，不在任何视图上。
+        let entry = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent("DshMobileApp.swift"),
+                           encoding: .utf8))
+        XCTAssertTrue(entry.contains { $0.1.contains("Task { await services.start() }") },
+                      "进程入口没有启动服务 —— 编排不会发生（视图不求值也必须在跑）")
+    }
 
-        // 触发条件单列：`.task(id:)` 的 id 必须是身份。写成无 id 的 `.task` 只在首帧跑
-        // 一次，重新配对之后不会再来一次 —— 而「连接活了」这一半照样是绿的。
-        XCTAssertTrue(lines.contains { $0.1.contains("guard services.credentials.hasDeviceToken else") },
-                      "没身份也去激活连接 —— 无票的连接会被传输层当终态收起")
+    /// 计划的三个动作之间有顺序契约，`StartupPlan` 自己守；这里只守**它还在**。
+    ///
+    /// 为什么值得一条结构判据：`StartupPlan` 一旦被内联回 `AppServices.start()` 的
+    /// `if/else` 里，`StartupPlanTests` 就会以「找不到类型」编译失败 —— 那也算红。
+    /// 但它也可能被保留成空壳而真正的判断在别处，那时测试全绿而计划与现实脱节。
+    func testTheStartupPlanIsTheOnlyPlaceThatDecidesTheOrder() throws {
+        let file = sourcesRoot.appendingPathComponent("StartupPlan.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(text.contains("static func steps(hasIdentity:"),
+                      "扫错文件了 —— 先怀疑路径")
+
+        // `AppServices` 不许自己再判「有没有身份该做什么」：它只读 hasDeviceToken 喂给计划。
+        let services = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent("AppServices.swift"),
+                           encoding: .utf8))
+        let branching = services.filter { $0.1.contains("hasDeviceToken") }
+            .filter { !$0.1.contains("StartupPlan.steps") && !$0.1.contains("credentials.hasDeviceToken,") }
+            .map(\.0)
+        XCTAssertEqual(branching, [],
+                       "AppServices 里按身份分支了（第 \(branching) 行）—— 判断归 StartupPlan")
     }
 
     /// 这一行是不是**提到了**那个类型 —— 要有左边界。

@@ -39,6 +39,15 @@ final class CredentialStore {
 
     var hasDeviceToken: Bool { deviceToken != nil }
 
+    /// 身份**刚变过**的那一刻 —— 供编排层接（配对成功后拉起连接）。
+    ///
+    /// 与 `hasDeviceToken` 的分工同 `MeshStore.onPhaseReady`：那个回答「现在有没有」，
+    /// 视图读它画；这个回答「刚变了」，动作层读它做 —— 而「配对成功该去连」必须发生
+    /// even 当没有任何视图在渲染（例如配对页刚被弹掉、列表还没重算）。
+    ///
+    /// **不参与观察**：它是接线不是状态，标上 `@ObservationIgnored` 免得视图白重算一次。
+    @ObservationIgnored var onIdentityChanged: (() -> Void)?
+
     init(storage: Storage = .secretFile) {
         self.storage = storage
         self.deviceToken = storage.read()
@@ -47,6 +56,7 @@ final class CredentialStore {
     func saveDeviceToken(_ token: String) {
         deviceToken = token
         storage.write(token)
+        onIdentityChanged?()
     }
 
     /// 关系在这台手机上的终点：被撤销（换票 401）时由 `RpcClient` 调用。
@@ -54,7 +64,11 @@ final class CredentialStore {
     /// 只管设备凭证。手上那张访问票由票那一层自己清 —— 两边各清各的，这个类就不必知道
     /// 世界上有「票」这回事。
     func deleteDeviceToken() {
+        guard deviceToken != nil else { return }
         deviceToken = nil
         storage.delete()
+        // 只在**真的变过**时通知：撤销是幂等的，重复通知会让编排层重走一遍
+        // 「无身份」那几步，而那些步骤的闸都在下游，白跑一趟。
+        onIdentityChanged?()
     }
 }

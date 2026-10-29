@@ -11,6 +11,42 @@ import XCTest
 @MainActor
 final class MeshStoreTests: XCTestCase {
 
+    /// 组网「刚就绪」的通知：只在**跨进** ready 那一次发。
+    ///
+    /// 两件事分别会坏，所以两头都断言：
+    /// ① 每次回灌都发 ⇒ 每次路径刷新（direct↔relay 切换）都会叫连接重连一次，
+    ///    而那条连接可能正好好的；
+    /// ② 从不发 ⇒ 编排层收不到「组网好了」，连接永远停在等组网。
+    func testPhaseReadyNotificationFiresOncePerTransition() async {
+        let config = MeshConfig(controlURLString: "https://203.0.113.10:8443",
+                                gatewayURLString: "http://100.64.0.1:3081")
+        let node = FakeNode()
+        let store = MeshStore(node: node)
+        var readyCount = 0
+        store.onPhaseReady = { readyCount += 1 }
+
+        await store.start(config: config)
+        XCTAssertEqual(readyCount, 0, "还没就绪就不该通知")
+
+        // 隧道产物就位（`verifiedRoute` 的唯一写入点）→ 同时回灌一次。
+        node.nodeState = .running
+        node.onVerifiedRunning?(URLSession.shared)
+        XCTAssertTrue(store.phase == .ready, "先确认真的就绪了，否则下面测的是别的分支")
+        XCTAssertEqual(readyCount, 1, "跨进 ready 要通知一次")
+
+        // 又一次回灌，阶段没变。
+        node.onNodeChanged?()
+        XCTAssertEqual(readyCount, 1, "保持 ready 时不该重复通知")
+
+        // 掉下去再回来：中间那个非 ready 值必须被记下，否则回不来就不通知了。
+        node.nodeState = .failed(.unreachable)
+        node.onNodeChanged?()
+        XCTAssertEqual(readyCount, 1, "掉下去本身不是「就绪」")
+        node.nodeState = .running
+        node.onNodeChanged?()
+        XCTAssertEqual(readyCount, 2, "再回到 ready 是第二次跨进")
+    }
+
     func testOrchestration() async {
         // —— 投影的全组合（2 节点态 × 2 组网；`failed` 两半各一次）——
         // 身份轴不并入组网阶段 —— 这件事现在由 `resolve` 的签名表达：签名里没有

@@ -57,6 +57,19 @@ final class MeshStore {
     /// `reportDamagedConfiguration`。界面据此说「重新填写」，而不是「检查证书」。
     private(set) var storedConfigDamaged = false
 
+    /// 组网**刚刚**就绪的那一刻 —— 供编排层接（叫醒连接）。
+    ///
+    /// 与 `phase` 的分工：`phase` 回答「现在是什么」，视图读它画；这个回调回答
+    /// 「它刚变成 ready」，动作层读它做。**两者不能互相替代** —— 观察 `phase` 只能
+    /// 在渲染时顺便发生，而「组网好了该去连」必须发生 even 当没有任何视图在渲染。
+    ///
+    /// 只在「变成 `.ready` 且上一次不是」时调，不是每次回灌都调。
+    var onPhaseReady: (() -> Void)?
+
+    /// 上一次通知过的阶段。判「变成」用 —— `phase` 是算出来的，没有别的变化可挂钩。
+    /// **不对外暴露**：读它会读到过期值，那正好是别人该用 `phase` 的场合。
+    private var lastNotifiedPhase: MeshPhase?
+
     /// 隧道的产物：往哪打、走哪条传输。**地址与传输同生共死** —— 没有「有地址但没有
     /// 传输」这种态，也没有「有传输但地址作废」这种态。
     struct Route {
@@ -162,8 +175,20 @@ final class MeshStore {
     ///
     /// 只读一个输入 —— 阶段与「能不能发」都由 `nodeState` 与 `route` 在读数上算出来，
     /// 这里不再算第二遍。
+    ///
+    /// 「刚就绪」的通知也挂在这里：它是节点侧事实的唯一回灌口（状态迁移与路径刷新都经过），
+    /// 放这儿不会漏；而 `phase` 是算出来的，没有别的「变化」可挂。
     private func nodeChanged() {
         nodeState = node.nodeState
         meshPath = node.carrierPath
+
+        let now = phase
+        let was = lastNotifiedPhase
+        lastNotifiedPhase = now
+        // 只在**跨进** ready 那一次通知。保持 ready 不动时不重复 —— 否则每一次路径刷新
+        // 都会让连接重连一次，而那条连接可能正好好的。
+        if case .ready = now, !(was == .ready) {
+            onPhaseReady?()
+        }
     }
 }

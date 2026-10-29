@@ -65,4 +65,86 @@ struct AppServices {
         self.events = events
         self.approvals = approvals
     }
+
+    // MARK: - 编排
+
+    /// 启动：**进程级一次**，由 `App.init` 开一个 Task 调。
+    ///
+    /// 它做两件事、分两个阶段：
+    /// 1. **接线**（同步，先做）：本轮之前这些依赖是靠 `RootScreen` 的
+    ///    `.onChange(of: store.phase)` / `.task(id: hasDeviceToken)` 表达的 ——
+    ///    那是渲染的副作用，视图不求值就不会发生。接线放在这里，与渲染无关。
+    /// 2. **动作**（按 `StartupPlan` 走）：读配置 → 起组网。**不 await 组网的完成** ——
+    ///    组网内部自己有 15s × 3 的重试，让它慢慢来，UI 该画什么画什么。
+    ///
+    /// 不 await 的后果是 `start()` 会较快返回，而组网仍在跑。这是有意的：启动编排
+    /// 不该被「组网多久才好」这件事拖住，UI 也不该等它。
+    func start() async {
+        wireCrossServiceTriggers()
+
+        let steps = StartupPlan.steps(
+            hasIdentity: credentials.hasDeviceToken,
+            config: MeshConfig.read()
+        )
+        await run(steps)
+    }
+
+    /// 回前台：探活（组网）+ 立刻要一次连接 + 重建被终态拒绝的流。
+    ///
+    /// 三件事的顺序有依赖：探活可能把组网从 failed 拉回来，那会让 `onPhaseReady` 再触发
+    /// 一次重连；而这里的 `reconnectNow` 覆盖「组网一直好着、只是连接断了」那一路。
+    /// 两者都幂等（各自的闸挡住重复），所以顺序不影响正确性。
+    func sceneActive() async {
+        await store.sceneActive()
+        link.reconnectNow(reason: "foreground")
+        events.attach(to: link)
+    }
+
+    /// 服务之间「A 好了 B 该动了」的两根线。
+    ///
+    /// 为什么在这里：只有这个类型同时认识 `store` 与 `link`。放进任一边都要跨层引用
+    /// （`Gateway` 不认识 `MeshNetwork`，见 `RULES` 的依赖方向）。所以不是「编排写在
+    /// 上层」，而是**这个上层的位置就是为了接这种线而存在的**。
+    private func wireCrossServiceTriggers() {
+        // 先落成局部量：捕获列表的 `weak` 那一格只接受一个标识符，而这些都是属性。
+        // 同时也是防环的必要条件 —— 闭包若捕获 `self`（值类型的一段拷贝），它会把
+        // 里面的每个 class 引用一起强持有，而这些闭包又正被那些 class 持有。
+        let link = self.link
+        let events = self.events
+        let credentials = self.credentials
+
+        // 组网刚就绪 → 叫醒连接。没有它，连接会一直停在 `.awaitingMesh` ——
+        // 那边不排定时器（等外部条件不该烧退避档位），只能靠这一声叫。
+        store.onPhaseReady = { [weak link] in
+            link?.reconnectNow(reason: "mesh-ready")
+        }
+        // 身份刚变过 → 按现状补做连接那几步。
+        //
+        // 回调体读的是**当前**身份，不是「变成了什么」：撤销时 `hasDeviceToken` 已是 false，
+        // 于是什么都不做 —— 连接层会把无票当终态自己收成 `.idle`，这里不必替它收。
+        credentials.onIdentityChanged = { [weak credentials, weak link, weak events] in
+            guard let credentials, credentials.hasDeviceToken,
+                  let link, let events else { return }
+            link.activate()
+            events.attach(to: link)
+        }
+    }
+
+    /// 把计划变成调用。一对一映射，不含判断 —— 判断全在 `StartupPlan` 里。
+    private func run(_ steps: [StartupStep]) async {
+        for step in steps {
+            switch step {
+            case .attachApprovals:
+                approvals.attach(events: events)
+            case .activateLink:
+                link.activate()
+            case .attachEventStream:
+                events.attach(to: link)
+            case .launchMesh(let config):
+                await store.start(config: config)
+            case .reportDamaged:
+                store.reportDamagedConfiguration()
+            }
+        }
+    }
 }
