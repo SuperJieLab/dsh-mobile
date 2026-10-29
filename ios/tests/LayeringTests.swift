@@ -2793,6 +2793,93 @@ final class LayeringTests: XCTestCase {
                       "进程入口没有启动服务 —— 编排不会发生（视图不求值也必须在跑）")
     }
 
+    /// 回前台那一步：判定归编排，动作归服务。
+    ///
+    /// 判定依据的一半是「App 回到前台」—— 组网域不认识它。这条守两半：
+    /// - **判定在编排**：`MeshStore` 只有动作、没有 `sceneActive`（留着那个门，判定随时能
+    ///   回流进去，而回流之后没有行为判据会红）；
+    /// - **动作与问法都在**：编排必须调 `store.revive()` / `store.retryStored()`，且经
+    ///   纯函数 `ForegroundAction.of(phase:)` 问一句 —— 少了这一句，`ForegroundActionTests`
+    ///   守的只是一个没人用的函数。
+    ///
+    /// ⚠️ 这是**结构**判据：它证明代码在场，证明不了运行时被调。那一跳的行为判据明知缺失
+    /// （`AppServices` 内部 new 出全部服务，要测它得给五件服务各抽一层协议），见方案文档。
+    func testTheForegroundJudgmentLivesInTheOrchestrator() throws {
+        let store = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent("Core/MeshNetwork/MeshStore.swift"),
+                           encoding: .utf8))
+        XCTAssertFalse(store.contains { $0.1.contains("func sceneActive") },
+                       "MeshStore 还留着 sceneActive —— 它认识不了「前台」，判定只能靠猜")
+        XCTAssertTrue(store.contains { $0.1.contains("func revive() async") },
+                      "store 少了探活（回前台的两条路之一）")
+        XCTAssertTrue(store.contains { $0.1.contains("func retryStored() async") },
+                      "store 少了「按存下的那份重试」（另一条路）")
+
+        let services = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent("AppServices.swift"),
+                           encoding: .utf8))
+        XCTAssertTrue(services.contains { $0.1.contains("ForegroundAction.of(phase: store.phase)") },
+                      "编排没有问那一句 —— 纯函数成了一纸空文")
+        XCTAssertTrue(services.contains { $0.1.contains("store.revive()") },
+                      "编排没调探活")
+        XCTAssertTrue(services.contains { $0.1.contains("store.retryStored()") },
+                      "编排没调重试 —— `.failed(.unreachable)` 之后回前台就再也不会重试")
+        let passingConfig = services.filter { $0.1.contains("retryStored(") }
+            .filter { $0.1.contains("config") }
+        XCTAssertEqual(passingConfig.map(\.0), [],
+                       "编排给 retryStored 传了配置（第 \(passingConfig.map(\.0)) 行）—— "
+                       + "用哪份配置是 store 的内部知识，传参就有「旧 session 配新地址」的入口")
+    }
+
+    /// 上游类型只出现在适配器文件里。
+    ///
+    /// 这条不是洁癖：接缝（`TailnetBackend`）一旦被绕过，`TailnetNodeTests` 里那两条
+    /// 「接入途中不探活 / 窗口靠 `defer` 进出」就只是在守一个假件 —— 真件不在它后面。
+    /// 副产品：换上游版本时改动面收在一个文件里。
+    func testUpstreamTypesAppearOnlyInTheAdapterFile() throws {
+        let adapter = "Core/MeshNetwork/TailnetBackend.swift"
+        var scanned = 0
+        for file in swiftFiles(under: sourcesRoot) {
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            guard relative != adapter else { continue }
+            scanned += 1
+            for (number, line) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
+                XCTAssertFalse(line.contains("import TailscaleKit"),
+                               "\(relative):\(number) 直接引了上游模块 —— 接缝被绕过了")
+                XCTAssertFalse(line.contains("TailscaleNode"),
+                               "\(relative):\(number) 直接用了上游类型 —— 接缝被绕过了")
+            }
+        }
+        // 扫不到的目录只回空数组、不报错 ⇒ 先证「真的扫到了东西」。
+        XCTAssertGreaterThan(scanned, 20, "一个文件都没扫到 —— 路径错了，这条判据在空转")
+    }
+
+    /// 审批听众的「只挂一次」落在 `ApprovalStore`，不在 `EventStream` 的注册面上。
+    ///
+    /// 落在注册面上就要改它的语义，而它是「同名追加」—— 全部订阅方都会跟着变。
+    /// ⚠️ 这条查的是「闸在哪」，查不到「它真的挡住了第二次」—— 后者由
+    /// `ApprovalStoreTests.testAttachingTwiceRegistersTheListenersOnce` 守。
+    func testTheAttachOnceGateLivesInTheApprovalStore() throws {
+        let approval = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent("Features/Approval/State/ApprovalStore.swift"),
+                           encoding: .utf8))
+        XCTAssertTrue(approval.contains { $0.1.contains("guard !attached else { return }") },
+                      "一次性闸没了 —— 第二次挂载会再注册一遍")
+
+        let stream = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/Events/EventStream.swift"),
+                           encoding: .utf8))
+        guard let start = stream.firstIndex(where: { $0.1.contains("func onCargo(_ type: String") }) else {
+            XCTFail("EventStream 里找不到 onCargo —— 扫错文件了")
+            return
+        }
+        let body = stream[start...].prefix(4).map(\.1).joined(separator: "\n")
+        XCTAssertTrue(body.contains("cargoHandlers[type, default: []].append(handler)"),
+                      "注册面不再是无条件追加 —— 改它之前先想清楚全部订阅方")
+        XCTAssertFalse(body.contains("guard"),
+                       "闸加到了注册面上 —— 全部订阅方的语义都会跟着变")
+    }
+
     /// 计划的三个动作之间有顺序契约，`StartupPlan` 自己守；这里只守**它还在**。
     ///
     /// 为什么值得一条结构判据：`StartupPlan` 一旦被内联回 `AppServices.start()` 的

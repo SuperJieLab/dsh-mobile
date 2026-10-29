@@ -53,7 +53,15 @@ final class CredentialStore {
         self.deviceToken = storage.read()
     }
 
+    /// 存下配对拿到的设备凭证。
+    ///
+    /// **同一个值再存一次什么都不做**（连写盘一起跳过）：与 `deleteDeviceToken` 的守卫对称。
+    /// 重复通知会让编排层重走一遍「有身份」那几步，而那些步骤的闸都在下游，白跑一趟。
+    ///
+    /// 代价明写：盘上内容被外部改动时，重存同一个值修不回来 —— 这个文件只有本进程一个写者，
+    /// 所以那是「不可能发生」，不是「没处理」。
     func saveDeviceToken(_ token: String) {
+        guard token != deviceToken else { return }
         deviceToken = token
         storage.write(token)
         onIdentityChanged?()

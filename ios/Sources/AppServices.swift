@@ -97,13 +97,26 @@ struct AppServices {
         await run(steps)
     }
 
-    /// 回前台：探活（组网）+ 立刻要一次连接 + 重建被终态拒绝的流。
+    /// 回前台：按现状决定探活还是重试（组网）+ 立刻要一次连接 + 重建被终态拒绝的流。
     ///
-    /// 三件事的顺序有依赖：探活可能把组网从 failed 拉回来，那会让 `onPhaseReady` 再触发
-    /// 一次重连；而这里的 `reconnectNow` 覆盖「组网一直好着、只是连接断了」那一路。
-    /// 两者都幂等（各自的闸挡住重复），所以顺序不影响正确性。
+    /// **`revive` 与 `retry` 的选择住在这里**，因为只有这个类型同时认识两样输入：
+    /// `store.phase`（组网域的事实）与「App 回到前台」（平台事件）。判定本身是纯函数
+    /// `ForegroundAction.of(phase:)` —— 放在别处要么让它依赖平台事件，要么让判定无处可测。
+    ///
+    /// 为什么 `.failed(.unreachable)` 要重试而不是只探活：探活对一条本来就不通的节点没有意义，
+    /// 而「用户回来了」是重新尝试最可靠的信号 —— 比后台定时器省电，时机也更准（后台网络受限，
+    /// 失败还会白白消耗次数）。key 被拒不重试：同样的 key 再问一次答案不会变。
+    ///
+    /// 三件事的顺序有依赖：探活可能把组网从 failed 拉回来，那会让 `onPhaseReady` 再触发一次
+    /// 重连；而这里的 `reconnectNow` 覆盖「组网一直好着、只是连接断了」那一路。两者都幂等
+    /// （各自的闸挡住重复），所以顺序不影响正确性。
     func sceneActive() async {
-        await store.sceneActive()
+        switch ForegroundAction.of(phase: store.phase) {
+        case .revive:
+            await store.revive()
+        case .retryStored:
+            _ = await store.retryStored()
+        }
         link.reconnectNow(reason: "foreground")
         events.attach(to: link)
     }
@@ -143,7 +156,7 @@ struct AppServices {
         for step in steps {
             switch step {
             case .attachApprovals:
-                approvals.attach(events: events)
+                approvals.attach(sink: events)
             case .activateLink:
                 link.activate()
             case .attachEventStream:

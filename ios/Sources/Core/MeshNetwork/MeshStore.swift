@@ -2,8 +2,8 @@
  * 组网域的唯一宿主：把「节点状态」收敛为「能不能发请求」，并持有隧道的唯一产物。
  *
  * 迁移判定仍在纯状态机 `TailnetNodeState`，这里不做第二台 —— `MeshPhase.resolve`
- * 只是它加「隧道是否建成」这一个输入后的**投影**。启动编排、VerifiedRunning 激活、
- * 回前台探活住在这里。
+ * 只是它加「隧道是否建成」这一个输入后的**投影**。VerifiedRunning 激活与回前台要动的两个
+ * 动作（探活 / 按存下的那份配置重试）住在这里；「什么时候动」不在这里 —— 那是编排的事。
  *
  * **产物也住这里**：隧道通了之后「往哪打、走哪条传输」由 `route` 一次给全，不再有第二个
  * 对象存着它的一半。地址与传输同生共死 —— 没有「有地址但没有传输」这种态。
@@ -123,7 +123,7 @@ final class MeshStore {
     /// 判定逻辑全部在节点层状态机，这里只管调用顺序。
     func start(config: MeshConfig) async {
         // 幂等：启动编排一次进程只该走一遍。重入（视图重放 .task）只刷新投影，
-        // 不重拉节点。回前台的恢复走 sceneActive，与此无关。
+        // 不重拉节点。回前台的恢复走 `AppServices.sceneActive`，与此无关。
         guard !started else {
             nodeChanged()
             return
@@ -140,26 +140,27 @@ final class MeshStore {
         nodeChanged()
     }
 
-    /// 回前台：探活；上一轮判定为不可达的，**顺手重试一次**。
+    /// 探活一次：节点还活着就从它那里重读路径，读不出就如实落 `failed(unreachable)`。
     ///
-    /// - 节点正在起：**什么都不做**。状态目录健康时状态一上来就是 `.running`，而节点
-    ///   此刻还没验证过 —— 这时探活多半读不出来，会把一次正常接入打成
-    ///   `failed(unreachable)`；而 `.failed` 之后成功进不来（迁移表里没有那一格）。
-    /// - 已就绪 / 注册中：只探活（`reviveNode`）。节点活着时重开会杀掉旧 socket，
-    ///   而那条连接可能正好好的。
-    /// - 判定不可达：探活没有意义（本来就不通），直接重走一次注册。
-    ///   「用户回来了」是重新尝试最可靠的信号 —— 比后台定时器省电，时机也更准
-    ///   （后台重试的成功率低：iOS 会限制后台网络，而失败次数会白白消耗）。
-    /// - key 被拒：**不重试**。同样的 key 再问一次答案不会变，而 authkey 有使用次数限制。
-    func sceneActive() async {
-        if !node.isStarting {
-            if case .failed(.unreachable) = nodeState, let config {
-                await node.retry(config: config)
-            } else {
-                await node.reviveNode()
-            }
-        }
+    /// **只回答「能不能做」，不回答「现在该不该做」** —— 「回前台了」这个触发条件不在本类型
+    /// 的知识里（平台事件的判定在 `AppServices.sceneActive`）。接入途中不探活那条不变式
+    /// 也不在这里：它由节点自己守（只有它知道接入进度）。
+    func revive() async {
+        await node.reviveNode()
         nodeChanged()
+    }
+
+    /// 按**存下来的那份**配置重走一次注册。
+    ///
+    /// 不带参数是有意的：编排不知道「存的是哪一份」，也不该知道。让它传参就有两种可能
+    /// （传存的那份 / 传手里的），而后者正是「旧 session 配上新地址」那类缺陷的入口。
+    func retryStored() async -> MeshActionOutcome {
+        guard let config else {
+            // 没存过配置 = 没有可重试的那一份。此刻 `phase` 也不可能是 `.failed`，
+            // 所以这条只是「接口对任何调用都答得出来」，不是一条真实的分支。
+            return .busy
+        }
+        return await retryMesh(config: config)
     }
 
     /// 配置读坏了：不进节点层，把「要重新填」这件事如实说出来。

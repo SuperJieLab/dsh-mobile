@@ -51,6 +51,39 @@ final class CredentialStoreTests: XCTestCase {
         XCTAssertEqual(notices, 0, "本来就没有，删它不算变化")
     }
 
+    /// 同一个值连存两次：只写一次盘、只通知一次。换值才照常。
+    ///
+    /// 与 `deleteDeviceToken` 的守卫对称 —— 一对相反动作只守了一半是明确的疏漏。
+    /// 数的是 `storage.write` 与通知**两个**：只去重通知会让「盘坏了」永远修不回来，
+    /// 所以这里要的是连写盘一起跳过。
+    ///
+    /// 不数卡片、不数视图：`onIdentityChanged` 的每个消费方都有自己的闸，这一层的契约只是
+    /// 「没变就别喊」—— 喊了之后那些闸会白跑一遍。
+    func testSavingTheSameTokenTwiceWritesAndNotifiesOnce() {
+        var writes = 0
+        var current: String?
+        let storage = CredentialStore.Storage(
+            read: { current },
+            write: { current = $0; writes += 1 },
+            delete: { current = nil }
+        )
+        let credentials = CredentialStore(storage: storage)
+        var notices = 0
+        credentials.onIdentityChanged = { notices += 1 }
+
+        credentials.saveDeviceToken("device-token-abc")
+        XCTAssertEqual(writes, 1, "第一次照常写盘")
+        XCTAssertEqual(notices, 1, "第一次照常通知")
+
+        credentials.saveDeviceToken("device-token-abc")
+        XCTAssertEqual(writes, 1, "同值不该再写一次盘")
+        XCTAssertEqual(notices, 1, "同值不该再通知 —— 重复通知会让编排层白跑一遍")
+
+        credentials.saveDeviceToken("device-token-def")
+        XCTAssertEqual(writes, 2, "换值照常写盘")
+        XCTAssertEqual(notices, 2, "换值照常通知")
+    }
+
     /// 正控：通知真的来自存储变化，不是无条件触发。
     func testTheNoticeComesWithTheStoreActuallyChanging() {
         let (credentials, current) = store()

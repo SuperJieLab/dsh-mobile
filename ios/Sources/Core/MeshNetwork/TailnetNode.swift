@@ -5,6 +5,10 @@
  * 注册成功的副产物是一只走 SOCKS5 回环的 `gatewaySession` —— `MeshStore` 把它连同网关
  * 地址一起收成 `route`，之后所有请求的流量都进 tailnet。
  *
+ * **它不认识上游类型**：起、关、读状态、建 session 四件事在 `TailnetBackend`
+ * （`TailnetBackend.swift`），本文件只认那条窄面。于是接入窗口这类判据能被假件构造出来，
+ * 换上游版本时改动面也收在一个文件里。
+ *
  * 上游形状（libtailscale，`TailscaleNode.swift` 实读）：
  * - `init(config:)` 即 `tailscale_start`；`up()` 阻塞到登录完成，key 错误从这里冒出；
  * - 状态目录（`Configuration.path`）持久节点身份 —— 重开 App 不重注册；
@@ -12,7 +16,6 @@
  *   —— 这里是薄翻译层。
  */
 import Foundation
-import TailscaleKit
 
 @MainActor
 @Observable
@@ -32,7 +35,7 @@ final class TailnetNode {
 
     /// 起节点那段（`up()`）还在跑。**与 `state` 是两件事**：状态目录健康时
     /// `launch` 一上来就把状态置成 `.running`，而真正的接入还要跑最长约 49 秒。
-    /// 设置页据此在提交前拒绝，自动路径（回前台探活）也据此避开这段窗口。
+    /// 设置页据此在提交前拒绝，`revive()` 据此避开这段窗口（接入途中读状态会误判成不可达）。
     private(set) var isStarting = false
 
     /// Running 后可用：全部流量进 tailnet 的 session，由 `MeshStore` 取走交给端点层。
@@ -50,8 +53,16 @@ final class TailnetNode {
     /// 通知本身零成本，重复通知由接收方的投影吸收。
     var onNodeChanged: (() -> Void)?
 
-    private var node: TailscaleNode?
+    /// 造后端的那一步。默认造真件；测试注入假件 —— 接入窗口那两条判据只有「让 `up()` 挂住」
+    /// 才构造得出来，而 `isStarting` 是 `private(set)`，外部设不进去。
+    private let makeBackend: BackendFactory
+
+    private var node: (any TailnetBackend)?
     private var pathPollTask: Task<Void, Never>?
+
+    init(makeBackend: @escaping BackendFactory = TailnetBackends.live) {
+        self.makeBackend = makeBackend
+    }
 
     // MARK: - 接入 key（App 沙盒而非 Keychain：Keychain 跨卸载存活且无法随卸载清除，
     // 与「卸载即失效」冲突；沙盒随卸载蒸发）
@@ -144,11 +155,13 @@ final class TailnetNode {
     /// 进程内，前台即恢复），这里只探测状态是否仍可读。读不了 = 节点已死 → 如实落
     /// Failed(unreachable)，不自动重试（异常点表：不做重试风暴，重试入口在设置页）。
     ///
-    /// **起节点期间由调用方避开**（见 `MeshStore.sceneActive`）：状态目录健康时状态
-    /// 一上来就是 `.running`，而节点此刻还没验证过 —— 这时读 `statusJSON` 多半报错，
-    /// 会把一次正常接入打成 `failed(unreachable)`，而 `.failed` 之后成功进不来
-    /// （迁移表里没有那一格）。判据不在这里，是因为「什么时候该探」是调用顺序的事。
+    /// **起节点期间不探活，判据就在这里**：状态目录健康时状态一上来就是 `.running`，
+    /// 而节点此刻还没验证过 —— 这时读 `statusJSON` 多半报错，会把一次正常接入打成
+    /// `failed(unreachable)`，而 `.failed` 之后成功进不来（迁移表里没有那一格）。
+    /// 这条依据的是「节点还没验证过」，只有节点自己知道；放在调用方等于要求每个调用方
+    /// 都记住它，而调用方会越来越多。
     func revive() async {
+        guard !isStarting else { return }
         guard case .running = state, let node else { return }
         do {
             _ = try await node.statusJSON()
@@ -162,7 +175,7 @@ final class TailnetNode {
     // MARK: - 后端事实探测（闭合信号）
 
     /// 读 statusJSON 的 BackendState。字段名跟 `tailscale status --json` 走。
-    private static func backendState(of node: TailscaleNode?) async -> String? {
+    private static func backendState(of node: (any TailnetBackend)?) async -> String? {
         guard let node,
               let data = try? await node.statusJSON(),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -170,7 +183,7 @@ final class TailnetNode {
     }
 
     /// 轮询等后端到 Running：注册落库有滞后，短窗口内多看几次；始终不到 = 没注册上。
-    private static func backendRunning(_ node: TailscaleNode) async -> Bool {
+    private static func backendRunning(_ node: any TailnetBackend) async -> Bool {
         for _ in 0..<3 {
             if await backendState(of: node) == "Running" { return true }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -271,7 +284,7 @@ final class TailnetNode {
     /// （上游对 Running 后端会自行忽略 key）。
     private func up(key: String?, config: MeshConfig) async {
         // **单飞**：同一时刻只允许一条起节点的路，这个标志就是那条不变式的存放处。
-        // 两个入口（`submitKey` / `retry`）据此拒绝，`MeshStore.sceneActive` 据此避开探活。
+        // 两个入口（`submitKey` / `retry`）据此拒绝，`revive()` 据此避开探活。
         // `defer` 而不是在每个终局写一遍 —— `up` 有四条 return，漏一条就永久卡在忙。
         isStarting = true
         defer { isStarting = false }
@@ -326,16 +339,15 @@ final class TailnetNode {
                  "up: start hostname=dsh-iphone controlURL=\(controlURL.absoluteString)"
                  + " key=\(Self.keyHint(key))")
 
-        let node: TailscaleNode
+        let node: any TailnetBackend
         do {
-            node = try TailscaleNode(
-                config: Configuration(
+            node = try makeBackend(
+                TailnetBackendSpec(
                     hostName: "dsh-iphone",
-                    path: Self.stateDir.path,
+                    stateDir: Self.stateDir.path,
                     authKey: key,
                     controlURL: controlURL.absoluteString
-                ),
-                logger: nil
+                )
             )
         } catch {
             let message = String(describing: error)
@@ -368,7 +380,7 @@ final class TailnetNode {
             if await Self.backendRunning(node) {
                 Log.info(Log.Module.mesh, "up: verified Running")
                 do {
-                    gatewaySession = try await TailnetURLSession.makeSession(for: node)
+                    gatewaySession = try await node.makeGatewaySession()
                 } catch {
                     Log.info(Log.Module.mesh,
                              "up: session build threw \(String(describing: error))")
@@ -392,7 +404,7 @@ final class TailnetNode {
         case timedOut
     }
 
-    private static func runUp(_ node: TailscaleNode) async -> UpStep {
+    private static func runUp(_ node: any TailnetBackend) async -> UpStep {
         await withTaskGroup(of: UpStep.self) { group in
             group.addTask {
                 do {

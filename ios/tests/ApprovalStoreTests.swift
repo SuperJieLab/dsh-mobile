@@ -184,13 +184,50 @@ final class ApprovalStoreTests: XCTestCase {
 
     // MARK: - 接线
 
+    /// 只数注册次数的订阅面替身。
+    ///
+    /// 为什么需要它：`EventStream` 的注册表是 private、类型又是具体类，替不进去 ⇒ 数不到
+    /// 「注册了几次」，而这条契约正是「注册几次」。不数卡片：`ApprovalTable.absorb` 按
+    /// `eventId` 覆盖，卡片数恒定，断言它会永远绿。
+    @MainActor
+    private final class SpySink: ApprovalEventSink {
+        private(set) var cargoRegistrations: [String] = []
+        private(set) var generationRegistrations = 0
+
+        func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) {
+            cargoRegistrations.append(type)
+        }
+
+        func onGeneration(_ handler: @escaping (Int?) -> Void) {
+            generationRegistrations += 1
+        }
+    }
+
+    /// 挂第二次是空操作 —— 入口不唯一，而注册本身不幂等。
+    ///
+    /// 症状今天**看不见**（重复的听众被按 `eventId` 覆盖吸收了），所以只能数注册次数。
+    /// 换实例重挂也不生效（闸只认「挂过」）：全仓只有一个 `EventStream`，这条限制写进了
+    /// `attach` 的注释。
+    func testAttachingTwiceRegistersTheListenersOnce() {
+        let sink = SpySink()
+        let store = ApprovalStore(answerer: FakeAnswerer())
+
+        store.attach(sink: sink)
+        XCTAssertEqual(sink.cargoRegistrations, ["waterfall", "cancel"], "一次挂载注册两条货物")
+        XCTAssertEqual(sink.generationRegistrations, 1, "一次挂载注册一个代次听众")
+
+        store.attach(sink: sink)
+        XCTAssertEqual(sink.cargoRegistrations, ["waterfall", "cancel"], "第二次不该再注册")
+        XCTAssertEqual(sink.generationRegistrations, 1, "第二次不该再注册")
+    }
+
     /// 三处接线一次断完：待答调用进表、撤回带走它、源失效清空。
     ///
     /// 三处各自能单独坏（而且坏了都不编译失败），所以各一条断言。
     func testAttachWiresTheApprovalPathAndSourceLoss() {
         let events = EventStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(events: events)
+        store.attach(sink: events)
 
         events.handle(EventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "货物从流里进来就成了一条")
@@ -211,7 +248,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testACancelWithoutAnEventIdKeepsTheCard() throws {
         let events = EventStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(events: events)
+        store.attach(sink: events)
 
         events.handle(EventReading(content: .cargo(type: "waterfall", payload: waterfall())))
         XCTAssertEqual(store.pending(in: "s1").count, 1)
@@ -240,7 +277,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testEveryReadyRebuildsTheTableFromTheReplay() {
         let events = EventStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(events: events)
+        store.attach(sink: events)
 
         store.receive(waterfall(eventId: "e9"))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "断线之前收到的那一条还在")

@@ -32,6 +32,21 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
     }
 }
 
+/// 待答表要的订阅面：三种事件、两个入口。
+///
+/// 收窄的理由不是「少几个方法」，而是**闸要能红**：`EventStream` 的注册表是 private，
+/// 类型又是具体类，替不进去 —— 于是「挂了第二次有没有再注册」只能数注册次数，
+/// 而数它需要一个能替身的窄面。
+///
+/// 它与 `MeshNodeControlling` 同形：消费者只认自己用得到的那条面，不认整个容器。
+@MainActor
+protocol ApprovalEventSink {
+    func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void)
+    func onGeneration(_ handler: @escaping (Int?) -> Void)
+}
+
+extension EventStream: ApprovalEventSink {}
+
 @MainActor
 @Observable
 final class ApprovalStore {
@@ -54,6 +69,14 @@ final class ApprovalStore {
     private(set) var notices: [String: String] = [:]
 
     private let answerer: any ApprovalAnswering
+
+    /// 已经挂过听众没有。**不是给视图看的状态**，是一次性闸的存放处 —— 重复挂载会让同一条
+    /// 待答调用被收两遍（今天被 `ApprovalTable.absorb` 按 `eventId` 覆盖吸收掉了，所以没有
+    /// 红点，也就一直没人守这条）。
+    ///
+    /// 闸是**永久的**：挂过之后不再重挂。全仓只有一个 `EventStream` 实例（`LayeringTests`
+    /// 的「各一个实例」盯着），换实例的场景不存在；真出现时再加一个 detach。
+    @ObservationIgnored private var attached = false
 
     init(answerer: any ApprovalAnswering) {
         self.answerer = answerer
@@ -80,18 +103,23 @@ final class ApprovalStore {
     /// **每一条 `ready` 都清空**（不论代次值）：网关在 `ready` 之后紧跟着重放当前集合，
     /// 两者在同一个帧序列里相邻、客户端同步处理，界面上看不到中间态。这样表就没有跨代
     /// 状态 —— 与上游「句柄表是局部变量、代际更替随函数消失」同一个形态。
-    func attach(events: EventStream) {
-        events.onCargo("waterfall") { [weak self] payload in self?.receive(payload) }
+    ///
+    /// **只生效一次**：入口不唯一（启动编排、身份到来、将来任何恢复路径），而注册本身不幂等。
+    /// 闸在发起这次注册的人身上，不在订阅面上 —— `EventStream.on` 的「同名追加」是别人的契约。
+    func attach(sink: any ApprovalEventSink) {
+        guard !attached else { return }
+        attached = true
+        sink.onCargo("waterfall") { [weak self] payload in self?.receive(payload) }
         // 撤回的解释在这里：`eventId` 是唯一的寻址信息。没有它删不掉任何东西 —— 留着这张卡
         // 比误删别人的强。
-        events.onCargo("cancel") { [weak self] payload in
+        sink.onCargo("cancel") { [weak self] payload in
             guard let eventId = payload["eventId"]?.string, !eventId.isEmpty else {
                 Log.warn(Log.Module.session, "dropped a cancel without an eventId")
                 return
             }
             self?.cancel(eventId: eventId)
         }
-        events.onGeneration { [weak self] _ in self?.clear() }
+        sink.onGeneration { [weak self] _ in self?.clear() }
     }
 
     /// 网关推来的一条待答调用。

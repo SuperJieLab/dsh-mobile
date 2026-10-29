@@ -104,7 +104,7 @@ final class MeshStoreTests: XCTestCase {
 
         // —— 回前台探活归属 store——
         node.reviveShouldFail = true
-        await store.sceneActive()
+        await store.revive()
         XCTAssertTrue(store.phase == .failed(.unreachable),
                       "N3a 回前台探活失败 → 如实落 failed(unreachable)，不自动重试")
         // **产物跟着判据失效**：阶段不再是 ready 时，路就不通了 —— 这不是靠谁去清，
@@ -114,7 +114,7 @@ final class MeshStoreTests: XCTestCase {
         node.nodeState = .running
         node.reviveShouldFail = false
         node.carrierPath = .direct
-        await store.sceneActive()
+        await store.revive()
         XCTAssertTrue(store.phase == .ready && store.meshPath == .direct,
                       "N3b 探活可读 → 阶段保持 ready 且路径已刷新")
 
@@ -161,28 +161,21 @@ final class MeshStoreTests: XCTestCase {
                        "被拒的配置不许进 config —— 否则旧 session 会配上新地址")
     }
 
-    /// 起节点期间回前台：不探活。
+    /// 回前台的重试用**存下来的那份**配置，不是调用方手里的。
     ///
-    /// 症状不是「慢一点」—— 探活读的是 `statusJSON`，节点此刻还没验证过，读失败会把
-    /// 状态打成 `failed(unreachable)`；而 `.failed` 之后成功进不来（迁移表里没有那一格），
-    /// 于是一次正常接入被一次切后台彻底废掉。
-    func testForegroundDoesNotProbeWhileTheNodeIsStarting() async {
-        let config = MeshConfig(controlURLString: "https://203.0.113.10:8443",
+    /// 为什么值得一条：`retryStored()` 一旦收参数，编排就有两种传法，而传「手里的那份」
+    /// 正是「旧 session 配上新地址」那类缺陷的入口。接口上少一个参数，这条就不必再靠人记。
+    func testRetryingFromForegroundUsesTheStoredConfig() async {
+        let stored = MeshConfig(controlURLString: "https://203.0.113.10:8443",
                                 gatewayURLString: "http://100.64.0.1:3081")
         let node = FakeNode()
         let store = MeshStore(node: node)
-        await store.start(config: config)
+        await store.start(config: stored)
 
-        // 冷启动 + 状态目录健康：状态一上来就是 running，而节点还在起。
-        node.nodeState = .running
-        node.isStarting = true
-        node.reviveShouldFail = true   // 真去探活的话，它会把状态打成 failed
+        let outcome = await store.retryStored()
 
-        await store.sceneActive()
-
-        XCTAssertEqual(node.reviveCount, 0, "起节点期间不该探活")
-        XCTAssertTrue(store.phase == .connecting,
-                      "仍是「running 但隧道未建成」—— 一次正常接入不该被切后台废掉")
+        XCTAssertTrue(outcome == .accepted)
+        XCTAssertEqual(node.retriedConfigs, [stored], "重试用的是 start 时存下的那份")
     }
 }
 
@@ -198,6 +191,7 @@ final class MeshStoreTests: XCTestCase {
     var launchCount = 0
     var submitCount = 0
     var reviveCount = 0
+    var retriedConfigs: [MeshConfig] = []
     func launchNode(config: MeshConfig) async {
         launchCount += 1
     }
@@ -216,6 +210,7 @@ final class MeshStoreTests: XCTestCase {
         return .accepted
     }
     func retry(config: MeshConfig) async -> MeshActionOutcome {
+        retriedConfigs.append(config)
         guard !isStarting else { return .busy }
         return .accepted
     }
