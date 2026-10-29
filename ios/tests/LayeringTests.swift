@@ -2777,6 +2777,14 @@ final class LayeringTests: XCTestCase {
                           "AppServices 里没有 \(needle) —— 编排少接了一根线")
         }
 
+        // 「等组网」是顺序的另一半，单列一条：计划里组网排第一，执行时必须**等它出结论**。
+        // 若这里改成 `Task { await store.start(...) }`，组网就成了后台并发，
+        // 后面三步会在「没有地址」的状态下跑完 —— 计划里的顺序于是只剩字面意义。
+        XCTAssertTrue(services.contains { $0.1.contains("await store.start(config: config)") },
+                      "组网那一步没被 await —— 顺序与「等」是同一件事，不能只写前一半")
+        XCTAssertFalse(services.contains { $0.1.contains("Task { await store.start") },
+                       "组网被丢进后台了 —— 后面几步会在没有地址时跑完")
+
         // 负向：启动的触发点在进程入口，不在任何视图上。
         let entry = codeLines(
             in: try String(contentsOf: sourcesRoot.appendingPathComponent("DshMobileApp.swift"),

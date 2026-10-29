@@ -74,11 +74,19 @@ struct AppServices {
     /// 1. **接线**（同步，先做）：本轮之前这些依赖是靠 `RootScreen` 的
     ///    `.onChange(of: store.phase)` / `.task(id: hasDeviceToken)` 表达的 ——
     ///    那是渲染的副作用，视图不求值就不会发生。接线放在这里，与渲染无关。
-    /// 2. **动作**（按 `StartupPlan` 走）：读配置 → 起组网。**不 await 组网的完成** ——
-    ///    组网内部自己有 15s × 3 的重试，让它慢慢来，UI 该画什么画什么。
+    /// 2. **动作**（按 `StartupPlan` 走，逐条同步执行，组网那一步 await）。
     ///
-    /// 不 await 的后果是 `start()` 会较快返回，而组网仍在跑。这是有意的：启动编排
-    /// 不该被「组网多久才好」这件事拖住，UI 也不该等它。
+    /// **为什么等组网出结论**：它是整条链的底座。没有地址，`activateLink` 只是把
+    /// `active` 置真、`attachEventStream` 只是登记一条开不出去的流 —— 三步都等不到
+    /// 任何数据。所以「先组网、再连接」不该只是列表里的先后，执行上也要真的等：
+    /// 顺序与「等」是同一件事的两个说法。
+    ///
+    /// **等多久不影响界面**：`start()` 跑在 `App.init` 开的 Task 里，没有人在等它返回；
+    /// 期间 UI 照常按 `store.phase` 画「等组网…」。代价只有一个 —— 组网三次尝试全失败时
+    /// 要等满（约 49s）才走到连接那几步，而那段时间连接本来就无处可去。
+    ///
+    /// **等待期间身份到来不受影响**：`credentials.onIdentityChanged` 是独立回调，
+    /// 不被这个 await 挡住，它自己会 `activate` + `attach`。
     func start() async {
         wireCrossServiceTriggers()
 

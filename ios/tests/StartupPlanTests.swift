@@ -30,20 +30,29 @@ final class StartupPlanTests: XCTestCase {
         XCTAssertFalse(steps.contains(.attachEventStream), "没有连接时登记流没有意义")
     }
 
-    /// 有身份：激活必须早于登记事件流。
+    /// 顺序就是依赖链：组网 → 连接 → 流 → 消费方。
     ///
-    /// `attachEventStream` 会开流，而开流经 `ensureConnected`，那个方法第一行是
-    /// 「不 active 就直接返回」。顺序反了的症状是「配对成功但列表永远不动」，
-    /// 且不编译失败 —— 只有这条断言抓得住。
-    func testWithIdentityActivatesTheLinkBeforeAttachingTheEventStream() {
+    /// 四段的理由各不相同，所以四段都要断言：
+    /// - **组网在最前**：它是底座。没有地址，后面三步都等不到任何数据，
+    ///   执行方因此会等它出结论（见 `AppServices.start` 的注释）—— 顺序与「等」是同一件事。
+    /// - **activate 早于 attach**：`attachEventStream` 开流会经 `ensureConnected` 读 `active`。
+    ///   顺序反了不会「永远建不起来」（`StreamMux.reopenAll` 换代次时会把没开过的也开出去），
+    ///   但那条流要晚一代才出现在线上，而这一代可能白等一轮退避。
+    /// - **审批在最后**：它消费的是「流开出来之后」的东西，排在依赖链尾端才与真实关系一致。
+    func testTheOrderFollowsTheDependencyChain() {
         let steps = StartupPlan.steps(hasIdentity: true, config: .ok(config))
+
+        XCTAssertEqual(steps.first, .launchMesh(config), "组网是底座，排第一：\(steps)")
+        XCTAssertEqual(steps.last, .attachApprovals, "审批是消费方，排最后：\(steps)")
+
         guard let activate = steps.firstIndex(of: .activateLink),
               let attach = steps.firstIndex(of: .attachEventStream) else {
             XCTFail("两个动作都在：\(steps)")
             return
         }
-        XCTAssertLessThan(activate, attach, "activate 必须在前：\(steps)")
-        XCTAssertEqual(steps.first, .attachApprovals, "审批仍是最先那一步")
+        XCTAssertLessThan(activate, attach, "activate 必须在 attach 之前：\(steps)")
+        XCTAssertLessThan(steps.firstIndex(of: .launchMesh(config))!, activate,
+                          "组网在连接之前：\(steps)")
     }
 
     /// 读盘的三种结果各走各的：`damaged` 不许交给节点。
