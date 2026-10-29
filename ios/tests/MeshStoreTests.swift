@@ -127,6 +127,63 @@ final class MeshStoreTests: XCTestCase {
         XCTAssertTrue(store.phase == .failed(.unreachable) && store.meshPath == nil,
                       "N3c 节点侧状态变化经 onNodeChanged 回灌：store 投影随即跟随（不经显式 store 调用）")
     }
+
+    /// 节点正在起时，第二次提交被明确拒绝，且**不改 `config`**。
+    ///
+    /// 两件事分开断言，因为症状不同：
+    /// - 不拒 ⇒ 两条起节点的路并发，任一条的终局都会清掉另一条的产物；先失败的那条
+    ///   还会把后成功的那条挡在 `.failed` 外面进不来（迁移表里没有那一格）。
+    /// - 拒了但仍改了 `config` ⇒ 正在起的那条旧配置一旦成功，`onVerifiedRunning` 会用
+    ///   **新**地址配**旧** session —— 「地址与传输同生共死」当场破掉。
+    func testSubmittingWhileTheNodeIsStartingIsRefusedAndLeavesTheConfigAlone() async {
+        let old = MeshConfig(controlURLString: "https://old.example:8443",
+                             gatewayURLString: "http://100.64.0.1:3081")
+        let new = MeshConfig(controlURLString: "https://new.example:8443",
+                             gatewayURLString: "http://100.64.0.2:3081")
+        let node = FakeNode()
+        let store = MeshStore(node: node)
+        await store.start(config: old)
+
+        node.isStarting = true
+        XCTAssertTrue(store.isStarting, "「正在起」要透传给设置页做提交前的判断")
+
+        let outcome = await store.submitMeshKey("hskey-auth-new", config: new)
+        XCTAssertTrue(outcome == .busy, "起节点期间该明确拒绝，不能静默吞掉")
+        XCTAssertEqual(node.submitCount, 0, "被拒的动作不该转交给节点层")
+        let retryOutcome = await store.retryMesh(config: new)
+        XCTAssertTrue(retryOutcome == .busy, "重试同样要拒 —— 它也会再起一条节点")
+
+        // 旧配置那条最终还是成功了：产物必须配旧地址，而不是用户刚敲的新地址。
+        node.isStarting = false
+        node.nodeState = .running
+        node.onVerifiedRunning?(URLSession(configuration: .ephemeral))
+        XCTAssertEqual(store.route?.baseURL, old.gatewayBaseURL,
+                       "被拒的配置不许进 config —— 否则旧 session 会配上新地址")
+    }
+
+    /// 起节点期间回前台：不探活。
+    ///
+    /// 症状不是「慢一点」—— 探活读的是 `statusJSON`，节点此刻还没验证过，读失败会把
+    /// 状态打成 `failed(unreachable)`；而 `.failed` 之后成功进不来（迁移表里没有那一格），
+    /// 于是一次正常接入被一次切后台彻底废掉。
+    func testForegroundDoesNotProbeWhileTheNodeIsStarting() async {
+        let config = MeshConfig(controlURLString: "https://203.0.113.10:8443",
+                                gatewayURLString: "http://100.64.0.1:3081")
+        let node = FakeNode()
+        let store = MeshStore(node: node)
+        await store.start(config: config)
+
+        // 冷启动 + 状态目录健康：状态一上来就是 running，而节点还在起。
+        node.nodeState = .running
+        node.isStarting = true
+        node.reviveShouldFail = true   // 真去探活的话，它会把状态打成 failed
+
+        await store.sceneActive()
+
+        XCTAssertEqual(node.reviveCount, 0, "起节点期间不该探活")
+        XCTAssertTrue(store.phase == .connecting,
+                      "仍是「running 但隧道未建成」—— 一次正常接入不该被切后台废掉")
+    }
 }
 
 // MARK: - 假件（只实现 store 的注入面，不 import TailscaleKit / 不碰网络）
@@ -134,19 +191,32 @@ final class MeshStoreTests: XCTestCase {
 @MainActor private final class FakeNode: MeshNodeControlling, @unchecked Sendable {
     var nodeState: TailnetNodeState = .noKey
     var carrierPath: CarrierPath?
+    var isStarting = false
     var onVerifiedRunning: ((URLSession) -> Void)?
     var onNodeChanged: (() -> Void)?
     var reviveShouldFail = false
     var launchCount = 0
+    var submitCount = 0
+    var reviveCount = 0
     func launchNode(config: MeshConfig) async {
         launchCount += 1
     }
     func reviveNode() async {
+        reviveCount += 1
         if reviveShouldFail { nodeState = .failed(.unreachable) }
         // 真实节点在状态迁移与路径刷新处推送（TailnetNode.transition / refreshPathNow）；
         // 假件在事实变化点同样推送，回灌链路才被测到。
         onNodeChanged?()
     }
-    func submitKey(_ key: String, config: MeshConfig) async {}
-    func retry(config: MeshConfig) async {}
+    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome {
+        // 计「转交次数」而不是「接下次数」：后者会被本守卫吃掉，恒为 0，
+        // 于是「被拒的动作不该转交给节点层」这条断言永远绿。
+        submitCount += 1
+        guard !isStarting else { return .busy }
+        return .accepted
+    }
+    func retry(config: MeshConfig) async -> MeshActionOutcome {
+        guard !isStarting else { return .busy }
+        return .accepted
+    }
 }

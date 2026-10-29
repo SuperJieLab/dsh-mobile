@@ -41,3 +41,15 @@ func nodeStateText(_ state: TailnetNodeState) -> String {
     case .failed(.unreachable): "组网服务不可达"
     }
 }
+
+/// 组网设置页「提交被拒」的那句话。
+///
+/// 说清**在等什么**（接入结束，最长约 49 秒），而不是只说「不行」—— 用户才知道该等
+/// 还是该去查地址。措辞住这里，`State/` 只给原因。
+extension MeshSetupState.BlockedReason {
+    var text: String {
+        switch self {
+        case .nodeStarting: "正在接入虚拟网，接入结束后再试。"
+        }
+    }
+}

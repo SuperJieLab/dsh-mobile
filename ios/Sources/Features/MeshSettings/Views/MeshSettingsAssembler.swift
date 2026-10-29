@@ -6,6 +6,7 @@ import SwiftUI
 /// 只有一条（设置页），而两页共享一份草稿的代价是两边都得知道对方什么时候改过它。
 ///
 /// 两个动作以闭包注入：它不认识 `MeshStore`，只认识「提交一份」与「按存下来的那份重试」。
+/// 第三个闭包是「节点此刻在不在起」—— 同一处接进来，因为它是这两个动作的前置。
 struct MeshSettingsAssembler: View {
     private let store: MeshStore
 
@@ -30,8 +31,13 @@ struct MeshSettingsAssembler: View {
             let store = self.store
             let created = MeshSetupState(
                 stored: .unconfigured,
-                submit: { [weak store] key, config in await store?.submitMeshKey(key, config: config) },
-                retry: { [weak store] config in await store?.retryMesh(config: config) }
+                submit: { [weak store] key, config in
+                    await store?.submitMeshKey(key, config: config) ?? .busy
+                },
+                retry: { [weak store] config in
+                    await store?.retryMesh(config: config) ?? .busy
+                },
+                isStarting: { [weak store] in store?.isStarting ?? false }
             )
             // 盘上的那份由状态自己读：读盘归它那一层，视图层只决定「什么时候读」。
             // 只在这一处读（`setup == nil` 那一支）—— 草稿建好之后 `.task` 若重跑，

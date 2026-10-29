@@ -30,6 +30,11 @@ final class TailnetNode {
     /// 状态机当前状态（界面据此渲染；迁移判定全在 `TailnetNodeState.handle`）。
     private(set) var state: TailnetNodeState = .noKey
 
+    /// 起节点那段（`up()`）还在跑。**与 `state` 是两件事**：状态目录健康时
+    /// `launch` 一上来就把状态置成 `.running`，而真正的接入还要跑最长约 49 秒。
+    /// 设置页据此在提交前拒绝，自动路径（回前台探活）也据此避开这段窗口。
+    private(set) var isStarting = false
+
     /// Running 后可用：全部流量进 tailnet 的 session，由 `MeshStore` 取走交给端点层。
     private var gatewaySession: URLSession?
 
@@ -99,31 +104,50 @@ final class TailnetNode {
     }
 
     /// 设置页提交接入 key：进沙盒存储 → registering → 注册。
-    func submitKey(_ key: String, config: MeshConfig) async {
+    ///
+    /// **正在起节点时拒绝**（`.busy`）：两条并发时，任一条的终局都会清掉另一条的产物 ——
+    /// `finishFailed` 清 `gatewaySession`、超时分支清 `self.node`，而先失败的那条还会
+    /// 把后成功的那条挡在 `.failed` 外面进不来。入口拒绝比事后补救便宜得多。
+    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome {
+        guard !isStarting else {
+            Log.info(Log.Module.mesh, "submitKey: refused — node is starting")
+            return .busy
+        }
         Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
         guard !key.isEmpty else {
             // 空提交不进状态机注册流程。
             transition(.registrationFailed(.badKey))
-            return
+            return .accepted
         }
         TailnetKeyStore.save(key)
         transition(.keySubmitted)
         await up(key: key, config: config)
+        return .accepted
     }
 
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
-    func retry(config: MeshConfig) async {
+    func retry(config: MeshConfig) async -> MeshActionOutcome {
+        guard !isStarting else {
+            Log.info(Log.Module.mesh, "retry: refused — node is starting")
+            return .busy
+        }
         let key = TailnetKeyStore.load()
         Log.info(Log.Module.mesh, "retry: key=\(Self.keyHint(key))")
         transition(.retry(keyPresent: key != nil))
         if case .registering = state {
             await up(key: key, config: config)
         }
+        return .accepted
     }
 
     /// 回前台的探活（节点复活场景的节点层侧）：tsnet 的复活是上游行为（状态在
     /// 进程内，前台即恢复），这里只探测状态是否仍可读。读不了 = 节点已死 → 如实落
     /// Failed(unreachable)，不自动重试（异常点表：不做重试风暴，重试入口在设置页）。
+    ///
+    /// **起节点期间由调用方避开**（见 `MeshStore.sceneActive`）：状态目录健康时状态
+    /// 一上来就是 `.running`，而节点此刻还没验证过 —— 这时读 `statusJSON` 多半报错，
+    /// 会把一次正常接入打成 `failed(unreachable)`，而 `.failed` 之后成功进不来
+    /// （迁移表里没有那一格）。判据不在这里，是因为「什么时候该探」是调用顺序的事。
     func revive() async {
         guard case .running = state, let node else { return }
         do {
@@ -246,6 +270,12 @@ final class TailnetNode {
     /// 起 tsnet 节点并等登录完成；环境类失败自动重试。key 空表示本机没存过 key
     /// （上游对 Running 后端会自行忽略 key）。
     private func up(key: String?, config: MeshConfig) async {
+        // **单飞**：同一时刻只允许一条起节点的路，这个标志就是那条不变式的存放处。
+        // 两个入口（`submitKey` / `retry`）据此拒绝，`MeshStore.sceneActive` 据此避开探活。
+        // `defer` 而不是在每个终局写一遍 —— `up` 有四条 return，漏一条就永久卡在忙。
+        isStarting = true
+        defer { isStarting = false }
+
         var attempt = 0
         while true {
             attempt += 1

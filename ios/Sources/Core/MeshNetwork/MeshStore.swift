@@ -18,12 +18,25 @@ import Foundation
 // （App target；store 的测试经 `@testable import` + 假件注入，不牵真实
 // TailscaleKit，见 tests/MeshStoreTests.swift）。
 
+/// 组网管理动作（提交接入 key / 失败后重试）有没有被接下。
+///
+/// **`busy` 不是失败，是「此刻不接」**：节点正在起的时候再起一条，会让两条注册互相
+/// 清产物、让状态机的终局互相覆盖。入口如实说没接，怎么讲这件事归调用方。
+enum MeshActionOutcome: Equatable {
+    case accepted
+    case busy
+}
+
 /// 组网节点能力：`TailnetNode` 的窄面。状态仍由 `TailnetNodeState` 状态机判定，
 /// 本协议只暴露读取与既有入口，不做任何新判定。
 @MainActor protocol MeshNodeControlling: AnyObject {
     var nodeState: TailnetNodeState { get }
     /// 当前到网关对端的路径；Running 期间由节点层轮询刷新，其余为 nil。
     var carrierPath: CarrierPath? { get }
+    /// 节点正在起（`up()` 那段还没跑完）。**与 `nodeState` 不是一回事**：
+    /// 状态目录健康时 `nodeState` 一上来就是 `.running`，而节点可能正卡在连控制面。
+    /// 设置页据此在提交前就说清「此刻改不了」，不必等提交被拒才知道。
+    var isStarting: Bool { get }
     /// 节点验证 Running、tailnet session 建成的那一刻（同值迁移不触发 onChange，
     /// 所以激活只能挂回调，不能靠观察状态变化）。
     var onVerifiedRunning: ((URLSession) -> Void)? { get set }
@@ -34,8 +47,9 @@ import Foundation
     func launchNode(config: MeshConfig) async
     func reviveNode() async
     /// 组网管理动作（设置页）：提交接入 key / failed 后重试。判定仍在节点层状态机。
-    func submitKey(_ key: String, config: MeshConfig) async
-    func retry(config: MeshConfig) async
+    /// 节点正在起时返回 `.busy` —— 同一时刻只允许一条起节点的路。
+    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome
+    func retry(config: MeshConfig) async -> MeshActionOutcome
 }
 
 @MainActor
@@ -128,6 +142,9 @@ final class MeshStore {
 
     /// 回前台：探活；上一轮判定为不可达的，**顺手重试一次**。
     ///
+    /// - 节点正在起：**什么都不做**。状态目录健康时状态一上来就是 `.running`，而节点
+    ///   此刻还没验证过 —— 这时探活多半读不出来，会把一次正常接入打成
+    ///   `failed(unreachable)`；而 `.failed` 之后成功进不来（迁移表里没有那一格）。
     /// - 已就绪 / 注册中：只探活（`reviveNode`）。节点活着时重开会杀掉旧 socket，
     ///   而那条连接可能正好好的。
     /// - 判定不可达：探活没有意义（本来就不通），直接重走一次注册。
@@ -135,10 +152,12 @@ final class MeshStore {
     ///   （后台重试的成功率低：iOS 会限制后台网络，而失败次数会白白消耗）。
     /// - key 被拒：**不重试**。同样的 key 再问一次答案不会变，而 authkey 有使用次数限制。
     func sceneActive() async {
-        if case .failed(.unreachable) = nodeState, let config {
-            await node.retry(config: config)
-        } else {
-            await node.reviveNode()
+        if !node.isStarting {
+            if case .failed(.unreachable) = nodeState, let config {
+                await node.retry(config: config)
+            } else {
+                await node.reviveNode()
+            }
         }
         nodeChanged()
     }
@@ -157,18 +176,30 @@ final class MeshStore {
 
     // MARK: - 组网管理（设置页动作透传；判定在节点层，这里只接顺序）
 
-    func submitMeshKey(_ key: String, config: MeshConfig) async {
+    /// 节点正在起。透传给设置页做「提交前先问一句」—— 判定仍在节点层，这里只转述。
+    var isStarting: Bool { node.isStarting }
+
+    /// 提交接入 key 并接入。
+    ///
+    /// **预判在改 `config` 之前**：`config` 是 `onVerifiedRunning` 组装路径时读的那一格。
+    /// 忙时若先把它换成新配置，正在起的那条旧配置一旦成功，就会拿旧 session 配上新地址 ——
+    /// 「地址与传输同生共死」当场破掉。所以忙时整条动作都不做。
+    func submitMeshKey(_ key: String, config: MeshConfig) async -> MeshActionOutcome {
+        guard !node.isStarting else { return .busy }
         self.config = config
         // 用户重填过了 —— 上一次的「读坏」到此为止。再坏会是下一次读盘的事。
         storedConfigDamaged = false
-        await node.submitKey(key, config: config)
+        let outcome = await node.submitKey(key, config: config)
         nodeChanged()
+        return outcome
     }
 
-    func retryMesh(config: MeshConfig) async {
+    func retryMesh(config: MeshConfig) async -> MeshActionOutcome {
+        guard !node.isStarting else { return .busy }
         self.config = config
-        await node.retry(config: config)
+        let outcome = await node.retry(config: config)
         nodeChanged()
+        return outcome
     }
 
     /// 节点侧事实变化的统一回灌口：重读节点状态 + 刷路径。

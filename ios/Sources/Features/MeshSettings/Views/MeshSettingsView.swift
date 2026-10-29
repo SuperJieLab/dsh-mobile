@@ -78,6 +78,13 @@ struct MeshSettingsView: View {
                         }
                     }
                 }
+
+                // 被拒的原因由状态给（它知道「为什么没提交」），措辞与渲染各归各家。
+                if let reason = setup.blockedReason {
+                    Text(reason.text)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .navigationTitle("组网")
