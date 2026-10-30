@@ -26,6 +26,14 @@ final class TailnetNode {
     /// 就是 `.running`，而真正的接入还要跑最长约 49 秒。设置页与 `revive()` 都据此避让。
     private(set) var isStarting = false
 
+    /// 每一代接入的代号。被取代一次 +1；`up()` 把当代代号带进循环，**每个写状态的点前先判
+    /// 「我是不是当代」**。漏判一处，迟到的结论就会静默改写新一代的结果。
+    private var generation = 0
+
+    /// 一次 `close()` 最多等多久。上游的 close 是唯一取消手段，但它自己不保证时限 ——
+    /// 没有上限时，「打断」只是把 45 秒的等待换成一次时长未知的等待。
+    private static let closeWaitLimitSeconds: TimeInterval = 2
+
     /// Running 后可用：全部流量进 tailnet 的 session，由 `MeshStore` 取走交给端点层。
     private var gatewaySession: URLSession?
 
@@ -94,19 +102,17 @@ final class TailnetNode {
         }
     }
 
-    /// 设置页提交接入 key：进沙盒存储 → registering → 注册。
-    /// 正在起节点时拒绝：两条并发时，任一条的终局都会清掉另一条的产物。
+    /// 设置页提交接入 key：进沙盒存储 → 注册。
+    /// **不再拒绝「节点正在起」**：用户给的是新地址，那次在跑的接入的结论已经不相关了，
+    /// 正确处置是让老的作废（`supersede()`），不是让用户等它跑完。
     func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
-        guard !isStarting else {
-            Log.info(Log.Module.mesh, "submitKey: refused — node is starting")
-            return .refusedWhileNodeStarting
-        }
         Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
         guard !key.isEmpty else {
-            // 空提交不进状态机注册流程 —— 动作照样算「接下」，成不成由状态机给。
+            // 空提交不进状态机注册流程 —— 也**不**打断在跑的那一次：没有新地址要换。
             transition(.registrationFailed(.badKey))
             return .accepted
         }
+        await supersede()
         TailnetKeyStore.save(key)
         transition(.keySubmitted)
         await up(key: key, config: config)
@@ -115,13 +121,15 @@ final class TailnetNode {
 
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
     func retry(config: MeshConfig) async -> MeshActionAcceptance {
-        guard !isStarting else {
-            Log.info(Log.Module.mesh, "retry: refused — node is starting")
-            return .refusedWhileNodeStarting
-        }
         let key = TailnetKeyStore.load()
         Log.info(Log.Module.mesh, "retry: key=\(Self.keyHint(key))")
-        transition(.retry(keyPresent: key != nil))
+        guard let key else {
+            // 没有 key 就没东西可换：不打断在跑的那次，按既有语义收成 noKey（fail-closed）。
+            transition(.retry(keyPresent: false))
+            return .accepted
+        }
+        await supersede()
+        transition(.retry(keyPresent: true))
         if case .registering = state {
             await up(key: key, config: config)
         }
@@ -240,36 +248,100 @@ final class TailnetNode {
 
     /// 一次尝试的结果 —— 归因决定要不要再试：环境问题值得，key 被拒只会消耗限次。
     private enum UpOutcome {
-        case ready
+        /// 后端验证 Running，并交出了这一代的隧道产物（由调用方决定收不收）。
+        case ready(URLSession)
         case retryable(TailnetNodeFailure)
         case fatal(TailnetNodeFailure)
     }
 
-    /// 起 tsnet 节点并等登录完成；环境类失败自动重试。key 空表示本机没存过 key
+    /// 让在跑的那一代作废，然后把场子交给新一代。**三件事的顺序有讲究**：
+    /// ① 先 `generation += 1` —— 旧一代此后任何写入都被丢弃；
+    /// ② 再把状态交回「接入中」—— `MeshStore.route` 的守卫读状态，不离开 `.running`
+    ///    就还会返回那个已关闭节点的 session；
+    /// ③ 最后 close 与清产物 —— close 可能耗到上限，放在最后不耽误前两件已经生效。
+    private func supersede() async {
+        generation += 1
+        transition(.superseded)
+        if let node {
+            await Self.close(node, within: Self.closeWaitLimitSeconds)
+        }
+        node = nil
+        gatewaySession = nil
+        stopPathPolling()
+    }
+
+    /// 等 `close()` 收尾，但只等到上限 —— 上游的 close 自己不保证会返回。
+    /// 到点仍然放手：代际已经 +1，这一代无论如何都作废，不差它有没有真的关干净。
+    ///
+    /// **不能写成 `withTaskGroup`**：那个 scope 退出时要等所有子任务结束，而挂住的 `close()`
+    /// 不响应取消 ⇒ 上限形同虚设，调用方照样无限期等。这里用「谁先到就用谁 resume 一次」，
+    /// 另一个任务不再被等待。
+    private static func close(_ node: any TailnetBackend, within seconds: TimeInterval) async {
+        let once = ResumeOnce()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Task {
+                try? await node.close()
+                if once.claim() { continuation.resume() }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if once.claim() { continuation.resume() }
+            }
+        }
+    }
+
+    /// 两条路争着 resume 同一个 continuation —— 只许成功一次。
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var used = false
+
+        func claim() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !used else { return false }
+            used = true
+            return true
+        }
+    }
+
+    /// 起一代节点并等登录完成；环境类失败自动重试。key 空表示本机没存过 key
     /// （上游对 Running 后端会自行忽略 key）。
+    ///
+    /// **同代才写**：`generation` 在这一代开始时取定，循环每轮与每个写状态的点前都比一次 ——
+    /// 被取代之后这一代什么都不写，也不清 `isStarting`（那是新一代的窗口）。
     private func up(key: String?, config: MeshConfig) async {
-        // **单飞**：同一时刻只允许一条起节点的路；`defer` 复位（`up` 有四条 return）。
+        let current = generation
         isStarting = true
-        defer { isStarting = false }
+        defer { if current == generation { isStarting = false } }
 
         var attempt = 0
         while true {
+            // 被取代：立刻收场，一个字段都不写。
+            guard current == generation else {
+                Log.info(Log.Module.mesh,
+                         "up: generation \(current) superseded — discarding this attempt")
+                return
+            }
             attempt += 1
             switch await attemptUp(key: key, config: config) {
-            case .ready:
+            case .ready(let session):
+                guard current == generation else { return }
+                gatewaySession = session
                 transition(.registrationSucceeded)
                 startPathPolling()
                 // 根部激活回调：同值迁移不触发 onChange，激活只能挂在「session 刚建成」这个时点。
-                if let session = gatewaySession { onVerifiedRunning?(session) }
+                onVerifiedRunning?(session)
                 return
 
             case .fatal(let failure):
+                guard current == generation else { return }
                 Log.info(Log.Module.mesh, "up: not retrying (\(failure)) — retrying cannot change it")
                 finishFailed(failure)
                 return
 
             case .retryable(let failure):
                 guard attempt < Self.upAttemptLimit else {
+                    guard current == generation else { return }
                     Log.info(Log.Module.mesh,
                              "up: giving up after \(attempt) attempts (\(failure))")
                     finishFailed(failure)
@@ -340,14 +412,14 @@ final class TailnetNode {
             if await Self.backendRunning(node) {
                 Log.info(Log.Module.mesh, "up: verified Running")
                 do {
-                    gatewaySession = try await node.makeGatewaySession()
+                    // 产物交给调用方收 —— 写入口集中在 `up`，代际判据也就只在那里判一次。
+                    return .ready(try await node.makeGatewaySession())
                 } catch {
                     Log.info(Log.Module.mesh,
                              "up: session build threw \(String(describing: error))")
                     self.node = nil
                     return .retryable(.unreachable)
                 }
-                return .ready
             }
             // 有 key 却停在 NeedsLogin = key 被拒；没有 key = 环境问题（可以补 key 后再试）。
             Log.info(Log.Module.mesh,

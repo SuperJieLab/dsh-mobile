@@ -21,15 +21,18 @@ final class TailnetNodeTests: XCTestCase {
     /// 那里的执行器与主线程无关 —— 共享计数器放在 actor 上才是真的安全。
     private actor FakeBackend: TailnetBackend {
         private(set) var statusCalls = 0
+        private(set) var closeCalls = 0
         private var upCalls = 0
         private var holdsUp = false
+        private var holdsClose = false
         private var failure: String?
         private var upWaiter: CheckedContinuation<Void, Never>?
-        private var arrivalWaiter: CheckedContinuation<Void, Never>?
+        private var closeWaiter: CheckedContinuation<Void, Never>?
 
-        func configure(holdsUp: Bool, failure: String? = nil) {
+        func configure(holdsUp: Bool, failure: String? = nil, holdsClose: Bool = false) {
             self.holdsUp = holdsUp
             self.failure = failure
+            self.holdsClose = holdsClose
         }
 
         func releaseUp() {
@@ -37,26 +40,49 @@ final class TailnetNodeTests: XCTestCase {
             upWaiter = nil
         }
 
+        /// 放掉还可能挂着的 close 与 up —— 测试收尾用，免得留下悬挂的 continuation。
+        func releaseEverything() {
+            closeWaiter?.resume()
+            closeWaiter = nil
+            upWaiter?.resume()
+            upWaiter = nil
+        }
+
         /// 等第 `count` 次 `up()` 真的进来 —— 「窗口开着」不能靠 sleep 猜。
-        func waitUntilUpCalls(_ count: Int) async {
-            while upCalls < count {
-                await withCheckedContinuation { arrivalWaiter = $0 }
+        ///
+        /// **有界且按时间轮询**：纯 `Task.yield()` 的次数不够时（今天这条路上，起来之前要先
+        /// 过一次 `supersede()` 的两次任务调度），循环会在后端还没造出来时就退出，于是后面的
+        /// `releaseUp()` 变成空操作、`await` 那一侧永远等不到 —— 挂死不算红，它只是把
+        /// 「断言失败」换成了「永远没结论」。用 `Task.sleep` 让出执行权，比 yield 可靠。
+        @discardableResult
+        func waitUntilUpCalls(_ count: Int, timeoutMs: Int = 3000) async -> Bool {
+            let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
+            while Date() < deadline {
+                if upCalls >= count { return true }
+                try? await Task.sleep(nanoseconds: 5_000_000)
             }
+            return upCalls >= count
         }
 
         func statusJSONCalls() -> Int { statusCalls }
 
         func up() async throws {
             upCalls += 1
-            arrivalWaiter?.resume()
-            arrivalWaiter = nil
             if holdsUp {
                 await withCheckedContinuation { upWaiter = $0 }
             }
             if let failure { throw FakeUpFailure(message: failure) }
         }
 
-        func close() async throws {}
+        /// 与上游同形：`close()` 是解开卡住的 `up()` 的那一下，且它自己可能不返回。
+        func close() async throws {
+            closeCalls += 1
+            upWaiter?.resume()
+            upWaiter = nil
+            if holdsClose {
+                await withCheckedContinuation { closeWaiter = $0 }
+            }
+        }
 
         func statusJSON() async throws -> Data {
             statusCalls += 1
@@ -119,14 +145,15 @@ final class TailnetNodeTests: XCTestCase {
         // 轮询的首轮会立刻读两次状态。等它读完再取基线，否则基线会平移。
         await waitForPathPollingFirstRound(backend)
 
-        // 第二条 up：running 状态下再提交 key，状态仍停在 running 而节点正在起 ——
-        // 正是那段「状态说已就绪、节点其实没验证过」的窗口。
+        // 第二条 up：running 状态下再提交 key —— 换代把它如实打回「接入中」，
+        // 而节点正在起。窗口仍在（`isStarting`），但不再有「状态说已就绪、其实没验证过」的错位：
+        // 那个错位是旧行为，换代时先 `superseded` 就是为消除它。
         await backend.configure(holdsUp: true)
         let second = Task { await node.submitKey("hskey-auth-second", config: config) }
         await backend.waitUntilUpCalls(2)
 
         XCTAssertTrue(node.isStarting, "窗口开着")
-        XCTAssertEqual(node.state, .running, "状态仍是 running —— 断言对象正是这个错位")
+        XCTAssertEqual(node.state, .registering, "换代时状态如实回到接入中 —— 不留「说 running、其实在起」的错位")
 
         let baseline = await backend.statusJSONCalls()
         await node.revive()
@@ -183,5 +210,85 @@ final class TailnetNodeTests: XCTestCase {
             if calls >= 4 { return }
             await Task.yield()
         }
+    }
+
+    // MARK: - 换代：旧一代被取代后，它的结论不再算数
+
+    /// 按 key 分派假后端：两代交错时要能分辨「旧那一个」与「新那一个」。
+    private func twoBackends(_ old: FakeBackend, _ fresh: FakeBackend) -> BackendFactory {
+        { spec in spec.authKey == "hskey-auth-old" ? old : fresh }
+    }
+
+    /// 旧那一代还挂着时提交新 key：旧的要被 close 掉，最终状态来自新那一代。
+    func testSubmittingAgainSupersedesTheAttemptStillRunning() async {
+        let old = FakeBackend()
+        await old.configure(holdsUp: true)
+        let fresh = FakeBackend()
+        let node = TailnetNode(makeBackend: twoBackends(old, fresh))
+        let config = completeConfig()
+
+        let first = Task { await node.submitKey("hskey-auth-old", config: config) }
+        await old.waitUntilUpCalls(1)
+        XCTAssertTrue(node.isStarting, "第一代正在起")
+
+        _ = await node.submitKey("hskey-auth-fresh", config: config)
+
+        let closes = await old.closeCalls
+        XCTAssertEqual(closes, 1, "旧那一代必须被 close —— 上游唯一的取消手段")
+        XCTAssertEqual(node.state, .running, "最终状态来自新一代")
+        XCTAssertFalse(node.isStarting, "窗口在新一代结束后收")
+
+        await old.releaseEverything()
+        _ = await first.value
+    }
+
+    /// 迟到的结论不得改写当代的结果：旧那一代被 close 后抛出 badKey，界面不能因此变成失败。
+    ///
+    /// 断言的落点选在末尾，且**先让旧那一代把自己那条路走完**（`releaseEverything` + 等它返回），
+    /// 再读状态 —— 这样「若没判代际就写 failed」这件事一定已经发生过，断言不靠时序赌。
+    func testTheSupersededAttemptCannotOverwriteTheResult() async {
+        let old = FakeBackend()
+        await old.configure(holdsUp: true, failure: "invalid authkey")
+        let fresh = FakeBackend()
+        await fresh.configure(holdsUp: true)
+        let node = TailnetNode(makeBackend: twoBackends(old, fresh))
+        let config = completeConfig()
+
+        let first = Task { await node.submitKey("hskey-auth-old", config: config) }
+        await old.waitUntilUpCalls(1)
+
+        let second = Task { await node.submitKey("hskey-auth-fresh", config: config) }
+        await fresh.waitUntilUpCalls(1)
+
+        await fresh.releaseUp()
+        _ = await second.value
+        await old.releaseEverything()
+        _ = await first.value
+
+        XCTAssertEqual(node.state, .running,
+                       "旧一代迟到的 badKey 不得改写新一代的结果 —— 它的结论在换代那一刻就作废了")
+    }
+
+    /// `close()` 自己不返回时，新一代仍要能开始 —— 否则「打断」只是把等待换了个位置。
+    func testAStuckCloseStillLetsTheNextAttemptStart() async {
+        let old = FakeBackend()
+        await old.configure(holdsUp: true, holdsClose: true)
+        let fresh = FakeBackend()
+        let node = TailnetNode(makeBackend: twoBackends(old, fresh))
+        let config = completeConfig()
+
+        let first = Task { await node.submitKey("hskey-auth-old", config: config) }
+        await old.waitUntilUpCalls(1)
+
+        let startedAt = Date()
+        _ = await node.submitKey("hskey-auth-fresh", config: config)
+        let waited = Date().timeIntervalSince(startedAt)
+
+        XCTAssertGreaterThanOrEqual(waited, 1.9,
+                                    "close 挂住时应当等满上限再放手，而不是无限期等它")
+        XCTAssertEqual(node.state, .running, "新一代照常起 —— 新一代的成败不受旧一代卡住影响")
+
+        await old.releaseEverything()
+        _ = await first.value
     }
 }
