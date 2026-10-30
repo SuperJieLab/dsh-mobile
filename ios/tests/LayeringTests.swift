@@ -2847,28 +2847,28 @@ final class LayeringTests: XCTestCase {
                        "闸加到了注册面上 —— 全部订阅方的语义都会跟着变")
     }
 
-    /// 一次动作的回答**不许存成状态** —— 两个出口不打架的那条规矩。
+    /// 「接入中所以不接」这一族**已从源码里消失** —— 判据只能是「东西不在了」。
     ///
-    /// `MeshPhase` 答「现在怎么样」（观察面），`MeshActionAcceptance` 答「刚才那一下接没接」
-    /// （回执）。两者不冲突的前提是回执活不过本次调用：一旦有人把它收进属性，就多出
-    /// 「上一次点击的结果」这种既不是当下事实、又会被当成事实读的东西 —— 而那时
-    /// 「该消费哪个」就没有答案了。
+    /// 这道闸门活着的时候，用户改完配置还得等旧那轮跑完（最长约 49 秒），而旧那轮恰恰是
+    /// 他想作废的那一次。现在旧一代由节点层代际作废，拒绝这条路整条不需要了。
     ///
-    /// 局部量接住它是合法的（`MeshSetupState` 就这么做）—— 这条禁的只是**跨调用存活**。
-    /// 判据形状照 `: MeshActionAcceptance` 匹配，不经 `->`：函数签名与闭包属性都在说
-    /// 「这种调用会答什么」，与「存下来的答案」不是一回事。
-    func testAnActionAcceptanceNeverBecomesStoredState() throws {
-        let declaration = try NSRegularExpression(
-            pattern: "(var|let)\\s+\\w+\\s*:\\s*MeshActionAcceptance\\b")
+    /// 三个名字是一起死的：设置页的预判、被拒原因、服务层那个只剩一个取值的回执枚举。
+    /// 留着任何一个，读代码的人都会以为「还有一条忙时拒绝的路」，然后照着它写新分支 ——
+    /// 而那条路没有生产者。这条判据防的就是那个。
+    ///
+    /// **只列这三个名字**：设置页那个「被拒原因」叫 `blockedReason`，而会话列表有一个同名的
+    /// 无关概念（那一格是「为什么不能新建会话」）。按名字全仓扫会把它一起判红 ——
+    /// 判据抓错对象比漏抓更难发现，因为它看起来是红的。
+    func testTheNodeStartingGateIsGoneFromTheSource() throws {
+        let forbidden = ["nodeStarting", "refusedWhileNodeStarting",
+                         "MeshActionAcceptance"]
         var scanned = 0
         for file in swiftFiles(under: sourcesRoot) {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
             scanned += 1
             for (number, line) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
-                let whole = NSRange(line.startIndex..., in: line)
-                if declaration.firstMatch(in: line, range: whole) != nil {
-                    XCTFail("\(relative):\(number) 把动作回执存进了属性 —— "
-                            + "它只该活一次调用；「现在怎么样」由 MeshPhase 答")
+                for needle in forbidden where line.contains(needle) {
+                    XCTFail("\(relative):\(number) 还留着「\(needle)」—— 这道闸门只拆了一半")
                 }
             }
         }

@@ -140,7 +140,7 @@ final class TailnetNodeTests: XCTestCase {
         let config = completeConfig()
 
         // 第一条 up 走完成功路径：状态 running、session 建成 —— 这才有「探活」可言。
-        _ = await node.submitKey("hskey-auth-first", config: config)
+        await node.submitKey("hskey-auth-first", config: config)
         XCTAssertEqual(node.state, .running)
         XCTAssertFalse(node.isStarting)
 
@@ -186,7 +186,7 @@ final class TailnetNodeTests: XCTestCase {
 
         // 出口一：up() 抛出（key 被拒 = 不重试，一次结束）。
         await backend.configure(holdsUp: false, failure: "invalid authkey")
-        _ = await node.submitKey("hskey-auth-bad", config: config)
+        await node.submitKey("hskey-auth-bad", config: config)
         XCTAssertFalse(node.isStarting, "抛出之后窗口要收")
         XCTAssertEqual(node.state, .failed(.badKey), "按消息归类成 key 被拒")
 
@@ -233,7 +233,7 @@ final class TailnetNodeTests: XCTestCase {
         await old.waitUntilUpCalls(1)
         XCTAssertTrue(node.isStarting, "第一代正在起")
 
-        _ = await node.submitKey("hskey-auth-fresh", config: config)
+        await node.submitKey("hskey-auth-fresh", config: config)
 
         let closes = await old.closeCalls
         XCTAssertEqual(closes, 1, "旧那一代必须被 close —— 上游唯一的取消手段")
@@ -327,7 +327,7 @@ final class TailnetNodeTests: XCTestCase {
 
         // 换代：新的一次接入建成。
         order = []
-        _ = await store.submitMeshKey("hskey-auth-second", config: config)
+        await store.submitMeshKey("hskey-auth-second", config: config)
         XCTAssertEqual(order, ["route", "phase:ready"],
                        "先产物、后阶段。反序会让接收方先拿旧会话叫醒一次连接，再把它拆掉")
     }
@@ -344,7 +344,7 @@ final class TailnetNodeTests: XCTestCase {
         await old.waitUntilUpCalls(1)
 
         let startedAt = Date()
-        _ = await node.submitKey("hskey-auth-fresh", config: config)
+        await node.submitKey("hskey-auth-fresh", config: config)
         let waited = Date().timeIntervalSince(startedAt)
 
         XCTAssertGreaterThanOrEqual(waited, 1.9,

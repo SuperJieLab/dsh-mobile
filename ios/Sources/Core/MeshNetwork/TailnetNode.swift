@@ -103,31 +103,30 @@ final class TailnetNode {
     }
 
     /// 设置页提交接入 key：进沙盒存储 → 注册。
-    /// **不再拒绝「节点正在起」**：用户给的是新地址，那次在跑的接入的结论已经不相关了，
+    /// **不拒绝「节点正在起」**：用户给的是新地址，那次在跑的接入的结论已经不相关了，
     /// 正确处置是让老的作废（`beginSupersede()`），不是让用户等它跑完。
-    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
+    func submitKey(_ key: String, config: MeshConfig) async {
         Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
         guard !key.isEmpty else {
             // 空提交不进状态机注册流程 —— 也**不**打断在跑的那一次：没有新地址要换。
             transition(.registrationFailed(.badKey))
-            return .accepted
+            return
         }
         beginSupersede()
         await closeSupersededNode()
         TailnetKeyStore.save(key)
         transition(.keySubmitted)
         await up(key: key, config: config)
-        return .accepted
     }
 
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
-    func retry(config: MeshConfig) async -> MeshActionAcceptance {
+    func retry(config: MeshConfig) async {
         let key = TailnetKeyStore.load()
         Log.info(Log.Module.mesh, "retry: key=\(Self.keyHint(key))")
         guard let key else {
             // 没有 key 就没东西可换：不打断在跑的那次，按既有语义收成 noKey（fail-closed）。
             transition(.retry(keyPresent: false))
-            return .accepted
+            return
         }
         beginSupersede()
         await closeSupersededNode()
@@ -135,7 +134,6 @@ final class TailnetNode {
         if case .registering = state {
             await up(key: key, config: config)
         }
-        return .accepted
     }
 
     /// 回前台的探活：只探测状态是否仍可读，读不了就落 `failed(unreachable)`，不自动重试。

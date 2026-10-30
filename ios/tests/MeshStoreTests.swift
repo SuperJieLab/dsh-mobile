@@ -191,15 +191,15 @@ final class MeshStoreTests: XCTestCase {
         XCTAssertTrue(order.isEmpty, "同一个会话重复报不算换代 —— 否则每条好连接都会被拆一次")
     }
 
-    /// 接入途中再次提交：**必须接下**，并真的转交给节点层。
+    /// 提交与重试都直接转交节点层 —— store 自己没有拒绝分支。
     ///
-    /// 这条原本断言的是「拒绝」。拒的代价是用户改完配置还得等旧那轮跑完（最长约 49 秒），
-    /// 而旧那轮恰恰是用户想作废的那一次。互相污染的顾虑现在由节点层代际收口：新配置起来时
-    /// 旧那代被取代，它迟到的结论写不进来（断言在 `TailnetNodeTests`）。
+    /// 这条原本断言「接入中提交被拒」。拒的代价是用户改完配置还得等旧那轮跑完（最长约
+    /// 49 秒），而旧那轮恰恰是用户想作废的那一次；互相污染的顾虑由节点层代际收口
+    /// （断言在 `TailnetNodeTests`）。
     ///
-    /// 于是这里要证明的是「接下了，而且真转交了」—— 只落盘不转交，用户会以为改好了，
+    /// 于是要证明的是「一定转交、且 store 的配置跟着换」—— 只落盘不转交，用户会以为改好了，
     /// 实际什么都没发生，也没有任何报错。
-    func testSubmittingWhileTheNodeIsStartingIsAccepted() async {
+    func testSubmittingAndRetryingAreAlwaysForwarded() async {
         let old = MeshConfig(controlURLString: "https://old.example:8443",
                              gatewayURLString: "http://100.64.0.1:3081")
         let new = MeshConfig(controlURLString: "https://new.example:8443",
@@ -208,17 +208,12 @@ final class MeshStoreTests: XCTestCase {
         let store = MeshStore(node: node)
         await store.start(config: old)
 
-        node.isStarting = true
-        let outcome = await store.submitMeshKey("hskey-auth-new", config: new)
-        XCTAssertTrue(outcome == .accepted,
-                      "接入中的提交要接下 —— 拒了就等于让用户等旧那轮跑完")
-        XCTAssertEqual(node.submitCount, 1, "接下的动作要真的转交给节点层")
+        await store.submitMeshKey("hskey-auth-new", config: new)
+        XCTAssertEqual(node.submitCount, 1, "提交要真的转交给节点层")
 
-        let retryOutcome = await store.retryMesh(config: new)
-        XCTAssertTrue(retryOutcome == .accepted, "重试同样要接 —— 它也是「我要用这份配置」")
+        await store.retryMesh(config: new)
         XCTAssertEqual(node.retriedConfigs, [new], "重试交的也是这一份")
 
-        node.isStarting = false
         node.nodeState = .running
         node.onVerifiedRunning?(URLSession(configuration: .ephemeral))
         XCTAssertEqual(store.route?.baseURL, new.gatewayBaseURL,
@@ -247,7 +242,6 @@ final class MeshStoreTests: XCTestCase {
 @MainActor private final class FakeNode: MeshNodeControlling, @unchecked Sendable {
     var nodeState: TailnetNodeState = .noKey
     var carrierPath: CarrierPath?
-    var isStarting = false
     var onVerifiedRunning: ((URLSession) -> Void)?
     var onNodeChanged: (() -> Void)?
     var reviveShouldFail = false
@@ -265,13 +259,11 @@ final class MeshStoreTests: XCTestCase {
         // 假件在事实变化点同样推送，回灌链路才被测到。
         onNodeChanged?()
     }
-    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
-        // 计「转交次数」：这条是「接下了就得真的交出去」的判据落点。
+    func submitKey(_ key: String, config: MeshConfig) async {
+        // 计「转交次数」：这条是「一定真的交出去」的判据落点。
         submitCount += 1
-        return .accepted
     }
-    func retry(config: MeshConfig) async -> MeshActionAcceptance {
+    func retry(config: MeshConfig) async {
         retriedConfigs.append(config)
-        return .accepted
     }
 }

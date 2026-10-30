@@ -30,8 +30,7 @@ struct MeshSettingsAssembler: View {
             let created = MeshSetupState(
                 stored: .unconfigured,
                 submit: { key, config in await store.submitMeshKey(key, config: config) },
-                retry: { config in await store.retryMesh(config: config) },
-                isStarting: { store.isStarting }
+                retry: { config in await store.retryMesh(config: config) }
             )
             // 盘上的那份由状态自己读：读盘归它那一层，视图层只决定「什么时候读」。
             // 只在这一处读（`setup == nil` 那一支）—— 草稿建好之后 `.task` 若重跑，

@@ -8,26 +8,12 @@ import Foundation
 
 // MARK: - 注入接缝（真实类型的适配住 `MeshStoreAdapters.swift`）
 
-/// 组网管理动作（提交接入 key / 失败后重试）有没有被接下。
-///
-/// 它不回答「成不成」（那是状态与订阅流的回答），只回答这一次调用的去向，活不过本次调用。
-/// 原因写在取值名里 —— `Refusal` 已被 `Features/` 占用，Core 再定义会被分层判据读成跨层。
-enum MeshActionAcceptance: Equatable {
-    case accepted
-    /// 没接：另一条起节点的路在跑。**当前没有生产者** —— 起节点的路不再靠拒绝互斥，
-    /// 改由节点层的代际收口（旧一代作废，它迟到的结论写不进来）。这一格只剩设置页在判。
-    case refusedWhileNodeStarting
-}
-
 /// 组网节点能力：`TailnetNode` 的窄面。状态仍由 `TailnetNodeState` 状态机判定，
 /// 本协议只暴露读取与既有入口，不做任何新判定。
 @MainActor protocol MeshNodeControlling: AnyObject {
     var nodeState: TailnetNodeState { get }
     /// 当前到网关对端的路径；Running 期间由节点层轮询刷新，其余为 nil。
     var carrierPath: CarrierPath? { get }
-    /// 节点正在起。**与 `nodeState` 不是一回事**：状态目录健康时它一上来是 `.running`，
-    /// 而接入可能还在跑。
-    var isStarting: Bool { get }
     /// 节点验证 Running、tailnet session 建成的那一刻（同值迁移不触发 onChange，
     /// 所以激活只能挂回调，不能靠观察状态变化）。
     var onVerifiedRunning: ((URLSession) -> Void)? { get set }
@@ -36,10 +22,10 @@ enum MeshActionAcceptance: Equatable {
     func launchNode(config: MeshConfig) async
     func reviveNode() async
     /// 组网管理动作（提交接入 key / failed 后重试）。判定仍在节点层状态机。
-    /// 节点正在起时也照接：用户给的是新配置，在跑那次的结论已经不相关了 —— 节点层会在
-    /// 提交的那一刻让旧一代作废（`supersede`），所以这里没有「忙时拒绝」这一支。
-    func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance
-    func retry(config: MeshConfig) async -> MeshActionAcceptance
+    /// 没有「忙时拒绝」这一支：用户给的是新配置，在跑那次的结论已经不相关了 —— 节点层会在
+    /// 提交的那一刻让旧一代作废，所以这里连回执都不需要。
+    func submitKey(_ key: String, config: MeshConfig) async
+    func retry(config: MeshConfig) async
 }
 
 @MainActor
@@ -144,7 +130,7 @@ final class MeshStore {
     /// 不回答「接没接」：内部动作，没有第二方等回执。
     func retryStored() async {
         guard let config else { return }
-        _ = await retryMesh(config: config)
+        await retryMesh(config: config)
     }
 
     /// 配置读坏了：不进节点层，把「要重新填」如实说出来。
@@ -158,26 +144,21 @@ final class MeshStore {
 
     // MARK: - 组网管理（设置页动作透传；判定在节点层，这里只接顺序）
 
-    /// 节点正在起。透传给设置页做「提交前先问一句」—— 判定仍在节点层，这里只转述。
-    var isStarting: Bool { node.isStarting }
-
     /// 提交接入 key 并接入。
-    /// **不再预判「节点正在起」**：用户改配置正是唯一能让在跑那次作废的动作，挡在门外等于
+    /// **不预判「节点正在起」**：用户改配置正是唯一能让在跑那次作废的动作，挡在门外等于
     /// 让他等旧那轮跑完。旧一代的结论由节点层代际判出去，不需要在这里互斥。
-    func submitMeshKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
+    func submitMeshKey(_ key: String, config: MeshConfig) async {
         self.config = config
         // 用户重填过了 —— 上一次的「读坏」到此为止。再坏会是下一次读盘的事。
         storedConfigDamaged = false
-        let outcome = await node.submitKey(key, config: config)
+        await node.submitKey(key, config: config)
         nodeChanged()
-        return outcome
     }
 
-    func retryMesh(config: MeshConfig) async -> MeshActionAcceptance {
+    func retryMesh(config: MeshConfig) async {
         self.config = config
-        let outcome = await node.retry(config: config)
+        await node.retry(config: config)
         nodeChanged()
-        return outcome
     }
 
     /// 节点侧事实变化的统一回灌口（状态迁移与路径刷新都经过）。

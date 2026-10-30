@@ -15,40 +15,24 @@ final class MeshSetupState {
     /// 明文输入（用户要求：key 要看得见才敢确认贴对了）。提交成功即清空。
     var tailnetKey = ""
 
-    /// 最近一次被拒的原因。**只说「因为什么」，说成什么话归 `Display/`** ——
-    /// 「能不能提交」与「为什么没提交」是同一件事的两面，分到两处就会出现
-    /// 「按钮亮着、点了却什么也没发生」。
-    var blockedReason: BlockedReason?
-
-    /// 被拒的原因。与 `MeshActionAcceptance.refused` 分开：那个是服务层的回答（接没接），
-    /// 这个是这一页要讲给用户听的东西（措辞不在这里）。
-    enum BlockedReason: Equatable {
-        case nodeStarting
-    }
-
     /// 最近一次落盘的那一份。`retryMesh` 用它 —— 重试的是「存下来的配置」，不是草稿。
     private(set) var stored: MeshConfig
     /// 落盘。**注入**是为了让「存的那份与交出去的那份是同一份」能被断言 —— 真写 UserDefaults
     /// 时断言不了，而这条正是最容易写错的：分两次构造就会出现「存的是 A、连的是 B」。
     private let save: (MeshConfig) -> Void
-    private let submit: (String, MeshConfig) async -> MeshActionAcceptance
-    private let retry: (MeshConfig) async -> MeshActionAcceptance
-    /// 节点此刻是否正在起。只在这一页**动手前**问一次，不参与观察 ——
-    /// 说法由可观察的 `blockedReason` 承担，不必让「忙」这个事实再流一遍。
-    private let isStarting: () -> Bool
+    private let submit: (String, MeshConfig) async -> Void
+    private let retry: (MeshConfig) async -> Void
 
     init(stored: MeshConfig,
          save: @escaping (MeshConfig) -> Void = { $0.save() },
-         submit: @escaping (String, MeshConfig) async -> MeshActionAcceptance,
-         retry: @escaping (MeshConfig) async -> MeshActionAcceptance,
-         isStarting: @escaping () -> Bool) {
+         submit: @escaping (String, MeshConfig) async -> Void,
+         retry: @escaping (MeshConfig) async -> Void) {
         self.stored = stored
         self.controlURL = stored.controlURLString
         self.gatewayURL = stored.gatewayURLString
         self.save = save
         self.submit = submit
         self.retry = retry
-        self.isStarting = isStarting
     }
 
     /// 把盘上读到的那份填进来。**读盘不在这里**：构造必须能重入，而 `@State` 的初值表达式
@@ -80,44 +64,20 @@ final class MeshSetupState {
     }
 
     /// 保存并接入：先落盘，再把**同一份**配置交给连接域。
-    /// **节点正在起时整条都不做**：服务层会拒掉（`.refused`），而若先把草稿落盘、把密钥清空，
-    /// 用户看到的是「保存了」，实际这份密钥从没进过沙盒 —— 先问一句，把输入原样留着。
+    ///
+    /// 不问「节点是不是正在起」：节点层会让在跑那次作废（代际），这里问一句只会让用户
+    /// 白等一轮 —— 而用户点保存，正是想让在跑那次作废。
     func saveAndConnect() async {
-        guard !isStarting() else {
-            blockedReason = .nodeStarting
-            return
-        }
-        blockedReason = nil
         let config = self.config
         save(config)
         stored = config
         let key = tailnetKey
         tailnetKey = ""
-        // 写成 switch 而不是 `if == .refusedWhileNodeStarting`：多出一种被拒原因时，
-        // 这里会编译失败，而不是静默把它当成「成功了」。
-        switch await submit(key, config) {
-        case .accepted:
-            break
-        case .refusedWhileNodeStarting:
-            // 预判与提交之间理论上插不进第二条起节点的路（都在 MainActor 上、中间没有
-            // 挂起点），但「理论上」不是判据 —— 真被拒了就把钥匙还给用户，别说成功。
-            tailnetKey = key
-            blockedReason = .nodeStarting
-        }
+        await submit(key, config)
     }
 
     /// 用存下来的那份配置重试 —— 用户没保存的新草稿不该被偷偷拿去连。
     func retryMesh() async {
-        guard !isStarting() else {
-            blockedReason = .nodeStarting
-            return
-        }
-        blockedReason = nil
-        switch await retry(stored) {
-        case .accepted:
-            break
-        case .refusedWhileNodeStarting:
-            blockedReason = .nodeStarting
-        }
+        await retry(stored)
     }
 }

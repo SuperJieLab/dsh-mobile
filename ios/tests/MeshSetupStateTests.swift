@@ -1,7 +1,7 @@
 /**
- * 组网录入那一段的三条不变式 —— 都对着一段具体的坑，不是覆盖率。
+ * 组网录入那一段的不变式 —— 都对着一段具体的坑，不是覆盖率。
  *
- * 三条都由「替身收下什么」来判：保存与提交各是一个闭包，于是「存的是不是交出去的那份」
+ * 判定都由「替身收下什么」来判：保存与提交各是一个闭包，于是「存的是不是交出去的那份」
  * 可以直接比对，不必去读 UserDefaults（读了也说不清是不是这一次写的）。
  */
 import Foundation
@@ -15,15 +15,13 @@ final class MeshSetupStateTests: XCTestCase {
     private func state(
         stored: MeshConfig = MeshConfig(controlURLString: "", gatewayURLString: ""),
         saved: @escaping (MeshConfig) -> Void = { _ in },
-        submitted: @escaping (String, MeshConfig) -> MeshActionAcceptance = { _, _ in .accepted },
-        retried: @escaping (MeshConfig) -> MeshActionAcceptance = { _ in .accepted },
-        isStarting: @escaping () -> Bool = { false }
+        submitted: @escaping (String, MeshConfig) -> Void = { _, _ in },
+        retried: @escaping (MeshConfig) -> Void = { _ in }
     ) -> MeshSetupState {
         MeshSetupState(stored: stored,
                        save: saved,
                        submit: { key, config in submitted(key, config) },
-                       retry: { config in retried(config) },
-                       isStarting: isStarting)
+                       retry: { config in retried(config) })
     }
 
     /// 落盘的那一份与交给连接域的那一份必须是同一份。
@@ -33,7 +31,7 @@ final class MeshSetupStateTests: XCTestCase {
     func testSavedAndSubmittedAreTheSameConfig() async {
         var saved: [MeshConfig] = []
         var submitted: [MeshConfig] = []
-        let sut = state(saved: { saved.append($0) }, submitted: { _, config in submitted.append(config); return .accepted })
+        let sut = state(saved: { saved.append($0) }, submitted: { _, config in submitted.append(config) })
 
         sut.controlURL = "https://example:8443"
         sut.gatewayURL = "http://100.64.0.1:3081"
@@ -48,7 +46,7 @@ final class MeshSetupStateTests: XCTestCase {
     /// 密钥先捕获再清空 —— 提交是异步的，顺序反了提交的永远是空串。
     func testKeyIsHandedOverBeforeTheFieldIsCleared() async {
         var keys: [String] = []
-        let sut = state(submitted: { key, _ in keys.append(key); return .accepted })
+        let sut = state(submitted: { key, _ in keys.append(key) })
 
         sut.controlURL = "https://example:8443"
         sut.gatewayURL = "http://100.64.0.1:3081"
@@ -64,7 +62,7 @@ final class MeshSetupStateTests: XCTestCase {
         let stored = MeshConfig(controlURLString: "https://stored:8443",
                                 gatewayURLString: "http://100.64.0.1:3081")
         var retried: [MeshConfig] = []
-        let sut = state(stored: stored, retried: { retried.append($0); return .accepted })
+        let sut = state(stored: stored, retried: { retried.append($0) })
 
         sut.controlURL = "https://draft:8443"
         await sut.retryMesh()
@@ -147,56 +145,5 @@ final class MeshSetupStateTests: XCTestCase {
         XCTAssertEqual(damaged.controlURL, "", "读坏了不该填 —— 那会让用户以为配过了")
         XCTAssertEqual(damaged.stored, MeshConfig(controlURLString: "", gatewayURLString: ""),
                        "坏配置也不能进「重试要用的那份」")
-    }
-
-    /// 节点正在起时提交：不落盘、不清密钥、并给出说法。
-    ///
-    /// 三样都要断言。只测「没转交」时，把落盘留在前面照样全绿 —— 而那个症状最坑：
-    /// 用户看到的是「保存了」，实际密钥从没进过沙盒（`TailnetKeyStore.save` 在被拒的
-    /// 那条路上根本不会执行），下次启动连不上，还得重贴一遍。
-    func testSubmitIsRefusedWhileTheNodeIsStarting() async {
-        var saved: [MeshConfig] = []
-        var submitted: [String] = []
-        let sut = state(saved: { saved.append($0) },
-                        submitted: { key, _ in submitted.append(key); return .accepted },
-                        isStarting: { true })
-        sut.controlURL = "https://example:8443"
-        sut.gatewayURL = "http://100.64.0.1:3081"
-        sut.tailnetKey = "hskey-auth-x"
-
-        await sut.saveAndConnect()
-
-        XCTAssertTrue(saved.isEmpty, "被拒时不该落盘 —— 盘上那份会被下次启动当成已配好")
-        XCTAssertTrue(submitted.isEmpty, "被拒时不该转交")
-        XCTAssertEqual(sut.tailnetKey, "hskey-auth-x", "密钥要原样留着，用户还得再提交一次")
-        XCTAssertNotNil(sut.blockedReason, "被拒要给说法，不能「点了没反应」")
-    }
-
-    /// 起节点期间重试：同样不转交，并给说法。
-    func testRetryIsRefusedWhileTheNodeIsStarting() async {
-        var retried: [MeshConfig] = []
-        let sut = state(retried: { retried.append($0); return .accepted },
-                        isStarting: { true })
-
-        await sut.retryMesh()
-
-        XCTAssertTrue(retried.isEmpty, "起节点期间不该转交重试")
-        XCTAssertNotNil(sut.blockedReason, "被拒要给说法")
-    }
-
-    /// 服务层回 `.refused` 时同样不能吞：密钥还给用户，并给说法。
-    ///
-    /// 这一支守的是「预判与提交之间被人插进一个挂起点」那类改动 —— 预判漏了，
-    /// 也不能让用户以为提交成功。
-    func testARefusalFromTheServiceIsNotSwallowed() async {
-        let sut = state(submitted: { _, _ in .refusedWhileNodeStarting })
-        sut.controlURL = "https://example:8443"
-        sut.gatewayURL = "http://100.64.0.1:3081"
-        sut.tailnetKey = "hskey-auth-x"
-
-        await sut.saveAndConnect()
-
-        XCTAssertEqual(sut.tailnetKey, "hskey-auth-x", "服务没接，密钥要还回来")
-        XCTAssertNotNil(sut.blockedReason, "服务没接也要给说法")
     }
 }
