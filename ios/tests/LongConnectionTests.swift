@@ -93,4 +93,28 @@ final class LongConnectionTests: XCTestCase {
         let stream = try XCTUnwrap(link.makeStream(Behavior()))
         XCTAssertEqual(stream.label, "witness", "标签来自注入的判读")
     }
+
+    /// 换代：换一条连接，逻辑流按新代次换号重开。
+    ///
+    /// 这条同时抓三种错法，而**只看阶段只能抓到第一种**：
+    /// - 什么都不做 ⇒ 阶段仍停在握手/就绪，旧 socket 继续连着上一代的会话；
+    /// - 只 `deactivate()` ⇒ 阶段掉回 `.idle`，而且流表被 `onStopped` 清空；
+    /// - `deactivate()` + `activate()` 冒充「换代」⇒ **阶段看起来完全正常**（握手 → 握手），
+    ///   但 `onStopped` → `closeAll()` 已经把每条逻辑流注销，它们再也回不来 ——
+    ///   `reopenAll` 只认代次变化，不认「重新激活」。
+    ///
+    /// 所以判据落在**流的编号**上：换一条之后它必须是新的。这也是「事件流与会话流会不会
+    /// 静默断掉」这一整类问题的观测点。
+    func testReplacingRebuildsTheConnectionAndRenumbersTheStreams() throws {
+        let link = link()
+        link.activate()
+        let stream = try XCTUnwrap(link.makeStream(Behavior()))
+        let before = stream.id
+
+        link.replaceConnection(reason: "tunnel-replaced")
+
+        XCTAssertEqual(link.phase, .connecting, "换一条之后回到握手")
+        XCTAssertNotEqual(stream.id, before,
+                          "逻辑流要换号重开 —— 不换号就等于它还挂在已经关掉的那条 socket 上")
+    }
 }

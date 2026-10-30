@@ -2737,7 +2737,8 @@ final class LayeringTests: XCTestCase {
             in: try String(contentsOf: sourcesRoot.appendingPathComponent("AppServices.swift"),
                            encoding: .utf8))
         let required = ["func start() async", "func sceneActive() async",
-                        "store.onPhaseChanged", "credentials.onIdentityChanged"]
+                        "store.onPhaseChanged", "store.onRouteReplaced",
+                        "credentials.onIdentityChanged"]
         for needle in required {
             XCTAssertTrue(services.contains { $0.1.contains(needle) },
                           "AppServices 里没有 \(needle) —— 编排少接了一根线")

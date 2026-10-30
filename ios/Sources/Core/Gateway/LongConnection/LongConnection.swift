@@ -59,6 +59,18 @@ final class LongConnection: StreamFactory {
         transport.reconnectNow(reason: reason)
     }
 
+    /// 换一条连接：隧道产物换代了，旧 socket 连的是上一代的会话，留着它只会往那边发。
+    ///
+    /// **不用 `deactivate()` + `activate()`**：`deactivate` 是 App 收尾用的生命周期动作，它经
+    /// `onStopped` 把流表整个清空，逻辑流再也回不来（`reopenAll` 只认代次变化，不认重新激活）。
+    /// 换一条只要重跑一次 `connect()`：关旧 socket、代次 +1、按此刻的地址重建、通知流层换号重开。
+    /// 未激活时它是空操作（`connect` 自己守 `active`）—— 换代不该把后台的 App 叫起来连网。
+    /// - Parameter reason: 谁在要。与 `reconnectNow` 同样留原因，排障时才分得清哪次重连为哪件事。
+    func replaceConnection(reason: String) {
+        Log.info(Log.Module.session, "replace connection (\(reason)) — tunnel product replaced")
+        transport.connect()
+    }
+
     /// 造一条流。屏幕与 App 级订阅方各调一次 —— 两者平级，谁都不占谁的位。
     @discardableResult
     func makeStream(_ behavior: any StreamBehavior) -> LogicalStream? {

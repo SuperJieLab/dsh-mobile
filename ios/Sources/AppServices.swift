@@ -98,6 +98,11 @@ struct AppServices {
             guard new == .ready, old != .ready else { return }
             link?.reconnectNow(reason: "mesh-ready")
         }
+        // 组网换了产物 → 换一条连接。**不能并进上面那一条**：换代时阶段可能本来就是 ready，
+        // 而 `reconnectNow` 在 ready 上是空操作（它答的是「别等退避」，不是「换一条」）。
+        store.onRouteReplaced = { [weak link] in
+            link?.replaceConnection(reason: "tunnel-replaced")
+        }
         // 身份刚变过 → 按现状补做连接那几步。读的是**当前**身份：撤销时 `hasDeviceToken`
         // 已是 false，
         // 于是什么都不做 —— 连接层会把无票当终态自己收成 `.idle`。
