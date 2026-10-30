@@ -70,7 +70,7 @@ final class TailnetNode {
     func launch(config: MeshConfig) async {
         let key = TailnetKeyStore.load()
         let healthy = Self.stateStoreHealthy()
-        Log.info(Log.Module.mesh, "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy) controlURL=\(config.controlURLString) gateway=\(config.gatewayURLString)")
+        Log.info(Log.Module.mesh, "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy) controlURL=\(config.controlURL?.absoluteString ?? "<invalid>") gateway=\(config.gatewayURLString)")
         transition(.launch(keyPresent: key != nil, nodeStateHealthy: healthy))
 
         switch state {
@@ -290,7 +290,8 @@ final class TailnetNode {
     /// 不在这里迁移状态：重试期间停在 `registering`，迁移只在终局做。
     private func attemptUp(key: String?, config: MeshConfig) async -> UpOutcome {
         guard config.isComplete, let controlURL = config.controlURL else {
-            // 配置没填全：视同不可达（界面提示去设置页补地址）。重试不会补上地址。
+            // 配置没填全（实际只可能是网关地址缺）：视同不可达（界面提示去设置页补地址）。
+            // 重试不会补上地址。
             Log.info(Log.Module.mesh, "up: config incomplete → unreachable")
             return .fatal(.unreachable)
         }

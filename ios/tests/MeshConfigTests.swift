@@ -27,7 +27,7 @@ final class MeshConfigTests: XCTestCase {
         super.tearDown()
     }
 
-    /// 「配置是否完整」这条规则本身：控制面要 `https`，网关地址只需是个 URL。
+    /// 「配置是否完整」这条规则本身：控制面是 `https`（留空则落官方），网关地址必须填。
     ///
     /// 规则住在 `MeshConfig`，断言就跟它住一起 —— 它不属于任何一屏。
     func testCompleteness() {
@@ -36,12 +36,27 @@ final class MeshConfigTests: XCTestCase {
         XCTAssertFalse(MeshConfig(controlURLString: "http://a:8443",
                                   gatewayURLString: "http://b:3081").isComplete,
                        "明文控制面不算完整")
-        XCTAssertFalse(MeshConfig(controlURLString: "",
-                                  gatewayURLString: "http://b:3081").isComplete,
-                       "还没配过（控制面为空）不算完整")
+        XCTAssertTrue(MeshConfig(controlURLString: "",
+                                 gatewayURLString: "http://b:3081").isComplete,
+                      "控制面留空 = 官方 Tailscale，不算缺项")
+        XCTAssertFalse(MeshConfig.unconfigured.isComplete,
+                       "网关地址没有默认值：两格都空时不能当成可连")
         XCTAssertFalse(MeshConfig(controlURLString: "https://a:8443",
                                   gatewayURLString: "").isComplete,
                        "网关地址为空不算完整")
+    }
+
+    /// 控制面留空要真的落到官方地址上 —— 否则「不填就能连」只是输入框里的一句提示。
+    /// 断言钉字面量而不是 `controlURLDefault`：守的是「官方地址是这个」这条外部事实，
+    /// 换掉常量不该顺带把这条判据一起改绿。
+    func testEmptyControlURLFallsBackToOfficial() {
+        XCTAssertEqual(MeshConfig(controlURLString: "",
+                                  gatewayURLString: "http://b:3081").controlURL?.absoluteString,
+                       "https://controlplane.tailscale.com")
+        XCTAssertEqual(MeshConfig(controlURLString: "https://vps:8443",
+                                  gatewayURLString: "http://b:3081").controlURL?.absoluteString,
+                       "https://vps:8443",
+                       "填了地址就用填的，不能被默认值盖掉")
     }
 
     /// 从没存过 ⇒ `missing`，不是 `damaged`。
@@ -55,7 +70,7 @@ final class MeshConfigTests: XCTestCase {
     /// 会静默测不到东西。
     func testDamagedWhenStoredBytesCannotBeDecoded() {
         let config = MeshConfig(controlURLString: "https://example:8443",
-                                gatewayURLString: MeshConfig.gatewayDefault)
+                                gatewayURLString: "http://b:3081")
         config.save(defaults)
 
         let written = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix("mesh.") }

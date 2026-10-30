@@ -1,31 +1,41 @@
 /**
- * 组网配置：headscale 控制面地址 + 网关 tailnet 地址。
+ * 组网配置：控制面地址 + 网关 tailnet 地址。
  *
- * controlURL 不硬编码：它内嵌 VPS 公网 IP，而仓库是公开的 —— 真实值只存在于设备本地与用户
- * 输入时刻。读写都不许静默失败：「存过但读不出来」与「从来没配过」是两件事。
+ * **控制面留空 = 官方 Tailscale**（`controlURLDefault`）。自建 headscale 才需要填地址，
+ * 它内嵌 VPS 公网 IP 而仓库是公开的 —— 那种真实值只存在于设备本地与用户输入时刻。
+ * 网关地址没有默认值：官方与自建分配的 100.x 都不可预测，填错了只会把失败伪装成
+ * 「服务不可达」，所以宁可让它空着逼人填。读写都不许静默失败：「存过但读不出来」与
+ * 「从来没配过」是两件事。
  */
 import Foundation
 
 struct MeshConfig: Equatable, Codable {
-    /// headscale 控制面，如 `https://<VPS-IP>:8443`。
+    /// 控制面地址，如 `https://<VPS-IP>:8443`；**空串表示用官方 Tailscale**。
     var controlURLString: String
     /// Mac 网关的 tailnet 地址（直用 100.x IP，不用 MagicDNS）。
     var gatewayURLString: String
 
-    static let gatewayDefault = "http://100.64.0.1:3081"
+    /// 控制面留空时落到的地址，与 libtailscale 的 `kDefaultControlURL` 同值。
+    /// 它只回答「不填时连哪」，不代表官方是唯一路 —— 自建仍然是填地址那条。
+    static let controlURLDefault = "https://controlplane.tailscale.com"
 
-    /// 「从没配过」的形状：控制面地址空、网关地址给默认。`isComplete` 因此为假。
+    /// 「从没配过」的形状：两格都空。`isComplete` 因此为假（缺网关地址）。
     ///
     /// 它是一个值而不是一次读盘 —— 需要「还没配」这个起点的调用方拿它，不必碰磁盘。
-    static let unconfigured = MeshConfig(controlURLString: "", gatewayURLString: gatewayDefault)
+    static let unconfigured = MeshConfig(controlURLString: "", gatewayURLString: "")
 
-    /// 设置页可直接用：controlURL 为空 = 还没配过。
+    /// 能不能拿去连：控制面（空 = 官方）是 https，且网关地址填了。
+    /// **它不回答「配没配过」** —— 那件事由「有没有接入密钥」回答（`TailnetNode.launch`）。
     var isComplete: Bool {
-        URL(string: controlURLString)?.scheme == "https"
-            && URL(string: gatewayURLString)?.scheme != nil
+        controlURL?.scheme == "https" && gatewayBaseURL?.scheme != nil
     }
 
-    var controlURL: URL? { URL(string: controlURLString) }
+    /// 归一后的控制面。**空串在这里变成官方地址**：读它的只有 `isComplete` 与
+    /// `TailnetNode`，归一放在取值上，这两处就不会各自解释一遍空串。
+    var controlURL: URL? {
+        URL(string: controlURLString.isEmpty ? Self.controlURLDefault : controlURLString)
+    }
+
     var gatewayBaseURL: URL? { URL(string: gatewayURLString) }
 
     // MARK: - UserDefaults 持久化（App 沙盒本地，不进仓库）

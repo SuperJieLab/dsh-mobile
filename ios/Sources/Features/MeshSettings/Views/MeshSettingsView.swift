@@ -20,7 +20,7 @@ struct MeshSettingsView: View {
 
                 switch store.nodeState {
                 case .noKey:
-                    Text("输入组网服务地址与接入密钥（Mac 上 `headscale preauthkeys create` 生成）。")
+                    Text("填接入密钥就能接入。组网服务留空即用官方 Tailscale；网关地址填 Mac 的虚拟网 IP。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -40,25 +40,26 @@ struct MeshSettingsView: View {
                     }
 
                 case .failed(.badKey):
-                    Text("密钥无效或过期，请在 VPS 上重新生成后重试。")
+                    Text("密钥无效或过期，在组网服务的后台重新生成后重试。")
                         .foregroundStyle(.red)
 
                 case .failed(.unreachable):
-                    Text("组网服务不可达。先确认地址正确、iPhone 已安装并信任 CA 描述文件。")
+                    Text("组网服务不可达。确认网关地址填对；自建服务还要 iPhone 已信任它的 CA 描述文件。")
                         .foregroundStyle(.red)
                 }
 
-                TextField("https://<组网服务地址>:8443", text: $setup.controlURL)
+                TextField("留空 = 官方 Tailscale（https://controlplane.tailscale.com）",
+                          text: $setup.controlURL)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                TextField("http://<网关 tailnet 地址>:3081", text: $setup.gatewayURL)
+                TextField("http://100.x.y.z:3081（Mac 上 tailscale ip -4）", text: $setup.gatewayURL)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 // 明文展示（用户要求）：key 要「看得见才敢确认贴对了」，粘错是排障的主要
                 // 嫌疑；个人设备场景下明文可接受（凭证本就存沙盒明文）。
-                TextField("接入密钥（hskey-auth-…）", text: $setup.tailnetKey)
+                TextField("接入密钥（tskey-auth-… 或 hskey-auth-…）", text: $setup.tailnetKey)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
