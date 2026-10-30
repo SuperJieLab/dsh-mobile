@@ -29,6 +29,8 @@ enum TailnetNodeState: Equatable {
         case retry(keyPresent: Bool)
         /// running 中节点失联（复活失败等）。
         case nodeUnreachable
+        /// 被新一代取代：这一代的一切结论作废。由节点层在「提交新配置、起新节点之前」发出。
+        case superseded
         /// 进后台：状态机不迁移，仍是 running。**当前无发射源**（后台路径走
         /// revive() + scenePhase，不进状态机）——保留是把「进后台不迁移」这个
         /// 决定固化在表里，作为决策档案。
@@ -58,6 +60,13 @@ enum TailnetNodeState: Equatable {
         // failed → 修复重试
         case (.failed, .retry(let keyPresent)):
             return keyPresent ? .registering : .noKey
+        // 被新一代取代：旧一代停在 running 或 failed 时，都交回「接入中」——
+        // running 必须离开（`MeshStore.route` 的守卫读它，不离开就还返回已关闭节点的 session）。
+        // 另两格不单列：`.registering` 遇它仍是 registering、`.noKey` 仍是 noKey，两者与
+        // 「未列出的组合返回原状态」逐字相同 —— 写出来既没有判据能区分，也没有行为差异。
+        case (.running, .superseded),
+             (.failed, .superseded):
+            return .registering
         // running 稳态
         case (.running, .nodeUnreachable):
             return .failed(.unreachable)

@@ -50,5 +50,16 @@ final class MeshNodeStateTests: XCTestCase {
                       "MS14 running 中节点失联 → failed(unreachable)（如实显示，不自动重试风暴）")
         XCTAssertTrue(TailnetNodeState.handle(.registrationSucceeded, from: .running) == .running,
                       "MS15 前台复活再次报注册成功 → 仍 running（幂等）")
+
+        // —— 被新一代取代（改配置打断在跑的接入）——
+        // 只断言「期望值与兜底不同」的那两格。`.registering` 与 `.noKey` 遇 `superseded` 的
+        // 结果与「该格不写、落进 default 返回原状态」逐字相同，任何断言都恒真 —— 实测：把整段
+        // 迁移改成 `return state`，那两条仍绿。所以它们不写断言，源码里也不单列。
+        XCTAssertTrue(TailnetNodeState.handle(.superseded, from: .running) == .registering,
+                      "MS16 running 被取代 → registering：旧一代的产物作废，状态必须离开 running（否则 route 仍指向已关闭的节点）")
+        XCTAssertTrue(TailnetNodeState.handle(.superseded, from: .failed(.badKey)) == .registering,
+                      "MS17 failed(badKey) 被取代 → registering")
+        XCTAssertTrue(TailnetNodeState.handle(.superseded, from: .failed(.unreachable)) == .registering,
+                      "MS18 failed(unreachable) 被取代 → registering（两个失败原因都要被这条 pattern 覆盖）")
     }
 }
