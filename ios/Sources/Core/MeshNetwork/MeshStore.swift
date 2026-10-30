@@ -55,9 +55,12 @@ final class MeshStore {
     /// 读盘时发现组网配置损坏（存过但解不出来）；节点不会启动。
     private(set) var storedConfigDamaged = false
 
-    /// 组网**刚刚**就绪的那一刻 —— 动作层读它做，视图读 `phase` 画。
-    /// 只在「变成 `.ready` 且上一次不是」时调。
-    var onPhaseReady: (() -> Void)?
+    /// 组网阶段**变了** —— 带旧值与新值两端。
+    ///
+    /// 只报变化，不判断「这次变化意味着什么」：「跨进 ready 该叫醒谁」是编排层的事
+    /// （只有它同时认识组网与连接）。视图读 `phase` 画，不订阅这个。
+    /// `old` 可选：`nil` 表示还没有过值 —— 那是「尚未确立」，不是从某个阶段变来的。
+    var onPhaseChanged: ((_ old: MeshPhase?, _ new: MeshPhase) -> Void)?
 
     /// 上一次通知过的阶段 —— `phase` 是算出来的，没有别的变化可挂钩。
     private var lastNotifiedPhase: MeshPhase?
@@ -170,9 +173,10 @@ final class MeshStore {
         let now = phase
         let was = lastNotifiedPhase
         lastNotifiedPhase = now
-        // 只在**跨进** ready 那一次通知：每次路径刷新都重连一次，而那条连接可能正好好的。
-        if case .ready = now, !(was == .ready) {
-            onPhaseReady?()
+        // 变了就报，两端都给出去。**同值不报**：每次路径刷新（direct↔relay）都会回灌一次，
+        // 报了就成「每次刷新都叫醒一次」，而那条连接可能正好好的。
+        if was != now {
+            onPhaseChanged?(was, now)
         }
     }
 }

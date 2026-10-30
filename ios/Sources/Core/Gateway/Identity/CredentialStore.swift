@@ -33,7 +33,7 @@ final class CredentialStore {
     var hasDeviceToken: Bool { deviceToken != nil }
 
     /// 身份**刚变过**的那一刻 —— 供编排层接（配对成功后拉起连接）。
-    /// 与 `hasDeviceToken` 的分工同 `MeshStore.onPhaseReady`：那个回答「现在有没有」，
+    /// 与 `hasDeviceToken` 的分工同 `MeshStore.onPhaseChanged`：那个回答「现在有没有」，
     /// **不参与观察**：它是接线不是状态，标上 `@ObservationIgnored` 免得视图白重算一次。
     @ObservationIgnored var onIdentityChanged: (() -> Void)?
 

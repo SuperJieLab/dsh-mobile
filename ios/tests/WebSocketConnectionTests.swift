@@ -218,10 +218,16 @@ final class WebSocketConnectionTests: XCTestCase {
         waiting.authorizationProvider = { "ticket" }
         waiting.sessionProvider = { .shared }
         var phases: [ConnectionPhase] = []
-        waiting.onPhaseChange = { phases.append($0) }
+        var transitions: [(ConnectionPhase?, ConnectionPhase)] = []
+        waiting.onPhaseChanged = { old, new in
+            transitions.append((old, new))
+            phases.append(new)
+        }
 
         waiting.activate()
         XCTAssertEqual(phases, [.awaitingMesh], "没有地址就该说「等组网」，而不是「连接中」")
+        XCTAssertEqual(transitions.first?.0, .idle,
+                       "首参是变化前的那一格 —— 只传新值等于让每个接收方自己记上一次")
 
         // 等够一拍退避的时间窗：若它偷偷退避，这段时间足够出现 waiting 与下一代 connecting。
         try await Task.sleep(nanoseconds: 900_000_000)
@@ -283,7 +289,7 @@ final class WebSocketConnectionTests: XCTestCase {
     func testAFailingEndpointKeepsCyclingPhaseWithoutLeavingIdle() async throws {
         let transport = transport()
         var phases: [ConnectionPhase] = []
-        transport.onPhaseChange = { phases.append($0) }
+        transport.onPhaseChanged = { _, new in phases.append(new) }
 
         transport.activate()
         XCTAssertEqual(phases, [.connecting], "一发起就离开 idle")

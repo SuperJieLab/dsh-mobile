@@ -11,40 +11,47 @@ import XCTest
 @MainActor
 final class MeshStoreTests: XCTestCase {
 
-    /// 组网「刚就绪」的通知：只在**跨进** ready 那一次发。
+    /// 阶段变化通知：带两端，同值不发。
     ///
-    /// 两件事分别会坏，所以两头都断言：
-    /// ① 每次回灌都发 ⇒ 每次路径刷新（direct↔relay 切换）都会叫连接重连一次，
-    ///    而那条连接可能正好好的；
-    /// ② 从不发 ⇒ 编排层收不到「组网好了」，连接永远停在等组网。
-    func testPhaseReadyNotificationFiresOncePerTransition() async {
+    /// 「跨进 ready 才叫醒连接」这条判断已搬到接收方（编排层）—— 于是这条判据要证明的是
+    /// 接收方需要的两样东西都在：**新值**与**旧值**；以及保持同值时不被重复打扰。
+    ///
+    /// 两件事分别会坏：每次回灌都发 ⇒ 每次路径刷新（direct↔relay 切换）都被接收方当成一次跨越，
+    /// 于是重连一条正好好的连接；从不发 ⇒ 编排层收不到「组网好了」，连接永远停在等组网。
+    func testPhaseChangedNotificationCarriesBothEnds() async {
         let config = MeshConfig(controlURLString: "https://203.0.113.10:8443",
                                 gatewayURLString: "http://100.64.0.1:3081")
         let node = FakeNode()
         let store = MeshStore(node: node)
-        var readyCount = 0
-        store.onPhaseReady = { readyCount += 1 }
+        var transitions: [(MeshPhase?, MeshPhase)] = []
+        store.onPhaseChanged = { old, new in transitions.append((old, new)) }
 
         await store.start(config: config)
-        XCTAssertEqual(readyCount, 0, "还没就绪就不该通知")
 
         // 隧道产物就位（`verifiedRoute` 的唯一写入点）→ 同时回灌一次。
         node.nodeState = .running
         node.onVerifiedRunning?(URLSession.shared)
         XCTAssertTrue(store.phase == .ready, "先确认真的就绪了，否则下面测的是别的分支")
-        XCTAssertEqual(readyCount, 1, "跨进 ready 要通知一次")
+        XCTAssertEqual(transitions.last?.1, .ready, "跨进 ready 要有一次通知")
+        XCTAssertNotEqual(transitions.last?.0, .ready, "旧值不能也是 ready —— 否则接收方判不出「跨进」")
 
-        // 又一次回灌，阶段没变。
+        let crossings = transitions.filter { $0.1 == .ready && $0.0 != .ready }.count
+        XCTAssertEqual(crossings, 1, "第一条跨越")
+
+        // 又一次回灌，阶段没变：不该发。
+        let before = transitions.count
         node.onNodeChanged?()
-        XCTAssertEqual(readyCount, 1, "保持 ready 时不该重复通知")
+        XCTAssertEqual(transitions.count, before, "阶段没变就不该发 —— 发了接收方就会重连一条好连接")
 
-        // 掉下去再回来：中间那个非 ready 值必须被记下，否则回不来就不通知了。
+        // 掉下去再回来：两次都要发，接收方能自己算出第二次跨越。
         node.nodeState = .failed(.unreachable)
         node.onNodeChanged?()
-        XCTAssertEqual(readyCount, 1, "掉下去本身不是「就绪」")
+        XCTAssertEqual(transitions.last?.1, .failed(.unreachable), "掉下去本身也是一次变化")
         node.nodeState = .running
         node.onNodeChanged?()
-        XCTAssertEqual(readyCount, 2, "再回到 ready 是第二次跨进")
+        XCTAssertEqual(transitions.last?.1, .ready)
+        XCTAssertEqual(transitions.filter { $0.1 == .ready && $0.0 != .ready }.count, 2,
+                       "再回到 ready 是第二次跨越")
     }
 
     func testOrchestration() async {

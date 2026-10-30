@@ -93,7 +93,9 @@ struct AppServices {
         let credentials = self.credentials
 
         // 组网刚就绪 → 叫醒连接。那边不排定时器（等外部条件不该烧退避档位），只能靠这一声叫。
-        store.onPhaseReady = { [weak link] in
+        // 「跨进 ready」的判断在这里，不在组网层：组网层只报变了什么，谁该动由编排决定。
+        store.onPhaseChanged = { [weak link] old, new in
+            guard new == .ready, old != .ready else { return }
             link?.reconnectNow(reason: "mesh-ready")
         }
         // 身份刚变过 → 按现状补做连接那几步。读的是**当前**身份：撤销时 `hasDeviceToken`

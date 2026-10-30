@@ -32,7 +32,7 @@ final class WebSocketConnection: Channel {
     // MARK: - 注入
 
     /// 阶段变化（连接态指示器的数据源）。
-    var onPhaseChange: ((ConnectionPhase) -> Void)?
+    var onPhaseChanged: ((_ old: ConnectionPhase, _ new: ConnectionPhase) -> Void)?
     /// 取一张有效的访问凭证（升级请求带上它）。**没有就说明现在不该连。**
     var authorizationProvider: (() -> String?)?
     /// 换一张票。见 `renewThenRetry`：换到之后该重连、换不到该等还是该停，由本类决定。
@@ -51,7 +51,7 @@ final class WebSocketConnection: Channel {
     private(set) var phase: ConnectionPhase = .idle {
         didSet {
             guard phase != oldValue else { return }
-            onPhaseChange?(phase)
+            onPhaseChanged?(oldValue, phase)
         }
     }
 

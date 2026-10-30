@@ -31,13 +31,13 @@ final class LongConnection: StreamFactory {
 
         // 三个接点，这里是唯一一处：接上 Channel（事件订阅在 `attach` 内部完成）、
         // 把帧交给流表、转发阶段。漏掉任何一个的症状都不同 —— 漏 attach 则换代次不重开，
-        // 漏 onFrame 则界面永远空，漏 onPhaseChange 则网络格不动。
+        // 漏 onFrame 则界面永远空，漏 onPhaseChanged 则网络格不动。
         streams.attach(channel: transport)
         transport.onFrame = { [weak streams] envelope, raw in
             streams?.receive(envelope, raw: raw)
         }
 
-        transport.onPhaseChange = { [weak self] phase in self?.phase = phase }
+        transport.onPhaseChanged = { [weak self] _, new in self?.phase = new }
         transport.authorizationProvider = authorization
         // 换票只是「给一个能力」：换到之后该重连、换不到该等还是该停，由传输层自己按结果
         // 决定（见 `renewThenRetry`）—— 那是连接编排，不是这一层的事。
