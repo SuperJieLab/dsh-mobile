@@ -135,14 +135,71 @@ final class MeshStoreTests: XCTestCase {
                       "N3c 节点侧状态变化经 onNodeChanged 回灌：store 投影随即跟随（不经显式 store 调用）")
     }
 
-    /// 节点正在起时，第二次提交被明确拒绝，且**不改 `config`**。
+    /// 产物换代：只在「上次已有产物、且新会话不是同一个」时报一次。
     ///
-    /// 两件事分开断言，因为症状不同：
-    /// - 不拒 ⇒ 两条起节点的路并发，任一条的终局都会清掉另一条的产物；先失败的那条
-    ///   还会把后成功的那条挡在 `.failed` 外面进不来（迁移表里没有那一格）。
-    /// - 拒了但仍改了 `config` ⇒ 正在起的那条旧配置一旦成功，`onVerifiedRunning` 会用
-    ///   **新**地址配**旧** session —— 「地址与传输同生共死」当场破掉。
-    func testSubmittingWhileTheNodeIsStartingIsRefusedAndLeavesTheConfigAlone() async {
+    /// 两个方向各有症状：报多了 —— 冷启动首次就绪被当成换代，刚建好的连接被拆掉重建，
+    /// 用户看到「组网好了却连不上」还得等退避；从不报 —— 换了地址的连接继续握着旧会话
+    /// 往旧地址打，而且不会有任何报错。
+    ///
+    /// 断言落在「拿到通知那一刻读到的 route」上：这个信号不带参数（route 是唯一真相），
+    /// 接收方只能读它，所以必须证明那一刻它已经是新产物。
+    func testRouteReplacedFiresOnlyWhenTheProductIsReplaced() async {
+        let first = MeshConfig(controlURLString: "https://old.example:8443",
+                               gatewayURLString: "http://100.64.0.1:3081")
+        let second = MeshConfig(controlURLString: "https://new.example:8443",
+                                gatewayURLString: "http://100.64.0.2:3081")
+        let node = FakeNode()
+        let store = MeshStore(node: node)
+        var order: [String] = []
+        var baseURLAtFire: [URL?] = []
+        store.onRouteReplaced = {
+            order.append("route")
+            baseURLAtFire.append(store.route?.baseURL)
+        }
+        store.onPhaseChanged = { _, _ in order.append("phase") }
+        await store.start(config: first)
+
+        // ① 首次就绪不是「替换」。
+        order = []          // `start` 自己报过一次阶段（nil → needsSetup），那不是这条要看的东西
+        let sessionA = URLSession(configuration: .ephemeral)
+        node.nodeState = .running
+        node.onVerifiedRunning?(sessionA)
+        XCTAssertTrue(store.route?.session === sessionA,
+                      "先确认产物真的建成了，否则下面测的是别的分支")
+        XCTAssertEqual(order, ["phase"],
+                       "首次就绪只报阶段 —— 报成换代会让刚建好的连接被拆掉再靠退避重连")
+
+        // ② 换代：节点层先把状态打回接入中（`superseded` 那一支），新一代建成时
+        //    产物与阶段在同一次回灌里都变。
+        node.nodeState = .registering
+        node.onNodeChanged?()
+        _ = await store.submitMeshKey("hskey-auth-new", config: second)
+        order = []          // 只看「产物建成」那一次回灌
+        let sessionB = URLSession(configuration: .ephemeral)
+        node.nodeState = .running
+        node.onVerifiedRunning?(sessionB)
+
+        XCTAssertTrue(store.route?.session === sessionB, "产物换成了新的")
+        XCTAssertEqual(order, ["route", "phase"],
+                       "先产物后阶段：反序会先用旧会话叫醒连接、紧接着又被拆掉 —— 一次白连")
+        XCTAssertEqual(baseURLAtFire.last ?? nil, second.gatewayBaseURL,
+                       "报的时候 route 必须已经是新地址 —— 接收方只能读它")
+
+        // ③ 同一个会话再报一次不算换代（幂等重入会重放一次成功回调）。
+        order = []
+        node.onVerifiedRunning?(sessionB)
+        XCTAssertTrue(order.isEmpty, "同一个会话重复报不算换代 —— 否则每条好连接都会被拆一次")
+    }
+
+    /// 接入途中再次提交：**必须接下**，并真的转交给节点层。
+    ///
+    /// 这条原本断言的是「拒绝」。拒的代价是用户改完配置还得等旧那轮跑完（最长约 49 秒），
+    /// 而旧那轮恰恰是用户想作废的那一次。互相污染的顾虑现在由节点层代际收口：新配置起来时
+    /// 旧那代被取代，它迟到的结论写不进来（断言在 `TailnetNodeTests`）。
+    ///
+    /// 于是这里要证明的是「接下了，而且真转交了」—— 只落盘不转交，用户会以为改好了，
+    /// 实际什么都没发生，也没有任何报错。
+    func testSubmittingWhileTheNodeIsStartingIsAccepted() async {
         let old = MeshConfig(controlURLString: "https://old.example:8443",
                              gatewayURLString: "http://100.64.0.1:3081")
         let new = MeshConfig(controlURLString: "https://new.example:8443",
@@ -152,20 +209,20 @@ final class MeshStoreTests: XCTestCase {
         await store.start(config: old)
 
         node.isStarting = true
-        XCTAssertTrue(store.isStarting, "「正在起」要透传给设置页做提交前的判断")
-
         let outcome = await store.submitMeshKey("hskey-auth-new", config: new)
-        XCTAssertTrue(outcome == .refusedWhileNodeStarting, "起节点期间该明确拒绝，不能静默吞掉")
-        XCTAssertEqual(node.submitCount, 0, "被拒的动作不该转交给节点层")
-        let retryOutcome = await store.retryMesh(config: new)
-        XCTAssertTrue(retryOutcome == .refusedWhileNodeStarting, "重试同样要拒 —— 它也会再起一条节点")
+        XCTAssertTrue(outcome == .accepted,
+                      "接入中的提交要接下 —— 拒了就等于让用户等旧那轮跑完")
+        XCTAssertEqual(node.submitCount, 1, "接下的动作要真的转交给节点层")
 
-        // 旧配置那条最终还是成功了：产物必须配旧地址，而不是用户刚敲的新地址。
+        let retryOutcome = await store.retryMesh(config: new)
+        XCTAssertTrue(retryOutcome == .accepted, "重试同样要接 —— 它也是「我要用这份配置」")
+        XCTAssertEqual(node.retriedConfigs, [new], "重试交的也是这一份")
+
         node.isStarting = false
         node.nodeState = .running
         node.onVerifiedRunning?(URLSession(configuration: .ephemeral))
-        XCTAssertEqual(store.route?.baseURL, old.gatewayBaseURL,
-                       "被拒的配置不许进 config —— 否则旧 session 会配上新地址")
+        XCTAssertEqual(store.route?.baseURL, new.gatewayBaseURL,
+                       "换代后的产物配新地址 —— 地址与传输同生共死")
     }
 
     /// 回前台的重试用**存下来的那份**配置，不是调用方手里的。
@@ -209,15 +266,12 @@ final class MeshStoreTests: XCTestCase {
         onNodeChanged?()
     }
     func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
-        // 计「转交次数」而不是「接下次数」：后者会被本守卫吃掉，恒为 0，
-        // 于是「被拒的动作不该转交给节点层」这条断言永远绿。
+        // 计「转交次数」：这条是「接下了就得真的交出去」的判据落点。
         submitCount += 1
-        guard !isStarting else { return .refusedWhileNodeStarting }
         return .accepted
     }
     func retry(config: MeshConfig) async -> MeshActionAcceptance {
         retriedConfigs.append(config)
-        guard !isStarting else { return .refusedWhileNodeStarting }
         return .accepted
     }
 }

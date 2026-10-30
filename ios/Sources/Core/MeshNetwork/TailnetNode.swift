@@ -104,7 +104,7 @@ final class TailnetNode {
 
     /// 设置页提交接入 key：进沙盒存储 → 注册。
     /// **不再拒绝「节点正在起」**：用户给的是新地址，那次在跑的接入的结论已经不相关了，
-    /// 正确处置是让老的作废（`supersede()`），不是让用户等它跑完。
+    /// 正确处置是让老的作废（`beginSupersede()`），不是让用户等它跑完。
     func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
         Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
         guard !key.isEmpty else {
@@ -112,7 +112,8 @@ final class TailnetNode {
             transition(.registrationFailed(.badKey))
             return .accepted
         }
-        await supersede()
+        beginSupersede()
+        await closeSupersededNode()
         TailnetKeyStore.save(key)
         transition(.keySubmitted)
         await up(key: key, config: config)
@@ -128,7 +129,8 @@ final class TailnetNode {
             transition(.retry(keyPresent: false))
             return .accepted
         }
-        await supersede()
+        beginSupersede()
+        await closeSupersededNode()
         transition(.retry(keyPresent: true))
         if case .registering = state {
             await up(key: key, config: config)
@@ -254,14 +256,22 @@ final class TailnetNode {
         case fatal(TailnetNodeFailure)
     }
 
-    /// 让在跑的那一代作废，然后把场子交给新一代。**三件事的顺序有讲究**：
-    /// ① 先 `generation += 1` —— 旧一代此后任何写入都被丢弃；
-    /// ② 再把状态交回「接入中」—— `MeshStore.route` 的守卫读状态，不离开 `.running`
-    ///    就还会返回那个已关闭节点的 session；
-    /// ③ 最后 close 与清产物 —— close 可能耗到上限，放在最后不耽误前两件已经生效。
-    private func supersede() async {
+    /// 让在跑的那一代立刻作废：**同步**，返回之后旧一代的任何写入都不会落地。
+    ///
+    /// 与收尸（`closeSupersededNode`）分开，是因为调用方需要它「立刻」生效 —— 提交新配置时，
+    /// 新地址会先写进组网配置；若作废要等一个 `await`，那之间旧一代的成功回调就会把
+    /// **旧 session** 与**新地址**拼成一对，请求于是全打在那边到不了的地方且不报错。
+    /// 同步做完这一半，那一对在时间上就拼不出来（调用链在同一 actor 上，中间没有挂起点）。
+    ///
+    /// 顺序也有讲究：先 `generation += 1`，再把状态交回「接入中」——
+    /// `MeshStore.route` 的守卫读状态，不离开 `.running` 就还会返回那个已关闭节点的会话。
+    private func beginSupersede() {
         generation += 1
         transition(.superseded)
+    }
+
+    /// 关掉被取代的节点并清掉它的产物。可能耗到上限，所以必须在作废之后单独等。
+    private func closeSupersededNode() async {
         if let node {
             await Self.close(node, within: Self.closeWaitLimitSeconds)
         }
@@ -327,10 +337,14 @@ final class TailnetNode {
             case .ready(let session):
                 guard current == generation else { return }
                 gatewaySession = session
+                // **先交产物、再宣布就绪**：`transition` 会立刻把「Running」推给上层，
+                // 产物若还没交出去，上层看到的就是「已就绪、手上却还是上一代那个会话」——
+                // 于是它先用旧会话连一次，紧接着被告知该换代，白连。
+                // 顺序调过来，「就绪」这个词才名副其实：看到 Running 时产物已经在那儿了。
+                // 也正因为状态那条通知**不带 session**，产物只能从这条回调交出去。
+                onVerifiedRunning?(session)
                 transition(.registrationSucceeded)
                 startPathPolling()
-                // 根部激活回调：同值迁移不触发 onChange，激活只能挂在「session 刚建成」这个时点。
-                onVerifiedRunning?(session)
                 return
 
             case .fatal(let failure):

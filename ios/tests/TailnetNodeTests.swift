@@ -1,5 +1,7 @@
 /**
  * 节点层自己的两条不变式：接入窗口（`isStarting`）怎么进、怎么出，以及窗口里不做探活。
+ * 另有两条跨层判据（换代不交产物、产物的交付早于「就绪」），它们落在这里是因为
+ * 决定顺序的是节点层，而假后端也只有这里造得出来。
  *
  * 这两条以前只在调用方那侧被测（`MeshStoreTests` 经 store 断言），而判据的归属错了：
  * 「节点还没验证过」只有节点知道。挪回来之后要能被测，就得让 `up()` 挂得住 ——
@@ -267,6 +269,67 @@ final class TailnetNodeTests: XCTestCase {
 
         XCTAssertEqual(node.state, .running,
                        "旧一代迟到的 badKey 不得改写新一代的结果 —— 它的结论在换代那一刻就作废了")
+    }
+
+    /// 旧那一代迟到的**成功**也不得交出产物 —— 这条比「不写状态」更要紧。
+    ///
+    /// 状态写错是一格标签；产物交出去，调用方就会把它与此刻的组网配置拼成一对
+    /// （旧 session + 新地址），请求会全部打在「那条会话到不了的地方」，而且没有任何报错。
+    ///
+    /// 构造上不赌时序：旧一代的 `up()` 正是被 `close()` 解开的，所以它走完成功那条路
+    /// 恰好发生在换代过程当中 —— 那是真实路径，不是人为插进去的。
+    func testTheSupersededAttemptCannotHandOutItsProduct() async {
+        let old = FakeBackend()
+        await old.configure(holdsUp: true)
+        let fresh = FakeBackend()
+        let node = TailnetNode(makeBackend: twoBackends(old, fresh))
+        let config = completeConfig()
+
+        var handedOut: [URLSession] = []
+        node.onVerifiedRunning = { handedOut.append($0) }
+
+        let first = Task { await node.submitKey("hskey-auth-old", config: config) }
+        await old.waitUntilUpCalls(1)
+
+        let second = Task { await node.submitKey("hskey-auth-fresh", config: config) }
+        await fresh.waitUntilUpCalls(1)
+        await fresh.releaseUp()
+        _ = await second.value
+        _ = await first.value
+
+        XCTAssertEqual(handedOut.count, 1,
+                       "只有新一代交产物 —— 旧一代迟到的成功再交一次，就有人拿旧 session 配新地址")
+        XCTAssertEqual(node.state, .running, "状态同样只来自新一代")
+    }
+
+    /// 产物的交付必须早于「就绪」的宣布 —— 在**真装配**上验，不靠两端各自的假件。
+    ///
+    /// 两端各自的判据都绿也可能坏：换代的判断在 store，而「什么时候算就绪」由节点决定。
+    /// 节点若先 `transition(`Running`)` 再交产物，store 那次回灌读到的 `route` 还是上一代的
+    /// 会话 —— 于是它先报一次「就绪」，接收方拿旧会话连一次，紧接着才被告知换代并拆掉。
+    ///
+    /// 这条判据的形状是「事件序列」，不是「谁被调过」：只有序列能分辨那一次白连。
+    func testTheProductIsHandedOutBeforeReadyIsAnnounced() async {
+        let backend = FakeBackend()
+        let node = TailnetNode(makeBackend: { _ in backend })
+        let store = MeshStore(node: node)
+        let config = completeConfig()
+        var order: [String] = []
+        store.onRouteReplaced = { order.append("route") }
+        // 只收「就绪」这一种阶段：中途的 connecting 不在本判据的观察范围内。
+        store.onPhaseChanged = { _, new in if case .ready = new { order.append("phase:ready") } }
+
+        // `launch` 要先有 key 才会真的去起节点（没有 key 就停在 noKey，`up()` 都不会跑）。
+        TailnetNode.TailnetKeyStore.save("hskey-auth-first")
+        await store.start(config: config)
+        XCTAssertEqual(order, ["phase:ready"],
+                       "首次就绪只报阶段 —— 报成换代等于让接收方去拆一条还不存在的连接")
+
+        // 换代：新的一次接入建成。
+        order = []
+        _ = await store.submitMeshKey("hskey-auth-second", config: config)
+        XCTAssertEqual(order, ["route", "phase:ready"],
+                       "先产物、后阶段。反序会让接收方先拿旧会话叫醒一次连接，再把它拆掉")
     }
 
     /// `close()` 自己不返回时，新一代仍要能开始 —— 否则「打断」只是把等待换了个位置。

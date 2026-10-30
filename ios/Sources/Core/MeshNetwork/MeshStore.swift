@@ -14,7 +14,8 @@ import Foundation
 /// 原因写在取值名里 —— `Refusal` 已被 `Features/` 占用，Core 再定义会被分层判据读成跨层。
 enum MeshActionAcceptance: Equatable {
     case accepted
-    /// 没接：另一条起节点的路在跑。两条并发时，任一条的终局都会清掉另一条的产物。
+    /// 没接：另一条起节点的路在跑。**当前没有生产者** —— 起节点的路不再靠拒绝互斥，
+    /// 改由节点层的代际收口（旧一代作废，它迟到的结论写不进来）。这一格只剩设置页在判。
     case refusedWhileNodeStarting
 }
 
@@ -34,8 +35,9 @@ enum MeshActionAcceptance: Equatable {
     var onNodeChanged: (() -> Void)? { get set }
     func launchNode(config: MeshConfig) async
     func reviveNode() async
-    /// 组网管理动作（设置页）：提交接入 key / failed 后重试。判定仍在节点层状态机。
-    /// 节点正在起时回 `.refusedWhileNodeStarting` —— 同一时刻只允许一条起节点的路。
+    /// 组网管理动作（提交接入 key / failed 后重试）。判定仍在节点层状态机。
+    /// 节点正在起时也照接：用户给的是新配置，在跑那次的结论已经不相关了 —— 节点层会在
+    /// 提交的那一刻让旧一代作废（`supersede`），所以这里没有「忙时拒绝」这一支。
     func submitKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance
     func retry(config: MeshConfig) async -> MeshActionAcceptance
 }
@@ -62,8 +64,21 @@ final class MeshStore {
     /// `old` 可选：`nil` 表示还没有过值 —— 那是「尚未确立」，不是从某个阶段变来的。
     var onPhaseChanged: ((_ old: MeshPhase?, _ new: MeshPhase) -> Void)?
 
+    /// 隧道**产物被换掉了** —— 新一代接入建成，`route` 已换成另一个会话。
+    ///
+    /// 与 `onPhaseChanged` 分开，因为两者要的动作相反：阶段跨进 ready 是「叫醒一条在等地址的
+    /// 连接」，产物换代是「拆掉一条握着旧产物的连接」。首次就绪只报前者 —— 那时还没有连接可拆。
+    ///
+    /// 不带参数：`route` 是「此刻能不能发、往哪发」的唯一真相，参数化会多一个「参数与属性
+    /// 不一致」的窗口；接收方读 `route` 拿到的永远是当下那一刻。
+    var onRouteReplaced: (() -> Void)?
+
     /// 上一次通知过的阶段 —— `phase` 是算出来的，没有别的变化可挂钩。
     private var lastNotifiedPhase: MeshPhase?
+
+    /// 上一次报过的产物会话。换代判据就是「这次可见的会话不是上一次那个」——
+    /// 用会话身份而不是「收到过一次成功回调」：重入会重放同一个会话，那不是换代。
+    private var lastNotifiedSession: URLSession?
 
     /// 隧道的产物：往哪打、走哪条传输。**地址与传输同生共死** —— 没有「有地址但没有
     /// 传输」这种态，也没有「有传输但地址作废」这种态。
@@ -107,6 +122,8 @@ final class MeshStore {
         self.config = config
         node.onVerifiedRunning = { [weak self] session in
             guard let self, let baseURL = self.config?.gatewayBaseURL else { return }
+            // 只管把这一对装起来（地址与传输同生共死）；报不报换代由回灌口判 ——
+            // 判据是「此刻可见的会话换没换」，那需要三个投影都在手里。
             self.verifiedRoute = Route(session: session, baseURL: baseURL)
             self.nodeChanged()
         }
@@ -145,9 +162,9 @@ final class MeshStore {
     var isStarting: Bool { node.isStarting }
 
     /// 提交接入 key 并接入。
-    /// **预判在改 `config` 之前**：忙时先换配置，旧配置一旦成功就会拿旧 session 配新地址。
+    /// **不再预判「节点正在起」**：用户改配置正是唯一能让在跑那次作废的动作，挡在门外等于
+    /// 让他等旧那轮跑完。旧一代的结论由节点层代际判出去，不需要在这里互斥。
     func submitMeshKey(_ key: String, config: MeshConfig) async -> MeshActionAcceptance {
-        guard !node.isStarting else { return .refusedWhileNodeStarting }
         self.config = config
         // 用户重填过了 —— 上一次的「读坏」到此为止。再坏会是下一次读盘的事。
         storedConfigDamaged = false
@@ -157,18 +174,28 @@ final class MeshStore {
     }
 
     func retryMesh(config: MeshConfig) async -> MeshActionAcceptance {
-        guard !node.isStarting else { return .refusedWhileNodeStarting }
         self.config = config
         let outcome = await node.retry(config: config)
         nodeChanged()
         return outcome
     }
 
-    /// 节点侧事实变化的统一回灌口（状态迁移与路径刷新都经过，所以「刚就绪」也挂这里）。
-    /// 只读一个输入 —— 阶段与「能不能发」都在读数上算出来。
+    /// 节点侧事实变化的统一回灌口（状态迁移与路径刷新都经过）。
+    /// 三个投影都在这儿重算，两个对外信号也在这儿发。
+    ///
+    /// **先产物、后阶段**：换代时两者在同一次回灌里都变，反序则连接会先用旧会话被叫醒一次，
+    /// 紧接着又被拆掉重建 —— 一次白连。顺序由这两个 `if` 的先后决定，不是调用方约定。
     private func nodeChanged() {
         nodeState = node.nodeState
         meshPath = node.carrierPath
+
+        // 换代：此刻 `route` 已经是新的一对（两个投影刚刷新过），报出去接收方读到的就是它。
+        if let session = route?.session, lastNotifiedSession !== session {
+            let isReplacement = lastNotifiedSession != nil
+            lastNotifiedSession = session
+            // 首次就绪不是换代：那之前没有任何连接握着旧产物，没什么可拆的。
+            if isReplacement { onRouteReplaced?() }
+        }
 
         let now = phase
         let was = lastNotifiedPhase
