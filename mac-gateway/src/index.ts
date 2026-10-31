@@ -91,7 +91,7 @@ export function resolveLimits(config: Config): Limits {
   }
 }
 
-/** 全接口绑定的兜底值；生产经 config.host 改绑 tailnet 地址（100.64.0.1）。 */
+/** 全接口绑定的兜底值；生产经 config.host 绑到 tailnet 接口地址（虚拟网外不可达）。 */
 const DEFAULT_HOST = '0.0.0.0'
 
 /** 刻意不用 3080 —— 那是 dsh web profile 自己的端口。 */

@@ -413,6 +413,11 @@ final class SessionSync {
             displayedModel = modelState.displayed
         }
 
+        // 占用基线：opening 带的这一份是**这条流上最后一个读数**，后续的 `usage` 帧只在读数
+        // 变化时才来（网关拿它当基线）。不采纳它，没有新轮次的会话就永远显示 `--`，
+        // 而上游投影里其实有值。水位判据仍在 `UsageState` 里 —— 重连时更旧的那份会被拒。
+        if let occupancy = opening.occupancy { applyUsage(occupancy) }
+
         // 状态行只在首次建立窗口时更新：重连是传输层事件。
         if wasEmpty {
             status = .done(added: addedCount(verdict), recovered: false)
