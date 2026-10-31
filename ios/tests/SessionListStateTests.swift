@@ -52,8 +52,15 @@ final class SessionListStateTests: XCTestCase {
         return try XCTUnwrap(SessionListChange.decode(value), "这条样本该解得出：\(payload)")
     }
 
-    private func make(_ fetch: FakeFetch) -> SessionListState {
-        SessionListState { try await fetch.fetch() }
+    /// 这一组里的多数用例不碰新建：默认给一个「被调到就失败」的桩，用到了再显式传。
+    private struct CreateNotExpected: Error {}
+
+    private func make(
+        _ fetch: FakeFetch,
+        create: @escaping () async throws -> String = { throw CreateNotExpected() },
+        open: @escaping (String) -> Void = { _ in }
+    ) -> SessionListState {
+        SessionListState(fetch: { try await fetch.fetch() }, create: create, open: open)
     }
 
     /// 让挂起的任务跑到它的第一个 await。
@@ -358,5 +365,89 @@ final class SessionListStateTests: XCTestCase {
         events.handle(EventReading(content: .ready(generation: nil)))
         await settle()
         XCTAssertEqual(fetch.calls, 3, "源失效也要重拉：那些事件再也补不回来")
+    }
+
+    // MARK: - 新建会话
+
+    /// 建成的 id 交给 `open`，且**不碰列表**。
+    ///
+    /// 断言「列表没变」不是形式：新建出来的一定是 `blank`，而 `blank` 被
+    /// `SessionVisibility` 筛掉，所以在这里顺手 `reload()` 是一次**注定读不到**的读 ——
+    /// 它既白花一次请求，又会让「点了新建但列表还空着」看起来像失败。
+    func testCreatingOpensTheNewSessionAndLeavesTheListAlone() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.result = .success([row("a", updatedAt: 100)])
+        var opened: [String] = []
+        let state = make(fetch, create: { "session-new" }, open: { opened.append($0) })
+        await state.reload()
+        let before = state.sessions.map(\.id)
+
+        await state.createSession()
+
+        XCTAssertEqual(opened, ["session-new"], "宿主给的 id 要交给 open —— 那是导航的唯一输入")
+        XCTAssertEqual(state.sessions.map(\.id), before, "新建不许动列表")
+        XCTAssertEqual(fetch.calls, 1, "新建之后再读一次列表是白读，不该发生")
+        XCTAssertFalse(state.isCreating, "动作结束后在飞标记要落")
+    }
+
+    /// 在飞期间再点一次：**不发起第二发**，也只推进一屏。
+    ///
+    /// 上游对空会话有复用规则，连点不会堆出两个会话 —— 但那是宿主的规则，不该拿来兜 UI：
+    /// 两发会让两个动作抢同一行状态，且各自都会推进一屏。
+    func testASecondCreateWhileOneIsInFlightIsIgnored() async {
+        var calls = 0
+        var opened: [String] = []
+        let gate = CreateGate()
+        let state = make(FakeFetch()) {
+            calls += 1
+            return try await gate.wait()
+        } open: { opened.append($0) }
+
+        let first = Task { await state.createSession() }
+        await settle()
+        // 第二次也丢进 Task：**在飞**这件事本身就意味着它会挂住，同步 await 会把
+        // 「去掉守卫」这个变异变成一个挂死而不是一条红的断言。
+        let second = Task { await state.createSession() }
+        await settle()
+
+        XCTAssertEqual(calls, 1, "在飞时不该发起第二次")
+
+        gate.release("session-new")
+        await first.value
+        await second.value
+        XCTAssertEqual(opened, ["session-new"], "只该推进一屏")
+    }
+
+    /// 宿主拒绝：不推进、不静默，把说法落到失败面。
+    func testAFailedCreateSurfacesTheFailureAndOpensNothing() async {
+        var opened: [String] = []
+        let state = make(FakeFetch(), create: { throw RpcClientError.badStatus(500) }) { id in
+            opened.append(id)
+        }
+
+        await state.createSession()
+
+        XCTAssertTrue(opened.isEmpty, "没建成就不该有导航目标")
+        XCTAssertNotNil(state.failureText, "失败要给说法")
+        XCTAssertFalse(state.isCreating)
+    }
+
+    /// 可放行的创建桩：把「在飞」变成一个能握住的时刻。
+    @MainActor
+    private final class CreateGate {
+        /// **多个等待者**：若哪个变异真的放进了第二次调用，它们会一起挂在这里；
+        /// 只留一个的话第二个会覆盖第一个，导致「挂死」而不是断言失败。
+        private var waiters: [CheckedContinuation<String, Error>] = []
+
+        func wait() async throws -> String {
+            try await withCheckedThrowingContinuation { waiters.append($0) }
+        }
+
+        func release(_ id: String) {
+            let pending = waiters
+            waiters = []
+            for waiter in pending { waiter.resume(returning: id) }
+        }
     }
 }

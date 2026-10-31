@@ -22,6 +22,7 @@ const PORT: SessionPort = { list: async () => [], read: async () => undefined, r
 const fakeWritePort = (): import('../../src/ports/write.ts').WritePort => ({
   answerApproval: () => Promise.reject(new Error('model tests must not touch the write channel')),
   promptSession: () => Promise.reject(new Error('model tests must not touch the write channel')),
+  createSession: () => Promise.reject(new Error('model tests must not touch the write channel')),
 })
 
 /** A catalog the fake port serves; the literal is the independent fact source. */

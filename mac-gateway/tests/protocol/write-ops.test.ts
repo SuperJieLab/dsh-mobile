@@ -31,6 +31,9 @@ function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; promp
         prompts.push(prompt)
         return prompt.sessionId === 'missing' ? 'unknown-session' : 'accepted'
       },
+      async createSession() {
+        return 's-unused'
+      },
     },
   }
 }

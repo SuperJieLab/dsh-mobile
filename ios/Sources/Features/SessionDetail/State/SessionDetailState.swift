@@ -9,7 +9,11 @@ import Foundation
 @MainActor
 final class SessionDetailState {
 
-    let session: SessionSummary
+    /// 这一屏认的会话身份与标题。**只要这两格** —— 摘要里的 `blank` / `origin` / 时间戳
+    /// 这一屏一个都不读，留着它们等于让每个调用方先凑一份完整摘要（新建会话就凑不出来）。
+    let sessionId: String
+    /// 会话标题；没有（新建的空会话）时界面显示「会话」。
+    let title: String?
     let sync: SessionSync
     let catalog: ModelCatalogState
     let commands: CommandDirectory
@@ -20,16 +24,18 @@ final class SessionDetailState {
     let approvals: ApprovalStore
 
     init(client: RpcClient,
-         session: SessionSummary,
+         sessionId: String,
+         title: String?,
          link: LongConnection,
          store: MeshStore,
          approvals: ApprovalStore) {
-        self.session = session
+        self.sessionId = sessionId
+        self.title = title
         self.store = store
         self.approvals = approvals
-        sync = SessionSync(client: client, sessionId: session.id, link: link)
+        sync = SessionSync(client: client, sessionId: sessionId, link: link)
         catalog = ModelCatalogState { try await fetchCatalog(client) }
-        commands = CommandDirectory { try await fetchCommands(client, sessionId: session.id) }
+        commands = CommandDirectory { try await fetchCommands(client, sessionId: sessionId) }
         composer = ComposerState()
     }
 
@@ -54,10 +60,10 @@ final class SessionDetailState {
     var isTranscriptEmpty: Bool { sync.eventCount == 0 }
 
     /// 本会话还挂着的卡。表按会话分组，这一屏只取这一栏。
-    var pendingApprovals: [ApprovalTable.Entry] { approvals.pending(in: session.id) }
+    var pendingApprovals: [ApprovalTable.Entry] { approvals.pending(in: sessionId) }
 
     /// 这一屏的审批提示（"已过期"这类），没有时是 nil。
-    var notice: String? { approvals.notice(for: session.id) }
+    var notice: String? { approvals.notice(for: sessionId) }
 
     /// 徽章与网络 sheet 读的路径投影 —— 同一个值三处读，折在这里一处。
     var meshPath: CarrierPath? { store.meshPath }

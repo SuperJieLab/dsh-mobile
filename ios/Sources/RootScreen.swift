@@ -4,10 +4,15 @@ import SwiftUI
 /// **它不驱动启动编排** —— 那件事在 `AppServices.start()`：编排的语义是「先 A 后 B，恰好
 /// 一次」，而视图的语义是「值变了就重画，反复、可丢」。
 /// 它在这里而不在 `App.body`：Observation 的追踪只对 **View 的 body** 有文档保证。
-/// **它不造任何屏级状态**：四个目的地各自造自己的，这里只把服务传下去。
+/// **它不造任何屏级状态**：四个目的地各自造自己的，这里只把服务传下去。唯一持有的是
+/// 导航路径本身 —— 栈推进是根的职责，不是某一屏的。
 struct RootScreen: View {
     /// 全部基础服务。与进程同寿 —— 它是这个视图唯一的一处依赖来源。
     private let services: AppServices
+
+    /// 导航路径。列表建完会话要能主动推进一屏（`NavigationLink` 只表达"点了这一行"），
+    /// 所以栈由根持、以绑定形式传下去。
+    @State private var path: [Destination] = []
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -35,16 +40,18 @@ struct RootScreen: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             // 列表永远是根。前置条件不满足时它只在顶部提示（那条提示由列表自己画）——
             // 正在读会话的人不会被整屏弹走，而修配置从齿轮开始。
             SessionListAssembler(client: services.client,
                                  events: services.events,
-                                 store: services.store)
+                                 store: services.store,
+                                 navigate: { path.append($0) })
                 .navigationDestination(for: Destination.self) { route in
                     switch route {
-                    case .session(let session):
-                        SessionDetailAssembler(session: session,
+                    case .session(let sessionId, let title):
+                        SessionDetailAssembler(sessionId: sessionId,
+                                               title: title,
                                                client: services.client,
                                                link: services.link,
                                                store: services.store,

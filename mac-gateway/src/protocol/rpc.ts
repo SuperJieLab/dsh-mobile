@@ -116,6 +116,10 @@ export async function handle(
         // 写 op：整行原样交给宿主，但「是不是一条命令行」在这里先判。
         if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
         return await commandExecute(envelope, command)
+      case 'session-create':
+        // 写 op（建实体）。无载荷 —— 目录由宿主决定，这一条是契约的一部分。
+        if (write === undefined) return failure('internal-error', `write channel not wired for "${op}"`)
+        return await sessionCreate(write)
       case 'approval-answer':
       case 'session-prompt':
         // 写 op。仅只读测试装配会缺 `write`；生产必接线，
@@ -133,6 +137,17 @@ export async function handle(
     const refusal = readErrorOf(error)
     return failure(refusal.code, refusal.message)
   }
+}
+
+/**
+ * 建一个空会话。`ok` 意为**宿主建出来或复用了**一个空会话，`sessionId` 是它给的那个 ——
+ * 网关不造 id、也不缓存：列表是会话的真相，这里只负责把这一次创建的结果答回去。
+ *
+ * 宿主失败**不在这里折**：`handle` 的 catch 用 `readErrorOf` 统一折成 `internal-error`
+ * 并把上游的话带进 message。本层不记日志（与其余 op 一致），排障看宿主侧。
+ */
+async function sessionCreate(write: WritePort): Promise<Response> {
+  return success({ sessionId: await write.createSession() })
 }
 
 /**

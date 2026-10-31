@@ -33,7 +33,7 @@ struct SessionDetailView: View {
         .safeAreaInset(edge: .bottom) {
             bottomBars
         }
-        .navigationTitle(detail.session.title ?? "会话")
+        .navigationTitle(detail.title ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
         // 四个面共用一个 `.sheet(item:)`：两个独立 sheet 在同一事务里「关一个开一个」时，
         // 第二个经常不 present。

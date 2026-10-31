@@ -10,15 +10,21 @@ struct SessionListAssembler: View {
     private let events: EventStream
     /// 渲染段读它的投影：`phase` 驱动「就绪即首载」，`meshPath` 给徽章，`route` 给页脚地址。
     private let store: MeshStore
+    /// 新建成功后要进哪一屏。由组合根给（那里握着 `NavigationStack` 的 path）。
+    private let navigate: (Destination) -> Void
 
     /// 首帧为 nil：容器在 `.task` 里现造。`@State` 的初值表达式每次视图重建都求值、
     /// 只采用第一个 —— 造在 `init` 里不会错（构造是纯的），但会白造好几次；造在这里只造一次。
     @State private var list: SessionListState?
 
-    init(client: RpcClient, events: EventStream, store: MeshStore) {
+    init(client: RpcClient,
+         events: EventStream,
+         store: MeshStore,
+         navigate: @escaping (Destination) -> Void) {
         self.client = client
         self.events = events
         self.store = store
+        self.navigate = navigate
     }
 
     var body: some View {
@@ -31,7 +37,13 @@ struct SessionListAssembler: View {
             }
         }
         .task {
-            if list == nil { list = SessionListState(client: client) }
+            if list == nil {
+                // 装配段把两个方向都对上：状态只管「建好了、id 是这个」，
+                // 推进哪一屏由握着栈的人决定。
+                list = SessionListState(client: client) { sessionId in
+                    navigate(.session(sessionId: sessionId, title: nil))
+                }
+            }
             // `attach` 自带闸：`.task` 在详情推入时取消、返回时重跑，重跑这一下是空操作。
             list?.attach(events: events)
         }

@@ -21,6 +21,15 @@ struct ModelSelectRequest: Encodable {
     var reasoningEffort: String? = nil
 }
 
+/// `session-create` 请求：**无载荷**。
+///
+/// 目录不由客户端指定 —— 宿主用它自己进程的当前目录。这不是遗漏：手机上不选目录是
+/// 契约的一部分：目录由宿主决定，客户端不指定。
+struct SessionCreateRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "session-create"
+}
+
 struct CommandCatalogRequest: Encodable {
     let v = gatewayProtocolVersion
     let op = "command-catalog"
@@ -189,6 +198,14 @@ struct ModelSelectResponse: GatewayResponse {
     let ok: Bool
     let error: GatewayFailure?
     var selected: ModelSelection? = nil
+}
+
+/// `session-create` 回包。`sessionId` 是宿主建出来或复用的那个会话 —— 客户端不许自己造。
+struct SessionCreateResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var sessionId: String? = nil
 }
 
 /// 命令列表回包。

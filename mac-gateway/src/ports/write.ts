@@ -31,4 +31,14 @@ export interface WritePort {
    * 其余上游失败归调用方的 `internal-error`。
    */
   promptSession(prompt: SessionPromptMessage): Promise<'accepted' | 'unknown-session'>
+  /**
+   * 建一个空会话，返回它的 id。
+   *
+   * **目录不由调用方给**（宿主用自己的当前目录）—— 这一条是 `session-create`
+   * 契约的一部分：手机端没有目录选择器。
+   *
+   * 同目录已有空会话时宿主会复用它。那条规则**不是本端口的承诺**：调用方不得据此
+   * 推断「调两次必有两个会话」，也不得推断「必是同一个」。
+   */
+  createSession(): Promise<string>
 }

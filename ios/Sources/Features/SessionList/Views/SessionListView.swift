@@ -15,6 +15,14 @@ struct SessionListView: View {
         pairedList
     }
 
+    /// 新建一个空会话，建成就进去。
+    ///
+    /// 失败时**留在此屏**：`list.createSession()` 已经把说法落到列表顶部那一面。
+    /// 不在这里再画一遍 —— 同一句话两处渲染，两处迟早不一致。
+    private func newSession() {
+        Task { await list.createSession() }
+    }
+
     private var pairedList: some View {
         List {
             // 前置不满足时那条提示：中性，说的是「现在缺什么」—— 原文来自服务端那次失败。
@@ -32,7 +40,7 @@ struct SessionListView: View {
             }
 
             ForEach(list.sessions) { session in
-                NavigationLink(value: Destination.session(session)) {
+                NavigationLink(value: Destination.session(sessionId: session.id, title: session.title)) {
                     SessionRow(session: session)
                 }
             }
@@ -49,11 +57,27 @@ struct SessionListView: View {
                 ProgressView("正在读 Mac 上的会话…")
             } else if list.sessions.isEmpty
                         && list.failureText == nil && list.blockedReason == nil {
-                ContentUnavailableView(
-                    "还没有会话",
-                    systemImage: "tray",
-                    description: Text("在 Mac 上的 DSH Web UI 里聊一句，这里就会出现。")
-                )
+                ContentUnavailableView {
+                    Label("还没有会话", systemImage: "tray")
+                } description: {
+                    // 空会话在发出第一条消息之前不进这个列表（那是「候选新会话」的定义）——
+                    // 所以这句话说「第一条消息之后」，而不是「新建之后」。
+                    Text("新建一个开始对话。发出第一条消息之后，它会出现在这里。")
+                } actions: {
+                    Button("新建会话") { newSession() }
+                        .disabled(list.isCreating)
+                }
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    newSession()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .disabled(list.isCreating)
+                .accessibilityLabel("新建会话")
             }
         }
         .refreshable { await list.reload() }

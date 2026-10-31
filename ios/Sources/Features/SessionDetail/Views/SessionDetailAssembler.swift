@@ -4,7 +4,8 @@ import SwiftUI
 /// **容器由这一屏自己造**：它要随这一屏生死（离开就丢，回来重取一个窗口），
 /// 依赖在签名上看得见：四个服务 —— 这一屏要什么，读签名就知道，不必跳到组合根。
 struct SessionDetailAssembler: View {
-    private let session: SessionSummary
+    private let sessionId: String
+    private let title: String?
     private let client: RpcClient
     private let link: LongConnection
     private let store: MeshStore
@@ -14,12 +15,14 @@ struct SessionDetailAssembler: View {
     /// 只采用第一个 —— 造在 `init` 里不会错（构造是纯的），但会白造好几次。
     @State private var detail: SessionDetailState?
 
-    init(session: SessionSummary,
+    init(sessionId: String,
+         title: String?,
          client: RpcClient,
          link: LongConnection,
          store: MeshStore,
          approvals: ApprovalStore) {
-        self.session = session
+        self.sessionId = sessionId
+        self.title = title
         self.client = client
         self.link = link
         self.store = store
@@ -42,7 +45,8 @@ struct SessionDetailAssembler: View {
         .task {
             if detail == nil {
                 detail = SessionDetailState(client: client,
-                                            session: session,
+                                            sessionId: sessionId,
+                                            title: title,
                                             link: link,
                                             store: store,
                                             approvals: approvals)

@@ -20,11 +20,19 @@ final class SessionListState {
 
     private(set) var sessions: [SessionSummary] = []
     private(set) var isLoading = false
+    /// 正在让宿主建一个空会话。视图用它禁用入口 —— 连发两次只会让两个动作抢同一行状态。
+    private(set) var isCreating = false
     private(set) var outcome: Outcome = .ready
 
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
     /// 走真网络时，「两次请求并发」与「一次请求很慢」在测试里长得一样。
     private let fetch: () async throws -> [SessionSummary]
+    /// 让宿主建一个空会话、交回 id。与 `fetch` 一样注入：新建的失败面要能被断言，
+    /// 而走真网络时「宿主拒绝」与「网络断了」在测试里长得一样。
+    private let create: () async throws -> String
+    /// 建好之后去哪 —— 由装配段给（它握着导航栈）。**不叫 `navigate`**：这一层不认识
+    /// `Destination` 那张路由表，它只知道「拿这个 id 去看那一条会话」。
+    private let open: (String) -> Void
     /// 在途的那一次。单飞的落点，也是这批账的归属。
     private var inflight: Task<[SessionSummary], Error>?
     /// 这一次在途期间到达的变更，按到达顺序。进 `reload` 时必然为空 —— `apply` 只在
@@ -32,12 +40,18 @@ final class SessionListState {
     private var buffered: [SessionListChange] = []
     /// 是否已经听过事件流（`attach` 幂等）。
     private var attached = false
-    init(fetch: @escaping () async throws -> [SessionSummary]) {
+    init(fetch: @escaping () async throws -> [SessionSummary],
+         create: @escaping () async throws -> String,
+         open: @escaping (String) -> Void) {
         self.fetch = fetch
+        self.create = create
+        self.open = open
     }
 
-    convenience init(client: RpcClient) {
-        self.init { try await fetchSessions(client) }
+    convenience init(client: RpcClient, open: @escaping (String) -> Void) {
+        self.init(fetch: { try await fetchSessions(client) },
+                  create: { try await createBlankSession(client) },
+                  open: open)
     }
 
     /// 失败面的读法，不是第二份状态。
@@ -116,16 +130,40 @@ final class SessionListState {
             //
             // 分类只看错误的类型，**不去推算「现在缺什么」**：`FailureText` 已经把两种前置
             // 说成了两句不同的话（组网未就绪 / 还没有配对），端上再猜一遍就会有两个说法。
-            if let gatewayError = error as? RpcClientError, Self.isPrerequisite(gatewayError) {
-                outcome = .blocked(error.localizedDescription)
-            } else {
-                outcome = .failed(error.localizedDescription)
-            }
+            record(failure: error)
         }
     }
 }
 
 extension SessionListState {
+
+    /// 新建一个空会话；建成就把它交给 `open`（装配段据此推进一屏），失败落失败面。
+    ///
+    /// **不碰列表**：新建出来的一定是 `blank`，而 `blank` 不进列表（`SessionVisibility`）——
+    /// 读一次只会白读。它要等第一条消息之后才出现，这是上游对 `blank` 的定义，不是缺陷。
+    /// 宿主对同目录的空会话有复用规则，所以连点也不会堆出多个（那条不由本方法承诺）。
+    func createSession() async {
+        guard !isCreating else { return }
+        isCreating = true
+        defer { isCreating = false }
+        do {
+            let sessionId = try await create()
+            open(sessionId)
+        } catch {
+            record(failure: error)
+        }
+    }
+
+    /// 一次失败该落哪一面。`blocked` 与 `failed` 的分界见 `Outcome` 的注释；
+    /// 分类只看错误类型，**不去推算「现在缺什么」**（`FailureText` 已经说过那句话了）。
+    private func record(failure error: any Error) {
+        if let gatewayError = error as? RpcClientError, Self.isPrerequisite(gatewayError) {
+            outcome = .blocked(error.localizedDescription)
+        } else {
+            outcome = .failed(error.localizedDescription)
+        }
+    }
+
     /// 这个错误是不是「还差一步配置」而不是「这次请求坏了」。
     ///
     /// 只有两个取值在此列：隧道产物还没有、没有可用身份。其余（传输失败、状态码、协议

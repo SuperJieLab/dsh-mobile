@@ -7,9 +7,10 @@
 import Foundation
 
 enum Destination: Hashable {
-    /// 带整份 `SessionSummary` 而不只是 id：那一屏首帧就要标题与状态，而列表手上就有 ——
-    /// 不给它一个「先空着、再查一遍」的阶段。
-    case session(SessionSummary)
+    /// 会话详情。带的两格是那一屏真正读的东西：`sessionId` 与 `title`（标题可缺 ——
+    /// 刚建的空会话就没有）。**不带整份摘要**：详情屏一个别的字段都不读，而新建出来的
+    /// 空会话凑不出一份完整摘要（也没有必要凑）。
+    case session(sessionId: String, title: String?)
     case settings
     /// 地址、接入密钥、节点五态。
     case mesh

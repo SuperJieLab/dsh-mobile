@@ -2450,7 +2450,7 @@ final class LayeringTests: XCTestCase {
         let lines = codeLines(in: try String(contentsOf: root, encoding: .utf8))
 
         // 正控：确认读到了那个栈与列表，否则下面的计数守的是空气。
-        XCTAssertTrue(lines.contains { $0.1.contains("NavigationStack {") }, "没读到导航栈")
+        XCTAssertTrue(lines.contains { Self.isNavigationStack($0.1) }, "没读到导航栈")
         XCTAssertTrue(lines.contains { $0.1.contains("SessionListAssembler(") },
                       "根不是列表 —— 首屏被别的面顶掉了")
 
@@ -2491,11 +2491,11 @@ final class LayeringTests: XCTestCase {
         let firstInBody = lines[(bodyLine + 1)...].first {
             !$0.1.trimmingCharacters(in: .whitespaces).isEmpty
         }
-        XCTAssertTrue(firstInBody?.1.contains("NavigationStack {") == true,
+        XCTAssertTrue(firstInBody.map { Self.isNavigationStack($0.1) } == true,
                       "body 的第一条不是导航栈（第 \(firstInBody?.0 ?? -1) 行）"
                       + " —— 条件包在栈外，整屏仍会被换掉")
 
-        guard let stackLine = lines.firstIndex(where: { $0.1.contains("NavigationStack {") }) else {
+        guard let stackLine = lines.firstIndex(where: { Self.isNavigationStack($0.1) }) else {
             XCTFail("没读到导航栈")
             return
         }
@@ -2505,6 +2505,15 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(firstChild?.1.contains("SessionListAssembler(") == true,
                       "导航栈的第一个子视图不是列表（第 \(firstChild?.0 ?? -1) 行）"
                       + " —— 中间插了条件，正在读会话的人会被弹走")
+    }
+
+    /// 这一行是不是那一个导航栈 —— 允许带绑定（`NavigationStack(path: $path) {`）。
+    ///
+    /// 判据要守的是「栈在 body 开头、栈里第一个是列表」，绑不绑路径与那件事无关；
+    /// 按字面量 `NavigationStack {` 匹配，会在有人给栈加绑定时假红 —— 那是判据写窄了，
+    /// 不是根被改坏了。
+    private static func isNavigationStack(_ line: String) -> Bool {
+        line.range(of: #"NavigationStack(\s*\(.*\))?\s*\{"#, options: .regularExpression) != nil
     }
 
     /// 两个配置页只能从目的地清单进入 —— 没有第二个入口。
