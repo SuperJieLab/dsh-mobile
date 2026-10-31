@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import type { Server } from 'node:http'
 import { STREAM_PATH } from '../../src/remote/connection.ts'
-import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
+import type { FollowSource, ProjectionBaseline, UpstreamFollowFrame } from '../../src/ports/follow.ts'
 import type { ForwardedSink, ForwardedSource, UpstreamWireFrame } from '../../src/ports/events.ts'
 import type { WireEvent } from '../../src/wire/rpc.ts'
 
@@ -148,13 +148,18 @@ export function event(seq: number): WireEvent {
   return { type: seq % 2 === 0 ? 'user/message' : 'assistant/message', seq, time: 1_700_000_000_000 + seq, data: { text: `m${seq}` } }
 }
 
-export function snapshotFrame(log: readonly WireEvent[], windowSize: number): UpstreamFollowFrame {
+export function snapshotFrame(
+  log: readonly WireEvent[],
+  windowSize: number,
+  extra: { projections?: ProjectionBaseline } = {},
+): UpstreamFollowFrame {
   const records = log.slice(-windowSize).map(ev => ({ type: 'event' as const, event: ev }))
   return {
     type: 'snapshot',
     cursor: log.length - 1,
     records,
     hasMore: log.length > windowSize,
+    ...extra,
   }
 }
 

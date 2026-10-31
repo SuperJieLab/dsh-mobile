@@ -1231,3 +1231,71 @@ test('E3: a new generation is another ready on the same stream, never an end', {
     server.close()
   }
 })
+
+/**
+ * 占用随打开帧一起来：宿主内存里没有会话对象时，这是**唯一**的一条路。
+ *
+ * 未激活的历史会话就是这样 —— `occupancyOf` 要给一个已加载的会话对象，拿不到就
+ * 静默缺省（`fakeSource` 的 `occupancyOf` 恒 `undefined`，正是这一格）。而投影其实
+ * 已经随打开送来了，不接就等于让手机永远显示 `--`。
+ */
+test('opening carries occupancy from the frame projections', { timeout: 10_000 }, async () => {
+  const frame = snapshotFrame([event(0)], 1, {
+    projections: {
+      asOfSeq: 295,
+      values: { contextPressure: { contextWindow: 1_000_000, projectedTokens: 148_807 } },
+    },
+  })
+  const source = fakeSource([frame])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true })
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+    const socket = await connect(server)
+
+    send(socket, { type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } })
+
+    const payload = (await receive(socket)).payload as Record<string, unknown>
+    assert.deepEqual(payload.occupancy, {
+      asOfSeq: 295,
+      usage: { usedTokens: 148_807, contextWindow: 1_000_000 },
+    }, '打开帧要带上从投影基线算出的占用，且水位取自投影而不是窗口的 cursor')
+
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
+/**
+ * 投影里没有可画的东西时**不许编一个 0%**：整份占用缺省，客户端据此隐藏那一行。
+ *
+ * 这条与上一条成对：只测「有值时要发」时，把「值不成形也发」写成 0 也绿。
+ */
+test('opening omits occupancy when the projections carry no reading', { timeout: 10_000 }, async () => {
+  const frame = snapshotFrame([event(0)], 1, {
+    projections: { asOfSeq: 7, values: { contextPressure: { surfaceTokens: 10 } } },
+  })
+  const source = fakeSource([frame])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true })
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+    const socket = await connect(server)
+
+    send(socket, { type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } })
+
+    const payload = (await receive(socket)).payload as Record<string, unknown>
+    assert.equal(payload.occupancy, undefined, '分子或分母缺失时不许发一份「0%」')
+
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})

@@ -48,6 +48,7 @@ import { streamErrorOf } from '../protocol/error-codes.ts'
 import { sessionListChangeOf } from '../upstream/session-events.ts'
 import type { WireEvent } from '../wire/rpc.ts'
 import type { UsageSnapshot } from '../wire/usage.ts'
+import { usageSnapshotOf } from '../upstream/usage.ts'
 import type { ModelSelection } from '../wire/model.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import type { ForwardedSource } from '../ports/events.ts'
@@ -87,6 +88,21 @@ const EXCERPT_LIMIT = 120
  * 再在这条连接上服务，每一条流都不可信。静默忽略更糟：客户端会等到 45 秒就绪超时才走，
  * 而那一帧到底发生了什么，两端日志都没有。
  */
+/**
+ * 从打开帧的投影基线算占用。
+ *
+ * 缺基线或值不成形时返回 `undefined`，由调用方回落到 `occupancyOf`。两条来源共用
+ * `usageSnapshotOf` 这一份换算 —— 分开写，同一个百分比迟早有两个算法。
+ */
+function occupancyFromBaseline(frame: {
+  projections?: { asOfSeq: number; values: Readonly<Record<string, unknown>> }
+}): UsageSnapshot | undefined {
+  const baseline = frame.projections
+  if (baseline === undefined) return undefined
+  const reading = usageSnapshotOf(baseline.values, baseline.asOfSeq)
+  return reading.usage === undefined ? undefined : reading
+}
+
 export function onClientText(
   socket: Duplex,
   source: FollowSource,
@@ -336,9 +352,10 @@ async function pump(
         const events = frame.records.map(record => record.event as WireEvent)
         const cursor = frame.cursor + 1 // 参考 cursor 含端；我们排他
         expectedSeq = cursor
-        // 占用基线与窗口同一口气读出：手机打开时拿到的是同一时刻的
-        // 窗口与状态。
-        const occupancy = readUsage()
+        // 占用基数优先取自**这一帧自带的投影基线**：它与窗口出自同一次观察（同一
+        // `asOfSeq`）。`occupancyOf` 要经 `sessions.get`，那条路要一个已加载的会话
+        // 对象 —— 未激活的历史会话拿不到，整份占用会静默缺省；而投影其实已经送来。
+        const occupancy = occupancyFromBaseline(frame) ?? readUsage()
         lastUsage = occupancy
         const model = readModel()
 

@@ -51,6 +51,16 @@ export interface FollowSource {
 }
 
 /**
+ * 一次投影读取的基线与切点。
+ *
+ * `asOfSeq` 是**投影**的水位，与窗口的 `cursor` 是两条轴 —— 别相减、也别互相顶替。
+ */
+export interface ProjectionBaseline {
+  asOfSeq: number
+  values: Readonly<Record<string, unknown>>
+}
+
+/**
  * 参考 follow 流的一帧：打开的 `snapshot`，其 `records` 把每条事件包成
  * `{type:'event', event}`；随后是同包裹的 `event` 帧；再后是无 cursor 的
  * `assistant-stream` 帧。
@@ -64,6 +74,13 @@ export type UpstreamFollowFrame =
       /** 窗口之前是否还有更旧的事件（参考的 `hasMore`）。 */
       hasMore: boolean
       assistantStream?: unknown
+      /**
+       * 上游随打开送来的投影基线与切点（值已是各自的客户端视图）。
+       *
+       * 与窗口出自**同一次观察**，所以占用读数从这里算比经 `sessions.get` 更可靠：
+       * 后者要一个已加载的会话对象，未激活的历史会话拿不到，占用会静默缺省。
+       */
+      projections?: ProjectionBaseline
     }
   | { type: 'event'; event: unknown }
   | { type: 'assistant-stream'; frame: unknown }
