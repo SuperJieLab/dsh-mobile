@@ -83,7 +83,8 @@ final class TailnetNode {
 
         switch state {
         case .registering:
-            await up(key: key, config: config)
+            // 启动编排这一代就是「此刻那一个」：期间若有提交把代号推走，这次 up 会被判出局。
+            await up(key: key, config: config, generation: generation)
         case .running:
             // 幂等：二次 launch 会把旧 socket 全杀掉，socks5 / localapi 随即报 closed，
             // 路径标签也掉。
@@ -96,7 +97,7 @@ final class TailnetNode {
             }
             // 重开也照喂 key：状态目录健康 ≠ 注册完成，残缺状态不喂 key 会让 headscale 落
             // 交互注册。后端已 Running 时上游自行忽略 key。
-            await up(key: key, config: config)
+            await up(key: key, config: config, generation: generation)
         default:
             break
         }
@@ -112,11 +113,15 @@ final class TailnetNode {
             transition(.registrationFailed(.badKey))
             return
         }
-        beginSupersede()
-        await closeSupersededNode()
+        let gen = beginSupersede()
+        // 落盘排在等待之前：close 可能耗到上限，这期间用户可能再提交一次，
+        // 后写的那一次才该留在盘上。等完再写就会出现「先点的那次覆盖后点的」。
         TailnetKeyStore.save(key)
+        await closeSupersededNode(of: gen)
+        // 等待期间被更新的一代取代：这一次提交的结论归它，这里一个字段都不写。
+        guard gen == generation else { return }
         transition(.keySubmitted)
-        await up(key: key, config: config)
+        await up(key: key, config: config, generation: gen)
     }
 
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
@@ -128,11 +133,12 @@ final class TailnetNode {
             transition(.retry(keyPresent: false))
             return
         }
-        beginSupersede()
-        await closeSupersededNode()
+        let gen = beginSupersede()
+        await closeSupersededNode(of: gen)
+        guard gen == generation else { return }
         transition(.retry(keyPresent: true))
         if case .registering = state {
-            await up(key: key, config: config)
+            await up(key: key, config: config, generation: gen)
         }
     }
 
@@ -261,18 +267,28 @@ final class TailnetNode {
     /// **旧 session** 与**新地址**拼成一对，请求于是全打在那边到不了的地方且不报错。
     /// 同步做完这一半，那一对在时间上就拼不出来（调用链在同一 actor 上，中间没有挂起点）。
     ///
+    /// **返回新代号，由调用方带进 `up()`。** 不能让 `up()` 自己在入口读 `generation`：读的是
+    /// 那一刻的值，而 close 可能挂住一两秒 —— 这期间再来一次提交，两次都会读到最后一个值，
+    /// 于是两代并到同一个代号上，各自都能交产物、都能写状态。
+    ///
     /// 顺序也有讲究：先 `generation += 1`，再把状态交回「接入中」——
     /// `MeshStore.route` 的守卫读状态，不离开 `.running` 就还会返回那个已关闭节点的会话。
-    private func beginSupersede() {
+    @discardableResult
+    private func beginSupersede() -> Int {
         generation += 1
         transition(.superseded)
+        return generation
     }
 
-    /// 关掉被取代的节点并清掉它的产物。可能耗到上限，所以必须在作废之后单独等。
-    private func closeSupersededNode() async {
+    /// 关掉这一代作废的那个节点并清掉它的产物。可能耗到上限，所以必须在作废之后单独等。
+    ///
+    /// **只在仍是当代时清**：等待期间可能已被更新的一代取代，那时清场归后一代 ——
+    /// 它要关的是同一个 `node`，这一代再去清只会把后一代刚建好的东西抹掉。
+    private func closeSupersededNode(of generation: Int) async {
         if let node {
             await Self.close(node, within: Self.closeWaitLimitSeconds)
         }
+        guard generation == self.generation else { return }
         node = nil
         gatewaySession = nil
         stopPathPolling()
@@ -315,10 +331,9 @@ final class TailnetNode {
     /// 起一代节点并等登录完成；环境类失败自动重试。key 空表示本机没存过 key
     /// （上游对 Running 后端会自行忽略 key）。
     ///
-    /// **同代才写**：`generation` 在这一代开始时取定，循环每轮与每个写状态的点前都比一次 ——
-    /// 被取代之后这一代什么都不写，也不清 `isStarting`（那是新一代的窗口）。
-    private func up(key: String?, config: MeshConfig) async {
-        let current = generation
+    /// **同代才写**：代号由提交方带进来（`beginSupersede()` 的返回值），循环每轮与每个写状态
+    /// 的点前都比一次 —— 被取代之后这一代什么都不写，也不清 `isStarting`（那是新一代的窗口）。
+    private func up(key: String?, config: MeshConfig, generation current: Int) async {
         isStarting = true
         defer { if current == generation { isStarting = false } }
 
@@ -331,7 +346,7 @@ final class TailnetNode {
                 return
             }
             attempt += 1
-            switch await attemptUp(key: key, config: config) {
+            switch await attemptUp(key: key, config: config, generation: current) {
             case .ready(let session):
                 guard current == generation else { return }
                 gatewaySession = session
@@ -372,7 +387,12 @@ final class TailnetNode {
 
     /// 一次尝试：造节点 → 等 up（带超时）→ 确认后端真的 Running。
     /// 不在这里迁移状态：重试期间停在 `registering`，迁移只在终局做。
-    private func attemptUp(key: String?, config: MeshConfig) async -> UpOutcome {
+    ///
+    /// `self.node` 的写入也要过代际判据：`runUp` 最长 15 秒，这期间换代完全可能发生，
+    /// 而句柄是**当代**的东西 —— 旧一代超时后把它抹成 nil，今天的活节点就没人关得掉了
+    /// （`revive()` 直接返回、路径轮询恒 nil、下一次 `closeSupersededNode` 也够不着它）。
+    private func attemptUp(key: String?, config: MeshConfig,
+                           generation current: Int) async -> UpOutcome {
         guard config.isComplete, let controlURL = config.controlURL else {
             // 配置没填全（实际只可能是网关地址缺）：视同不可达（界面提示去设置页补地址）。
             // 重试不会补上地址。
@@ -398,6 +418,7 @@ final class TailnetNode {
             Log.info(Log.Module.mesh, "up: init threw \(message)")
             return Self.outcome(forMessage: message)
         }
+        // 到这一行没有挂起点（造后端是同步的），所以循环开头那次代际判定仍然成立。
         self.node = node
 
         switch await Self.runUp(node) {
@@ -406,13 +427,14 @@ final class TailnetNode {
                      "up: no answer in \(Int(Self.upTimeoutSeconds))s"
                      + " — closing this node (upstream has no timeout of its own)")
             // `close` 是上游指定的取消手段：它让卡住的 `up()` 收尾，不留一条还在跑的 Go 侧节点。
+            // 它关的是**这一次尝试造的**那个，与代际无关，所以无条件关。
             try? await node.close()
-            self.node = nil
+            if current == generation { self.node = nil }
             return .retryable(.unreachable)
 
         case .failed(let message):
             Log.info(Log.Module.mesh, "up: threw \(message)")
-            self.node = nil
+            if current == generation { self.node = nil }
             return Self.outcome(forMessage: message)
 
         case .returned:

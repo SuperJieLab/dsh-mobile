@@ -41,6 +41,9 @@ final class SignalShapeTests: XCTestCase {
         XCTAssertEqual(definitions, 2,
                        "阶段变化通知应当两处各一个（组网层与连接层）；"
                        + "少一处说明有人又写了个窄的，多一处说明有人加了第三种形状")
+        // 「首参是旧值」这一半不在这里扫：两处消费点（`AppServices` 与 `LongConnection`）
+        // 都写成两参闭包，签名改成窄的会直接编译不过 —— 编译器已经在守，再写一条正则
+        // 只会随 Swift 语法变化而误报。
     }
 
     /// 标识符边界匹配：命中处的前后都不能是字母、数字或下划线。

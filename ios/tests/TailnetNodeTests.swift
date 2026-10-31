@@ -66,6 +66,17 @@ final class TailnetNodeTests: XCTestCase {
             return upCalls >= count
         }
 
+        /// 等 `close()` 被调到第 `count` 次 —— 「作废这一步已经开始」不能靠 sleep 猜。
+        @discardableResult
+        func waitUntilCloseCalls(_ count: Int, timeoutMs: Int = 3000) async -> Bool {
+            let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
+            while Date() < deadline {
+                if closeCalls >= count { return true }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            return closeCalls >= count
+        }
+
         func statusJSONCalls() -> Int { statusCalls }
 
         func up() async throws {
@@ -330,6 +341,54 @@ final class TailnetNodeTests: XCTestCase {
         await store.submitMeshKey("hskey-auth-second", config: config)
         XCTAssertEqual(order, ["route", "phase:ready"],
                        "先产物、后阶段。反序会让接收方先拿旧会话叫醒一次连接，再把它拆掉")
+    }
+
+    /// 连点两次保存、第一次的 close 还挂着：两代**不许**并到同一个代号上。
+    ///
+    /// 触发条件不是纸面情形 ——「已有节点 + close 挂住」正是控制面不可达时的样子，而
+    /// `close` 的等待上限就是两秒。若代号由 `up()` 自己在入口读，那两个提交都会读到最后的
+    /// 值：两代通吃同一代号，各自都能交产物、都能写状态，用户看到的是「点了两次，结果不确定」。
+    ///
+    /// 断言的落点是**交产物的次数**：只有最后那一次提交该交。
+    ///
+    /// 修法有两处守卫（close 之后判一次当代、代号由提交方带进 `up()`），它们互为冗余：
+    /// 单独去掉任何一个这条仍然绿，**两个都去掉才红**（变异探针实测 2 ≠ 1）。
+    /// 记这一点是为了别人别以为「删了一个还绿」就等于那一行没用。
+    func testASecondSubmitWhileTheFirstCloseHangsDoesNotShareTheGeneration() async {
+        let base = FakeBackend()            // 已入网的那个节点：换代时它的 close 挂住
+        let first = FakeBackend()           // 第一次提交（会被取代）
+        let second = FakeBackend()          // 第二次提交（该赢）
+        let node = TailnetNode(makeBackend: { spec in
+            switch spec.authKey {
+            case "hskey-auth-base": return base
+            case "hskey-auth-first": return first
+            default: return second
+            }
+        })
+        let config = completeConfig()
+        var handedOut: [URLSession] = []
+        node.onVerifiedRunning = { handedOut.append($0) }
+
+        // 先让组网就绪，后面两次提交才会各有一次「关掉上一个节点」。
+        await node.submitKey("hskey-auth-base", config: config)
+        XCTAssertEqual(node.state, .running, "先确认起点真的入网了，否则下面测的是别的路径")
+        handedOut = []
+
+        // 此后这个节点关不掉 —— close 会一直等到上限。
+        await base.configure(holdsUp: false, holdsClose: true)
+
+        let a = Task { await node.submitKey("hskey-auth-first", config: config) }
+        await base.waitUntilCloseCalls(1)   // A 的作废动作真的开始了
+
+        let b = Task { await node.submitKey("hskey-auth-second", config: config) }
+        _ = await a.value
+        _ = await b.value
+
+        XCTAssertEqual(handedOut.count, 1,
+                       "只有最后一次提交该交产物 —— 交两次说明两代共用了同一个代号")
+        XCTAssertEqual(node.state, .running, "终局来自后那一代")
+        XCTAssertEqual(TailnetNode.TailnetKeyStore.load(), "hskey-auth-second",
+                       "盘上该是后点的那次 —— 先点的那次等完 close 再写就会把它覆盖掉")
     }
 
     /// `close()` 自己不返回时，新一代仍要能开始 —— 否则「打断」只是把等待换了个位置。

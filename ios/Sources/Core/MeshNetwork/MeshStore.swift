@@ -110,6 +110,10 @@ final class MeshStore {
             guard let self, let baseURL = self.config?.gatewayBaseURL else { return }
             // 只管把这一对装起来（地址与传输同生共死）；报不报换代由回灌口判 ——
             // 判据是「此刻可见的会话换没换」，那需要三个投影都在手里。
+            //
+            // 地址取自**此刻**的 `config`，不是「产生这个 session 的那次配置」。两者相等靠的是
+            // 一条不在签名里的前提：改配置必经 `submitKey` / `retry` → 节点层换代 → 新 session，
+            // 所以旧 session 不可能配上新地址（旧一代的回调在换代时已作废）。
             self.verifiedRoute = Route(session: session, baseURL: baseURL)
             self.nodeChanged()
         }

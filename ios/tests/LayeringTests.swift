@@ -2859,6 +2859,9 @@ final class LayeringTests: XCTestCase {
     /// **只列这三个名字**：设置页那个「被拒原因」叫 `blockedReason`，而会话列表有一个同名的
     /// 无关概念（那一格是「为什么不能新建会话」）。按名字全仓扫会把它一起判红 ——
     /// 判据抓错对象比漏抓更难发现，因为它看起来是红的。
+    ///
+    /// **口径是「代码行」，注释不算**（`codeLines` 会剥掉注释行）。这是有意的：注释里出现
+    /// 这些名字，通常正是在解释「这道闸门为什么拆了」，把它判红只会逼人删掉解释。
     func testTheNodeStartingGateIsGoneFromTheSource() throws {
         let forbidden = ["nodeStarting", "refusedWhileNodeStarting",
                          "MeshActionAcceptance"]
@@ -2867,7 +2870,10 @@ final class LayeringTests: XCTestCase {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
             scanned += 1
             for (number, line) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
-                for needle in forbidden where line.contains(needle) {
+                // 按**标识符边界**匹配，不用 `contains`：子串匹配会把 `nodeStartingX` 这种
+                // 将来的邻居一起判红，而那是「红得没道理」，比漏抓更难查（见本期另一条）。
+                for needle in forbidden
+                where line.range(of: "\\b\(needle)\\b", options: .regularExpression) != nil {
                     XCTFail("\(relative):\(number) 还留着「\(needle)」—— 这道闸门只拆了一半")
                 }
             }

@@ -247,13 +247,11 @@ final class MeshStoreTests: XCTestCase {
     var reviveShouldFail = false
     var launchCount = 0
     var submitCount = 0
-    var reviveCount = 0
     var retriedConfigs: [MeshConfig] = []
     func launchNode(config: MeshConfig) async {
         launchCount += 1
     }
     func reviveNode() async {
-        reviveCount += 1
         if reviveShouldFail { nodeState = .failed(.unreachable) }
         // 真实节点在状态迁移与路径刷新处推送（TailnetNode.transition / refreshPathNow）；
         // 假件在事实变化点同样推送，回灌链路才被测到。
