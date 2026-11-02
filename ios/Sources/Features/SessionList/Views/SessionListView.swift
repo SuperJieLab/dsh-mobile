@@ -166,7 +166,33 @@ struct SessionListView: View {
 
             ForEach(groups) { group in
                 let expanded = list.isExpanded(group.id)
+                // 组的标题是**卡片里的第一行**，不是 Section 的 header。
+                //
+                // 这个位置不是排版偏好：`Section` 的 header 渲染在卡片**之外**，而那些行
+                // 一个都不画时（折叠，或一个空工作空间），整张卡片都不会出现 —— 只剩一行
+                // 灰色小字悬在空白里，与它管辖的东西脱开。放进卡片里之后，「一组 = 一张卡」
+                // 在最少的形态下也成立：折叠的组就是一张只有标题行的卡。
                 Section {
+                    GroupHeaderRow(title: title(of: group),
+                                   count: group.sessions.count,
+                                   isExpanded: expanded,
+                                   isRunning: group.hasRunning,
+                                   isUngrouped: group.isUngrouped,
+                                   isBusy: list.isCreating || list.isDeletingWorkspace,
+                                   onToggle: {
+                                       withAnimation(.snappy) { list.toggleExpansion(group.id) }
+                                   },
+                                   onCreate: {
+                                       Task { await list.createSession(in: group.id) }
+                                   },
+                                   onDelete: {
+                                       pendingDeletion = PendingDeletion(
+                                           id: group.id,
+                                           title: title(of: group),
+                                           sessionCount: group.sessions.count)
+                                   })
+                        .listRowInsets(EdgeInsets(top: 11, leading: 14, bottom: 11, trailing: 8))
+
                     // 折叠只是不画：`list.sessions` 里那些行一个都没少，事件照常落进去。
                     // 展开时看到的是最新的一份，不需要再读一次列表。
                     if expanded {
@@ -177,29 +203,6 @@ struct SessionListView: View {
                             }
                         }
                     }
-                } header: {
-                    GroupHeader(title: title(of: group),
-                                count: group.sessions.count,
-                                isExpanded: expanded,
-                                isRunning: group.hasRunning,
-                                // 未分组的组背后没有注册 —— 既没有工作空间可落，也没有东西可删。
-                                // 折叠的组两个动作都不给：它让「在这个组里做事」必然以
-                                // 「那个组是展开的」为前提。
-                                isWorkspace: !group.isUngrouped,
-                                isBusy: list.isCreating || list.isDeletingWorkspace,
-                                onToggle: {
-                                    withAnimation(.snappy) { list.toggleExpansion(group.id) }
-                                },
-                                onCreate: {
-                                    Task { await list.createSession(in: group.id) }
-                                },
-                                onDelete: {
-                                    pendingDeletion = PendingDeletion(
-                                        id: group.id,
-                                        title: title(of: group),
-                                        sessionCount: group.sessions.count)
-                                })
-                        .textCase(nil)
                 }
             }
 
@@ -209,6 +212,9 @@ struct SessionListView: View {
                 Text(footerText)
             }
         }
+        // 显式声明分组样式：一组一张卡这件事要靠它，而不是靠默认值 -- 默认值随平台
+        // 与层级变化，而「组是卡片、组之间有空隙」是这一屏的结构，不是巧合。
+        .listStyle(.insetGrouped)
         .navigationTitle("会话")
         .overlay {
             if list.isLoading && groups.isEmpty {
@@ -303,35 +309,42 @@ private struct PendingDeletion {
     let sessionCount: Int
 }
 
-/// 一组的标题行：左侧整块是折叠开关，右侧那两个动作只在展开时出现。
+/// 一组的标题行，**住在组那张卡里**：左侧整块是折叠开关，右侧那两个动作只在展开时出现。
+///
+/// 它与组内会话同属一张卡，所以它读起来是这个块的标题栏，而不是悬在块外面的一行说明。
+/// 折叠时这张卡就只剩它自己 —— 那是「一个收起来的分组」该有的样子。
 ///
 /// 折叠开关做成一个 `Button` 包住「箭头 + 标题 + 计数」，而不是给整行挂 `onTapGesture`：
 /// 后者会与右侧的「+」抢手势，而误触的代价是「想建会话，结果把组收起来了」。
-private struct GroupHeader: View {
+private struct GroupHeaderRow: View {
     let title: String
     let count: Int
     let isExpanded: Bool
     /// 组里有会话在跑。折叠之后这是唯一的痕迹 —— 否则「有东西在动」与「静止」长得一样。
     let isRunning: Bool
-    /// 这一组背后是一个工作空间（不是「未分组」）。
-    let isWorkspace: Bool
+    /// 这一组背后没有工作空间（「未分组」）—— 既没有地方落新会话，也没有东西可删。
+    let isUngrouped: Bool
     let isBusy: Bool
     let onToggle: () -> Void
     let onCreate: () -> Void
     let onDelete: () -> Void
 
+    /// 「未分组」不是工作空间，样式上降一级：它是兜底，不是用户建的那个东西。
+    private var titleFont: Font { isUngrouped ? .subheadline : .headline }
+    private var titleColor: HierarchicalShapeStyle { isUngrouped ? .secondary : .primary }
+
     var body: some View {
         HStack(spacing: 6) {
             Button(action: onToggle) {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
                     Text(title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                        .font(titleFont)
+                        .foregroundStyle(titleColor)
                         .lineLimit(1)
 
                     Text("\(count)")
@@ -354,9 +367,10 @@ private struct GroupHeader: View {
 
             Spacer(minLength: 8)
 
-            if isExpanded && isWorkspace {
+            if isExpanded && !isUngrouped {
                 Button(action: onCreate) {
                     Image(systemName: "plus")
+                        .font(.body.weight(.medium))
                 }
                 .buttonStyle(.borderless)
                 .disabled(isBusy)
@@ -368,12 +382,13 @@ private struct GroupHeader: View {
                     Button("删除工作空间", role: .destructive, action: onDelete)
                 } label: {
                     Image(systemName: "ellipsis")
+                        .font(.body.weight(.medium))
+                        .frame(width: 30, height: 22)
                 }
                 .disabled(isBusy)
                 .accessibilityLabel("「\(title)」的更多操作")
             }
         }
-        .padding(.vertical, 2)
     }
 }
 
