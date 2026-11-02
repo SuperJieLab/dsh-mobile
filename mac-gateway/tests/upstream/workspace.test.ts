@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { createWorkspaceIn, workspaceSnapshotOf } from '../../src/upstream/workspace.ts'
+import { createWorkspaceIn, deleteWorkspaceIn, workspaceSnapshotOf } from '../../src/upstream/workspace.ts'
 
 /**
  * 一个工作空间在注册表里的样子。`path` 是**多余的**：实现要是改成按目录路径
@@ -86,4 +86,53 @@ test('a session listed by two workspaces belongs to the first in registry order'
 
   assert.equal(snapshot.owners.get('s-shared'), 'w-a',
     '参照界面找的是清单里第一个成员表含它的工作空间；取后者会让同一批会话在手机与 Web UI 上分到不同的组')
+})
+
+// -- 删除（幂等） -------------------------------------------------------------
+
+/**
+ * 宿主的删除面：这个 id 还在就删掉，否则抛 `workspace/not-found` ——
+ * 上游就是这么做的（`registry.delete` 回 false 时抛）。
+ */
+function fakeDeleter(known: readonly string[]) {
+  const rest = new Set(known)
+  return {
+    calls: [] as string[],
+    async delete(request: { workspaceId: string }) {
+      this.calls.push(request.workspaceId)
+      if (!rest.delete(request.workspaceId)) {
+        throw Object.assign(new Error(`Workspace "${request.workspaceId}" not found`), {
+          isDSHRemoteError: true,
+          code: 'workspace/not-found',
+        })
+      }
+      return { deleted: true as const }
+    },
+  }
+}
+
+test('deleting a workspace that is there calls straight through', async () => {
+  const controller = fakeDeleter(['w-a'])
+
+  await deleteWorkspaceIn(controller, 'w-a')
+
+  assert.deepEqual(controller.calls, ['w-a'], '删的就是被点的那一个')
+})
+
+test('deleting a workspace that is already gone is not a failure', async () => {
+  const controller = fakeDeleter([])
+
+  await deleteWorkspaceIn(controller, 'w-gone')
+
+  assert.deepEqual(controller.calls, ['w-gone'],
+    '仍然问了宿主一次 —— 不凭本地记忆跳过它，那会让「另一端刚删掉」表现成另一种结局')
+})
+
+test('a real host failure is not swallowed', async () => {
+  const controller = {
+    async delete(): Promise<{ deleted: true }> { throw new Error('disk is on fire') },
+  }
+
+  await assert.rejects(() => deleteWorkspaceIn(controller, 'w-a'), /disk is on fire/,
+    '只有明确的 not-found 才吞；别的故障必须冒泡成 internal-error')
 })

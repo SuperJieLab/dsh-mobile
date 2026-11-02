@@ -13,9 +13,10 @@ import XCTest
 
 final class SessionGroupingTests: XCTestCase {
 
-    private func session(_ id: String, updatedAt: Double = 1, workspace: String? = nil) -> SessionSummary {
+    private func session(_ id: String, updatedAt: Double = 1, workspace: String? = nil,
+                         running: Bool = false) -> SessionSummary {
         SessionSummary(id: id, title: nil, createdAt: 1, updatedAt: updatedAt,
-                       running: false, blank: false, origin: nil, workspaceId: workspace)
+                       running: running, blank: false, origin: nil, workspaceId: workspace)
     }
 
     private func workspace(_ id: String, _ title: String) -> WorkspaceSummary {
@@ -74,5 +75,27 @@ final class SessionGroupingTests: XCTestCase {
 
         XCTAssertEqual(groups[0].sessions.map(\.id), ["older", "newer"],
                        "顺序由服务端排好；客户端二次排序会让两端口径分叉")
+    }
+
+    /// 组自己知道有没有东西在跑 —— 折叠之后标题上那个痕迹靠它。
+    ///
+    /// 判据只落在 `sessions` 上，与折没折叠无关 —— 折叠只是不画行，成员一个不少。所以
+    /// 折叠的组「标题上有痕迹」这件事才有数据可依。
+    func testAGroupKnowsWhetherAnythingInItIsRunning() {
+        let groups = SessionGrouping.groups(
+            sessions: [session("a1", workspace: "w-a"),
+                       session("a2", workspace: "w-a", running: true),
+                       session("b1", workspace: "w-b")],
+            workspaces: [workspace("w-a", "A"), workspace("w-b", "B")])
+
+        XCTAssertTrue(groups[0].hasRunning, "组里有一条在跑，整组就算在跑")
+        XCTAssertFalse(groups[1].hasRunning, "一条都没跑就是静止的 —— 不能恒真")
+    }
+
+    func testAnEmptyGroupIsNotRunning() {
+        let groups = SessionGrouping.groups(
+            sessions: [], workspaces: [workspace("w-a", "A")])
+
+        XCTAssertFalse(groups[0].hasRunning, "空组不能因为「没有任何行在跑」而被算成在跑")
     }
 }

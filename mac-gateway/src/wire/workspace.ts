@@ -1,9 +1,11 @@
 /**
- * 新 op `workspace-create` 的线上形状与请求判型。
+ * 两个工作空间写 op 的线上形状与请求判型。
  *
- * 形状只有三格：op 的同义词 `name`、应答的 `workspaceId` / `title` / `created`。
- * 判型与语义（名字能不能用）合成一次判断 —— 对客户端而言两者的补救动作相同
- * （改字重发），分两个码只会让界面多一个分支。
+ * 形状只有几格：`workspace-create` 的 `name` 与应答的 `workspaceId` / `title` / `created`；
+ * `workspace-delete` 的 `workspaceId`。
+ *
+ * 判型与语义合在一次判断里 —— 对客户端而言两者的补救动作相同（改字重发 / 换一个组），
+ * 分两个码只会让界面多一个分支。
  *
  * ⚠️ 名字规则在客户端有一份同样的实现（它要在提交前就拦下、不发请求）。两份靠同一组
  * 字面量对齐，改这里必须同步改 `WorkspaceName.swift`。
@@ -14,9 +16,14 @@ import { nonEmptyString } from './fields.ts'
 /** 名字里不许出现的两个路径分隔符。 */
 const SEPARATORS = ['/', '\\']
 
-/** 请求形状：只有一个名字。 */
+/** `workspace-create` 的请求形状：只有一个名字。 */
 export interface WorkspaceCreatePayload {
   name: string
+}
+
+/** `workspace-delete` 的请求形状：只有一个工作空间 id。 */
+export interface WorkspaceDeletePayload {
+  workspaceId: string
 }
 
 /**
@@ -45,4 +52,17 @@ export function workspaceNameOf(payload: unknown): string | undefined {
   if (name === undefined) return undefined
   const trimmed = name.trim()
   return isValidName(trimmed) ? trimmed : undefined
+}
+
+/**
+ * 请求 → 要删的工作空间 id；形状不对或 id 是空串时返回 `undefined`。
+ *
+ * **不判它是否真的存在**：那是宿主的事，而删一个不存在的按成功处理 —— 在这一层先拦，
+ * 会让「另一端已经删掉了」这件事表现成一个客户端错误。
+ *
+ * @param payload - 解析后的请求体，构造上形状未知。
+ */
+export function workspaceIdOf(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
+  return nonEmptyString((payload as Record<string, unknown>).workspaceId)
 }

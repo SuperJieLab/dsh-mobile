@@ -61,10 +61,14 @@ final class SessionListStateTests: XCTestCase {
         _ fetch: FakeFetch,
         create: @escaping (String?) async throws -> String = { _ in throw CreateNotExpected() },
         createWorkspace: @escaping (String) async throws -> WorkspaceCreated = { _ in throw CreateNotExpected() },
-        open: @escaping (String) -> Void = { _ in }
+        deleteWorkspace: @escaping (String) async throws -> Void = { _ in throw CreateNotExpected() },
+        open: @escaping (String) -> Void = { _ in },
+        expansion: GroupExpansion = GroupExpansion(),
+        persisted: @escaping (GroupExpansion) -> Void = { _ in }
     ) -> SessionListState {
         SessionListState(fetch: { try await fetch.fetch() }, create: create,
-                         createWorkspace: createWorkspace, open: open)
+                         createWorkspace: createWorkspace, deleteWorkspace: deleteWorkspace,
+                         open: open, expansion: expansion, persistExpansion: persisted)
     }
 
     /// 让挂起的任务跑到它的第一个 await。
@@ -600,5 +604,95 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(state.workspaces.map(\.id), ["w-new"],
                        "在途那次的结果早于这次创建；不重拉就等于拿旧快照当最新")
         XCTAssertEqual(fetch.calls, 2, "一次在途 + 创建之后那一次")
+    }
+
+    // MARK: - 折叠状态
+
+    /// 切换要落盘。只在内存里变的话，重启就回到默认，而「记住」正是这一层的全部职责。
+    func testTogglingAGroupPersistsTheNewState() {
+        var saved: [GroupExpansion] = []
+        let state = make(FakeFetch(), persisted: { saved.append($0) })
+
+        state.toggleExpansion("w-a")
+
+        XCTAssertTrue(state.isExpanded("w-a"), "切一下就开")
+        XCTAssertEqual(saved.count, 1, "切换必须写一次盘")
+        XCTAssertEqual(saved.first, state.expansion, "写出去的那一份与内存里的是同一份")
+    }
+
+    /// 没拿到组清单时不能借它做清理。
+    ///
+    /// `workspaces` 为空有两个来源：一个工作空间都没有，或者这一发没取到组清单。后者若被
+    /// 当成前者，用户点一下折叠就把所有记录清空了 —— 那个错误不会以任何方式被看出来。
+    func testTogglingWithoutAWorkspaceListKeepsEveryRecord() {
+        var saved: GroupExpansion?
+        let state = make(FakeFetch(),
+                         expansion: GroupExpansion(expanded: ["w-old", "w-a"]),
+                         persisted: { saved = $0 })
+
+        state.toggleExpansion("w-a")     // 收起 w-a，剩 w-old
+
+        XCTAssertEqual(saved?.expanded, Set(["w-old"]),
+                       "空清单不等于「所有工作空间都没了」—— 那一刻不该清任何记录")
+    }
+
+    /// 拿到组清单之后，已经不存在的工作空间的记录在写盘时被清掉。
+    func testTogglingWithAKnownListDropsRecordsOfWorkspacesThatAreGone() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
+        var saved: GroupExpansion?
+        let state = make(fetch,
+                         expansion: GroupExpansion(expanded: ["w-gone"]),
+                         persisted: { saved = $0 })
+        await state.reload()
+
+        state.toggleExpansion("w-a")
+
+        XCTAssertEqual(saved?.expanded, Set(["w-a"]),
+                       "w-gone 已经不在了；不清的话它会永远留在本机偏好里")
+    }
+
+    // MARK: - 删除工作空间
+
+    /// 删完必须重拉：组消失与会话进未分组两件事都在新快照里。
+    func testDeletingAWorkspaceReloadsSoTheGroupGoesAway() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
+        var asked: [String] = []
+        let state = make(fetch, deleteWorkspace: {
+            asked.append($0)
+            fetch.workspaces = []
+        })
+        await state.reload()
+        let before = fetch.calls
+
+        await state.deleteWorkspace("w-a")
+
+        XCTAssertEqual(asked, ["w-a"], "删的是被点的那一个")
+        XCTAssertEqual(fetch.calls, before + 1, "删完要重拉一次 —— 不重拉，组还在列表里")
+        XCTAssertTrue(state.workspaces.isEmpty, "重拉回来的组清单里没有它了")
+        XCTAssertFalse(state.isDeletingWorkspace, "动作结束后在飞标记要落")
+    }
+
+    /// 失败时列表一动不动，说法落在顶部那一面。
+    ///
+    /// 「先本地删掉、失败再补回来」是这个仓里不该出现的形状：中间那一帧是「删了但没删掉」，
+    /// 而它没有任何东西能纠正。
+    func testAFailedDeletionLeavesTheListAloneAndSaysSo() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
+        let state = make(fetch, deleteWorkspace: { _ in throw RpcClientError.badStatus(500) })
+        await state.reload()
+        let before = fetch.calls
+
+        await state.deleteWorkspace("w-a")
+
+        XCTAssertEqual(fetch.calls, before, "失败不重拉：组清单没变，白读一次")
+        XCTAssertEqual(state.workspaces.map(\.id), ["w-a"], "组还在 —— 失败不该让界面先动")
+        XCTAssertNotNil(state.failureText, "失败必须有说法（落在列表顶部那条）")
+        XCTAssertFalse(state.isDeletingWorkspace)
     }
 }

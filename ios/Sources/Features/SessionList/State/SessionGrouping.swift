@@ -19,6 +19,14 @@ struct SessionGroup: Identifiable, Equatable {
     let sessions: [SessionSummary]
 
     var isUngrouped: Bool { id == SessionGrouping.ungroupedKey }
+
+    /// 组里有没有会话在跑。
+    ///
+    /// 折叠之后标题上要靠它留一个痕迹 —— 否则「有东西在动」与「静止的组」在列表上长得一样。
+    /// 它在折叠态仍然是准的：折叠只是不画行，`sessions` 一直带着全部成员。
+    var hasRunning: Bool {
+        sessions.contains { $0.running }
+    }
 }
 
 enum SessionGrouping {

@@ -27,6 +27,7 @@ function workspacePort(snapshot: WorkspaceSnapshot): WorkspacePort {
     snapshot: () => snapshot,
     // 这一组用例只读列表；写面在这里用不到，走到就是编错了。
     create: async () => { throw new Error('list-sessions must not create a workspace') },
+    delete: async () => { throw new Error('list-sessions must not delete a workspace') },
   }
 }
 

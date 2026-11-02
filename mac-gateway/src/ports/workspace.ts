@@ -35,6 +35,16 @@ export interface WorkspacePort {
    * @param name - 已判过的名字（单段、非空、不含分隔符）。
    */
   create(name: string): Promise<WorkspaceCreated>
+  /**
+   * 解除一个工作空间的注册。**目录与会话日志都不动** —— 那一批会话从此没有归属，
+   * 会落到「未分组」里。
+   *
+   * 删一个**已经不存在**的按成功处理：用户的意图是「让它不在列表里」，那已经是事实。
+   * 报一个「没有这个东西」只会让人怀疑自己刚点的是什么，而重试本来就无害。
+   *
+   * @param workspaceId - 已判过的 id（非空字符串）；存在与否不在这里判。
+   */
+  delete(workspaceId: string): Promise<void>
 }
 
 /** 一次创建工作空间的结果。 */

@@ -1,9 +1,9 @@
 /**
- * 会话列表那一屏的写动作：让宿主建一个空会话、让宿主造一个工作空间。
+ * 会话列表那一屏的写动作：让宿主建一个空会话、让宿主造一个工作空间、删掉一个工作空间。
  *
  * 与 `SessionDetail/State/SessionWrites.swift` 分开：那边是「往一个已存在的会话里写」，
- * 这边是「让一个会话或一个工作空间存在」。失败域不同，合成一个入口会让「哪个会话」
- * 这个问题在一半的路径上没有答案。
+ * 这边是「让一个会话或一个工作空间存在 / 不再存在」。失败域不同，合成一个入口会让
+ * 「哪个会话」这个问题在一半的路径上没有答案。
  *
  * 名字的合法性**不在这里判**：`WorkspaceName` 是那条规则的家，调用方在发请求之前用它。
  */
@@ -57,4 +57,19 @@ func createBlankSession(_ client: RpcClient, in workspaceId: String?) async thro
         throw RpcClientError.malformedResponse(detail: "sessionId")
     }
     return sessionId
+}
+
+/// 让宿主解除一个工作空间的注册。**目录与会话日志都不动** —— 它们失去的只是归属。
+///
+/// 没有业务字段要读：回包的 `ok` 由 `perform` 里的信封校验保证，非 ok 会抛
+/// `RpcClientError.refused`。删一个已经不存在的同样走成功路径（网关认得 not-found）——
+/// 用户的意图是「让它不在列表里」，那已经是事实。
+///
+/// 名字用 `remove` 而不是 `delete`：状态层那个动作叫 `deleteWorkspace(_:)`，两者同名会让
+/// `convenience init` 里的调用被解析成实例方法（`makeWorkspace` 与 `createWorkspaceAction`
+/// 也是同一个理由）。
+@MainActor
+func removeWorkspace(_ client: RpcClient, workspaceId: String) async throws {
+    _ = try await client.perform(
+        WorkspaceDeleteRequest(workspaceId: workspaceId)) as WorkspaceDeleteResponse
 }

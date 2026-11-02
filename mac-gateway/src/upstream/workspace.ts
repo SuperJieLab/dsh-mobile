@@ -9,6 +9,7 @@
  * 形状在本文件自行声明，因为真实类型在 dsh 安装目录之外无法解析。
  */
 
+import { isNotFound } from '../ports/errors.ts'
 import type { WorkspacePort, WorkspaceSnapshot } from '../ports/workspace.ts'
 
 /** 本适配器读取的工作空间实体。成员表已由宿主按目录索引过滤过。 */
@@ -28,11 +29,16 @@ export interface RegistryLike {
  * `resolveByPath` + `create`：**「这一次是不是新建的」只有它回答**（注册表那两个方法
  * 各自都不带这一格），而且它内部已经串行化了（`enqueue`），我们不必再实现一条队列。
  */
-export interface WorkspaceControllerLike {
+export interface WorkspaceCreateFace {
   create(request: { path: string }): Promise<{
     workspace: { workspaceId: string; title: string }
     created: boolean
   }>
+}
+
+/** 同一个控制器的删除面。拆成两个窄面：每个适配函数只声明自己用的那一个方法。 */
+export interface WorkspaceDeleteFace {
+  delete(request: { workspaceId: string }): Promise<{ deleted: true }>
 }
 
 /**
@@ -68,9 +74,32 @@ export function workspaceSnapshotOf(registry: RegistryLike): WorkspaceSnapshot {
  * @param path - 已存在的目录（调用方先建好）。
  */
 export async function createWorkspaceIn(
-  controller: WorkspaceControllerLike,
+  controller: WorkspaceCreateFace,
   path: string,
 ): Promise<{ workspaceId: string; title: string; created: boolean }> {
   const { workspace, created } = await controller.create({ path })
   return { workspaceId: workspace.workspaceId, title: workspace.title, created }
+}
+
+/**
+ * 删掉一个工作空间的**注册**。目录与会话日志都留着 —— 那是宿主的语义，本函数不越权。
+ *
+ * 「它已经不在」不是失败：宿主的 `delete` 对未知 id 抛 `workspace/not-found`，而用户的
+ * 意图是「让它不在列表里」—— 那已经是事实。吞掉它，其余一律冒泡。
+ *
+ * **仍然向宿主问一次**，即使本地记得它不存在：本地记忆会过期，而这一次调用本来就是廉价的。
+ *
+ * @param controller - 宿主的删除面。
+ * @param workspaceId - 要解除注册的工作空间。
+ */
+export async function deleteWorkspaceIn(
+  controller: WorkspaceDeleteFace,
+  workspaceId: string,
+): Promise<void> {
+  try {
+    await controller.delete({ workspaceId })
+  } catch (error) {
+    if (isNotFound(error)) return
+    throw error
+  }
 }

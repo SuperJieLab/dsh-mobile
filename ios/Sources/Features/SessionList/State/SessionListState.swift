@@ -27,6 +27,8 @@ final class SessionListState {
     private(set) var isCreating = false
     /// 正在让宿主造一个工作空间。
     private(set) var isCreatingWorkspace = false
+    /// 正在让宿主删掉一个工作空间。
+    private(set) var isDeletingWorkspace = false
     /// 上一次创建工作空间的结果；`nil` 表示这次还没发起过。视图据它给提示 ——
     /// 结果留在这里而不是交回调用方，视图才不必接 `await` 的返回值。
     private(set) var workspaceCreation: WorkspaceCreation?
@@ -34,6 +36,8 @@ final class SessionListState {
     /// `if problem != nil { return }` 删掉不会有任何判据变红，而它守的正是 spec 的
     /// 「非法名字一个请求都不发」。
     private(set) var workspaceNameProblem: WorkspaceName.Problem?
+    /// 哪些组被点开了。默认全折（`GroupExpansion` 的初值是空集合）。
+    private(set) var expansion: GroupExpansion
     private(set) var outcome: Outcome = .ready
 
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
@@ -46,9 +50,15 @@ final class SessionListState {
     private let create: (String?) async throws -> String
     /// 让宿主造一个工作空间。同样注入，理由同上。
     private let createWorkspaceAction: (String) async throws -> WorkspaceCreated
+    /// 让宿主删掉一个工作空间。注入的理由同 `create` —— 「宿主拒绝」与「网络断了」在
+    /// 测试里长得一样，而这一条要断言的是「拒绝时列表没动」。
+    private let deleteWorkspaceAction: (String) async throws -> Void
     /// 建好之后去哪 —— 由装配段给（它握着导航栈）。**不叫 `navigate`**：这一层不认识
     /// `Destination` 那张路由表，它只知道「拿这个 id 去看那一条会话」。
     private let open: (String) -> Void
+    /// 把展开状态落盘。注入的理由与 `fetch` 相同：测试要能断言「真的写了」，而真写
+    /// `UserDefaults` 时「写了」与「没写」在测试里长得一样。
+    private let persistExpansion: (GroupExpansion) -> Void
     /// 在途的那一次。单飞的落点，也是这批账的归属。
     private var inflight: Task<SessionListPage, Error>?
     /// 这一次在途期间到达的变更，按到达顺序。进 `reload` 时必然为空 —— `apply` 只在
@@ -59,18 +69,27 @@ final class SessionListState {
     init(fetch: @escaping () async throws -> SessionListPage,
          create: @escaping (String?) async throws -> String,
          createWorkspace: @escaping (String) async throws -> WorkspaceCreated,
-         open: @escaping (String) -> Void) {
+         deleteWorkspace: @escaping (String) async throws -> Void,
+         open: @escaping (String) -> Void,
+         expansion: GroupExpansion,
+         persistExpansion: @escaping (GroupExpansion) -> Void) {
         self.fetch = fetch
         self.create = create
         self.createWorkspaceAction = createWorkspace
+        self.deleteWorkspaceAction = deleteWorkspace
         self.open = open
+        self.expansion = expansion
+        self.persistExpansion = persistExpansion
     }
 
     convenience init(client: RpcClient, open: @escaping (String) -> Void) {
         self.init(fetch: { try await fetchSessions(client) },
                   create: { try await createBlankSession(client, in: $0) },
                   createWorkspace: { try await makeWorkspace(client, name: $0) },
-                  open: open)
+                  deleteWorkspace: { try await removeWorkspace(client, workspaceId: $0) },
+                  open: open,
+                  expansion: .load(),
+                  persistExpansion: { $0.save() })
     }
 
     /// 失败面的读法，不是第二份状态。
@@ -220,24 +239,45 @@ extension SessionListState {
             if made.created {
                 workspaces.insert(WorkspaceSummary(id: made.workspaceId, title: made.title), at: 0)
             }
-            await reloadAfterCreate()
+            await reloadAfterAction()
         } catch {
             workspaceCreation = .failed(error.localizedDescription)
         }
     }
 
-    /// 建完之后取一次**新**的列表。
+    /// 让宿主解除一个工作空间的注册。
     ///
-    /// 不能直接 `reload()`：它在有在途请求时只等不重发，而在途那次的结果早于这次创建 ——
-    /// 等它就等于把旧快照当最新，界面说「建好了」而列表里没有那个组。
+    /// 成功后重拉：组清单只在拉取时更新，「那个组消失」与「它的会话进了未分组」两件事都要
+    /// 等一份新快照。**不做本地先行删除** —— 乐观地去掉再补回来，中间那一帧是「删了但没删掉」，
+    /// 而删除的频率低到不值得为它引入一个需要回滚的状态。
     ///
-    /// 所以每轮都问一句「这一发真的发出去了吗」，没发出去就让一轮步再试；上限三轮。
+    /// 失败落 {@link outcome}（列表顶部那条红）而不是别处：这一次是从列表上的确认框发起的，
+    /// 框一关就没有承载失败的地方了 —— 与建工作空间相反，那个的失败落在输入面板里。
+    ///
+    /// @param workspaceId - 要解除注册的工作空间。
+    func deleteWorkspace(_ workspaceId: String) async {
+        guard !isDeletingWorkspace else { return }
+        isDeletingWorkspace = true
+        defer { isDeletingWorkspace = false }
+        do {
+            try await deleteWorkspaceAction(workspaceId)
+            await reloadAfterAction()
+        } catch {
+            record(failure: error)
+        }
+    }
+
+    /// 动作成功之后取一次**新**的列表。
+    ///
+    /// 不能直接 `reload()`：它在有在途请求时只等不重发，而在途那次的结���早于刚发生的事 ——
+    /// 等它就等于把旧快照当最新，界面说「成功了」而列表里还是旧的。
+    ///
+    /// 所以每轮都问一句「这一发真的发出去了吗」，没发出去就再让一轮步；上限三轮。
     /// 在途那次的 body 从拿到值之后到收尾之间没有 `await`，因此一轮让步通常就够 ——
     /// 上限只是防它永远不让位。
     ///
-    /// 上面那一步「就地插到最前」是同一件事的另一半：万一三轮都没发出，列表至少已经能
-    /// 看到新组。
-    private func reloadAfterCreate() async {
+    /// 名字不再叫 `reloadAfterCreate`：它服务「建工作空间」与「删工作空间」两个动作。
+    private func reloadAfterAction() async {
         for _ in 0..<3 {
             if await reload() { return }
             await Task.yield()
@@ -248,6 +288,39 @@ extension SessionListState {
     func beginNamingWorkspace() {
         workspaceCreation = nil
         workspaceNameProblem = nil
+    }
+
+    /// 展开 / 收起一个组。视图只负责发起，结果落在 {@link expansion} 上。
+    ///
+    /// **这是折叠状态唯一会被改变的地方**。没有「新建后自动展开」那条规则：折叠的组上
+    /// 不提供「新建会话」，所以「在折叠的组里建了东西」这个状态不存在，App 也就不需要
+    /// 去撤销用户做过的折叠。
+    ///
+    /// @param groupId - 组的工作空间 id；未分组的组是空串。
+    func toggleExpansion(_ groupId: String) {
+        expansion.toggle(groupId)
+        writeExpansion()
+    }
+
+    func isExpanded(_ groupId: String) -> Bool {
+        expansion.isExpanded(groupId)
+    }
+
+    /// 写盘。**写之前先与当前所有组求交**，把已经不存在的组的记录清掉 —— 不等下一次
+    /// 拉取，也不在拉取里做（那会让一次读带上写副作用）。
+    ///
+    /// 「所有组」取 `SessionGrouping` 的结果而不是 `workspaces.map(\.id)`：未分组也是组，
+    /// 它的 id（空串）必须参与，否则用户点开它之后一次写盘就把它清了。
+    ///
+    /// `workspaces` 为空时**不求交**：空清单既可能是「一个工作空间都没有」，也可能是
+    /// 「这一发没取到组清单」，后一种情况下清记录就是错的。
+    private func writeExpansion() {
+        if !workspaces.isEmpty {
+            let known = Set(SessionGrouping.groups(sessions: sessions,
+                                                  workspaces: workspaces).map(\.id))
+            expansion.retain(among: known)
+        }
+        persistExpansion(expansion)
     }
 
     /// 一次失败该落哪一面。`blocked` 与 `failed` 的分界见 `Outcome` 的注释；

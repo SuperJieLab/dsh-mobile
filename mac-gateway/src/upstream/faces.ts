@@ -14,7 +14,7 @@ import type { CommandPort } from '../ports/command.ts'
 import type { ModelSelection } from '../wire/model.ts'
 
 import { nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
-import { workspaceSnapshotOf, createWorkspaceIn, type RegistryLike, type WorkspaceControllerLike } from './workspace.ts'
+import { workspaceSnapshotOf, createWorkspaceIn, deleteWorkspaceIn, type RegistryLike, type WorkspaceCreateFace, type WorkspaceDeleteFace } from './workspace.ts'
 import { makeWorkspaceDirectory } from './workspace-root.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import type { FollowSource } from '../ports/follow.ts'
@@ -101,7 +101,12 @@ export function workspacePortOver(ctx: HostContext): WorkspacePort {
     // 注册这一步走宿主的控制器 —— 它回答 created，也自带串行化。
     create: async (name) => {
       const path = await makeWorkspaceDirectory(name)
-      return await createWorkspaceIn(ctx.workspaceController as unknown as WorkspaceControllerLike, path)
+      return await createWorkspaceIn(ctx.workspaceController as unknown as WorkspaceCreateFace, path)
+    },
+    // 删除只转发：宿主那一行 `delete` 已经把「只解注册、保留目录与会话日志」写进了语义，
+    // 我们唯一要补的是「删一个已经不在的算成功」（见 `deleteWorkspaceIn`）。
+    delete: async (workspaceId) => {
+      await deleteWorkspaceIn(ctx.workspaceController as unknown as WorkspaceDeleteFace, workspaceId)
     },
   }
 }

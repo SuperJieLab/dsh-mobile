@@ -16,6 +16,9 @@ struct SessionListView: View {
     @State private var isNaming = false
     /// 面板里那个输入框的内容。输入的**持有者**是视图，规则不在这里。
     @State private var draftName = ""
+    /// 正等着确认删除的那一组。`nil` 表示没有框开着 —— 它同时也是 `confirmationDialog`
+    /// 的呈现条件，所以不另设一个布尔。
+    @State private var pendingDeletion: PendingDeletion?
 
     var body: some View {
         pairedList
@@ -123,6 +126,28 @@ struct SessionListView: View {
         return title.isEmpty ? "（未命名工作空间）" : title
     }
 
+    /// 页脚：平时只说总数，连不上时才带上地址。
+    ///
+    /// 地址不是日常浏览信息，但它不能直接删掉 —— 设置页显示的是**用户填的那个**地址，
+    /// 而运行时**实际连上的**那个只在这里出现过。连不上时，两者的差别正是要查的东西。
+    private var footerText: String {
+        let count = "\(list.sessions.count) 个会话"
+        guard list.failureText != nil || list.blockedReason != nil else { return count }
+        return "\(count) · \(gatewayAddressLine(store.route?.baseURL))"
+    }
+
+    /// 确认框的标题：点的是哪一组就点它的名。
+    private var deletionTitle: String {
+        pendingDeletion.map { WorkspaceDeletionText.title(for: $0.title) } ?? ""
+    }
+
+    /// 确认框的呈现条件。用 `pendingDeletion` 反推而不是另设一个布尔：
+    /// 两个状态描述同一件事，就一定会有一刻它们不一致。
+    private var deletionIsPresented: Binding<Bool> {
+        Binding(get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } })
+    }
+
     private var pairedList: some View {
         List {
             // 前置不满足时那条提示：中性，说的是「现在缺什么」—— 原文来自服务端那次失败。
@@ -140,36 +165,48 @@ struct SessionListView: View {
             }
 
             ForEach(groups) { group in
+                let expanded = list.isExpanded(group.id)
                 Section {
-                    ForEach(group.sessions) { session in
-                        NavigationLink(value: Destination.session(sessionId: session.id, title: session.title)) {
-                            SessionRow(session: session)
+                    // 折叠只是不画：`list.sessions` 里那些行一个都没少，事件照常落进去。
+                    // 展开时看到的是最新的一份，不需要再读一次列表。
+                    if expanded {
+                        ForEach(group.sessions) { session in
+                            NavigationLink(value: Destination.session(sessionId: session.id,
+                                                                      title: session.title)) {
+                                SessionRow(session: session)
+                            }
                         }
                     }
                 } header: {
-                    HStack {
-                        Text(title(of: group))
-                        Spacer()
-                        // 未分组的组没有工作空间可落，所以不给入口 —— 「不指定工作空间」
-                        // 那条路在手机端已经关掉了。
-                        if !group.isUngrouped {
-                            Button {
-                                Task { await list.createSession(in: group.id) }
-                            } label: {
-                                Image(systemName: "plus")
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(list.isCreating)
-                            .accessibilityLabel("在「\(title(of: group))」里新建会话")
-                        }
-                    }
+                    GroupHeader(title: title(of: group),
+                                count: group.sessions.count,
+                                isExpanded: expanded,
+                                isRunning: group.hasRunning,
+                                // 未分组的组背后没有注册 —— 既没有工作空间可落，也没有东西可删。
+                                // 折叠的组两个动作都不给：它让「在这个组里做事」必然以
+                                // 「那个组是展开的」为前提。
+                                isWorkspace: !group.isUngrouped,
+                                isBusy: list.isCreating || list.isDeletingWorkspace,
+                                onToggle: {
+                                    withAnimation(.snappy) { list.toggleExpansion(group.id) }
+                                },
+                                onCreate: {
+                                    Task { await list.createSession(in: group.id) }
+                                },
+                                onDelete: {
+                                    pendingDeletion = PendingDeletion(
+                                        id: group.id,
+                                        title: title(of: group),
+                                        sessionCount: group.sessions.count)
+                                })
+                        .textCase(nil)
                 }
             }
 
             Section {
                 EmptyView()
             } footer: {
-                Text("\(list.sessions.count) 个会话 · \(gatewayAddressLine(store.route?.baseURL))")
+                Text(footerText)
             }
         }
         .navigationTitle("会话")
@@ -191,6 +228,21 @@ struct SessionListView: View {
             }
         }
         .sheet(isPresented: $isNaming) { namingSheet }
+        .confirmationDialog(deletionTitle,
+                            isPresented: deletionIsPresented,
+                            titleVisibility: .visible,
+                            presenting: pendingDeletion) { target in
+            // 破坏性动作在前，取消在后 —— 系统会给 destructive 那一项红色。
+            Button("删除", role: .destructive) {
+                let workspaceId = target.id
+                pendingDeletion = nil
+                Task { await list.deleteWorkspace(workspaceId) }
+            }
+            Button("取消", role: .cancel) { pendingDeletion = nil }
+        } message: { target in
+            // 这三件事必须说：用户看到「删除」两个字，默认理解是「项目没了」。
+            Text(WorkspaceDeletionText.message(sessionCount: target.sessionCount))
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // 顶层唯一的「新建」：造一个工作空间。会话由各组的标题行按钮建 ——
@@ -235,48 +287,131 @@ struct SessionListView: View {
                 NavigationLink(value: Destination.settings) {
                     Image(systemName: "gearshape")
                 }
-                Button {
-                    Task { await list.reload() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .disabled(list.isLoading)
             }
         }
     }
 }
 
-/// 列表里的一行。
+/// 正等着确认删除的那一组。
+///
+/// 会话数在按下删除菜单那一刻就定下来了：确认框里那句「里面的 N 个会话会移到未分组」
+/// 说的是**用户看到的那个数**，而在框开着的时候列表可能已经变了 —— 显示一个在他点开框之后
+/// 才变过的数只会让他怀疑自己看错了。
+private struct PendingDeletion {
+    let id: String
+    let title: String
+    let sessionCount: Int
+}
+
+/// 一组的标题行：左侧整块是折叠开关，右侧那两个动作只在展开时出现。
+///
+/// 折叠开关做成一个 `Button` 包住「箭头 + 标题 + 计数」，而不是给整行挂 `onTapGesture`：
+/// 后者会与右侧的「+」抢手势，而误触的代价是「想建会话，结果把组收起来了」。
+private struct GroupHeader: View {
+    let title: String
+    let count: Int
+    let isExpanded: Bool
+    /// 组里有会话在跑。折叠之后这是唯一的痕迹 —— 否则「有东西在动」与「静止」长得一样。
+    let isRunning: Bool
+    /// 这一组背后是一个工作空间（不是「未分组」）。
+    let isWorkspace: Bool
+    let isBusy: Bool
+    let onToggle: () -> Void
+    let onCreate: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: onToggle) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text("\(count)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(.quaternary, in: Capsule())
+
+                    if isRunning {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 6, height: 6)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title)，\(count) 个会话，\(isExpanded ? "已展开" : "已折叠")")
+
+            Spacer(minLength: 8)
+
+            if isExpanded && isWorkspace {
+                Button(action: onCreate) {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isBusy)
+                .accessibilityLabel("在「\(title)」里新建会话")
+
+                // 删除收在菜单里：它是破坏性的，多一层「点进去才看得到」是好事；
+                // 而组标题不是行，滑动删除在它上面做不干净。
+                Menu {
+                    Button("删除工作空间", role: .destructive, action: onDelete)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .disabled(isBusy)
+                .accessibilityLabel("「\(title)」的更多操作")
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// 列表里的一行会话：一行主文本 + 右侧时间。
+///
+/// 时间是「你上次发言」而不是「它上次动过」（协议 v2 起如此）。那三个字从视觉上去掉了 ——
+/// 每行都写一遍是纯噪声 —— 但留在 `accessibilityLabel` 里：对扫视的人多余，对读屏的人是信息。
 private struct SessionRow: View {
     let session: SessionSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(session.title ?? "（无标题）")
-                    .font(.headline)
-                    .lineLimit(2)
-
-                // 列表不显示任何审批痕迹：有东西等你批时，只有点进那个会话才看得到
-                // —— 与 Web UI 一致（它也不在列表渲染 `pendingInteraction`）。
-                if session.running {
-                    Text("进行中")
-                        .font(.caption2)
-                        .foregroundStyle(Color.accentColor)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
+        HStack(spacing: 8) {
+            // 进行中用一个圆点，不用文字标签：标签会与长标题抢宽度，也会多出一个色块。
+            if session.running {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
             }
 
-            HStack(spacing: 6) {
-                Text(relativeTime(session.updatedAt))
-                Text("·")
-                // 这一栏说的是「你上次发言」，不是「它上次动过」—— 协议 v2 起如此。
-                Text("最后发言")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text(session.title ?? "（无标题）")
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text(relativeTime(session.updatedAt))
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(spokenText)
+    }
+
+    private var spokenText: String {
+        let title = session.title ?? "无标题会话"
+        let when = "最后发言于\(relativeTime(session.updatedAt))"
+        return session.running ? "\(title)，进行中，\(when)" : "\(title)，\(when)"
     }
 }

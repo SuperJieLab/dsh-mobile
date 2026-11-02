@@ -29,7 +29,7 @@ import type {
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
 import { approvalAnswerOf, sessionCreateTargetOf, sessionPromptOf } from '../wire/write.ts'
-import { workspaceNameOf } from '../wire/workspace.ts'
+import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
 import type { PageWindow } from '../wire/window.ts'
@@ -132,6 +132,10 @@ export async function handle(
         // 写 op（造目录 + 注册）。名字不合法时**一个文件系统调用都不发生**。
         if (workspace === undefined) return failure('internal-error', `workspace channel not wired for "${op}"`)
         return await workspaceCreate(envelope, workspace)
+      case 'workspace-delete':
+        // 写 op（解注册）。只删注册 —— 目录与会话日志都由宿主留着。
+        if (workspace === undefined) return failure('internal-error', `workspace channel not wired for "${op}"`)
+        return await workspaceDelete(envelope, workspace)
       case 'approval-answer':
       case 'session-prompt':
         // 写 op。仅只读测试装配会缺 `write`；生产必接线，
@@ -178,6 +182,27 @@ async function workspaceCreate(
   }
   const made = await workspace.create(name)
   return success({ workspaceId: made.workspaceId, title: made.title, created: made.created })
+}
+
+/**
+ * 解除一个工作空间的注册。
+ *
+ * `ok` 意为**它已经不在列表里了** —— 是真删掉的、还是本来就没有，客户端不需要知道
+ * （两种结局要做的事完全一样：关掉确认框、重拉一次）。所以应答里没有 `deleted`。
+ *
+ * 宿主失败**不在这里折**：`handle` 的 catch 用 `readErrorOf` 统一折成 `internal-error`。
+ * 「删一个已经不在的算成功」那条住在适配层（`deleteWorkspaceIn`），它认得 not-found。
+ */
+async function workspaceDelete(
+  envelope: Record<string, unknown>,
+  workspace: WorkspacePort,
+): Promise<Response> {
+  const workspaceId = workspaceIdOf(envelope)
+  if (workspaceId === undefined) {
+    return failure('invalid-request', 'workspace-delete needs a non-blank workspaceId')
+  }
+  await workspace.delete(workspaceId)
+  return success({})
 }
 
 /**

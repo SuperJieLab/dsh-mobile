@@ -245,6 +245,23 @@ struct WorkspaceCreateResponse: GatewayResponse {
     var created: Bool? = nil
 }
 
+/// `workspace-delete` 请求：只带一个工作空间 id。
+struct WorkspaceDeleteRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "workspace-delete"
+    let workspaceId: String
+}
+
+/// `workspace-delete` 回包。
+///
+/// **没有业务字段** —— `ok` 就是结论：它已经不在列表里了。是真删掉的、还是另一端早就删了，
+/// 客户端要做的事完全一样（关掉确认框、重拉一次），所以没有一格要读。
+struct WorkspaceDeleteResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+}
+
 /// 命令列表回包。
 struct CommandCatalogResponse: GatewayResponse {
     let v: Int

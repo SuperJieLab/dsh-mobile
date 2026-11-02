@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { workspaceNameOf } from '../../src/wire/workspace.ts'
+import { workspaceIdOf, workspaceNameOf } from '../../src/wire/workspace.ts'
 
 /** 与 iOS 侧逐字相同的一组样本。加样本时两边一起加。 */
 const REFUSED = ['', '   ', 'a/b', 'a\\b', '.', '..', ' a/b ', '\uFEFF']
@@ -44,4 +44,23 @@ test('the payload reader yields the trimmed name and refuses a malformed payload
     assert.equal(workspaceNameOf(payload), undefined,
       `载荷 ${JSON.stringify(payload)} 该被拒：形状与语义在同一个判断里`)
   }
+})
+
+// -- 删除载荷 ---------------------------------------------------------------
+
+test('the delete payload reader yields a non-empty workspace id', () => {
+  assert.equal(workspaceIdOf({ op: 'workspace-delete', workspaceId: 'w-a' }), 'w-a')
+})
+
+test('the delete payload reader refuses a payload without a usable id', () => {
+  for (const payload of [{}, { workspaceId: '' }, { workspaceId: 42 }, { workspaceId: null },
+                         'workspace-delete', null, ['w-a']]) {
+    assert.equal(workspaceIdOf(payload), undefined,
+      `载荷 ${JSON.stringify(payload)} 该被拒 —— 写路径从严，不靠下游兜`)
+  }
+})
+
+test('the delete payload reader does not judge whether the workspace exists', () => {
+  assert.equal(workspaceIdOf({ workspaceId: '从来没见过的-id' }), '从来没见过的-id',
+    '存在与否是宿主的事；删一个不存在的按成功处理，所以这一层不该先拦')
 })
