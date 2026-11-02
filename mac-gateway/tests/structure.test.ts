@@ -1605,3 +1605,44 @@ test('G3: upstream session event names live only in the upstream adapter', () =>
   assert.deepEqual([...homes.keys()].sort(), expected,
     `upstream event names must live in ${expected.join(' + ')} only — got ${JSON.stringify([...homes.keys()])}`)
 })
+
+// ---------------------------------------------------------------------------
+// 日志出口唯一
+// ---------------------------------------------------------------------------
+
+/**
+ * 日志只能从 `log.ts` 出去。
+ *
+ * 这条纪律一直存在（`RULES` 写了「日志出口唯一：禁裸 `console.*`」），但**从来没有判据** ——
+ * 任何人加一句 `console.log` 都不会红，而症状是那一行绕过了级别门控、模块标签与时间戳，
+ * 混在输出里谁也认不出来源。
+ *
+ * 判据落在 `src/` 的**代码**上，不是原文：注释里出现 `console.log`（本文件就有一处说明）
+ * 不该算违规，所以先剥注释再扫。
+ */
+test('console.* lives only in the logging exit', () => {
+  const offenders: string[] = []
+  for (const file of filesUnder(SRC)) {
+    if (!file.endsWith('.ts')) continue
+    if (file === resolve(SRC, 'log.ts')) continue
+    const code = stripComments(readFileSync(file, 'utf8'))
+    for (const match of code.matchAll(/\bconsole\s*\.\s*(log|error|warn|debug|info)\s*\(/g)) {
+      offenders.push(`${where(file)}: ${match[0]}`)
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'a log line that bypasses log.ts loses its level, module tag and timestamp — use createLogger instead')
+})
+
+test('the console scan would catch a bare line if one appeared', () => {
+  // 活性正控：扫的是剥注释后的代码，所以要证明这两件事同时成立 ——
+  // 真代码会被抓、注释里的说明不会。
+  const sample = [
+    '// 说明文字里提到 console.log，不该算违规',
+    'const log = createLogger("x")',
+    'console.log("bare")',
+  ].join('\n')
+  const code = stripComments(sample)
+  assert.equal([...code.matchAll(/\bconsole\s*\.\s*log\s*\(/g)].length, 1,
+    '剥注释后应当只剩那一句真代码')
+})

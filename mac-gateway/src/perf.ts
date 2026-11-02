@@ -1,7 +1,8 @@
 /**
  * 性能记录通道（R8 期1）—— 观测出口的一支：与文本日志同一个 `[dsh]` 家族、
  * 同一个 debug 门控，但承载的是「挂 seq 的四段边界记录」而不是人读的消息。
- * 行格式：`ISO8601 [dsh][perf][模块] {json}`。
+ * 行格式：`<本机时间带偏移> [dsh][perf][模块] {json}`，时间戳与文本日志共用
+ * `timestamp.ts` 的 `logTimestamp` —— 两条出口要能被放在一起按时间对照。
  *
  * 字段集与语义（seg / t / sessionId / seq 与各 seg 的附加字段）**是两端契约**：
  * 改字段就是改协议，采集脚本与预算表都按它读。本文件只负责拼行与出口，
@@ -16,6 +17,8 @@
  */
 
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
+
+import { logTimestamp } from './timestamp.ts'
 
 /**
  * 亚毫秒 epoch 时刻（R8 期2 精度加精）：`Date.now()` 只有整数毫秒，而 t2 段
@@ -55,9 +58,12 @@ export function perfEnabled(): boolean {
 /**
  * 拼一行。纯函数 —— 时间由调用方给入（测试注入时钟，默认取当下）。
  * JSON 的键序跟随记录对象的字面顺序，消费方按字段名读，不依赖键序。
+ *
+ * 时间戳与文本日志同一个函数（`logTimestamp`）：两条出口必须能被放在一起按时间对照，
+ * 而「同一毫秒在两处写法不同」会让那种对照退化成手工换算。
  */
 export function perfLine(module: string, record: PerfRecord, now: Date = new Date()): string {
-  return `${now.toISOString()} [dsh][perf][${module}] ${JSON.stringify(record)}`
+  return `${logTimestamp(now)} [dsh][perf][${module}] ${JSON.stringify(record)}`
 }
 
 /** 行的去向。默认 stderr；只有测试会替换它。 */

@@ -29,8 +29,9 @@ final class HttpTransport {
     ///
     /// 返回 `nil` 只表示**业务请求被 401 拒了**（换票再来一次的号）。配对与换票的 401 是
     /// **定论**，必须读出信封里的原因上抛：配对码不对就要说配对码不对。
-    func send<Request: Encodable, Response: GatewayResponse>(
+    func send<Request: GatewayRequest, Response: GatewayResponse>(
         _ request: Request,
+        requestId: String?,
         authorization: String?,
         treat401AsRefusal: Bool
     ) async throws -> Response? {
@@ -43,6 +44,13 @@ final class HttpTransport {
         if let authorization {
             urlRequest.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
         }
+        // 关联标记走头而不走消息体：它是传输层的事，不是协议形状的一部分 ——
+        // 放进消息体就得改契约、也会让「同一件事有两个地方描述」。
+        // 显式收参而不是在这里读 `RpcTrace.requestId`：让「这一发属于哪次请求」在签名上
+        // 看得见，也让换票那条自造 id 的路径能决定带不带。
+        if let requestId {
+            urlRequest.setValue(requestId, forHTTPHeaderField: RpcTrace.headerName)
+        }
         urlRequest.timeoutInterval = Self.timeout
         urlRequest.httpBody = try JSONEncoder().encode(request)
 
@@ -54,7 +62,7 @@ final class HttpTransport {
             // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
             Log.warn(
                 Log.Module.gateway,
-                "transport: \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
+                "transport: \(request.op) — \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
             )
             throw RpcClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }
@@ -71,7 +79,7 @@ final class HttpTransport {
                     if failure.code == GatewayErrorCode.unauthenticated.rawValue {
                         Log.info(
                             Log.Module.gateway,
-                            "auth op refused: \(failure.code) — \(failure.message)"
+                            "auth op refused: \(request.op) — \(failure.code) — \(failure.message)"
                         )
                         throw RpcClientError.unauthenticated
                     }
@@ -80,7 +88,8 @@ final class HttpTransport {
                 throw RpcClientError.unauthenticated
             }
             if http.statusCode != 200 {
-                Log.warn(Log.Module.gateway, "HTTP \(http.statusCode) from \(baseURL.host ?? "?")")
+                Log.warn(Log.Module.gateway,
+                         "HTTP \(http.statusCode) on \(request.op) from \(baseURL.host ?? "?")")
                 throw RpcClientError.badStatus(http.statusCode)
             }
         }
@@ -92,10 +101,12 @@ final class HttpTransport {
             // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
             // 比解码器的报错信息有用得多。
             if let failure = envelopeFailure(in: payload) {
-                Log.warn(Log.Module.gateway, "op refused: \(failure.code) — \(failure.message)")
+                Log.warn(Log.Module.gateway,
+                         "\(request.op) refused: \(failure.code) — \(failure.message)")
                 throw RpcClientError.refused(failure)
             }
-            Log.warn(Log.Module.gateway, "malformed response: \(String(describing: error))")
+            Log.warn(Log.Module.gateway,
+                     "\(request.op) returned a malformed response: \(String(describing: error))")
             throw RpcClientError.malformedResponse(detail: String(describing: error))
         }
         try response.validate()

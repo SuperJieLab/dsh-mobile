@@ -26,7 +26,10 @@ test('perfLine: [dsh] tag, module, and the record as one JSON object', () => {
   const line = perfLine('ws', sample, now)
   // 与文本日志同一拼写：时间戳、[dsh][级别][模块] 一个 token、JSON 一个 token。
   const [stamp, tag, json] = line.split(' ')
-  assert.equal(stamp, '2026-10-13T04:00:00.000Z')
+  // 时间戳不再钉字面量：它现在带本机偏移，钉死等于要求跑测试的机器在某个时区。
+  // 要守的是两条与机器无关的性质 —— 形状对、写下的就是那一刻。
+  assert.match(stamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(Z|[+-]\d{2}:\d{2})$/)
+  assert.equal(Date.parse(stamp), now.getTime(), 'perf 行必须与前后的文本日志落在同一刻，否则对照要手算')
   assert.equal(tag, '[dsh][perf][ws]')
   assert.deepEqual(JSON.parse(json), sample)
 })

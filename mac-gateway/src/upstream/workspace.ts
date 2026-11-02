@@ -9,8 +9,11 @@
  * 形状在本文件自行声明，因为真实类型在 dsh 安装目录之外无法解析。
  */
 
-import { isNotFound } from '../ports/errors.ts'
+import { describeError, isNotFound } from '../ports/errors.ts'
+import { createLogger, LogModule } from '../log.ts'
 import type { WorkspacePort, WorkspaceSnapshot } from '../ports/workspace.ts'
+
+const log = createLogger(LogModule.workspace)
 
 /** 本适配器读取的工作空间实体。成员表已由宿主按目录索引过滤过。 */
 export interface WorkspaceLike {
@@ -78,6 +81,9 @@ export async function createWorkspaceIn(
   path: string,
 ): Promise<{ workspaceId: string; title: string; created: boolean }> {
   const { workspace, created } = await controller.create({ path })
+  // `created` 是这条链唯一一次出现的「这一次到底建了没有」—— 界面据此说两句不同的话，
+  // 日志里没有它就分不清「用户以为建了新的，其实命中了旧的」。
+  log.info(`${created ? 'registered' : 'already registered'} "${path}" → ${workspace.workspaceId}`)
   return { workspaceId: workspace.workspaceId, title: workspace.title, created }
 }
 
@@ -98,8 +104,15 @@ export async function deleteWorkspaceIn(
 ): Promise<void> {
   try {
     await controller.delete({ workspaceId })
+    log.info(`registration removed: ${workspaceId} (directory and sessions kept)`)
   } catch (error) {
-    if (isNotFound(error)) return
+    if (isNotFound(error)) {
+      // 吞掉是对的（用户的意图已经达成），**静默吞不对**：用户说「我删了但组还在」时，
+      // 这一行是唯一能证明「网关处理过、而且当时它已经不在了」的东西。
+      log.info(`registration already gone: ${workspaceId} — treated as success`)
+      return
+    }
+    log.warn(`removing registration ${workspaceId} failed: ${describeError(error)}`)
     throw error
   }
 }

@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { makeWorkspaceDirectory, workspaceRoot } from '../../src/upstream/workspace-root.ts'
+import { setLogSink } from '../../src/log.ts'
 
 test('the root is the system Documents directory plus our own segment', async () => {
   const asked: string[] = []
@@ -60,4 +61,68 @@ test('no directory is made when the root cannot be resolved', async () => {
   }))
 
   assert.deepEqual(made, [], '根都没解析出来就不该碰文件系统')
+})
+
+// -- 留痕 -------------------------------------------------------------------
+
+/**
+ * 这一组判据守的是**日志**，不是返回值。
+ *
+ * 它们值得存在的理由：`osascript` 首次调用会弹 macOS 的自动化授权框，用户没点就超时 ——
+ * 而超时与「命令本身失败」在报错上分不开（都是一个 Error），两者的排查方向还相反。
+ * 整条链路里只有这里能说清是哪一种；这句话不写出来，用户报「建工作空间没反应」时
+ * 日志里查不到任何东西。
+ */
+function captureLogs(): { lines: string[]; restore: () => void } {
+  const lines: string[] = []
+  const previous = setLogSink((_level, module, line) => { lines.push(`${module}|${line}`) })
+  return { lines, restore: () => { setLogSink(previous) } }
+}
+
+/** `execFile` 超时抛出来的那个形状：被信号杀掉。 */
+function timeoutError(): Error {
+  return Object.assign(new Error('Command failed: osascript'), {
+    killed: true, signal: 'SIGTERM',
+  })
+}
+
+test('a timed-out lookup says so, and an ordinary failure does not', async () => {
+  const captured = captureLogs()
+  try {
+    await assert.rejects(() => workspaceRoot({ run: async () => { throw timeoutError() } }))
+    const timedOut = captured.lines.filter(line => line.includes('timed out'))
+    assert.equal(timedOut.length, 1, '超时必须留一句 —— 它是这条链最容易发生、也最难倒推的失败')
+    assert.match(timedOut[0], /^workspace\|/, '要能按模块把它从别的噪音里筛出来')
+
+    captured.lines.length = 0
+    await assert.rejects(() => workspaceRoot({ run: async () => { throw new Error('osascript not found') } }))
+    assert.equal(captured.lines.filter(line => line.includes('timed out')).length, 0,
+      '普通失败不该被说成超时 —— 一个是「去点授权框」，一个是「这台机器没这个命令」')
+  } finally {
+    captured.restore()
+  }
+})
+
+test('a successful lookup reports the resolved root', async () => {
+  const captured = captureLogs()
+  try {
+    await workspaceRoot({ run: async () => '/Users/someone/Documents/\n' })
+    const resolved = captured.lines.filter(line => line.includes('root resolved'))
+    assert.equal(resolved.length, 1,
+      '成功也要留一句：只有失败日志时，分不清「没走到这一步」与「走到了但后面错了」')
+    assert.match(resolved[0], /deepseek-harness/, '要写清最终那条路径')
+  } finally {
+    captured.restore()
+  }
+})
+
+test('an empty answer logs nothing, because it never got as far as a root', async () => {
+  const captured = captureLogs()
+  try {
+    await assert.rejects(() => workspaceRoot({ run: async () => '   \n' }))
+    assert.equal(captured.lines.filter(line => line.includes('root resolved')).length, 0,
+      '空答案没有根可报 —— 报一条空路径只会让人以为解析成功了')
+  } finally {
+    captured.restore()
+  }
 })

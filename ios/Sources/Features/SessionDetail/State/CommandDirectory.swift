@@ -101,4 +101,7 @@ func runCommand(_ client: RpcClient, sessionId: String, line: String) async thro
     guard response.commandId != nil else {
         throw RpcClientError.malformedResponse(detail: "commandId")
     }
+    // 命令是这一屏唯一**不可撤回**的动作（可能改了文件、跑了测试）：发给谁、发了什么
+    // 必须留痕，而回包只说受理 —— 之后没有别的机会补记这一刻的输入。
+    Log.info(Log.Module.session, "command-execute \(sessionId): \(line)")
 }

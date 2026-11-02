@@ -41,6 +41,10 @@ func makeWorkspace(_ client: RpcClient, name: String) async throws -> WorkspaceC
           let created = response.created else {
         throw RpcClientError.malformedResponse(detail: "workspaceId/title/created")
     }
+    // 与网关那一侧同名的一格：界面据 `created` 说两句不同的话，日志里没有它，
+    // 「我以为建了新的、其实命中旧的」这种投诉就查不出来。
+    Log.info(Log.Module.workspace,
+             "workspace-create \"\(name)\" → \(workspaceId) (\(created ? "created" : "already existed"))")
     return WorkspaceCreated(workspaceId: workspaceId, title: title, created: created)
 }
 
@@ -56,6 +60,10 @@ func createBlankSession(_ client: RpcClient, in workspaceId: String?) async thro
     guard let sessionId = response.sessionId else {
         throw RpcClientError.malformedResponse(detail: "sessionId")
     }
+    // 落在哪儿是这条 op 唯一的变量；不带工作空间那条老路径会落宿主的当前目录，
+    // 而那个目录在手机上完全看不见 —— 将来「新建的会话不知道去哪了」时靠这一行。
+    Log.info(Log.Module.workspace,
+             "session-create in \(workspaceId ?? "<host default cwd>") → \(sessionId)")
     return sessionId
 }
 
@@ -72,4 +80,7 @@ func createBlankSession(_ client: RpcClient, in workspaceId: String?) async thro
 func removeWorkspace(_ client: RpcClient, workspaceId: String) async throws {
     _ = try await client.perform(
         WorkspaceDeleteRequest(workspaceId: workspaceId)) as WorkspaceDeleteResponse
+    // 成功只有一条路（回包的 `ok` 由信封校验保证），但它是**破坏性动作**的收尾：
+    // 用户说「我删了但组还在」时，得能证明这一发真的到了网关并成功了。
+    Log.info(Log.Module.workspace, "workspace-delete \(workspaceId) — accepted")
 }

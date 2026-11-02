@@ -24,6 +24,10 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
                 eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId
             )
         )
+        // 「批了但对面没动」是这一屏最典型的投诉形状，而它的两种成因（没投递出去 /
+        // 投递了但上游没接）在界面上完全一样。这一行钉住的是**已经投递**这一半。
+        Log.info(Log.Module.session,
+                 "approval-answer \(eventId) delivered: \(allow ? "allow" : "deny")")
     }
 }
 

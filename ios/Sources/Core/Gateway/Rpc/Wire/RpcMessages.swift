@@ -5,14 +5,25 @@
  */
 import Foundation
 
-struct ModelCatalogRequest: Encodable {
+/// 一条一元请求。除了「能编码」，它还必须说出自己的 `op`。
+///
+/// 这一格不是为了线上形状（`op` 本来就编在 JSON 里），而是为了**失败日志**：
+/// 传输层只发字节、不认识语义，它记下的那次失败必须能指认是哪条 op。否则排障时
+/// 只能看到「op refused: internal-error」，而说不出那是删工作空间还是拉列表。
+///
+/// 所有请求结构的 `op` 都是 `let` 常量，天然满足这个只读要求。
+protocol GatewayRequest: Encodable {
+    var op: String { get }
+}
+
+struct ModelCatalogRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "model-catalog"
 }
 
 /// `model-select` 请求：`reasoningEffort` 为 `nil` 时整个字段不出现在 JSON 里
 /// （合成编码用 `encodeIfPresent`）—— 「没指定」与「空串」是两回事（严格校验）。
-struct ModelSelectRequest: Encodable {
+struct ModelSelectRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "model-select"
     let sessionId: String
@@ -29,7 +40,7 @@ struct ModelSelectRequest: Encodable {
 ///
 /// ⚠️ `nil` 必须**整个字段不出现**，不能编码成 `null`：网关按「有没有这个键」区分
 /// 「不指定」与「指定了一个空值」，后者是畸形载荷、会被拒。所以这里的编码是手写的。
-struct SessionCreateRequest: Encodable {
+struct SessionCreateRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "session-create"
     var workspaceId: String? = nil
@@ -45,13 +56,13 @@ struct SessionCreateRequest: Encodable {
 }
 
 /// `workspace-create` 请求：只发一个名字 —— 目录落在哪由网关决定，客户端不指定路径。
-struct WorkspaceCreateRequest: Encodable {
+struct WorkspaceCreateRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "workspace-create"
     let name: String
 }
 
-struct CommandCatalogRequest: Encodable {
+struct CommandCatalogRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "command-catalog"
     let sessionId: String
@@ -61,7 +72,7 @@ struct CommandCatalogRequest: Encodable {
 ///
 /// **只发一整行文本**，不拆名字与参数：语法（含分隔符）由宿主定义，客户端拆一次就成了
 /// 第二份实现 —— 上游改规则时这里不会编译失败，只会在某个参数上静默错位。
-struct CommandExecuteRequest: Encodable {
+struct CommandExecuteRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "command-execute"
     let sessionId: String
@@ -75,27 +86,27 @@ func epochMilliseconds(_ value: Double) -> Date {
 
 // MARK: - 请求（协议形状的唯一出处）
 
-struct ListSessionsRequest: Encodable {
+struct ListSessionsRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "list-sessions"
 }
 
 /// 配对：一次性配对码换设备凭证。身份不进消息体之外的位置 ——
 /// 配对码就是这条消息的载荷，走与业务同一端点。
-struct PairRequest: Encodable {
+struct PairRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "pair"
     let code: String
 }
 
 /// 续期：设备凭证换访问凭证。
-struct RefreshRequest: Encodable {
+struct RefreshRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "refresh"
     let deviceToken: String
 }
 
-struct SnapshotRequest: Encodable {
+struct SnapshotRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "snapshot"
     let sessionId: String
@@ -104,7 +115,7 @@ struct SnapshotRequest: Encodable {
 
 /// 可选字段为 `nil` 时不会出现在 JSON 里（合成实现用的是 `encodeIfPresent`），
 /// 这正是协议要的形状：不传 `beforeSeq` 的意思是「从最新往回」，而不是「空值」。
-struct PageRequest: Encodable {
+struct PageRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "page"
     let sessionId: String
@@ -113,7 +124,7 @@ struct PageRequest: Encodable {
 
 /// 审批应答：应答词汇表只有两键，映射在服务端完成 ——
 /// `allow` → `allowed-once`（一次性，绝不推断持久授权）。
-struct ApprovalAnswerRequest: Encodable {
+struct ApprovalAnswerRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "approval-answer"
     let eventId: String
@@ -122,7 +133,7 @@ struct ApprovalAnswerRequest: Encodable {
 }
 
 /// 下发指令：`promptId` 是幂等键，服务端按它去重重复投递。
-struct SessionPromptRequest: Encodable {
+struct SessionPromptRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "session-prompt"
     let sessionId: String
@@ -246,7 +257,7 @@ struct WorkspaceCreateResponse: GatewayResponse {
 }
 
 /// `workspace-delete` 请求：只带一个工作空间 id。
-struct WorkspaceDeleteRequest: Encodable {
+struct WorkspaceDeleteRequest: GatewayRequest {
     let v = gatewayProtocolVersion
     let op = "workspace-delete"
     let workspaceId: String

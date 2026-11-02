@@ -15,7 +15,11 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
+import { describeError } from '../ports/errors.ts'
+import { createLogger, LogModule } from '../log.ts'
+
 const execFileAsync = promisify(execFile)
+const log = createLogger(LogModule.workspace)
 
 /** 本应用在 Documents 下占的那一段。与宿主首次使用时用的是同一个名字。 */
 export const WORKSPACE_ROOT_SEGMENT = 'deepseek-harness'
@@ -49,14 +53,38 @@ export interface WorkspaceRootDeps {
  */
 export async function workspaceRoot(deps: WorkspaceRootDeps = {}): Promise<string> {
   const run = deps.run ?? runCommand
-  const documents = (await run('osascript', [
-    '-e',
-    'POSIX path of (path to documents folder from user domain without folder creation)',
-  ])).trim()
+  const startedAt = Date.now()
+  let stdout: string
+  try {
+    stdout = await run('osascript', [
+      '-e',
+      'POSIX path of (path to documents folder from user domain without folder creation)',
+    ])
+  } catch (error) {
+    // 超时是这条链**最需要留痕**的降级：`osascript` 首次调用会弹 macOS 的自动化授权框，
+    // 用户没点就永远不返回。它与其他失败在报错文本上分不开（都是一个 Error），
+    // 只有这里有上下文能说清是「超时」还是「命令本身失败」—— 两者的排查方向相反。
+    if (timedOut(error)) {
+      log.warn(`asking the system for Documents timed out after ${LOOKUP_TIMEOUT_MS}ms`
+        + ' — the automation prompt may still be waiting for an answer')
+    }
+    throw error
+  }
+  const documents = stdout.trim()
   if (documents === '') {
     throw new Error('the system Documents directory resolved to an empty path')
   }
-  return join(documents, WORKSPACE_ROOT_SEGMENT)
+  const root = join(documents, WORKSPACE_ROOT_SEGMENT)
+  // 成功也留一句：只有失败日志的话，分不清「没走到这一步」与「走到了但后面错了」。
+  // 耗时一并给出 —— 首次要等授权框时，它与平时的毫秒级差得很远。
+  log.info(`root resolved in ${Date.now() - startedAt}ms: ${root}`)
+  return root
+}
+
+/** `execFile` 超时的指纹：被信号杀掉。 */
+function timedOut(error: unknown): boolean {
+  const shape = error as { killed?: unknown; signal?: unknown } | null
+  return shape?.killed === true && typeof shape.signal === 'string'
 }
 
 /**
@@ -84,5 +112,11 @@ async function runCommand(command: string, args: readonly string[]): Promise<str
 }
 
 async function makeDirectory(path: string): Promise<void> {
-  await mkdir(path, { recursive: true })
+  try {
+    await mkdir(path, { recursive: true })
+  } catch (error) {
+    // 带上路径：同一个 op 里前面还有「问系统要根」那一步，只说「建目录失败」对不上是哪一层。
+    log.warn(`mkdir failed for ${path}: ${describeError(error)}`)
+    throw error
+  }
 }

@@ -41,9 +41,18 @@ struct GroupExpansion: Equatable {
         expanded.formIntersection(groupIds)
     }
 
-    /// 读本机偏好。缺失与损坏都退化为「全折叠」 —— 它不影响任何正确性，不值得为它做三态。
+    /// 读本机偏好。缺失与损坏都退化为「全折叠」—— 它不影响任何正确性，不为它做三态；
+    /// 但**损坏要留痕**：`mesh.config` 读不出来会报一句，这一份如果静默退化，
+    /// 「我点开的组怎么又收起来了」就查不到原因（症状与「用户自己折的」完全一样）。
+    ///
+    /// 判损坏的办法只能是「键在、但读不成字符串数组」—— `stringArray` 对这种情形与
+    /// 「没存过」都回 `nil`，两者靠 `object(forKey:)` 区分。
     static func load(from defaults: UserDefaults = .standard) -> GroupExpansion {
         guard let stored = defaults.stringArray(forKey: defaultsKey) else {
+            if defaults.object(forKey: defaultsKey) != nil {
+                Log.warn(Log.Module.workspace,
+                         "\(defaultsKey) is not a string array — falling back to all collapsed")
+            }
             return GroupExpansion()
         }
         return GroupExpansion(expanded: Set(stored))

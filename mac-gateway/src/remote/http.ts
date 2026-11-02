@@ -18,7 +18,7 @@ import { CredentialVault } from './credentials.ts'
 import type {
   PairRequest, PairResponse, RefreshRequest, RefreshResponse,
 } from '../wire/auth.ts'
-import { createLogger, LogModule } from '../log.ts'
+import { createLogger, LogModule, mintRequestId, runWithRequestId } from '../log.ts'
 
 const log = createLogger(LogModule.http)
 
@@ -37,6 +37,21 @@ const MAX_BODY_BYTES = 1_048_576
  * 既没有日志、也没人知道它本该静默。
  */
 export const SILENT_REFUSALS: ReadonlySet<string> = new Set(['list-sessions', 'snapshot', 'page'])
+
+/**
+ * 这次请求的关联 id：客户端给的那个，没有就现铸一个。
+ *
+ * 客户端给的才有跨端价值 —— 它同一侧记的也是这个 id。现铸的那份只保证网关内部这一次的
+ * 若干行能归到一起，与客户端对不上；所以「客户端没带」本身是可诊断的（看 id 是不是 8 位
+ * 随机串就知道），而不是悄悄退回时间对账。
+ *
+ * 头名与 iOS 侧 `RpcTrace.headerName` 必须一致。
+ */
+function requestIdOf(headers: IncomingMessage['headers']): string {
+  const given = headers['x-dsh-request-id']
+  const text = Array.isArray(given) ? given[0] : given
+  return typeof text === 'string' && text !== '' ? text : mintRequestId()
+}
 
 /** 监听器应答一条请求所需的依赖。 */
 export interface RpcListenerDeps {
@@ -86,6 +101,19 @@ async function respond(
     return
   }
 
+  // 整条链路都在这个作用域里：读体、鉴权、分派、拒绝时的留痕。任何一步的行都属于
+  // 同一次请求，所以标记要在这里设、而不是等到 `handle` 那一步 —— 否则「401 被拒」
+  // 那种最需要归因的行反而不带标记。
+  await runWithRequestId(requestIdOf(request.headers), () => respondInScope(request, response, deps))
+}
+
+/** `respond` 的 `/rpc` POST 分支，已带请求标记。 */
+async function respondInScope(
+  request: IncomingMessage,
+  response: ServerResponse,
+  deps: RpcListenerDeps,
+): Promise<void> {
+
   let body: string
   try {
     body = await readBody(request)
@@ -124,7 +152,8 @@ async function respond(
     return
   }
 
-  const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort, deps.modelPort, deps.commandPort, deps.workspacePort)
+  const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort,
+                              deps.modelPort, deps.commandPort, deps.workspacePort)
   // 拒绝在服务端留证据：手机对一次失败的写 op 只显示一行状态，对一次失败的读 op
   // 只在它自己那一屏留个提示 —— 归因要回到网关日志。静默的例外见 {@link SILENT_REFUSALS}。
   if (!answer.ok && typeof op === 'string' && !SILENT_REFUSALS.has(op)) {

@@ -66,6 +66,9 @@ final class RpcClient {
         do {
             let response: RefreshResponse? = try await http.send(
                 RefreshRequest(deviceToken: deviceToken),
+                // 换票不走 `perform`（票层正等在这次换票上），所以这里自己铸一个 ——
+                // 换票的两行仍然能归到一起，只是与触发它的那次业务请求对不上。
+                requestId: RpcTrace.newId(),
                 authorization: nil,
                 treat401AsRefusal: true
             )
@@ -101,9 +104,21 @@ final class RpcClient {
     /// 回包已过 `validate()` —— **这条校验只写在这里**：op 散到各功能后，少写一次既不报错
     /// 也不变红。
     /// - Parameter authenticated: 要不要票，**配对是唯一的 `false`**；401 该怎么读也由它定。
-    func perform<Request: Encodable, Response: GatewayResponse>(
+    func perform<Request: GatewayRequest, Response: GatewayResponse>(
         _ request: Request,
         authenticated: Bool = true
+    ) async throws -> Response {
+        // 每个 op 一次标记：网关把同一次请求产生的每一行都冠上它，客户端的行也带着 ——
+        // 两端因此能按同一个 id 对上。401 换票后的重试沿用同一个 id（那是同一次操作）。
+        try await RpcTrace.withNewId { requestId in
+            try await sendOnce(request, requestId: requestId, authenticated: authenticated)
+        }
+    }
+
+    private func sendOnce<Request: GatewayRequest, Response: GatewayResponse>(
+        _ request: Request,
+        requestId: String,
+        authenticated: Bool
     ) async throws -> Response {
         // 隧道没通 = 没有地址可打：fail-fast，不猜地址。
         guard let baseURL = baseURLProvider() else { throw RpcClientError.notActivated }
@@ -112,7 +127,8 @@ final class RpcClient {
         let ticket = authenticated ? await self.ticket() : nil
         // 标注类型：`send` 的返回只在这里判空，编译器无从推它的泛型参数。
         let first: Response? = try await http.send(
-            request, authorization: ticket?.token, treat401AsRefusal: !authenticated
+            request, requestId: requestId, authorization: ticket?.token,
+            treat401AsRefusal: !authenticated
         )
         if let first { return first }
         // 走到这里 = 业务请求被 401 拒了。换一张票（单飞），恰好重试一次。
@@ -123,8 +139,9 @@ final class RpcClient {
         // 读缓存只会把同一枚死票再发一遍。
         switch await tickets.renewAnyway(deviceToken: credentials.deviceToken) {
         case .granted(let fresh):
+            // 同一个 id：换票重试仍是同一次操作。
             let retried: Response? = try await http.send(
-                request, authorization: fresh, treat401AsRefusal: false
+                request, requestId: requestId, authorization: fresh, treat401AsRefusal: false
             )
             if let retried { return retried }
             throw RpcClientError.unauthenticated
