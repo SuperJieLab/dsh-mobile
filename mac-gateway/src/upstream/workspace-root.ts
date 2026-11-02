@@ -20,6 +20,15 @@ const execFileAsync = promisify(execFile)
 /** 本应用在 Documents 下占的那一段。与宿主首次使用时用的是同一个名字。 */
 export const WORKSPACE_ROOT_SEGMENT = 'deepseek-harness'
 
+/**
+ * 问系统要目录的时限。
+ *
+ * 首次调用 `osascript` 会触发 macOS 的自动化授权确认 —— 那个对话框挂着不点、或用户拒了
+ * 但进程没退，`execFile` 会一直等下去。没有上限就等于「这一次请求既不给 ok 也不给
+ * internal-error」，而契约承诺的是两条失败之一。10 秒比人手点一下确认宽得多。
+ */
+export const LOOKUP_TIMEOUT_MS = 10_000
+
 /** 跑一条系统命令并返回 stdout。抽出来是为了让判据不必真的起子进程。 */
 export type CommandRunner = (command: string, args: readonly string[]) => Promise<string>
 
@@ -70,7 +79,7 @@ export async function makeWorkspaceDirectory(
 }
 
 async function runCommand(command: string, args: readonly string[]): Promise<string> {
-  const { stdout } = await execFileAsync(command, [...args])
+  const { stdout } = await execFileAsync(command, [...args], { timeout: LOOKUP_TIMEOUT_MS })
   return stdout
 }
 

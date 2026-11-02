@@ -78,3 +78,12 @@ test('a brand-new path reports the title the host derived', async () => {
   const made = await createWorkspaceIn(fakeController(), '/根/记账 App')
   assert.equal(made.title, '记账 App', '标题由宿主从目录名派生，网关不改写')
 })
+
+test('a session listed by two workspaces belongs to the first in registry order', () => {
+  const snapshot = workspaceSnapshotOf({
+    list: () => [workspace('w-a', 'A 项目', ['s-shared']), workspace('w-b', 'B 项目', ['s-shared'])],
+  })
+
+  assert.equal(snapshot.owners.get('s-shared'), 'w-a',
+    '参照界面找的是清单里第一个成员表含它的工作空间；取后者会让同一批会话在手机与 Web UI 上分到不同的组')
+})

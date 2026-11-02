@@ -30,6 +30,10 @@ final class SessionListState {
     /// 上一次创建工作空间的结果；`nil` 表示这次还没发起过。视图据它给提示 ——
     /// 结果留在这里而不是交回调用方，视图才不必接 `await` 的返回值。
     private(set) var workspaceCreation: WorkspaceCreation?
+    /// 上一次提交被名字规则拒掉的理由。**判断在这里，不在视图**：视图里那句
+    /// `if problem != nil { return }` 删掉不会有任何判据变红，而它守的正是 spec 的
+    /// 「非法名字一个请求都不发」。
+    private(set) var workspaceNameProblem: WorkspaceName.Problem?
     private(set) var outcome: Outcome = .ready
 
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
@@ -41,7 +45,7 @@ final class SessionListState {
     /// 参数是落在哪个工作空间；`nil` 表示不指定（宿主用它自己的当前目录）。
     private let create: (String?) async throws -> String
     /// 让宿主造一个工作空间。同样注入，理由同上。
-    private let createWorkspaceAction: (String) async throws -> WorkspaceCreation
+    private let createWorkspaceAction: (String) async throws -> WorkspaceCreated
     /// 建好之后去哪 —— 由装配段给（它握着导航栈）。**不叫 `navigate`**：这一层不认识
     /// `Destination` 那张路由表，它只知道「拿这个 id 去看那一条会话」。
     private let open: (String) -> Void
@@ -54,7 +58,7 @@ final class SessionListState {
     private var attached = false
     init(fetch: @escaping () async throws -> SessionListPage,
          create: @escaping (String?) async throws -> String,
-         createWorkspace: @escaping (String) async throws -> WorkspaceCreation,
+         createWorkspace: @escaping (String) async throws -> WorkspaceCreated,
          open: @escaping (String) -> Void) {
         self.fetch = fetch
         self.create = create
@@ -117,11 +121,15 @@ final class SessionListState {
     }
 
     /// 服务端给出事实（`blank` / `origin`），**显示哪些**由 `SessionVisibility` 答。
-    func reload() async {
+    ///
+    /// @returns 这一次**真的发出去了**吗。撞在途时只等它收尾、不重发，返回 `false` ——
+    ///   调用方拿它决定要不要再试一轮（见 `reloadAfterCreate`）。
+    @discardableResult
+    func reload() async -> Bool {
 
         if let running = inflight {
             _ = try? await running.value
-            return
+            return false
         }
         let task = Task { try await fetch() }
         inflight = task
@@ -149,6 +157,7 @@ final class SessionListState {
             // 说成了两句不同的话（组网未就绪 / 还没有配对），端上再猜一遍就会有两个说法。
             record(failure: error)
         }
+        return true
     }
 }
 
@@ -174,8 +183,27 @@ extension SessionListState {
         }
     }
 
+    /// 提交一个名字：**规则先判**，不合法就停在这里，一个请求也不发。
+    ///
+    /// 这一步住在状态层而不是视图里：它是「发不发请求」的判定，删掉它不会有任何判据变红
+    /// —— 而 `WorkspaceNameTests` 只证明规则算得对，证明不了它被用上。
+    ///
+    /// @param raw - 用户输入的原样。规则与 trim 各做一次，都在 `WorkspaceName` 里。
+    func submitWorkspaceName(_ raw: String) async {
+        if let problem = WorkspaceName.problem(with: raw) {
+            workspaceNameProblem = problem
+            return
+        }
+        workspaceNameProblem = nil
+        await createWorkspace(name: raw)
+    }
+
     /// 造一个工作空间。成功（新建或本已存在）都重拉一次列表：
     /// 组清单只在拉取时更新，不重拉新组不会出现。
+    ///
+    /// 新建成功时**先就地插到最前**再重拉：宿主把新建的排在注册表首位，而 `reload` 撞在
+    /// 一次在途请求上时只等不重发（那是它的单飞语义）。没有这一步，界面说「建好了」而
+    /// 列表里没有那个组。
     ///
     /// 结果落在 {@link workspaceCreation} 上而不是交回调用方 —— 视图只发起、不接结果
     /// （与新建会话同一条纪律）。失败也**只落这里**，不落列表顶部：动作是在输入面板里
@@ -187,16 +215,39 @@ extension SessionListState {
         isCreatingWorkspace = true
         defer { isCreatingWorkspace = false }
         do {
-            workspaceCreation = try await createWorkspaceAction(WorkspaceName.trimmed(name))
-            await reload()
+            let made = try await createWorkspaceAction(WorkspaceName.trimmed(name))
+            workspaceCreation = made.created ? .created : .alreadyExists
+            if made.created {
+                workspaces.insert(WorkspaceSummary(id: made.workspaceId, title: made.title), at: 0)
+            }
+            await reloadAfterCreate()
         } catch {
             workspaceCreation = .failed(error.localizedDescription)
         }
     }
 
-    /// 打开输入面板时清掉上一次的结果 —— 否则「已经有了」会一直挂在那儿。
+    /// 建完之后取一次**新**的列表。
+    ///
+    /// 不能直接 `reload()`：它在有在途请求时只等不重发，而在途那次的结果早于这次创建 ——
+    /// 等它就等于把旧快照当最新，界面说「建好了」而列表里没有那个组。
+    ///
+    /// 所以每轮都问一句「这一发真的发出去了吗」，没发出去就让一轮步再试；上限三轮。
+    /// 在途那次的 body 从拿到值之后到收尾之间没有 `await`，因此一轮让步通常就够 ——
+    /// 上限只是防它永远不让位。
+    ///
+    /// 上面那一步「就地插到最前」是同一件事的另一半：万一三轮都没发出，列表至少已经能
+    /// 看到新组。
+    private func reloadAfterCreate() async {
+        for _ in 0..<3 {
+            if await reload() { return }
+            await Task.yield()
+        }
+    }
+
+    /// 打开输入面板时清掉上一次的结果与拒绝理由 —— 否则「已经有了」会一直挂在那儿。
     func beginNamingWorkspace() {
         workspaceCreation = nil
+        workspaceNameProblem = nil
     }
 
     /// 一次失败该落哪一面。`blocked` 与 `failed` 的分界见 `Outcome` 的注释；

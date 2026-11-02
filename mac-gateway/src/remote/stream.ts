@@ -257,7 +257,9 @@ function pumpEvents(
       // （列表路径、这里、客户端），而只有前两个归我们管。
       //
       // 归属每次现取一次注册表快照，不缓存：缓存要引入失效时机，而这里错一次就是
-      // 一行挂错组。规模是「工作空间数 × 成员数」，与事件频率（每条一轮交互几条）比，可以忽略。
+      // 一行挂错组。代价是**每一条 emit 帧**都要遍历一次（不只是 `api-session/added`
+      // 那一种 —— 在调用点分清事件类型，就得让这一层认识上游的事件名，而认识它们的
+      // 只有适配器）。量级是「工作空间数 × 成员数」，与事件频率比可以忽略。
       const change = sessionListChangeOf(frame.event, frame.args, workspace?.snapshot().owners)
       send(socket, {
         type: 'item',

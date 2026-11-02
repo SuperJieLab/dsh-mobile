@@ -46,11 +46,3 @@ export function workspaceNameOf(payload: unknown): string | undefined {
   const trimmed = name.trim()
   return isValidName(trimmed) ? trimmed : undefined
 }
-
-/** 本 op 的应答。 */
-export interface WorkspaceCreateResult {
-  workspaceId: string
-  title: string
-  /** `false` 表示这个名字已经在用，返回的是既有的那个 —— 不是失败。 */
-  created: boolean
-}

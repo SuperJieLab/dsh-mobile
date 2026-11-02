@@ -13,7 +13,7 @@ import XCTest
 final class WorkspaceNameTests: XCTestCase {
 
     /// 与网关侧逐字相同的一组样本。加样本时两边一起加。
-    private let refused = ["", "   ", "a/b", "a\\b", ".", "..", " a/b "]
+    private let refused = ["", "   ", "a/b", "a\\b", ".", "..", " a/b ", "\u{FEFF}"]
     private let accepted = ["记账 App", "a b", ".config", "项目-1", "test-r41"]
 
     func testBlanksSeparatorsAndDotEntriesAreRefused() {
@@ -38,5 +38,14 @@ final class WorkspaceNameTests: XCTestCase {
         XCTAssertEqual(WorkspaceName.problem(with: ""), .blank)
         XCTAssertEqual(WorkspaceName.problem(with: "a/b"), .pathSeparator)
         XCTAssertEqual(WorkspaceName.problem(with: ".."), .dotEntry)
+    }
+
+    /// 预填取的是**第一个空闲**的 `workspace-N`，不是「最大号加一」。
+    func testTheSuggestionIsTheFirstFreeWorkspaceNumber() {
+        XCTAssertEqual(WorkspaceName.suggestion(among: []), "workspace-1")
+        XCTAssertEqual(WorkspaceName.suggestion(among: ["CodeTest"]), "workspace-1")
+        XCTAssertEqual(WorkspaceName.suggestion(among: ["workspace-1"]), "workspace-2")
+        XCTAssertEqual(WorkspaceName.suggestion(among: ["workspace-1", "workspace-3"]), "workspace-2",
+                       "空出来的号要补上 —— 取最大号加一会给出 workspace-4")
     }
 }

@@ -16,20 +16,32 @@ enum WorkspaceCreation: Equatable {
     case failed(String)
 }
 
+/// 宿主造出来的那个工作空间。
+///
+/// 三格都要：`created` 决定界面说哪句话，`workspaceId` 与 `title` 让列表在重拉之前
+/// 就能把它摆出来（重拉可能撞在一次在途请求上，那一撞什么也不拉）。
+struct WorkspaceCreated: Equatable {
+    let workspaceId: String
+    let title: String
+    let created: Bool
+}
+
 /// 让宿主造一个工作空间：在固定根下建目录并注册。
 ///
 /// 名字里用 `make` 而不是 `create`：状态层那个动作叫 `createWorkspace(name:)`（它是
 /// 用户按下去的那件事），这里是它落到线上去的那一半 —— 两者同名会让调用点看起来在
 /// 递归。
 ///
-/// 同名**不报错**（`alreadyExists`）—— 那正是用户想要的：那个工作空间已经在那儿了。
+/// 同名**不报错**（`created` 为假）—— 那正是用户想要的：那个工作空间已经在那儿了。
 @MainActor
-func makeWorkspace(_ client: RpcClient, name: String) async throws -> WorkspaceCreation {
+func makeWorkspace(_ client: RpcClient, name: String) async throws -> WorkspaceCreated {
     let response: WorkspaceCreateResponse = try await client.perform(WorkspaceCreateRequest(name: name))
-    guard response.workspaceId != nil, let created = response.created else {
-        throw RpcClientError.malformedResponse(detail: "workspaceId/created")
+    guard let workspaceId = response.workspaceId,
+          let title = response.title,
+          let created = response.created else {
+        throw RpcClientError.malformedResponse(detail: "workspaceId/title/created")
     }
-    return created ? .created : .alreadyExists
+    return WorkspaceCreated(workspaceId: workspaceId, title: title, created: created)
 }
 
 /// 让宿主建一个空会话，返回它的 id。

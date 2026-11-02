@@ -76,4 +76,4 @@ npm test               # 先跑 typecheck，再跑 node --test
 
 dsh 安装这个包时读 `cordis.patch.yml`，把 `./src/index.ts` 作为一行插进插件树。`name` 是**相对 patch 文件**的路径，加载器会在 patch 文件旁边锚定它 —— 所以这个文件里没有绝对路径，包被装到哪里都对。
 
-`index.ts` 的 `inject` 声明九个宿主服务；缺任何一个，cordis 会扣住 fiber（表现为「起来了但没监听」），这正是「读不了会话就不该说自己活着」的形态。
+`index.ts` 的 `inject` 声明十一个宿主服务；缺任何一个，cordis 会扣住 fiber（表现为「起来了但没监听」），这正是「读不了会话就不该说自己活着」的形态。

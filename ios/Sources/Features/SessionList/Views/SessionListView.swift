@@ -12,12 +12,10 @@ struct SessionListView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     /// 输入面板开着吗。**这是视图的本地值**：它只管「这一层皮在不在」，
-    /// 名字合法与否归 `WorkspaceName`，创建结果归状态层。
+    /// 名字合法与否归 `WorkspaceName`，判定（发不发请求）与创建结果归状态层。
     @State private var isNaming = false
-    /// 面板里那个输入框的内容。
+    /// 面板里那个输入框的内容。输入的**持有者**是视图，规则不在这里。
     @State private var draftName = ""
-    /// 上一次提交被规则拒掉的理由。
-    @State private var nameProblem: WorkspaceName.Problem?
 
     var body: some View {
         pairedList
@@ -25,30 +23,32 @@ struct SessionListView: View {
 
     /// 打开「新建工作空间」的输入面板。
     ///
-    /// 打开时清掉上一次的结果（状态层里那份），否则「已经有了」会一直挂在那儿。
+    /// 名字预填 `workspace-N`（**已注册**的那些里第一个空闲的）—— 用户多数时候只想赶紧建
+    /// 一个，不该被要求从零想个名字。根下还没注册的目录看不见，那种情况交给服务端撞。
     private func startNamingWorkspace() {
-        draftName = ""
-        nameProblem = nil
+        draftName = WorkspaceName.suggestion(among: list.workspaces.map(\.title))
         list.beginNamingWorkspace()
         isNaming = true
     }
 
-    /// 提交名字。**规则先判**：不合法就停在这儿，一个请求也不发。
-    ///
-    /// 结果不接 —— 它落在 `list.workspaceCreation` 上，面板读它渲染（视图不接 `await` 的结果）。
+    /// 提交名字。判定在状态层（不合法就不发请求），这里只发起 —— 视图不接结果。
     private func submitName() {
-        if let problem = WorkspaceName.problem(with: draftName) {
-            nameProblem = problem
-            return
-        }
-        nameProblem = nil
-        Task { await list.createWorkspace(name: draftName) }
+        Task { await list.submitWorkspaceName(draftName) }
     }
 
     private func closeNaming() {
         isNaming = false
         draftName = ""
-        nameProblem = nil
+    }
+
+    /// 这一次提交已经有结论（建好了 / 已经有了）—— 收口按钮该说「完成」。
+    ///
+    /// 失败时仍是「创建」：那是重新试一次，不是收口。
+    private var hasOutcome: Bool {
+        switch list.workspaceCreation {
+        case .some(.created), .some(.alreadyExists): return true
+        default: return false
+        }
     }
 
     /// 名字不能用的理由，说人话。
@@ -81,7 +81,7 @@ struct SessionListView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } footer: {
-                    if let problem = nameProblem {
+                    if let problem = list.workspaceNameProblem {
                         Text(text(of: problem)).foregroundStyle(.red)
                     } else if let creation = list.workspaceCreation {
                         Text(text(of: creation))
@@ -94,11 +94,17 @@ struct SessionListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { closeNaming() }
+                    Button(hasOutcome ? "关闭" : "取消") { closeNaming() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("创建") { submitName() }
-                        .disabled(list.isCreatingWorkspace)
+                    if hasOutcome {
+                        // 建好了就得有一个**语义正确**的收口动作。只留「取消」的话，
+                        // 用户对着一次成功会被要求点一个写着「放弃」的按钮。
+                        Button("完成") { closeNaming() }
+                    } else {
+                        Button("创建") { submitName() }
+                            .disabled(list.isCreatingWorkspace)
+                    }
                 }
             }
         }

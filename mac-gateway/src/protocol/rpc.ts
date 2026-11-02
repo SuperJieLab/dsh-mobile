@@ -277,7 +277,6 @@ async function commandExecute(envelope: Record<string, unknown>, command: Comman
   return { v: PROTOCOL_VERSION, ok: true, commandId: outcome.commandId }
 }
 
-/** 列表路径：廉价的每会话元数据，最新在前。 */
 /**
  * 列表应答：会话行 + 工作空间清单。
  *

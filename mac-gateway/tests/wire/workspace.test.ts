@@ -14,7 +14,7 @@ import { test } from 'node:test'
 import { workspaceNameOf } from '../../src/wire/workspace.ts'
 
 /** 与 iOS 侧逐字相同的一组样本。加样本时两边一起加。 */
-const REFUSED = ['', '   ', 'a/b', 'a\\b', '.', '..', ' a/b ']
+const REFUSED = ['', '   ', 'a/b', 'a\\b', '.', '..', ' a/b ', '\uFEFF']
 const ACCEPTED = ['记账 App', 'a b', '.config', '项目-1', 'test-r41']
 
 /** 「这个名字能不能用」只有这一个公开答案 —— 规则本身不导出（结构判据守着 `wire/` 的导出面）。 */

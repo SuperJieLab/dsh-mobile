@@ -60,7 +60,7 @@ final class SessionListStateTests: XCTestCase {
     private func make(
         _ fetch: FakeFetch,
         create: @escaping (String?) async throws -> String = { _ in throw CreateNotExpected() },
-        createWorkspace: @escaping (String) async throws -> WorkspaceCreation = { _ in throw CreateNotExpected() },
+        createWorkspace: @escaping (String) async throws -> WorkspaceCreated = { _ in throw CreateNotExpected() },
         open: @escaping (String) -> Void = { _ in }
     ) -> SessionListState {
         SessionListState(fetch: { try await fetch.fetch() }, create: create,
@@ -482,7 +482,7 @@ final class SessionListStateTests: XCTestCase {
         let state = make(fetch, createWorkspace: { name in
             asked.append(name)
             fetch.workspaces = [WorkspaceSummary(id: "w-new", title: name)]
-            return .created
+            return WorkspaceCreated(workspaceId: "w-new", title: name, created: true)
         })
         await state.reload()
         let before = fetch.calls
@@ -500,7 +500,7 @@ final class SessionListStateTests: XCTestCase {
     func testAnAlreadyExistingWorkspaceIsReportedAsSuch() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        let state = make(fetch, createWorkspace: { _ in .alreadyExists })
+        let state = make(fetch, createWorkspace: { name in WorkspaceCreated(workspaceId: "w-old", title: name, created: false) })
         await state.reload()
 
         await state.createWorkspace(name: "已有的")
@@ -530,7 +530,7 @@ final class SessionListStateTests: XCTestCase {
     func testBeginningToNameClearsThePreviousOutcome() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        let state = make(fetch, createWorkspace: { _ in .alreadyExists })
+        let state = make(fetch, createWorkspace: { name in WorkspaceCreated(workspaceId: "w-old", title: name, created: false) })
         await state.reload()
         await state.createWorkspace(name: "x")
         XCTAssertNotNil(state.workspaceCreation)
@@ -538,5 +538,67 @@ final class SessionListStateTests: XCTestCase {
         state.beginNamingWorkspace()
 
         XCTAssertNil(state.workspaceCreation)
+    }
+
+    /// 非法名字**一个请求都不发** —— 守的是 spec「不许把非法路径送出去靠服务端兜」。
+    ///
+    /// 判定住在状态层（`submitWorkspaceName`）而不是视图里：视图里那句
+    /// `if problem != nil { return }` 删掉不会有任何判据变红，而它守的正是这一条。
+    func testAnInvalidNameNeverReachesTheNetwork() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        var called = 0
+        let state = make(fetch, createWorkspace: { name in
+            called += 1
+            return WorkspaceCreated(workspaceId: "w", title: name, created: true)
+        })
+
+        for name in ["", "   ", "a/b", "a\\b", ".", ".."] {
+            await state.submitWorkspaceName(name)
+        }
+
+        XCTAssertEqual(called, 0, "非法名字一个请求都不该发出去")
+        XCTAssertNotNil(state.workspaceNameProblem, "拒了得给一个理由")
+        XCTAssertNil(state.workspaceCreation, "没发请求就没有创建结果")
+    }
+
+    /// 合法的那一次要把上一次的红字清掉，并把 trim 过的名字发出去。
+    func testAValidNameClearsTheProblemAndCreates() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        var asked: [String] = []
+        let state = make(fetch, createWorkspace: { name in
+            asked.append(name)
+            return WorkspaceCreated(workspaceId: "w-new", title: name, created: true)
+        })
+
+        await state.submitWorkspaceName("a/b")
+        XCTAssertNotNil(state.workspaceNameProblem)
+
+        await state.submitWorkspaceName("  记账  ")
+
+        XCTAssertNil(state.workspaceNameProblem, "合法的这一次要把上一次的红字清掉")
+        XCTAssertEqual(asked, ["记账"])
+    }
+
+    /// 重拉撞在途：在途那次拉的是**创建之前**的快照，不能当最新用 —— 必须再拉一次。
+    func testANewWorkspaceIsVisibleEvenIfAReloadWasInFlight() async {
+        let fetch = FakeFetch()   // 第一次请求挂在 gate 上
+        let state = make(fetch, createWorkspace: { name in
+            fetch.workspaces = [WorkspaceSummary(id: "w-new", title: name)]
+            return WorkspaceCreated(workspaceId: "w-new", title: name, created: true)
+        })
+
+        let pending = Task { await state.reload() }
+        await settle()
+        let creating = Task { await state.createWorkspace(name: "记账") }
+        await settle()
+        fetch.release()
+        await pending.value
+        await creating.value
+
+        XCTAssertEqual(state.workspaces.map(\.id), ["w-new"],
+                       "在途那次的结果早于这次创建；不重拉就等于拿旧快照当最新")
+        XCTAssertEqual(fetch.calls, 2, "一次在途 + 创建之后那一次")
     }
 }

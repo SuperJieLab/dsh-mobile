@@ -45,7 +45,13 @@ export function workspaceSnapshotOf(registry: RegistryLike): WorkspaceSnapshot {
   const workspaces = registry.list()
   const owners = new Map<string, string>()
   const rows = workspaces.map((workspace) => {
-    for (const sessionId of workspace.sessionIds) owners.set(sessionId, workspace.id)
+    // **先来的那个胜出**（`has` 守住），不是后来的：参照界面找的是清单里**第一个**成员表
+    // 含它的工作空间。正常数据下一个会话只属于一个组，两种写法同解；一旦注册表里出现重复
+    // 成员（`attachSession` 只加不减，历史数据也可能被手改过），取后者会把同一批会话在
+    // 手机与 Web UI 上分到不同的组 —— 而那正是这条判据要防的事。
+    for (const sessionId of workspace.sessionIds) {
+      if (!owners.has(sessionId)) owners.set(sessionId, workspace.id)
+    }
     return { id: workspace.id, title: workspace.title }
   })
   return { rows, owners }
