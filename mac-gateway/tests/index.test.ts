@@ -99,6 +99,9 @@ function install(
        * upstream's `connection.createPeer`, mirrored after
        * `dsh-client-connection/lib/types/rpc-host.d.ts:40-44`. Ahead of `services`
        * so a caller that passes its own `connection` still wins. */
+      /** 列表分组的来源。默认空注册表：这组用例问的是列表在投影与缓存异常下的行为，
+       * 不是分组结果；要看分组的用例自己传一份。 */
+      workspaceRegistry: { list: () => [] },
       connection: {
         createPeer(values: { principal: { kind: string }; interactions?: string }) {
           return {

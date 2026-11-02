@@ -19,7 +19,7 @@ final class SessionListStateTests: XCTestCase {
     private func row(_ id: String, title: String? = nil, updatedAt: Double) -> SessionSummary {
         SessionSummary(
             id: id, title: title, createdAt: 1, updatedAt: updatedAt,
-            running: false, blank: false, origin: nil
+            running: false, blank: false, origin: nil, workspaceId: nil
         )
     }
 
@@ -28,17 +28,19 @@ final class SessionListStateTests: XCTestCase {
     @MainActor
     private final class FakeFetch {
         private(set) var calls = 0
-        var result: Result<[SessionSummary], Error> = .success([])
+        var rows: Result<[SessionSummary], Error> = .success([])
+        /// 组清单。多数用例不关心分组，默认空 —— 那时全部会话落「未分组」。
+        var workspaces: [WorkspaceSummary] = []
         var holds = true
         private var gate: CheckedContinuation<Void, Never>?
 
-        func fetch() async throws -> [SessionSummary] {
+        func fetch() async throws -> SessionListPage {
             calls += 1
             if holds {
                 holds = false   // 只停第一次：单飞的那一条要证明第二次根本没发出去
                 await withCheckedContinuation { gate = $0 }
             }
-            return try result.get()
+            return SessionListPage(sessions: try rows.get(), workspaces: workspaces)
         }
 
         func release() {
@@ -73,7 +75,7 @@ final class SessionListStateTests: XCTestCase {
     /// 两次 `reload()` 撞在一起：取数只被调一次，两次都拿到同一份结果。
     func testConcurrentReloadsShareOneRequest() async {
         let fetch = FakeFetch()
-        fetch.result = .success([row("a", updatedAt: 100)])
+        fetch.rows = .success([row("a", updatedAt: 100)])
         let state = make(fetch)
 
         let first = Task { await state.reload() }
@@ -111,7 +113,7 @@ final class SessionListStateTests: XCTestCase {
     func testARowThatOnlyAnEventKnewAboutDoesNotSurviveTheBaseline() async throws {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.result = .success([row("a", updatedAt: 100)])
+        fetch.rows = .success([row("a", updatedAt: 100)])
         let state = make(fetch)
 
         state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300}}"#))
@@ -131,7 +133,7 @@ final class SessionListStateTests: XCTestCase {
     func testChangesThatArriveWhileAPullIsInFlightSurviveIt() async throws {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.result = .success([row("a", updatedAt: 100), row("z", updatedAt: 50)])
+        fetch.rows = .success([row("a", updatedAt: 100), row("z", updatedAt: 50)])
         let state = make(fetch)
         await state.reload()
 
@@ -155,7 +157,7 @@ final class SessionListStateTests: XCTestCase {
     /// 在途期间删掉一行，响应里还有它：账重放之后它不该复活。
     func testARemovalThatArrivesWhileAPullIsInFlightWins() async throws {
         let fetch = FakeFetch()
-        fetch.result = .success([row("a", updatedAt: 100), row("b", updatedAt: 50)])
+        fetch.rows = .success([row("a", updatedAt: 100), row("b", updatedAt: 50)])
         let state = make(fetch)
 
         let pull = Task { await state.reload() }
@@ -171,7 +173,7 @@ final class SessionListStateTests: XCTestCase {
     /// 响应里也有同一条新行：仍然只有一行。
     func testARowThatBothTheEventAndTheResponseCarryIsOneRow() async throws {
         let fetch = FakeFetch()
-        fetch.result = .success([row("b", title: "拉取来的", updatedAt: 300)])
+        fetch.rows = .success([row("b", title: "拉取来的", updatedAt: 300)])
         let state = make(fetch)
 
         let pull = Task { await state.reload() }
@@ -210,7 +212,7 @@ final class SessionListStateTests: XCTestCase {
     /// 在途期间到达的不可见行，重放之后也不该漏进来 —— 落地后要再筛一次。
     func testAnInvisibleRowBufferedDuringAPullDoesNotLeakOnReplay() async throws {
         let fetch = FakeFetch()
-        fetch.result = .success([row("a", updatedAt: 100)])
+        fetch.rows = .success([row("a", updatedAt: 100)])
         let state = make(fetch)
 
         let pull = Task { await state.reload() }
@@ -278,13 +280,13 @@ final class SessionListStateTests: XCTestCase {
     func testAFailedPullKeepsTheListAndTheChanges() async throws {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.result = .success([row("a", updatedAt: 100)])
+        fetch.rows = .success([row("a", updatedAt: 100)])
         let state = make(fetch)
         await state.reload()
 
         // 第二发要真的停在在途：不这样的话，`apply` 落在失败之后，这条就退化成
         // 「失败不清空 + apply 会改行」，而后半是 apply 的定义。
-        fetch.result = .failure(RpcClientError.notActivated)
+        fetch.rows = .failure(RpcClientError.notActivated)
         fetch.holds = true
         let pull = Task { await state.reload() }
         await settle()
@@ -307,7 +309,7 @@ final class SessionListStateTests: XCTestCase {
             let fetch = FakeFetch()
             // 不挂起：这几个用例只关心落成的面，不关心在途期间发生了什么。
             fetch.holds = false
-            fetch.result = .failure(error)
+            fetch.rows = .failure(error)
             let state = make(fetch)
             await state.reload()
 
@@ -320,7 +322,7 @@ final class SessionListStateTests: XCTestCase {
     func testTransportFailureIsAFailure() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.result = .failure(RpcClientError.transport(
+        fetch.rows = .failure(RpcClientError.transport(
             url: URL(string: "http://100.64.0.1:3081/rpc")!,
             underlying: URLError(.cannotConnectToHost)))
         let state = make(fetch)
@@ -377,7 +379,7 @@ final class SessionListStateTests: XCTestCase {
     func testCreatingOpensTheNewSessionAndLeavesTheListAlone() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.result = .success([row("a", updatedAt: 100)])
+        fetch.rows = .success([row("a", updatedAt: 100)])
         var opened: [String] = []
         let state = make(fetch, create: { "session-new" }, open: { opened.append($0) })
         await state.reload()

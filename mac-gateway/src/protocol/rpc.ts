@@ -17,6 +17,7 @@ import type { SessionPort } from '../ports/session.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { CommandPort } from '../ports/command.ts'
+import type { WorkspacePort } from '../ports/workspace.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type {
   WireEvent,
@@ -81,6 +82,7 @@ export async function handle(
   write?: WritePort,
   model?: ModelPort,
   command?: CommandPort,
+  workspace?: WorkspacePort,
 ): Promise<Response> {
   const envelope = asRecord(message)
   if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
@@ -93,7 +95,7 @@ export async function handle(
   try {
     switch (op) {
       case 'list-sessions':
-        return await listSessions(port, now)
+        return await listSessions(port, workspace, now)
       case 'snapshot':
         return await snapshot(envelope, port, normalizeLimits(limits))
       case 'page':
@@ -248,23 +250,41 @@ async function commandExecute(envelope: Record<string, unknown>, command: Comman
 }
 
 /** 列表路径：廉价的每会话元数据，最新在前。 */
-async function listSessions(port: SessionPort, now: () => number): Promise<Response> {
+/**
+ * 列表应答：会话行 + 工作空间清单。
+ *
+ * 两样出自**同一次**读取（`snapshot()` 一次），所以不存在「清单里没有、归属里
+ * 却有」这种半新半旧的应答。端口缺席时清单这一格整个不发 —— 那是「这个装配没有
+ * 分组能力」，与「宿主里没有工作空间」（空数组）是两件事，客户端两种都按
+ * 「没有组」处理，但线上不能混成一种。
+ */
+async function listSessions(
+  port: SessionPort,
+  workspace: WorkspacePort | undefined,
+  now: () => number,
+): Promise<Response> {
   const summaries = [...await port.list()]
   // 在此排序而非在客户端排，让所有客户端的顺序一致。
   summaries.sort((left, right) => right.updatedAt - left.updatedAt)
+  const groups = workspace?.snapshot()
   return {
     v: PROTOCOL_VERSION,
     ok: true,
     serverTime: now(),
-    sessions: summaries.map(toWireSummary),
+    ...groups === undefined ? {} : { workspaces: groups.rows },
+    sessions: summaries.map(row => toWireSummary(row, groups?.owners.get(row.id))),
   }
 }
 
 /**
  * 一行的线上形状，省略 `title` 而非发送 null。`eventCount` 刻意缺席：
  * 日志推导的事实会把日志拖回列表路径。
+ *
+ * `workspaceId` 由**这一层**补上而不是由数据源给：归属不是会话的事实，而是
+ * 「会话与工作空间的关系」，它的唯一来源是工作空间注册表。让适配器去填这一格，
+ * 等于让会话存储认识工作空间。
  */
-function toWireSummary(row: SessionRow): Record<string, unknown> {
+function toWireSummary(row: SessionRow, workspaceId: string | undefined): Record<string, unknown> {
   return {
     id: row.id,
     ...row.title === undefined ? {} : { title: row.title },
@@ -273,6 +293,7 @@ function toWireSummary(row: SessionRow): Record<string, unknown> {
     running: row.running,
     blank: row.blank,
     ...row.origin === undefined ? {} : { origin: row.origin },
+    ...workspaceId === undefined ? {} : { workspaceId },
   }
 }
 

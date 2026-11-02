@@ -30,7 +30,8 @@ enum SessionListChange: Equatable {
                 updatedAt: updatedAt,
                 running: row["running"]?.bool ?? false,
                 blank: row["blank"]?.bool ?? false,
-                origin: row["origin"]?.string
+                origin: row["origin"]?.string,
+                workspaceId: row["workspaceId"]?.string
             ))
         case "removed":
             guard let id = payload["id"]?.string, !id.isEmpty else { return nil }

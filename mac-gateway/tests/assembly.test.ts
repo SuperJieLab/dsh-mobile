@@ -69,6 +69,8 @@ function hostServices(): Record<string, unknown> {
     sessionProjectionCache: { cachedSnapshot: () => undefined },
     sessions: { get: () => undefined },
     agents: { get: (id: string) => (id === 's' ? { id } : undefined) },
+    // 列表分组用；空注册表就够了 —— 这条用例问的是装配与注入，不是分组结果。
+    workspaceRegistry: { list: () => [] },
     sessionController: {
       async selectModel(request: unknown) { void request; return { selected: {} } },
       async modelCatalog() { return { groups: [], failures: [] } },

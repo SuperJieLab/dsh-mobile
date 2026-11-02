@@ -23,6 +23,19 @@ struct SessionListView: View {
         Task { await list.createSession() }
     }
 
+    /// 这一屏的分组。每次渲染现算：行与组清单是两份事实，缓存分组会多出两份真相
+    /// （行变了要重算、清单变了要重算，漏一处的症状是某个会话停在旧组里）。
+    private var groups: [SessionGroup] {
+        SessionGrouping.groups(sessions: list.sessions, workspaces: list.workspaces)
+    }
+
+    /// 组标题。未分组的组由界面给文案（判定层不放用户可见的中文）。
+    private func title(of group: SessionGroup) -> String {
+        if group.isUngrouped { return "未分组" }
+        let title = group.title ?? ""
+        return title.isEmpty ? "（未命名工作空间）" : title
+    }
+
     private var pairedList: some View {
         List {
             // 前置不满足时那条提示：中性，说的是「现在缺什么」—— 原文来自服务端那次失败。
@@ -39,9 +52,15 @@ struct SessionListView: View {
                 }
             }
 
-            ForEach(list.sessions) { session in
-                NavigationLink(value: Destination.session(sessionId: session.id, title: session.title)) {
-                    SessionRow(session: session)
+            ForEach(groups) { group in
+                Section {
+                    ForEach(group.sessions) { session in
+                        NavigationLink(value: Destination.session(sessionId: session.id, title: session.title)) {
+                            SessionRow(session: session)
+                        }
+                    }
+                } header: {
+                    Text(title(of: group))
                 }
             }
 
@@ -53,9 +72,9 @@ struct SessionListView: View {
         }
         .navigationTitle("会话")
         .overlay {
-            if list.isLoading && list.sessions.isEmpty {
+            if list.isLoading && groups.isEmpty {
                 ProgressView("正在读 Mac 上的会话…")
-            } else if list.sessions.isEmpty
+            } else if groups.isEmpty
                         && list.failureText == nil && list.blockedReason == nil {
                 ContentUnavailableView {
                     Label("还没有会话", systemImage: "tray")

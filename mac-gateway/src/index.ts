@@ -25,7 +25,7 @@ import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
-import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, writePortOver, type HostContext } from './upstream/faces.ts'
+import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
@@ -47,6 +47,10 @@ export const inject = [
   'sessionProjectionCache',
   'sessions',
   'agents',
+  // 工作空间注册表：列表分组的组清单与每行归属都取自它。它也是
+  // sessionController 的依赖之一，所以这一条不新增失败面 —— 只是把
+  // 「网关依赖它」这件事显式写出来。
+  'workspaceRegistry',
   // follow 流：把控制器的 follow 泵到 WS 通道。
   // 仅 web-app bundle 提供。
   'sessionController',
@@ -140,11 +144,14 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // `inject` 里（它是扩展，缺席不该让整个网关 pending），所以端口在第一次调用时才取
   // 那份服务；取不到就由协议层折成 `internal-error`。
   const commandPort = commandChannelOver(ctx)
+  // 列表分组：组清单与每行归属都取自工作空间注册表。它与会话列表同一次应答
+  // 发出，所以没有自己的一条流。
+  const workspacePort = workspacePortOver(ctx)
 
   log.info('plugin loaded — auth on both channels, write + model channels on, command channel on demand')
 
   ctx.effect(() => {
-    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort })
+    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort })
 
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
@@ -154,6 +161,9 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       openingCapBytes: limits.maxOpeningBytes,
       // `{op:'events'}` 的流订阅这份源：身份是网关进程的，流是这条连接的。
       events: forwardedEvents,
+      // 列表增量行的归属来源。与一元的列表路径同一份端口 —— 两处的归属必须同一判据，
+      // 否则同一条会话会在列表里和增量里落在两个组。
+      workspace: workspacePort,
       // 待答项随这条流走：开流时重放当前集合、之后随变化增量。它是审批唯一的
       // 投递通道 —— 连接建立时不再预先推一遍（那时还没有流编号可用）。
       approvals: relay,

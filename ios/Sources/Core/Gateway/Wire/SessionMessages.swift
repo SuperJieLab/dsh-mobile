@@ -26,6 +26,20 @@ struct SessionSummary: Decodable, Identifiable, Hashable {
     let blank: Bool
     /// `"subagent"` 表示它是另一个会话的子会话；普通会话没有这个字段。
     let origin: String?
+    /// 所属工作空间；不属于任何工作空间时这个字段**整个缺席**（不是 null，也不是空串）——
+    /// 与 `title` 同一手法。读成「没有归属」而不是「还不知道」：服务端查不到归属时
+    /// 已经有确定答案了。
+    let workspaceId: String?
+}
+
+/// 工作空间清单的一行 —— 列表应答里随行的第二样东西。
+///
+/// 只有两格：客户端要做的是分组，它需要标题与身份。路径、成员表、时间戳都不上线，
+/// 少发一格就少一处「两端对同一个字段有不同理解」的机会。
+struct WorkspaceSummary: Decodable, Identifiable, Hashable {
+    let id: String
+    /// 组标题。服务端保证非空（由目录名派生）。
+    let title: String
 }
 
 /// 一条会话事件。协议承诺**事件体原样透传**（不裁剪、不翻译、不改名，且日后会带我们不认识的

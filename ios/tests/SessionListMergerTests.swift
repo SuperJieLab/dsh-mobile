@@ -21,11 +21,12 @@ final class SessionListMergerTests: XCTestCase {
 
     private func session(
         _ id: String, title: String? = nil, updatedAt: Double, running: Bool = false,
-        createdAt: Double? = 1, blank: Bool = false, origin: String? = nil
+        createdAt: Double? = 1, blank: Bool = false, origin: String? = nil,
+        workspaceId: String? = nil
     ) -> SessionSummary {
         SessionSummary(
             id: id, title: title, createdAt: createdAt, updatedAt: updatedAt,
-            running: running, blank: blank, origin: origin
+            running: running, blank: blank, origin: origin, workspaceId: workspaceId
         )
     }
 
@@ -38,7 +39,7 @@ final class SessionListMergerTests: XCTestCase {
         """))
         XCTAssertEqual(added, .added(SessionSummary(
             id: "s1", title: nil, createdAt: nil, updatedAt: 100,
-            running: true, blank: false, origin: nil
+            running: true, blank: false, origin: nil, workspaceId: nil
         )), "事件行没有 createdAt —— 它是可选的")
 
         XCTAssertEqual(SessionListChange.decode(try json(#"{"kind":"removed","id":"s1"}"#)),
@@ -161,5 +162,20 @@ final class SessionListMergerTests: XCTestCase {
         let rows = SessionListMerger.apply(
             .added(session("s1", updatedAt: 100, createdAt: nil, blank: true)), to: [])
         XCTAssertEqual(rows.map(\.id), ["s1"], "合并层不管可见性")
+    }
+
+    /// 归属这一格与 `title` 同一语义：事件行没带就保留旧值，带了就是新事实。
+    ///
+    /// 少了「没带就保留」，每收到一条不带归属的增量，那一行就会被赶进「未分组」——
+    /// 而 `status` 与 `activity` 两类增根本来就不带它。
+    func testAnAddedRowKeepsTheKnownWorkspaceUnlessItNamesAnother() {
+        let known = session("s1", updatedAt: 100, workspaceId: "w-a")
+
+        let silent = SessionListMerger.apply(.added(session("s1", updatedAt: 200)), to: [known])
+        XCTAssertEqual(silent.first?.workspaceId, "w-a", "事件行没带归属时不得把已有归属抹掉")
+
+        let moved = SessionListMerger.apply(
+            .added(session("s1", updatedAt: 300, workspaceId: "w-b")), to: [known])
+        XCTAssertEqual(moved.first?.workspaceId, "w-b", "带了归属就是新事实，覆盖旧值")
     }
 }

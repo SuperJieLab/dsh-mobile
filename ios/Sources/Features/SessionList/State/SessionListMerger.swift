@@ -35,6 +35,9 @@ enum SessionListMerger {
 
     /// 事件行叠加到已有行上：它知道的那几格取新的，不知道的保留旧值。
     /// **`title` 缺席也保留旧值**，尽管协议里「缺席」同时表示「无标题」与「投影不可用」。
+    ///
+    /// `workspaceId` 同理：事件行没带归属时，已有行的那一格不被抹掉 —— 否则每收到一条
+    /// 不带归属的增量，那一行就会被赶进「未分组」。
     private static func merge(_ incoming: SessionSummary, into rows: [SessionSummary]) -> SessionSummary {
         guard let existing = rows.first(where: { $0.id == incoming.id }) else { return incoming }
         return copy(of: existing,
@@ -43,7 +46,8 @@ enum SessionListMerger {
                     origin: incoming.origin,
                     updatedAt: incoming.updatedAt,
                     running: incoming.running,
-                    blank: incoming.blank)
+                    blank: incoming.blank,
+                    workspaceId: incoming.workspaceId)
     }
 
     /// 插到第一个 `updatedAt <= 新值` 的位置；都比它新就排最后。
@@ -72,13 +76,15 @@ enum SessionListMerger {
                              origin: String? = nil,
                              updatedAt: Double? = nil,
                              running: Bool? = nil,
-                             blank: Bool? = nil) -> SessionSummary {
+                             blank: Bool? = nil,
+                             workspaceId: String? = nil) -> SessionSummary {
         SessionSummary(id: row.id,
                        title: title ?? row.title,
                        createdAt: createdAt ?? row.createdAt,
                        updatedAt: updatedAt ?? row.updatedAt,
                        running: running ?? row.running,
                        blank: blank ?? row.blank,
-                       origin: origin ?? row.origin)
+                       origin: origin ?? row.origin,
+                       workspaceId: workspaceId ?? row.workspaceId)
     }
 }

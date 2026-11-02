@@ -19,6 +19,9 @@ final class SessionListState {
     }
 
     private(set) var sessions: [SessionSummary] = []
+    /// 宿主的工作空间清单，顺序即显示顺序。只在拉取成功时更新 —— 组的成员或标题在
+    /// 别的设备上改了，要等一次刷新才看到（组关系没有自己的订阅通道）。
+    private(set) var workspaces: [WorkspaceSummary] = []
     private(set) var isLoading = false
     /// 正在让宿主建一个空会话。视图用它禁用入口 —— 连发两次只会让两个动作抢同一行状态。
     private(set) var isCreating = false
@@ -26,7 +29,7 @@ final class SessionListState {
 
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
     /// 走真网络时，「两次请求并发」与「一次请求很慢」在测试里长得一样。
-    private let fetch: () async throws -> [SessionSummary]
+    private let fetch: () async throws -> SessionListPage
     /// 让宿主建一个空会话、交回 id。与 `fetch` 一样注入：新建的失败面要能被断言，
     /// 而走真网络时「宿主拒绝」与「网络断了」在测试里长得一样。
     private let create: () async throws -> String
@@ -34,13 +37,13 @@ final class SessionListState {
     /// `Destination` 那张路由表，它只知道「拿这个 id 去看那一条会话」。
     private let open: (String) -> Void
     /// 在途的那一次。单飞的落点，也是这批账的归属。
-    private var inflight: Task<[SessionSummary], Error>?
+    private var inflight: Task<SessionListPage, Error>?
     /// 这一次在途期间到达的变更，按到达顺序。进 `reload` 时必然为空 —— `apply` 只在
     /// `inflight != nil` 时入账，而它只在 `reload` 体内非 nil。
     private var buffered: [SessionListChange] = []
     /// 是否已经听过事件流（`attach` 幂等）。
     private var attached = false
-    init(fetch: @escaping () async throws -> [SessionSummary],
+    init(fetch: @escaping () async throws -> SessionListPage,
          create: @escaping () async throws -> String,
          open: @escaping (String) -> Void) {
         self.fetch = fetch
@@ -117,13 +120,15 @@ final class SessionListState {
             isLoading = false
         }
         do {
-            let rows = try await task.value
+            let page = try await task.value
             // 先摆响应的顺序，再把这批账依次重放 —— 反过来会让事件带来的位置被响应冲掉。
-            var merged = visible(rows)
+            var merged = visible(page.sessions)
             for change in buffered { merged = SessionListMerger.apply(change, to: merged) }
             // 重放会把事件推来的行加回去，所以落地之后再筛一次 —— 只筛一次的话，在途
             // 期间到达的 blank / subagent 会从这里漏进列表。
             sessions = visible(merged)
+            // 组清单只跟应答走：它没有自己的增量通道，事件也不携带它。
+            workspaces = page.workspaces
             outcome = .ready
         } catch {
             // 列表保留（事件带来的变化已经生效），只换失败面。
@@ -176,9 +181,18 @@ extension SessionListState {
     }
 }
 
+/// 一次拉取得到的两样东西：会话行，与工作空间清单。
+///
+/// 合成一个类型而不是两个闭包：它们出自同一条应答、同一次读取，分开取就会有一个
+/// 「行是新的、组清单是旧的」的中间态。只有一个消费者（列表状态），所以与它同住。
+struct SessionListPage: Equatable {
+    let sessions: [SessionSummary]
+    let workspaces: [WorkspaceSummary]
+}
+
 /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
 @MainActor
-func fetchSessions(_ client: RpcClient) async throws -> [SessionSummary] {
+func fetchSessions(_ client: RpcClient) async throws -> SessionListPage {
     let response: ListSessionsResponse = try await client.perform(ListSessionsRequest())
     // clock 采样：服务端时钟与本地收到时刻的一对。两端 offset 由这一对估出来，
     // 才能修正跨机的 t3 段与端到端 —— 直接相减会把这个 offset 算进延迟里。
@@ -189,5 +203,7 @@ func fetchSessions(_ client: RpcClient) async throws -> [SessionSummary] {
             fields: ["serverTime": .number(serverTime)]
         ))
     }
-    return response.sessions ?? []
+    // 组清单缺席（只读装配）与空数组在界面上同义：都表现为「全在未分组」。
+    return SessionListPage(sessions: response.sessions ?? [],
+                           workspaces: response.workspaces ?? [])
 }

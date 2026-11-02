@@ -14,6 +14,8 @@ import type { CommandPort } from '../ports/command.ts'
 import type { ModelSelection } from '../wire/model.ts'
 
 import { nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
+import { workspaceSnapshotOf, type RegistryLike } from './workspace.ts'
+import type { WorkspacePort } from '../ports/workspace.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { commandPortOver, type CommandsLike, type LiveAgentsLike } from './command.ts'
@@ -77,6 +79,22 @@ export function listSourceOver(ctx: HostContext): ListSource {
         `${failures} session row(s) served without projections — first failure: ${String(first)}`,
       )
     },
+  }
+}
+
+/**
+ * 工作空间端口：组清单与归属表都取自注册表。
+ *
+ * 注册表是宿主的核心服务，网关能起来就意味着它在 —— `sessionController` 自己也
+ * 注入它，而本插件注入 `sessionController`。所以这里没有「服务缺席」这一支：
+ * 缺了就不是少一个格子，而是整个网关不该起来。
+ *
+ * 每次 `snapshot()` 现读服务而不是在装配时捕获：与 `listSourceOver` 同一写法，
+ * 服务在热重载里被换掉时不会留下旧引用。
+ */
+export function workspacePortOver(ctx: HostContext): WorkspacePort {
+  return {
+    snapshot: () => workspaceSnapshotOf(ctx.workspaceRegistry as unknown as RegistryLike),
   }
 }
 

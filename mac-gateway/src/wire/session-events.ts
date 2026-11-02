@@ -20,6 +20,8 @@ export interface SessionListRow {
   running: boolean
   blank: boolean
   origin?: string
+  /** 所属工作空间；不属于任何工作空间时整个字段缺席 —— 与列表行同义。 */
+  workspaceId?: string
 }
 
 /** 会话列表的一条增量。四种，各自对应上游的一类事件。 */

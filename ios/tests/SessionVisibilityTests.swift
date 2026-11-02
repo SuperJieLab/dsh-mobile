@@ -21,7 +21,8 @@ final class SessionVisibilityTests: XCTestCase {
             updatedAt: 0,
             running: false,
             blank: blank,
-            origin: origin
+            origin: origin,
+            workspaceId: nil
         )
     }
 

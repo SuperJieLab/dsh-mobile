@@ -51,6 +51,7 @@ import type { UsageSnapshot } from '../wire/usage.ts'
 import { usageSnapshotOf } from '../upstream/usage.ts'
 import type { ModelSelection } from '../wire/model.ts'
 import type { FollowSource } from '../ports/follow.ts'
+import type { WorkspacePort } from '../ports/workspace.ts'
 import type { ForwardedSource } from '../ports/events.ts'
 import type { Duplex } from 'node:stream'
 import { encodeTextFrame } from './frames.ts'
@@ -111,6 +112,12 @@ export function onClientText(
   streams: Map<StreamId, { abort: AbortController }>,
   text: string,
   openingCapBytes: number,
+  /**
+   * 会话列表增量行的归属来源。追加在末尾而不是挨着 `approvals`：它是后来才有的
+   * 第五个数据源，插在中间会让每个调用点的实参全部错位，而错位的症状是**静默**
+   * 的（位置参数，类型又都像）。
+   */
+  workspace?: WorkspacePort,
 ): ClientFrameOutcome {
   const frame = parseClientFrame(text)
   if (frame === undefined) return { ok: false, reason: 'unreadable-frame', excerpt: excerptOf(text) }
@@ -145,7 +152,7 @@ export function onClientText(
       send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'internal-error', message: 'this gateway has no forwarded-event source' } })
       return { ok: true }
     }
-    pumpEvents(socket, feed, approvals, frame.streamId, abort.signal, done)
+    pumpEvents(socket, feed, approvals, frame.streamId, abort.signal, done, workspace)
     return { ok: true }
   }
 
@@ -209,6 +216,7 @@ function pumpEvents(
   streamId: StreamId,
   signal: AbortSignal,
   done: () => void,
+  workspace: WorkspacePort | undefined,
 ): void {
   // 源这一代没活着就不给集合。一份「看起来有、其实不知道」的集合比拒绝更坏：客户端会
   // 把它当成可信基线，而中继此刻根本不知道上游还挂着什么。拒绝之后客户端按可重试处理、
@@ -247,7 +255,10 @@ function pumpEvents(
       // 会话列表的四类事件在**这里**翻成我们的行形状，其余的按原样转发。
       // 翻译放在网关而不是手机：客户端若也解一遍上游形状，同一事实就有三个声明
       // （列表路径、这里、客户端），而只有前两个归我们管。
-      const change = sessionListChangeOf(frame.event, frame.args)
+      //
+      // 归属每次现取一次注册表快照，不缓存：缓存要引入失效时机，而这里错一次就是
+      // 一行挂错组。规模是「工作空间数 × 成员数」，与事件频率（每条一轮交互几条）比，可以忽略。
+      const change = sessionListChangeOf(frame.event, frame.args, workspace?.snapshot().owners)
       send(socket, {
         type: 'item',
         streamId,

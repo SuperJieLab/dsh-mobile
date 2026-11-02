@@ -39,11 +39,15 @@ interface HostSummaryLike {
  * @param event - 上游事件名（`api-session/added` 等）。
  * @param args - 上游 `emit` 的位置参数。
  */
-export function sessionListChangeOf(event: string, args: unknown): SessionListChange | undefined {
+export function sessionListChangeOf(
+  event: string,
+  args: unknown,
+  owners?: ReadonlyMap<string, string>,
+): SessionListChange | undefined {
   if (!Array.isArray(args)) return undefined
   switch (event) {
     case 'api-session/added': {
-      const row = sessionListRowOf(args[0])
+      const row = sessionListRowOf(args[0], owners)
       return row === undefined ? undefined : { kind: 'added', row }
     }
     case 'api-session/removed': {
@@ -72,14 +76,21 @@ export function sessionListChangeOf(event: string, args: unknown): SessionListCh
  *
  * `createdAt` 刻意不取：上游 summary 不带它，而为了填这一格去查会话头会把 I/O
  * 拉进事件路径。
+ *
+ * `owners` 来自工作空间注册表（与会话的事实不同源），所以由调用方给。缺席时
+ * 这一行**不带归属** —— 与「不属于任何工作空间」同形，客户端一种读法就够。
  */
-export function sessionListRowOf(summary: unknown): SessionListRow | undefined {
+export function sessionListRowOf(
+  summary: unknown,
+  owners?: ReadonlyMap<string, string>,
+): SessionListRow | undefined {
   if (typeof summary !== 'object' || summary === null) return undefined
   const host = summary as HostSummaryLike
   const id = nonEmptyString(host.sessionId)
   const updatedAt = host.updatedAt
   if (id === undefined || typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return undefined
   const origin = nonEmptyString(host.origin)
+  const workspaceId = owners?.get(id)
   return {
     id,
     ...titleOf(projectionValuesOf(host.projections)),
@@ -87,6 +98,7 @@ export function sessionListRowOf(summary: unknown): SessionListRow | undefined {
     running: host.running === true,
     blank: host.blank === true,
     ...(origin === undefined ? {} : { origin }),
+    ...(workspaceId === undefined ? {} : { workspaceId }),
   }
 }
 

@@ -122,6 +122,10 @@ struct ListSessionsResponse: GatewayResponse {
     let ok: Bool
     let error: GatewayFailure?
     let sessions: [SessionSummary]?
+    /// 工作空间清单，顺序即显示顺序。**缺席**表示这次应答没有分组能力（只读装配），
+    /// 空数组表示宿主里一个工作空间也没有 —— 两者在界面上都表现为「全在未分组」，
+    /// 但线上不能混成一种。
+    let workspaces: [WorkspaceSummary]?
     /// 服务端时钟（epoch ms）—— 协议承诺在；clock 采样读它估两端 offset。
     /// 缺席按「服务端没给」处理，不猜。
     let serverTime: Double?

@@ -12,6 +12,7 @@ import type { Duplex } from 'node:stream'
 import type { IncomingMessage } from 'node:http'
 import type { StreamId } from '../wire/mux.ts'
 import type { ApprovalSource } from '../ports/approval.ts'
+import type { WorkspacePort } from '../ports/workspace.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../protocol/rpc.ts'
 import { describeError } from '../ports/errors.ts'
 import type { FollowSource } from '../ports/follow.ts'
@@ -143,6 +144,14 @@ export interface StreamOptions {
    * 现在是什么"。缺了它，`{op:'events'}` 同样要被拒绝（装配错误）。
    */
   approvals?: ApprovalSource
+  /**
+   * 工作空间注册表的读口。会话列表的增量行要带归属，而归属不是会话的事实 ——
+   * 它来自这份注册表。
+   *
+   * 缺席不是降级：那时增量行不带归属，客户端把它们放进「未分组」；只有一元的
+   * 列表路径被接上、而流没有的装配才会这样，属于装配错误。
+   */
+  workspace?: WorkspacePort
   /** 打开帧的字节上界；缺省即 {@link DEFAULT_OPENING_BYTES}。 */
   openingCapBytes?: number
   /**
@@ -241,7 +250,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
           socket.end()
           break
         case 'text': {
-          const outcome = onClientText(socket, source, options.events, options.approvals, streams, frame.text, openingCapBytes)
+          const outcome = onClientText(socket, source, options.events, options.approvals, streams, frame.text, openingCapBytes, options.workspace)
           if (outcome.ok) break
           // 两档都在这里关连接，但原因不同，日志必须分得开：
           //   重复编号 —— 客户端坏了，这条连接上的一切都不再可信；

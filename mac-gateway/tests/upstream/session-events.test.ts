@@ -114,3 +114,25 @@ test('session events: the row a change carries has the same shape a list row has
   const direct = sessionListRowOf(addedSummary({ projections: { kind: 'cached', values: {} } }))
   assert.equal(direct?.id, 's1')
 })
+
+// -- 归属 -------------------------------------------------------------------
+
+test('session events: an added row carries the workspace its session belongs to', () => {
+  const change = sessionListChangeOf('api-session/added', [addedSummary()], new Map([['s1', 'w-a']]))
+
+  assert.deepEqual(change, {
+    kind: 'added',
+    row: {
+      id: 's1', updatedAt: 1_700_000_000_000, running: false, blank: false, workspaceId: 'w-a',
+    },
+  }, '归属随事件行一起到 —— 不带的话客户端要区分「没有归属」与「这次没告诉我归属」，那是第二套判据')
+})
+
+test('session events: an added row for an unowned session omits the workspace field', () => {
+  const change = sessionListChangeOf('api-session/added', [addedSummary({ sessionId: 's9' })], new Map([['s1', 'w-a']]))
+
+  assert.equal(change?.kind, 'added')
+  if (change?.kind !== 'added') return
+  assert.equal('workspaceId' in change.row, false,
+    '没有归属时字段缺席，与列表路径同一手法（不是 null，也不是空串）')
+})
