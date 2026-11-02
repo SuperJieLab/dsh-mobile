@@ -142,7 +142,7 @@ final class SessionListState {
     /// 服务端给出事实（`blank` / `origin`），**显示哪些**由 `SessionVisibility` 答。
     ///
     /// @returns 这一次**真的发出去了**吗。撞在途时只等它收尾、不重发，返回 `false` ——
-    ///   调用方拿它决定要不要再试一轮（见 `reloadAfterCreate`）。
+    ///   调用方拿它决定要不要再试一轮（见 `reloadAfterAction`）。
     @discardableResult
     func reload() async -> Bool {
 
@@ -269,14 +269,14 @@ extension SessionListState {
 
     /// 动作成功之后取一次**新**的列表。
     ///
-    /// 不能直接 `reload()`：它在有在途请求时只等不重发，而在途那次的结���早于刚发生的事 ——
+    /// 不能直接 `reload()`：它在有在途请求时只等不重发，而在途那次的结果早于刚发生的事 ——
     /// 等它就等于把旧快照当最新，界面说「成功了」而列表里还是旧的。
     ///
     /// 所以每轮都问一句「这一发真的发出去了吗」，没发出去就再让一轮步；上限三轮。
     /// 在途那次的 body 从拿到值之后到收尾之间没有 `await`，因此一轮让步通常就够 ——
     /// 上限只是防它永远不让位。
     ///
-    /// 名字不再叫 `reloadAfterCreate`：它服务「建工作空间」与「删工作空间」两个动作。
+    /// 它服务两个动作：建工作空间、删工作空间。
     private func reloadAfterAction() async {
         for _ in 0..<3 {
             if await reload() { return }

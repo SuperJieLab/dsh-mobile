@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 会话列表 —— **全应用的首屏**。取数与「显示哪些」在 `SessionListState`；本文件只画，
-/// 加四个触发点（下拉、回前台、组网就绪、工具栏按钮）—— 那是平台事件与用户手势。
+/// 加四个触发点（进屏首载、下拉、回前台、组网就绪）—— 那是平台事件与用户手势。
 /// **它永远是根**：前置条件不满足时不换屏，只在顶部给一条提示。
 struct SessionListView: View {
     let list: SessionListState
@@ -249,19 +249,6 @@ struct SessionListView: View {
             // 这三件事必须说：用户看到「删除」两个字，默认理解是「项目没了」。
             Text(WorkspaceDeletionText.message(sessionCount: target.sessionCount))
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                // 顶层唯一的「新建」：造一个工作空间。会话由各组的标题行按钮建 ——
-                // 两步各自只做一件事，谁失败都看得出是哪一步。
-                Button {
-                    startNamingWorkspace()
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                }
-                .disabled(list.isCreatingWorkspace)
-                .accessibilityLabel("新建工作空间")
-            }
-        }
         .refreshable { await list.reload() }
         // 进屏首载。事件订阅不在这里：那是造这个 state 的装配段接的线（见
         // `SessionListAssembler`）。本屏只负责「什么时候取」——那是手势与平台事件。
@@ -286,6 +273,17 @@ struct SessionListView: View {
                 ConnectionBadge(state: ConnectionBadge.Status(isLoading: list.isLoading,
                                                              lastFailure: list.failureText),
                                 meshPath: store.meshPath)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                // 顶层唯一的「新建」：造一个工作空间。会话由各组的标题行按钮建 ——
+                // 两步各自只做一件事，谁失败都看得出是哪一步。
+                Button {
+                    startNamingWorkspace()
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .disabled(list.isCreatingWorkspace)
+                .accessibilityLabel("新建工作空间")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 // 设置是唯一常驻入口：组网与身份两条都在里面。**它永远在** ——
@@ -323,15 +321,14 @@ private struct GroupHeaderRow: View {
     /// 组里有会话在跑。折叠之后这是唯一的痕迹 —— 否则「有东西在动」与「静止」长得一样。
     let isRunning: Bool
     /// 这一组背后没有工作空间（「未分组」）—— 既没有地方落新会话，也没有东西可删。
+    ///
+    /// 它仍然用与真工作空间**同样的**标题样式：那三个动作的缺席已经足以说明它不是工作空间，
+    /// 而把标题调小调浅会让它比组内的会话行还轻（它是容器，会话是内容）。
     let isUngrouped: Bool
     let isBusy: Bool
     let onToggle: () -> Void
     let onCreate: () -> Void
     let onDelete: () -> Void
-
-    /// 「未分组」不是工作空间，样式上降一级：它是兜底，不是用户建的那个东西。
-    private var titleFont: Font { isUngrouped ? .subheadline : .headline }
-    private var titleColor: HierarchicalShapeStyle { isUngrouped ? .secondary : .primary }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -343,8 +340,8 @@ private struct GroupHeaderRow: View {
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
                     Text(title)
-                        .font(titleFont)
-                        .foregroundStyle(titleColor)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text("\(count)")

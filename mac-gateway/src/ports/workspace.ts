@@ -42,7 +42,11 @@ export interface WorkspacePort {
    * 删一个**已经不存在**的按成功处理：用户的意图是「让它不在列表里」，那已经是事实。
    * 报一个「没有这个东西」只会让人怀疑自己刚点的是什么，而重试本来就无害。
    *
-   * @param workspaceId - 已判过的 id（非空字符串）；存在与否不在这里判。
+   * ⚠️ **失败只经异常表达**（宿主的 `delete` 对未命中就是抛 `workspace/not-found`，
+   * 它的返回值恒为 `{ deleted: true }`）。若宿主哪天改用「返回值里带 `false`」表达失败，
+   * 这里会静默成功、客户端重拉后组还在而没有任何说法 —— 那时适配层必须跟着改。
+   *
+   * @param workspaceId - 已判过的 id（非空、非纯空白）；存在与否不在这里判。
    */
   delete(workspaceId: string): Promise<void>
 }

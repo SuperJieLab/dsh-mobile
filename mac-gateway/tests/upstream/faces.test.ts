@@ -14,7 +14,7 @@
 
 import assert from 'node:assert/strict'
 import { mock, test } from 'node:test'
-import { gatewayOver, peerShapeProblem } from '../../src/upstream/faces.ts'
+import { gatewayOver, peerShapeProblem, workspacePortOver } from '../../src/upstream/faces.ts'
 import type { PeerScopeLike } from '../../src/upstream/call-through.ts'
 
 /** A Peer as the runtime's `connection.createPeer` returns one. */
@@ -199,4 +199,57 @@ test('peerShapeProblem: reports the first field the relay would need and find mi
     'missing interactions=answer',
   )
   assert.equal(peerShapeProblem(fakePeer()), undefined, 'a Peer as the runtime returns one is usable')
+})
+
+// -- 工作空间端口的装配 -------------------------------------------------------
+
+/**
+ * 一个只带工作空间那两项服务的假宿主。
+ *
+ * 这两条判据守的是**装配那一行**，不是适配函数本身 —— 后者在 `workspace.test.ts` 里。
+ * 把 `workspacePortOver` 的 `delete` 改成直呼 `controller.delete` 时，
+ * `deleteWorkspaceIn` 仍然是对的、它的用例仍然绿，而生产上「删一个已经不在的组」会变成
+ * `internal-error`。接线错一格，计数不变 —— 这类形状只有走一遍装配才抓得到。
+ */
+function hostWithWorkspaceController(controller: Record<string, unknown>) {
+  return {
+    workspaceRegistry: { list: () => [] },
+    workspaceController: controller,
+  } as never
+}
+
+test('workspacePortOver: deleting a group that is already gone is wired as success', async () => {
+  const port = workspacePortOver(hostWithWorkspaceController({
+    async delete() {
+      throw Object.assign(new Error('Workspace "w-gone" not found'), {
+        isDSHRemoteError: true,
+        code: 'workspace/not-found',
+      })
+    },
+  }))
+
+  await port.delete('w-gone')
+})
+
+test('workspacePortOver: a real host failure still reaches the caller', async () => {
+  const port = workspacePortOver(hostWithWorkspaceController({
+    async delete(): Promise<{ deleted: true }> { throw new Error('registry is on fire') },
+  }))
+
+  await assert.rejects(() => port.delete('w-a'), /registry is on fire/,
+    '装配把 not-found 吞掉，但不得顺手吞掉别的故障')
+})
+
+test('workspacePortOver: the id the caller gives is the one the host receives', async () => {
+  const seen: string[] = []
+  const port = workspacePortOver(hostWithWorkspaceController({
+    async delete(request: { workspaceId: string }) {
+      seen.push(request.workspaceId)
+      return { deleted: true as const }
+    },
+  }))
+
+  await port.delete('w-a')
+
+  assert.deepEqual(seen, ['w-a'], '参数名与位置都要对 —— 装配层最容易错的就是这一格')
 })

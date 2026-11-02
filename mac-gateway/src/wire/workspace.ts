@@ -55,7 +55,12 @@ export function workspaceNameOf(payload: unknown): string | undefined {
 }
 
 /**
- * 请求 → 要删的工作空间 id；形状不对或 id 是空串时返回 `undefined`。
+ * 请求 → 要删的工作空间 id；形状不对、空串或纯空白时返回 `undefined`。
+ *
+ * 这里比 `nonEmptyString` 严一格（纯空白也拒）：工作空间 id 是宿主给的标识符，
+ * 一个全是空白的 id 不可能指到任何东西。而拒绝的代价是零 —— 允许它的话，那次请求会
+ * 一路走到宿主、得到 not-found、被适配层当成功吞掉，于是「载荷畸形」与「它本来就不在」
+ * 在日志上完全同形。
  *
  * **不判它是否真的存在**：那是宿主的事，而删一个不存在的按成功处理 —— 在这一层先拦，
  * 会让「另一端已经删掉了」这件事表现成一个客户端错误。
@@ -64,5 +69,6 @@ export function workspaceNameOf(payload: unknown): string | undefined {
  */
 export function workspaceIdOf(payload: unknown): string | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  return nonEmptyString((payload as Record<string, unknown>).workspaceId)
+  const workspaceId = nonEmptyString((payload as Record<string, unknown>).workspaceId)
+  return workspaceId === undefined || workspaceId.trim() === '' ? undefined : workspaceId
 }

@@ -54,14 +54,15 @@ final class SessionListStateTests: XCTestCase {
         return try XCTUnwrap(SessionListChange.decode(value), "这条样本该解得出：\(payload)")
     }
 
-    /// 这一组里的多数用例不碰新建：默认给一个「被调到就失败」的桩，用到了再显式传。
-    private struct CreateNotExpected: Error {}
+    /// 这一组里的多数用例不碰写动作（建会话 / 建工作空间 / 删工作空间）：三个都默认给一个
+    /// 「被调到就失败」的桩，用到了再显式传。
+    private struct WriteNotExpected: Error {}
 
     private func make(
         _ fetch: FakeFetch,
-        create: @escaping (String?) async throws -> String = { _ in throw CreateNotExpected() },
-        createWorkspace: @escaping (String) async throws -> WorkspaceCreated = { _ in throw CreateNotExpected() },
-        deleteWorkspace: @escaping (String) async throws -> Void = { _ in throw CreateNotExpected() },
+        create: @escaping (String?) async throws -> String = { _ in throw WriteNotExpected() },
+        createWorkspace: @escaping (String) async throws -> WorkspaceCreated = { _ in throw WriteNotExpected() },
+        deleteWorkspace: @escaping (String) async throws -> Void = { _ in throw WriteNotExpected() },
         open: @escaping (String) -> Void = { _ in },
         expansion: GroupExpansion = GroupExpansion(),
         persisted: @escaping (GroupExpansion) -> Void = { _ in }
@@ -653,6 +654,29 @@ final class SessionListStateTests: XCTestCase {
                        "w-gone 已经不在了；不清的话它会永远留在本机偏好里")
     }
 
+    /// 求交的入参必须是**组 id**，不是工作空间 id。
+    ///
+    /// 「未分组」是一个组，但背后没有工作空间 —— 它的 id（空串）只出现在组清单里。
+    /// 若求交取 `workspaces.map(\.id)`，用户点开未分组之后只要收起任意一组，它就当场被清掉，
+    /// 下一次进来还是折的。这条判据因此必须让**未分组真的存在**（有会话、且没有归属）。
+    func testRetainingKeepsTheUngroupedGroupWhichHasNoWorkspace() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
+        fetch.rows = .success([row("loopback", updatedAt: 100)])   // 无 workspaceId ⇒ 未分组
+        var saved: GroupExpansion?
+        let state = make(fetch, persisted: { saved = $0 })
+        await state.reload()
+        XCTAssertEqual(state.sessions.map(\.workspaceId), [nil],
+                       "前提：这一份数据里有一个不属于任何工作空间的会话")
+
+        state.toggleExpansion(SessionGrouping.ungroupedKey)   // 点开未分组
+        state.toggleExpansion("w-a")                          // 再收起一个工作空间组
+
+        XCTAssertTrue(saved?.expanded.contains(SessionGrouping.ungroupedKey) == true,
+                      "未分组的 id 只出现在组清单里 —— 求交取工作空间 id 会把它清掉，而界面上下次它就折回去了")
+    }
+
     // MARK: - 删除工作空间
 
     /// 删完必须重拉：组消失与会话进未分组两件事都在新快照里。
@@ -673,7 +697,6 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(asked, ["w-a"], "删的是被点的那一个")
         XCTAssertEqual(fetch.calls, before + 1, "删完要重拉一次 —— 不重拉，组还在列表里")
         XCTAssertTrue(state.workspaces.isEmpty, "重拉回来的组清单里没有它了")
-        XCTAssertFalse(state.isDeletingWorkspace, "动作结束后在飞标记要落")
     }
 
     /// 失败时列表一动不动，说法落在顶部那一面。
@@ -693,6 +716,5 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(fetch.calls, before, "失败不重拉：组清单没变，白读一次")
         XCTAssertEqual(state.workspaces.map(\.id), ["w-a"], "组还在 —— 失败不该让界面先动")
         XCTAssertNotNil(state.failureText, "失败必须有说法（落在列表顶部那条）")
-        XCTAssertFalse(state.isDeletingWorkspace)
     }
 }

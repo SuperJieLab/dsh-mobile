@@ -53,8 +53,8 @@ test('the delete payload reader yields a non-empty workspace id', () => {
 })
 
 test('the delete payload reader refuses a payload without a usable id', () => {
-  for (const payload of [{}, { workspaceId: '' }, { workspaceId: 42 }, { workspaceId: null },
-                         'workspace-delete', null, ['w-a']]) {
+  for (const payload of [{}, { workspaceId: '' }, { workspaceId: '   ' }, { workspaceId: 42 },
+                         { workspaceId: null }, 'workspace-delete', null, ['w-a']]) {
     assert.equal(workspaceIdOf(payload), undefined,
       `载荷 ${JSON.stringify(payload)} 该被拒 —— 写路径从严，不靠下游兜`)
   }
