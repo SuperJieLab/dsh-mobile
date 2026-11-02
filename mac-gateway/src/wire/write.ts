@@ -65,3 +65,26 @@ export function sessionPromptOf(message: Record<string, unknown>): SessionPrompt
   return { sessionId, text, promptId }
 }
 
+
+/**
+ * `session-create` 的目标：交给宿主的默认目录、指定一个工作空间，或一条畸形载荷。
+ *
+ * 三态而不是 `string | undefined`：`undefined` 同时能读成「没带」与「带了但是空的」，
+ * 而后者是畸形载荷，必须拒 —— 写路径从严（见模块注释）。
+ */
+export type SessionCreateTarget =
+  | { kind: 'default' }
+  | { kind: 'workspace'; workspaceId: string }
+  | { kind: 'invalid' }
+
+/**
+ * 解析 `session-create` 的载荷。**缺省是合法的一种**：不带 `workspaceId` 就走宿主的
+ * 当前目录 —— 那是这条 op 在本功能之前唯一的行为，老客户端仍在用。
+ *
+ * @param message - 解析后的请求体。
+ */
+export function sessionCreateTargetOf(message: Record<string, unknown>): SessionCreateTarget {
+  if (!('workspaceId' in message)) return { kind: 'default' }
+  const workspaceId = nonEmptyString(message.workspaceId)
+  return workspaceId === undefined ? { kind: 'invalid' } : { kind: 'workspace', workspaceId }
+}

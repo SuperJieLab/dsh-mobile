@@ -59,10 +59,12 @@ final class SessionListStateTests: XCTestCase {
 
     private func make(
         _ fetch: FakeFetch,
-        create: @escaping () async throws -> String = { throw CreateNotExpected() },
+        create: @escaping (String?) async throws -> String = { _ in throw CreateNotExpected() },
+        createWorkspace: @escaping (String) async throws -> WorkspaceCreation = { _ in throw CreateNotExpected() },
         open: @escaping (String) -> Void = { _ in }
     ) -> SessionListState {
-        SessionListState(fetch: { try await fetch.fetch() }, create: create, open: open)
+        SessionListState(fetch: { try await fetch.fetch() }, create: create,
+                         createWorkspace: createWorkspace, open: open)
     }
 
     /// 让挂起的任务跑到它的第一个 await。
@@ -381,11 +383,11 @@ final class SessionListStateTests: XCTestCase {
         fetch.holds = false
         fetch.rows = .success([row("a", updatedAt: 100)])
         var opened: [String] = []
-        let state = make(fetch, create: { "session-new" }, open: { opened.append($0) })
+        let state = make(fetch, create: { _ in "session-new" }, open: { opened.append($0) })
         await state.reload()
         let before = state.sessions.map(\.id)
 
-        await state.createSession()
+        await state.createSession(in: nil)
 
         XCTAssertEqual(opened, ["session-new"], "宿主给的 id 要交给 open —— 那是导航的唯一输入")
         XCTAssertEqual(state.sessions.map(\.id), before, "新建不许动列表")
@@ -401,16 +403,16 @@ final class SessionListStateTests: XCTestCase {
         var calls = 0
         var opened: [String] = []
         let gate = CreateGate()
-        let state = make(FakeFetch()) {
+        let state = make(FakeFetch(), create: { _ in
             calls += 1
             return try await gate.wait()
-        } open: { opened.append($0) }
+        }, open: { opened.append($0) })
 
-        let first = Task { await state.createSession() }
+        let first = Task { await state.createSession(in: nil) }
         await settle()
         // 第二次也丢进 Task：**在飞**这件事本身就意味着它会挂住，同步 await 会把
         // 「去掉守卫」这个变异变成一个挂死而不是一条红的断言。
-        let second = Task { await state.createSession() }
+        let second = Task { await state.createSession(in: nil) }
         await settle()
 
         XCTAssertEqual(calls, 1, "在飞时不该发起第二次")
@@ -424,11 +426,10 @@ final class SessionListStateTests: XCTestCase {
     /// 宿主拒绝：不推进、不静默，把说法落到失败面。
     func testAFailedCreateSurfacesTheFailureAndOpensNothing() async {
         var opened: [String] = []
-        let state = make(FakeFetch(), create: { throw RpcClientError.badStatus(500) }) { id in
-            opened.append(id)
-        }
+        let state = make(FakeFetch(), create: { _ in throw RpcClientError.badStatus(500) },
+                         open: { opened.append($0) })
 
-        await state.createSession()
+        await state.createSession(in: nil)
 
         XCTAssertTrue(opened.isEmpty, "没建成就不该有导航目标")
         XCTAssertNotNil(state.failureText, "失败要给说法")
@@ -451,5 +452,91 @@ final class SessionListStateTests: XCTestCase {
             waiters = []
             for waiter in pending { waiter.resume(returning: id) }
         }
+    }
+
+    // MARK: - 在某个工作空间里建会话、造工作空间
+
+    /// 组内新建：客户端把那个组的 id 原样交给宿主。
+    ///
+    /// 这条守的是「点 A 组建的会话跑到 B 组」—— 那不会有任何编译错，只会在第一次发言之后
+    /// 让人发现会话不在自己点的那个组里。
+    func testCreatingASessionCarriesTheWorkspaceItWasAskedFor() async {
+        var asked: [String?] = []
+        let state = make(FakeFetch(),
+                         create: { workspaceId in
+                             asked.append(workspaceId)
+                             return "s-new"
+                         },
+                         open: { _ in })
+
+        await state.createSession(in: "w-a")
+
+        XCTAssertEqual(asked, [Optional("w-a")], "手机点的那个组必须原样传下去")
+    }
+
+    /// 造工作空间成功：名字先 trim，成功后必须重拉 —— 组清单只在拉取时更新。
+    func testCreatingAWorkspaceReloadsSoTheNewGroupShows() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        var asked: [String] = []
+        let state = make(fetch, createWorkspace: { name in
+            asked.append(name)
+            fetch.workspaces = [WorkspaceSummary(id: "w-new", title: name)]
+            return .created
+        })
+        await state.reload()
+        let before = fetch.calls
+
+        await state.createWorkspace(name: "  记账  ")
+
+        XCTAssertEqual(asked, ["记账"], "发出去的是 trim 过的名字 —— 首尾空白不是名字的一部分")
+        XCTAssertEqual(state.workspaceCreation, .created)
+        XCTAssertEqual(fetch.calls, before + 1, "成功之后必须重拉一次：不重拉，新组不会出现在列表里")
+        XCTAssertEqual(state.workspaces.map(\.id), ["w-new"])
+        XCTAssertFalse(state.isCreatingWorkspace, "动作结束后在飞标记要落")
+    }
+
+    /// 同名不是失败：结果里说的是「已有」，界面据此说不同的话。
+    func testAnAlreadyExistingWorkspaceIsReportedAsSuch() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        let state = make(fetch, createWorkspace: { _ in .alreadyExists })
+        await state.reload()
+
+        await state.createWorkspace(name: "已有的")
+
+        XCTAssertEqual(state.workspaceCreation, .alreadyExists,
+                       "「已有」不是失败 —— 那个工作空间已经在那儿了，界面只需说清这一点")
+    }
+
+    /// 创建失败：不重拉（组清单没变），说法落在创建结果上。
+    func testAFailedWorkspaceCreationReportsAndLeavesTheListAlone() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        let state = make(fetch, createWorkspace: { _ in throw RpcClientError.badStatus(500) })
+        await state.reload()
+        let calls = fetch.calls
+
+        await state.createWorkspace(name: "会失败的")
+
+        XCTAssertEqual(fetch.calls, calls, "失败不重拉：组清单没变，白读一次")
+        guard case .failed(let reason)? = state.workspaceCreation else {
+            return XCTFail("失败该落在创建结果上，实际是 \(String(describing: state.workspaceCreation))")
+        }
+        XCTAssertFalse(reason.isEmpty, "失败必须有说法")
+    }
+
+    /// 打开面板时清掉上一次的结果，否则「已经有了」会一直挂在那儿。
+    func testBeginningToNameClearsThePreviousOutcome() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        let state = make(fetch, createWorkspace: { _ in .alreadyExists })
+        await state.reload()
+        await state.createWorkspace(name: "x")
+        XCTAssertNotNil(state.workspaceCreation)
+
+        state.beginNamingWorkspace()
+
+        XCTAssertNil(state.workspaceCreation)
     }
 }

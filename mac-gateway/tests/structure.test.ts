@@ -706,6 +706,8 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'command.ts', name: 'commandExecuteRequestOf', shape: 'CommandExecuteMessage' },
   { file: 'write.ts', name: 'approvalAnswerOf', shape: 'ApprovalAnswerMessage' },
   { file: 'write.ts', name: 'sessionPromptOf', shape: 'SessionPromptMessage' },
+  { file: 'write.ts', name: 'sessionCreateTargetOf', shape: 'SessionCreateTarget' },
+  { file: 'workspace.ts', name: 'workspaceNameOf', shape: 'WorkspaceCreatePayload' },
 ]
 
 /**

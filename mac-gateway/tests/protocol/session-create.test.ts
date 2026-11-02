@@ -56,3 +56,48 @@ test('session-create refuses when the write channel is not wired', async () => {
   assert.equal((answer as { error?: { code?: string } }).error?.code, 'internal-error',
     '仅只读装配会缺这个端口；生产必接线，但拒答而不是崩')
 })
+
+/** 记下宿主的建会话口收到了什么；两个不该被走到的写方法给桩。 */
+function writeRecording(): { port: WritePort; targets: (string | undefined)[] } {
+  const targets: (string | undefined)[] = []
+  return {
+    targets,
+    port: {
+      answerApproval: async () => 'delivered',
+      promptSession: async () => 'accepted',
+      createSession: async (workspaceId) => {
+        targets.push(workspaceId)
+        return 's-test'
+      },
+    },
+  }
+}
+
+test('session-create hands the workspace to the host when the request names one', async () => {
+  const { port, targets } = writeRecording()
+
+  await handle({ v: 2, op: 'session-create', workspaceId: 'w-a' }, PORT, Date.now, undefined, port)
+
+  assert.deepEqual(targets, ['w-a'], '手机点的那个组必须原样传到宿主')
+})
+
+test('session-create without a target keeps the host default', async () => {
+  const { port, targets } = writeRecording()
+
+  await handle({ v: 2, op: 'session-create' }, PORT, Date.now, undefined, port)
+
+  assert.deepEqual(targets, [undefined],
+    '不带就是不带 —— 传空串会假装「指定了一个工作空间」，而宿主会用空 cwd 去建会话')
+})
+
+test('a malformed workspace target is refused before the host is asked', async () => {
+  for (const workspaceId of ['', 42, null, {}]) {
+    const { port, targets } = writeRecording()
+    const answer = await handle({ v: 2, op: 'session-create', workspaceId }, PORT, Date.now, undefined, port)
+
+    assert.equal(answer.ok, false, `${JSON.stringify(workspaceId)} 该被拒`)
+    assert.equal((answer as { error?: { code?: string } }).error?.code, 'invalid-request',
+      '写载荷从严：畸形不得凭猜测执行')
+    assert.deepEqual(targets, [], '畸形载荷不得触达宿主')
+  }
+})

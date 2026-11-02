@@ -34,11 +34,12 @@ export interface WritePort {
   /**
    * 建一个空会话，返回它的 id。
    *
-   * **目录不由调用方给**（宿主用自己的当前目录）—— 这一条是 `session-create`
-   * 契约的一部分：手机端没有目录选择器。
+   * **目录由 `workspaceId` 决定**：指定了就落在那个工作空间的目录里（宿主把它
+   * `attachSession` 进那个工作空间），没指定就由宿主用自己的当前目录 —— 后者是
+   * 这条 op 在本功能之前唯一的行为，不能删。
    *
    * 同目录已有空会话时宿主会复用它。那条规则**不是本端口的承诺**：调用方不得据此
    * 推断「调两次必有两个会话」，也不得推断「必是同一个」。
    */
-  createSession(): Promise<string>
+  createSession(workspaceId?: string): Promise<string>
 }

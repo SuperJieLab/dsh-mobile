@@ -23,6 +23,12 @@ export interface RegistryLike {
   list(): readonly WorkspaceLike[]
 }
 
+/** 本适配器用到的注册表写面。`create` 要求目录已存在，且对同一路径幂等。 */
+export interface RegistryWriteLike {
+  resolveByPath(path: string): Promise<{ id: string; title: string } | undefined>
+  create(path: string): Promise<{ id: string; title: string }>
+}
+
 /**
  * 注册表 → 组清单与归属表。
  *
@@ -37,4 +43,25 @@ export function workspaceSnapshotOf(registry: RegistryLike): WorkspaceSnapshot {
     return { id: workspace.id, title: workspace.title }
   })
   return { rows, owners }
+}
+
+/**
+ * 把一条路径注册成工作空间，并回答「这一次是不是新建的」。
+ *
+ * 注册表自己的 `create` 是幂等的（同路径返回既有的那个），但它**不告诉你**这一次是新建
+ * 还是命中，所以要先用 `resolveByPath` 问一次。两次调用之间的窗口由调用方串行化（见
+ * `workspaceCreatorOver`）—— 不串行化时连点两下会让两次都报「新建了」，但不会造出两个
+ * 工作空间：注册表那一层仍然幂等。
+ *
+ * @param registry - 宿主的注册表写面。
+ * @param path - 已存在的目录（调用方先建好）。
+ */
+export async function registerWorkspace(
+  registry: RegistryWriteLike,
+  path: string,
+): Promise<{ id: string; title: string; created: boolean }> {
+  const existing = await registry.resolveByPath(path)
+  if (existing !== undefined) return { ...existing, created: false }
+  const workspace = await registry.create(path)
+  return { ...workspace, created: true }
 }

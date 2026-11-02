@@ -26,4 +26,21 @@ export interface WorkspaceSnapshot {
 export interface WorkspacePort {
   /** 同步：注册表在内存里，这个接口不该有等待。 */
   snapshot(): WorkspaceSnapshot
+  /**
+   * 在固定根下造出 `name` 这个目录，并把它注册成工作空间。
+   *
+   * 同名已经在用时**不是错误**：返回既有的那个，`created` 为假 —— 那正是用户想要的
+   * （那个工作空间已经在那儿了）。要目录已存在才能注册是宿主的约束，所以这里先建目录。
+   *
+   * @param name - 已判过的名字（单段、非空、不含分隔符）。
+   */
+  create(name: string): Promise<WorkspaceCreated>
+}
+
+/** 一次创建工作空间的结果。 */
+export interface WorkspaceCreated {
+  workspaceId: string
+  title: string
+  /** `false` 表示这个名字已经在用，返回的是既有的那个 —— 不是失败。 */
+  created: boolean
 }

@@ -1,19 +1,46 @@
 /**
- * 会话列表那一屏的写动作：让宿主建一个空会话。
+ * 会话列表那一屏的写动作：让宿主建一个空会话、让宿主造一个工作空间。
  *
  * 与 `SessionDetail/State/SessionWrites.swift` 分开：那边是「往一个已存在的会话里写」，
- * 这边是「让一个会话存在」。失败域不同，合成一个入口会让「哪个会话」这个问题在一半的
- * 路径上没有答案。
+ * 这边是「让一个会话或一个工作空间存在」。失败域不同，合成一个入口会让「哪个会话」
+ * 这个问题在一半的路径上没有答案。
+ *
+ * 名字的合法性**不在这里判**：`WorkspaceName` 是那条规则的家，调用方在发请求之前用它。
  */
 import Foundation
 
+/// 一次创建工作空间的结果。`alreadyExists` 不是失败 —— 那个工作空间已经在那儿了。
+enum WorkspaceCreation: Equatable {
+    case created
+    case alreadyExists
+    case failed(String)
+}
+
+/// 让宿主造一个工作空间：在固定根下建目录并注册。
+///
+/// 名字里用 `make` 而不是 `create`：状态层那个动作叫 `createWorkspace(name:)`（它是
+/// 用户按下去的那件事），这里是它落到线上去的那一半 —— 两者同名会让调用点看起来在
+/// 递归。
+///
+/// 同名**不报错**（`alreadyExists`）—— 那正是用户想要的：那个工作空间已经在那儿了。
+@MainActor
+func makeWorkspace(_ client: RpcClient, name: String) async throws -> WorkspaceCreation {
+    let response: WorkspaceCreateResponse = try await client.perform(WorkspaceCreateRequest(name: name))
+    guard response.workspaceId != nil, let created = response.created else {
+        throw RpcClientError.malformedResponse(detail: "workspaceId/created")
+    }
+    return created ? .created : .alreadyExists
+}
+
 /// 让宿主建一个空会话，返回它的 id。
 ///
-/// `ok` 意为**建出来或复用了一个空会话**，不是「进去了」—— 进去要靠列表读回那一行。
-/// 目录不由我们给（宿主用自己的当前目录），所以这里没有参数。
+/// `ok` 意为**建出来或复用了一个空会话**，不是「进去了」—— 进去靠导航，不靠列表。
+/// `workspaceId` 为 `nil` 时目录由宿主自己决定（这条 op 在本功能之前唯一的行为）；
+/// 给了就落在那个工作空间里，归属由宿主挂进成员表。
 @MainActor
-func createBlankSession(_ client: RpcClient) async throws -> String {
-    let response: SessionCreateResponse = try await client.perform(SessionCreateRequest())
+func createBlankSession(_ client: RpcClient, in workspaceId: String?) async throws -> String {
+    let response: SessionCreateResponse = try await client.perform(
+        SessionCreateRequest(workspaceId: workspaceId))
     guard let sessionId = response.sessionId else {
         throw RpcClientError.malformedResponse(detail: "sessionId")
     }

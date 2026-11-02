@@ -11,16 +11,97 @@ struct SessionListView: View {
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
 
+    /// 输入面板开着吗。**这是视图的本地值**：它只管「这一层皮在不在」，
+    /// 名字合法与否归 `WorkspaceName`，创建结果归状态层。
+    @State private var isNaming = false
+    /// 面板里那个输入框的内容。
+    @State private var draftName = ""
+    /// 上一次提交被规则拒掉的理由。
+    @State private var nameProblem: WorkspaceName.Problem?
+
     var body: some View {
         pairedList
     }
 
-    /// 新建一个空会话，建成就进去。
+    /// 打开「新建工作空间」的输入面板。
     ///
-    /// 失败时**留在此屏**：`list.createSession()` 已经把说法落到列表顶部那一面。
-    /// 不在这里再画一遍 —— 同一句话两处渲染，两处迟早不一致。
-    private func newSession() {
-        Task { await list.createSession() }
+    /// 打开时清掉上一次的结果（状态层里那份），否则「已经有了」会一直挂在那儿。
+    private func startNamingWorkspace() {
+        draftName = ""
+        nameProblem = nil
+        list.beginNamingWorkspace()
+        isNaming = true
+    }
+
+    /// 提交名字。**规则先判**：不合法就停在这儿，一个请求也不发。
+    ///
+    /// 结果不接 —— 它落在 `list.workspaceCreation` 上，面板读它渲染（视图不接 `await` 的结果）。
+    private func submitName() {
+        if let problem = WorkspaceName.problem(with: draftName) {
+            nameProblem = problem
+            return
+        }
+        nameProblem = nil
+        Task { await list.createWorkspace(name: draftName) }
+    }
+
+    private func closeNaming() {
+        isNaming = false
+        draftName = ""
+        nameProblem = nil
+    }
+
+    /// 名字不能用的理由，说人话。
+    private func text(of problem: WorkspaceName.Problem) -> String {
+        switch problem {
+        case .blank: return "名字不能是空的。"
+        case .pathSeparator: return "名字里不能有斜杠。"
+        case .dotEntry: return "「.」和「..」不能当名字。"
+        }
+    }
+
+    /// 创建结果，说人话。
+    private func text(of creation: WorkspaceCreation) -> String {
+        switch creation {
+        case .created: return "建好了。关掉这里就能在列表里看到它。"
+        case .alreadyExists: return "这个工作空间已经有了，不用再建一次。"
+        case .failed(let reason): return reason
+        }
+    }
+
+    /// 「新建工作空间」的输入面板。
+    ///
+    /// 只输一个名字：目录落在哪由网关决定（固定的根，与 Web UI 首次使用的是同一个父目录），
+    /// 所以这里**不出现任何目录浏览**。创建结果由状态层带回，面板只负责把它说人话。
+    private var namingSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("工作空间名字", text: $draftName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } footer: {
+                    if let problem = nameProblem {
+                        Text(text(of: problem)).foregroundStyle(.red)
+                    } else if let creation = list.workspaceCreation {
+                        Text(text(of: creation))
+                    } else {
+                        Text("名字就是 Mac 上那个目录的名字，会建在「文稿/deepseek-harness」下面。")
+                    }
+                }
+            }
+            .navigationTitle("新建工作空间")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { closeNaming() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("创建") { submitName() }
+                        .disabled(list.isCreatingWorkspace)
+                }
+            }
+        }
     }
 
     /// 这一屏的分组。每次渲染现算：行与组清单是两份事实，缓存分组会多出两份真相
@@ -60,7 +141,22 @@ struct SessionListView: View {
                         }
                     }
                 } header: {
-                    Text(title(of: group))
+                    HStack {
+                        Text(title(of: group))
+                        Spacer()
+                        // 未分组的组没有工作空间可落，所以不给入口 —— 「不指定工作空间」
+                        // 那条路在手机端已经关掉了。
+                        if !group.isUngrouped {
+                            Button {
+                                Task { await list.createSession(in: group.id) }
+                            } label: {
+                                Image(systemName: "plus")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(list.isCreating)
+                            .accessibilityLabel("在「\(title(of: group))」里新建会话")
+                        }
+                    }
                 }
             }
 
@@ -77,26 +173,29 @@ struct SessionListView: View {
             } else if groups.isEmpty
                         && list.failureText == nil && list.blockedReason == nil {
                 ContentUnavailableView {
-                    Label("还没有会话", systemImage: "tray")
+                    Label("还没有工作空间", systemImage: "folder")
                 } description: {
-                    // 空会话在发出第一条消息之前不进这个列表（那是「候选新会话」的定义）——
-                    // 所以这句话说「第一条消息之后」，而不是「新建之后」。
-                    Text("新建一个开始对话。发出第一条消息之后，它会出现在这里。")
+                    // 走到这里意味着连一个工作空间都没有 —— 会话只能活在某个工作空间里，
+                    // 所以这里唯一的动作是建一个（不是「新建会话」）。
+                    Text("在手机上建一个：给它起个名字，剩下的交给 Mac。")
                 } actions: {
-                    Button("新建会话") { newSession() }
-                        .disabled(list.isCreating)
+                    Button("新建工作空间") { startNamingWorkspace() }
+                        .disabled(list.isCreatingWorkspace)
                 }
             }
         }
+        .sheet(isPresented: $isNaming) { namingSheet }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                // 顶层唯一的「新建」：造一个工作空间。会话由各组的标题行按钮建 ——
+                // 两步各自只做一件事，谁失败都看得出是哪一步。
                 Button {
-                    newSession()
+                    startNamingWorkspace()
                 } label: {
-                    Image(systemName: "square.and.pencil")
+                    Image(systemName: "folder.badge.plus")
                 }
-                .disabled(list.isCreating)
-                .accessibilityLabel("新建会话")
+                .disabled(list.isCreatingWorkspace)
+                .accessibilityLabel("新建工作空间")
             }
         }
         .refreshable { await list.reload() }

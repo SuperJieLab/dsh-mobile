@@ -14,7 +14,8 @@ import type { CommandPort } from '../ports/command.ts'
 import type { ModelSelection } from '../wire/model.ts'
 
 import { nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
-import { workspaceSnapshotOf, type RegistryLike } from './workspace.ts'
+import { workspaceSnapshotOf, registerWorkspace, type RegistryLike, type RegistryWriteLike } from './workspace.ts'
+import { makeWorkspaceDirectory } from './workspace-root.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
@@ -93,8 +94,20 @@ export function listSourceOver(ctx: HostContext): ListSource {
  * 服务在热重载里被换掉时不会留下旧引用。
  */
 export function workspacePortOver(ctx: HostContext): WorkspacePort {
+  // 「建目录 + 注册」是一条链，串行化它：两次并发同名会让两次 `resolveByPath` 都问空，
+  // 于是都报「新建了」。不会造出两个工作空间（注册表那一层仍幂等），但界面会撒一次谎。
+  let tail: Promise<unknown> = Promise.resolve()
   return {
     snapshot: () => workspaceSnapshotOf(ctx.workspaceRegistry as unknown as RegistryLike),
+    create: (name) => {
+      const result = tail.then(async () => {
+        const path = await makeWorkspaceDirectory(name)
+        const made = await registerWorkspace(ctx.workspaceRegistry as unknown as RegistryWriteLike, path)
+        return { workspaceId: made.id, title: made.title, created: made.created }
+      })
+      tail = result.catch(() => undefined)
+      return result
+    },
   }
 }
 
@@ -204,28 +217,29 @@ export function writePortOver(ctx: HostContext, relay: ApprovalRelay): WritePort
   return {
     answerApproval: (answer) => relay.answerApproval(answer),
     promptSession: async (prompt) => pumpPrompt(promptControllerOver(ctx), prompt),
-    createSession: () => createSession(ctx),
+    createSession: (workspaceId) => createSession(ctx, workspaceId),
   }
 }
 
 /**
  * 建一个空会话，只交出宿主给的 id。
  *
- * **不传 `cwd`**：目录由宿主用自己进程的当前目录决定 —— 这是本期契约的一部分
- * （手机上不选目录）。宿主缺席这个切面时抛错，由协议层折成 `internal-error`。
+ * 带 `workspaceId` 时宿主把会话建在那个工作空间的目录里并把它挂进成员表（cwd 与
+ * attach 都由宿主负责，我们只传 id）；不带时目录仍由宿主的当前目录决定。
+ * 宿主缺席这个切面时抛错，由协议层折成 `internal-error`。
  */
-async function createSession(ctx: HostContext): Promise<string> {
+async function createSession(ctx: HostContext, workspaceId: string | undefined): Promise<string> {
   const controller = ctx.sessionController as unknown as Partial<SessionCreateControllerLike> | undefined
   if (controller?.create === undefined) {
     throw new Error('sessionController has no create face')
   }
-  const created = await controller.create({})
+  const created = await controller.create(workspaceId === undefined ? {} : { workspaceId })
   return created.sessionId
 }
 
-/** `session.create` 调用的 `ctx.sessionController` 部分。 */
+/** `session.create` 调用的 `ctx.sessionController` 部分。两个位置二选一，由宿主判。 */
 interface SessionCreateControllerLike {
-  create(request: { cwd?: string }): Promise<{ sessionId: string }>
+  create(request: { cwd?: string; workspaceId?: string }): Promise<{ sessionId: string }>
 }
 
 /**

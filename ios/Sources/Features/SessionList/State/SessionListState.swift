@@ -25,6 +25,11 @@ final class SessionListState {
     private(set) var isLoading = false
     /// 正在让宿主建一个空会话。视图用它禁用入口 —— 连发两次只会让两个动作抢同一行状态。
     private(set) var isCreating = false
+    /// 正在让宿主造一个工作空间。
+    private(set) var isCreatingWorkspace = false
+    /// 上一次创建工作空间的结果；`nil` 表示这次还没发起过。视图据它给提示 ——
+    /// 结果留在这里而不是交回调用方，视图才不必接 `await` 的返回值。
+    private(set) var workspaceCreation: WorkspaceCreation?
     private(set) var outcome: Outcome = .ready
 
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
@@ -32,7 +37,11 @@ final class SessionListState {
     private let fetch: () async throws -> SessionListPage
     /// 让宿主建一个空会话、交回 id。与 `fetch` 一样注入：新建的失败面要能被断言，
     /// 而走真网络时「宿主拒绝」与「网络断了」在测试里长得一样。
-    private let create: () async throws -> String
+    ///
+    /// 参数是落在哪个工作空间；`nil` 表示不指定（宿主用它自己的当前目录）。
+    private let create: (String?) async throws -> String
+    /// 让宿主造一个工作空间。同样注入，理由同上。
+    private let createWorkspaceAction: (String) async throws -> WorkspaceCreation
     /// 建好之后去哪 —— 由装配段给（它握着导航栈）。**不叫 `navigate`**：这一层不认识
     /// `Destination` 那张路由表，它只知道「拿这个 id 去看那一条会话」。
     private let open: (String) -> Void
@@ -44,16 +53,19 @@ final class SessionListState {
     /// 是否已经听过事件流（`attach` 幂等）。
     private var attached = false
     init(fetch: @escaping () async throws -> SessionListPage,
-         create: @escaping () async throws -> String,
+         create: @escaping (String?) async throws -> String,
+         createWorkspace: @escaping (String) async throws -> WorkspaceCreation,
          open: @escaping (String) -> Void) {
         self.fetch = fetch
         self.create = create
+        self.createWorkspaceAction = createWorkspace
         self.open = open
     }
 
     convenience init(client: RpcClient, open: @escaping (String) -> Void) {
         self.init(fetch: { try await fetchSessions(client) },
-                  create: { try await createBlankSession(client) },
+                  create: { try await createBlankSession(client, in: $0) },
+                  createWorkspace: { try await makeWorkspace(client, name: $0) },
                   open: open)
     }
 
@@ -142,21 +154,49 @@ final class SessionListState {
 
 extension SessionListState {
 
-    /// 新建一个空会话；建成就把它交给 `open`（装配段据此推进一屏），失败落失败面。
+    /// 在某个工作空间里建一个空会话；建成就把它交给 `open`（装配段据此推进一屏），
+    /// 失败落失败面。
     ///
     /// **不碰列表**：新建出来的一定是 `blank`，而 `blank` 不进列表（`SessionVisibility`）——
     /// 读一次只会白读。它要等第一条消息之后才出现，这是上游对 `blank` 的定义，不是缺陷。
     /// 宿主对同目录的空会话有复用规则，所以连点也不会堆出多个（那条不由本方法承诺）。
-    func createSession() async {
+    ///
+    /// @param workspaceId - 落在哪个工作空间；`nil` 表示交给宿主的当前目录。
+    func createSession(in workspaceId: String?) async {
         guard !isCreating else { return }
         isCreating = true
         defer { isCreating = false }
         do {
-            let sessionId = try await create()
+            let sessionId = try await create(workspaceId)
             open(sessionId)
         } catch {
             record(failure: error)
         }
+    }
+
+    /// 造一个工作空间。成功（新建或本已存在）都重拉一次列表：
+    /// 组清单只在拉取时更新，不重拉新组不会出现。
+    ///
+    /// 结果落在 {@link workspaceCreation} 上而不是交回调用方 —— 视图只发起、不接结果
+    /// （与新建会话同一条纪律）。失败也**只落这里**，不落列表顶部：动作是在输入面板里
+    /// 发起的，用户的眼睛在那儿；两处显示同一句话，两处迟早不一致。
+    ///
+    /// @param name - 用户输入的原样；这里 trim 一次，不判合法性（`WorkspaceName` 的家）。
+    func createWorkspace(name: String) async {
+        guard !isCreatingWorkspace else { return }
+        isCreatingWorkspace = true
+        defer { isCreatingWorkspace = false }
+        do {
+            workspaceCreation = try await createWorkspaceAction(WorkspaceName.trimmed(name))
+            await reload()
+        } catch {
+            workspaceCreation = .failed(error.localizedDescription)
+        }
+    }
+
+    /// 打开输入面板时清掉上一次的结果 —— 否则「已经有了」会一直挂在那儿。
+    func beginNamingWorkspace() {
+        workspaceCreation = nil
     }
 
     /// 一次失败该落哪一面。`blocked` 与 `failed` 的分界见 `Outcome` 的注释；

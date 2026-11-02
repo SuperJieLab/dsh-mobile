@@ -28,7 +28,8 @@ import type {
 } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
-import { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
+import { approvalAnswerOf, sessionCreateTargetOf, sessionPromptOf } from '../wire/write.ts'
+import { workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
 import type { PageWindow } from '../wire/window.ts'
@@ -118,10 +119,19 @@ export async function handle(
         // 写 op：整行原样交给宿主，但「是不是一条命令行」在这里先判。
         if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
         return await commandExecute(envelope, command)
-      case 'session-create':
-        // 写 op（建实体）。无载荷 —— 目录由宿主决定，这一条是契约的一部分。
+      case 'session-create': {
+        // 写 op（建实体）。载荷只有一格：落在哪个工作空间；不带就交给宿主当前目录。
         if (write === undefined) return failure('internal-error', `write channel not wired for "${op}"`)
-        return await sessionCreate(write)
+        const target = sessionCreateTargetOf(envelope)
+        if (target.kind === 'invalid') {
+          return failure('invalid-request', 'session-create accepts a non-empty workspaceId or none')
+        }
+        return await sessionCreate(write, target.kind === 'workspace' ? target.workspaceId : undefined)
+      }
+      case 'workspace-create':
+        // 写 op（造目录 + 注册）。名字不合法时**一个文件系统调用都不发生**。
+        if (workspace === undefined) return failure('internal-error', `workspace channel not wired for "${op}"`)
+        return await workspaceCreate(envelope, workspace)
       case 'approval-answer':
       case 'session-prompt':
         // 写 op。仅只读测试装配会缺 `write`；生产必接线，
@@ -148,8 +158,26 @@ export async function handle(
  * 宿主失败**不在这里折**：`handle` 的 catch 用 `readErrorOf` 统一折成 `internal-error`
  * 并把上游的话带进 message。本层不记日志（与其余 op 一致），排障看宿主侧。
  */
-async function sessionCreate(write: WritePort): Promise<Response> {
-  return success({ sessionId: await write.createSession() })
+async function sessionCreate(write: WritePort, workspaceId: string | undefined): Promise<Response> {
+  return success({ sessionId: await write.createSession(workspaceId) })
+}
+
+/**
+ * 在固定根下造一个工作空间。
+ *
+ * 名字不合法时在这里就拒，**不碰文件系统** —— 形状与语义合成一次判断，因为对客户端
+ * 而言两者的补救动作相同（改字重发）。
+ */
+async function workspaceCreate(
+  envelope: Record<string, unknown>,
+  workspace: WorkspacePort,
+): Promise<Response> {
+  const name = workspaceNameOf(envelope)
+  if (name === undefined) {
+    return failure('invalid-request', 'workspace-create needs a name that is one non-blank path segment')
+  }
+  const made = await workspace.create(name)
+  return success({ workspaceId: made.workspaceId, title: made.title, created: made.created })
 }
 
 /**

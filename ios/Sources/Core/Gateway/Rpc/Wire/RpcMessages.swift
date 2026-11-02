@@ -21,13 +21,34 @@ struct ModelSelectRequest: Encodable {
     var reasoningEffort: String? = nil
 }
 
-/// `session-create` 请求：**无载荷**。
+/// `session-create` 请求：**至多一个工作空间**。
 ///
-/// 目录不由客户端指定 —— 宿主用它自己进程的当前目录。这不是遗漏：手机上不选目录是
-/// 契约的一部分：目录由宿主决定，客户端不指定。
+/// 不带 `workspaceId` 时目录由宿主进程的当前目录决定（这条 op 在本功能之前唯一的行为，
+/// 不能删 —— 删了老客户端会建到别处）。带的时候落在那个工作空间的目录里，归属由宿主
+/// 自己挂进成员表。
+///
+/// ⚠️ `nil` 必须**整个字段不出现**，不能编码成 `null`：网关按「有没有这个键」区分
+/// 「不指定」与「指定了一个空值」，后者是畸形载荷、会被拒。所以这里的编码是手写的。
 struct SessionCreateRequest: Encodable {
     let v = gatewayProtocolVersion
     let op = "session-create"
+    var workspaceId: String? = nil
+
+    private enum CodingKeys: String, CodingKey { case v, op, workspaceId }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(v, forKey: .v)
+        try container.encode(op, forKey: .op)
+        try container.encodeIfPresent(workspaceId, forKey: .workspaceId)
+    }
+}
+
+/// `workspace-create` 请求：只发一个名字 —— 目录落在哪由网关决定，客户端不指定路径。
+struct WorkspaceCreateRequest: Encodable {
+    let v = gatewayProtocolVersion
+    let op = "workspace-create"
+    let name: String
 }
 
 struct CommandCatalogRequest: Encodable {
@@ -210,6 +231,18 @@ struct SessionCreateResponse: GatewayResponse {
     let ok: Bool
     let error: GatewayFailure?
     var sessionId: String? = nil
+}
+
+/// `workspace-create` 回包。
+///
+/// `created` 为假**不是失败**：这个名字已经在用，返回的是既有的那个。界面据它说不同的话。
+struct WorkspaceCreateResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var workspaceId: String? = nil
+    var title: String? = nil
+    var created: Bool? = nil
 }
 
 /// 命令列表回包。
