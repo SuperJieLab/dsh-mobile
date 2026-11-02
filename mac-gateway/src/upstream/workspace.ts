@@ -23,10 +23,16 @@ export interface RegistryLike {
   list(): readonly WorkspaceLike[]
 }
 
-/** 本适配器用到的注册表写面。`create` 要求目录已存在，且对同一路径幂等。 */
-export interface RegistryWriteLike {
-  resolveByPath(path: string): Promise<{ id: string; title: string } | undefined>
-  create(path: string): Promise<{ id: string; title: string }>
+/**
+ * 本适配器用到的工作空间控制器写面 —— 宿主的公开入口，用它而不是自己组合
+ * `resolveByPath` + `create`：**「这一次是不是新建的」只有它回答**（注册表那两个方法
+ * 各自都不带这一格），而且它内部已经串行化了（`enqueue`），我们不必再实现一条队列。
+ */
+export interface WorkspaceControllerLike {
+  create(request: { path: string }): Promise<{
+    workspace: { workspaceId: string; title: string }
+    created: boolean
+  }>
 }
 
 /**
@@ -46,22 +52,19 @@ export function workspaceSnapshotOf(registry: RegistryLike): WorkspaceSnapshot {
 }
 
 /**
- * 把一条路径注册成工作空间，并回答「这一次是不是新建的」。
+ * 把一条已存在的路径注册成工作空间。
  *
- * 注册表自己的 `create` 是幂等的（同路径返回既有的那个），但它**不告诉你**这一次是新建
- * 还是命中，所以要先用 `resolveByPath` 问一次。两次调用之间的窗口由调用方串行化（见
- * `workspaceCreatorOver`）—— 不串行化时连点两下会让两次都报「新建了」，但不会造出两个
- * 工作空间：注册表那一层仍然幂等。
+ * 直接用宿主的控制器：它回答「这一次是不是新建的」（`created`），并在内部串行化 ——
+ * 拿注册表的 `resolveByPath` + `create` 自己拼一遍，那两格与那条队列都要重写，
+ * 而重写出来的判据迟早与宿主的不一样。
  *
- * @param registry - 宿主的注册表写面。
+ * @param controller - 宿主的工作空间控制器。
  * @param path - 已存在的目录（调用方先建好）。
  */
-export async function registerWorkspace(
-  registry: RegistryWriteLike,
+export async function createWorkspaceIn(
+  controller: WorkspaceControllerLike,
   path: string,
-): Promise<{ id: string; title: string; created: boolean }> {
-  const existing = await registry.resolveByPath(path)
-  if (existing !== undefined) return { ...existing, created: false }
-  const workspace = await registry.create(path)
-  return { ...workspace, created: true }
+): Promise<{ workspaceId: string; title: string; created: boolean }> {
+  const { workspace, created } = await controller.create({ path })
+  return { workspaceId: workspace.workspaceId, title: workspace.title, created }
 }

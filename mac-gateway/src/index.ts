@@ -51,6 +51,9 @@ export const inject = [
   // sessionController 的依赖之一，所以这一条不新增失败面 —— 只是把
   // 「网关依赖它」这件事显式写出来。
   'workspaceRegistry',
+  // 工作空间的写面（建目录之后注册那一步）。与注册表同源、同一个 bundle 装载；
+  // 「这一次是不是新建的」只有它回答，注册表那两个方法都不带这一格。
+  'workspaceController',
   // follow 流：把控制器的 follow 泵到 WS 通道。
   // 仅 web-app bundle 提供。
   'sessionController',

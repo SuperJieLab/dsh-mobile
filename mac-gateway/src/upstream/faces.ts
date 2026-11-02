@@ -14,7 +14,7 @@ import type { CommandPort } from '../ports/command.ts'
 import type { ModelSelection } from '../wire/model.ts'
 
 import { nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
-import { workspaceSnapshotOf, registerWorkspace, type RegistryLike, type RegistryWriteLike } from './workspace.ts'
+import { workspaceSnapshotOf, createWorkspaceIn, type RegistryLike, type WorkspaceControllerLike } from './workspace.ts'
 import { makeWorkspaceDirectory } from './workspace-root.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import type { FollowSource } from '../ports/follow.ts'
@@ -94,19 +94,14 @@ export function listSourceOver(ctx: HostContext): ListSource {
  * 服务在热重载里被换掉时不会留下旧引用。
  */
 export function workspacePortOver(ctx: HostContext): WorkspacePort {
-  // 「建目录 + 注册」是一条链，串行化它：两次并发同名会让两次 `resolveByPath` 都问空，
-  // 于是都报「新建了」。不会造出两个工作空间（注册表那一层仍幂等），但界面会撒一次谎。
-  let tail: Promise<unknown> = Promise.resolve()
   return {
     snapshot: () => workspaceSnapshotOf(ctx.workspaceRegistry as unknown as RegistryLike),
-    create: (name) => {
-      const result = tail.then(async () => {
-        const path = await makeWorkspaceDirectory(name)
-        const made = await registerWorkspace(ctx.workspaceRegistry as unknown as RegistryWriteLike, path)
-        return { workspaceId: made.id, title: made.title, created: made.created }
-      })
-      tail = result.catch(() => undefined)
-      return result
+    // 只有「建目录」是我们的：「在指定父目录下建一个子目录」这件事宿主没有可用入口
+    // （目录选择器的建目录能力挂在 browse 后端上，而 macOS 绑回环时挂的是 native 后端）。
+    // 注册这一步走宿主的控制器 —— 它回答 created，也自带串行化。
+    create: async (name) => {
+      const path = await makeWorkspaceDirectory(name)
+      return await createWorkspaceIn(ctx.workspaceController as unknown as WorkspaceControllerLike, path)
     },
   }
 }

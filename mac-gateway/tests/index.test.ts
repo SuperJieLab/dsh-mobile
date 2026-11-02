@@ -102,6 +102,10 @@ function install(
       /** 列表分组的来源。默认空注册表：这组用例问的是列表在投影与缓存异常下的行为，
        * 不是分组结果；要看分组的用例自己传一份。 */
       workspaceRegistry: { list: () => [] },
+      /** 建工作空间的写面。同样只求「在」—— 这组用例不调那条 op。 */
+      workspaceController: {
+        create: async () => { throw new Error('workspace-create is not exercised here') },
+      },
       connection: {
         createPeer(values: { principal: { kind: string }; interactions?: string }) {
           return {

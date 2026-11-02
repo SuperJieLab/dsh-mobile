@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { registerWorkspace, workspaceSnapshotOf } from '../../src/upstream/workspace.ts'
+import { createWorkspaceIn, workspaceSnapshotOf } from '../../src/upstream/workspace.ts'
 
 /**
  * 一个工作空间在注册表里的样子。`path` 是**多余的**：实现要是改成按目录路径
@@ -42,40 +42,39 @@ test('an empty registry yields an empty snapshot rather than throwing', () => {
 
 // -- 注册（幂等） -------------------------------------------------------------
 
-/** 一个记住了路径的假注册表：`create` 对同一条路径返回同一个实体。 */
-function fakeRegistry() {
-  const byPath = new Map<string, { id: string; title: string }>()
+/**
+ * 宿主的 `workspaceController` 形状：`create` 对同一条路径幂等，并用 `created` 告诉你
+ * 这一次是不是新建的 —— 这一格是控制器给的，注册表本身没有。
+ */
+function fakeController() {
+  const byPath = new Map<string, { workspaceId: string; title: string }>()
   let serial = 0
   return {
     calls: 0,
-    async resolveByPath(path: string) {
-      return byPath.get(path)
-    },
-    async create(path: string) {
+    async create(request: { path: string }) {
       this.calls += 1
-      const existing = byPath.get(path)
-      if (existing !== undefined) return existing
+      const existing = byPath.get(request.path)
+      if (existing !== undefined) return { workspace: existing, created: false }
       serial += 1
-      const entity = { id: `w-${serial}`, title: path.split('/').at(-1) ?? path }
-      byPath.set(path, entity)
-      return entity
+      const workspace = { workspaceId: `w-${serial}`, title: request.path.split('/').at(-1) ?? request.path }
+      byPath.set(request.path, workspace)
+      return { workspace, created: true }
     },
   }
 }
 
 test('registering the same path twice reports created once', async () => {
-  const registry = fakeRegistry()
-  const first = await registerWorkspace(registry, '/根/名字')
-  const second = await registerWorkspace(registry, '/根/名字')
+  const controller = fakeController()
+  const first = await createWorkspaceIn(controller, '/根/名字')
+  const second = await createWorkspaceIn(controller, '/根/名字')
 
   assert.equal(first.created, true, '第一次是新建')
   assert.equal(second.created, false, '第二次不是 —— 「已存在」不是失败，是幂等')
-  assert.equal(second.id, first.id, '两次给的是同一个工作空间')
-  assert.equal(registry.calls, 1, '第二次不该再问注册表要新建')
+  assert.equal(second.workspaceId, first.workspaceId, '两次给的是同一个工作空间')
+  assert.equal(controller.calls, 2, '两次都问控制器：判断「是不是新建」是它的事，不是我们的')
 })
 
 test('a brand-new path reports the title the host derived', async () => {
-  const registry = fakeRegistry()
-  const made = await registerWorkspace(registry, '/根/记账 App')
+  const made = await createWorkspaceIn(fakeController(), '/根/记账 App')
   assert.equal(made.title, '记账 App', '标题由宿主从目录名派生，网关不改写')
 })

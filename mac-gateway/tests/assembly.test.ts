@@ -71,6 +71,8 @@ function hostServices(): Record<string, unknown> {
     agents: { get: (id: string) => (id === 's' ? { id } : undefined) },
     // 列表分组用；空注册表就够了 —— 这条用例问的是装配与注入，不是分组结果。
     workspaceRegistry: { list: () => [] },
+    // 建工作空间的写面。同样只求「在」。
+    workspaceController: { create: async () => { throw new Error('workspace-controller not exercised here') } },
     sessionController: {
       async selectModel(request: unknown) { void request; return { selected: {} } },
       async modelCatalog() { return { groups: [], failures: [] } },
