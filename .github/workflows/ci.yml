@@ -1,0 +1,99 @@
+name: CI
+
+# 只在 main 与本仓库的 PR 上跑。`workflow_dispatch` 留着是为了能手动重跑一次，
+# 不必为了「再验一遍」而提交一个空 commit。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支上新的推送取消上一轮：判据回答的是「当前代码绿不绿」，
+# 旧代码的结论没有价值，而 macOS runner 的排队时间不短。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# 只读就够 —— 这两个 job 什么都不写回仓库。
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    name: 网关
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与本地开发用的版本对齐。跳大版本前先在本地跑一遍 scripts/ci.sh。
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mac-gateway/package-lock.json
+
+      - name: 装依赖
+        working-directory: mac-gateway
+        run: npm ci
+
+      # 环境版本进摘要：红了第一件事是分清「代码变了」还是「环境变了」。
+      # 少了这一行，同一个红要花两倍时间去归因。
+      - name: 记录环境
+        run: |
+          {
+            echo "### 网关环境"
+            echo "- node $(node --version)"
+            echo "- npm $(npm --version)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 跑闸门
+        run: ./scripts/ci.sh gateway
+        env:
+          # 下限只能往上调。调低它等于承认「这次少了几条没关系」，而那正是
+          # 这条闸门要拦的东西。当前 425，留一点余量给临时下线某组判据。
+          DSH_MIN_GATEWAY: '420'
+
+      # 日志永远上传（包括失败时）：CI 上失败的第一手证据就是它，
+      # 而 runner 一结束，那些文件就没了。
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gateway-log
+          path: .ci-out/
+          retention-days: 7
+
+  ios:
+    name: iOS
+    # 跟随最新镜像，不固定版本 —— 理由与退路写在下面「记录环境」那一步。
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Xcode 版本是判据环境的一部分：镜像跳版会让「昨天绿今天红」变成
+      # 无法归因的事。所以先把版本打进摘要 —— 红了先看它变没变。
+      #
+      # 跟随 `macos-latest` 而不写死版本，是因为本地是 Xcode 27 而旧镜像
+      # 的 SDK 更老，写死旧镜像反而会先红一次。真遇到跳版致红，就把
+      # `runs-on` 改成具体镜像（如 `macos-26`）并把当时的 Xcode 版本写在这里。
+      - name: 记录环境
+        run: |
+          {
+            echo "### iOS 环境"
+            echo "- $(xcodebuild -version | head -1)"
+            echo "- 运行时：$(xcrun simctl list runtimes | grep -i 'iOS ' | head -1 | sed 's/^ *//')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 不缓存 DerivedData：它对本机路径敏感、体积以 GB 计，而缓存失配时
+      # 的表现是「构建成功但行为诡异」—— 那是比慢更坏的失败。等第一次跑
+      # 出真实耗时再决定要不要为它付这个风险。
+      - name: 跑闸门
+        run: ./scripts/ci.sh ios
+        env:
+          DSH_MIN_IOS: '420'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-log
+          path: .ci-out/
+          retention-days: 7

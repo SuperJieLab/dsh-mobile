@@ -34,3 +34,6 @@ ios/.derived/
 xcuserdata/
 # xcodebuild 的输出重定向（老版本脚本用 .txt，新脚本用 .log —— 两类都别进仓库）
 ios/.*.txt
+
+# CI 闸门的日志（scripts/ci.sh 的产物）
+.ci-out/
