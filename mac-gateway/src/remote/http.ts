@@ -8,6 +8,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
 import { failure, handle, success, type Limits } from '../protocol/rpc.ts'
+import { handleAuthOp } from '../protocol/auth-ops.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { CommandPort } from '../ports/command.ts'
@@ -140,9 +141,12 @@ async function respondInScope(
   // 被拒时以 HTTP 401 附协议信封。
   const op = (message as { op?: unknown } | null)?.op
   if (op === 'pair' || op === 'refresh') {
-    const answer = await handleAuthOp(op, message, deps.vault)
-    response.writeHead(answer.status, { 'content-type': 'application/json; charset=utf-8' })
-    response.end(`${JSON.stringify(answer.body)}\n`)
+    const answer = handleAuthOp(op, message, deps.vault)
+    // 留痕在这里而不是判定里：判定是纯的，日志是传输层的事。
+    logAuthOp(op, answer)
+    // 「没成」就是 401 —— 这一层不需要再判一次为什么失败。
+    response.writeHead(answer.ok ? 200 : 401, { 'content-type': 'application/json; charset=utf-8' })
+    response.end(`${JSON.stringify(answer)}\n`)
     return
   }
 
@@ -166,53 +170,25 @@ async function respondInScope(
 }
 
 /**
- * 应答 `pair` / `refresh`。放在闸门旁而非 `handle` 内：凭据来自体内而非头部的
- * 消息只有这两条，而其余 op 都要先过头部那道闸。
+ * 身份链路上的两条留痕 —— 判定在 `protocol/auth-ops.ts`，这里只负责说给人听。
  *
- * 形状在 `wire/auth.ts`（两端共守）；**校验不在这里，它在 `protocol/auth.ts`
- * 的配对规则里** —— 那四种失败原因必须原样传到手机上，所以这一层不判对错，
- * 只选 HTTP 状态码。
+ * 三条各有各的读者：配对成功是「关系建立了」的锚点（之后列表还 401 就先看它）；
+ * 配对失败要能区分「码错了」与「码过期了」；续期被拒是服务端**掐断关系**的唯一时刻。
  */
-async function handleAuthOp(
+function logAuthOp(
   op: 'pair' | 'refresh',
-  message: unknown,
-  vault: CredentialVault,
-): Promise<{ status: number; body: PairResponse | RefreshResponse }> {
-  // 字段名从请求形状里取：改名会在这里编译失败，而不是让客户端与服务端各读
-  // 一个名字、每次配对都落到 `bad-code-shape`。两者都可能缺 —— 缺了交给规则层
-  // 拒绝，所以读取处按 `unknown` 收窄。
-  //
-  // 不写成 `Partial<PairRequest & RefreshRequest>`：两条 op 的 `op` 是互斥
-  // 字面量，交叉之后整个类型塌成 `never`。
-  const payload = message as {
-    code?: PairRequest['code']
-    deviceToken?: RefreshRequest['deviceToken']
-  }
-
+  answer: PairResponse | RefreshResponse,
+): void {
   if (op === 'pair') {
-    const outcome = vault.pair(payload.code)
-    if (!outcome.ok) {
-      // 配对失败值得留痕：试错配对码与码过期在这里同形，日志能区分开。
-      log.warn(`pair refused: ${outcome.reason}`)
-      return { status: 401, body: failure('invalid-pairing-code', outcome.reason) }
+    if (answer.ok) {
+      log.info('pair accepted — device relationship established')
+    } else {
+      log.warn(`pair refused: ${answer.error?.message ?? 'unknown'}`)
     }
-    // 关系建立是身份链路的状态迁移，必须留痕（配对成功但列表 401 时先看这里）。
-    log.info('pair accepted — device relationship established')
-    return { status: 200, body: success({ deviceToken: outcome.deviceToken }) }
+    return
   }
-
-  const outcome = vault.refresh(payload.deviceToken)
-  if (!outcome.ok) {
-    // 服务端掐断关系的唯一时刻 —— 客户端会静默回未配对态，这里不说就没人知道为什么。
+  if (!answer.ok) {
     log.warn('refresh refused: unknown device token — relationship severed')
-    return {
-      status: 401,
-      body: failure('unauthenticated', 'unknown device token — pair again'),
-    }
-  }
-  return {
-    status: 200,
-    body: success({ accessToken: outcome.accessToken, expiresAt: outcome.expiresAt }),
   }
 }
 

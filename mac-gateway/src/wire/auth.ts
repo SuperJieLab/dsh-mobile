@@ -40,11 +40,18 @@ export interface PairResponse {
   deviceToken?: string
 }
 
-/** 续期回包：访问凭证与它到期的时刻（epoch 毫秒）。 */
+/** 续期回包：访问凭证、它到期的时刻（epoch 毫秒），以及轮换后的设备凭证。 */
 export interface RefreshResponse {
   v: number
   ok: boolean
   error?: WireError
   accessToken?: string
   expiresAt?: number
+  /**
+   * 轮换后的设备凭证 —— 客户端**必须**存下它。
+   *
+   * 服务端每次续期都换一枚：旧的在宽限期内还能用一次，过期即作废。客户端丢掉这个字段
+   * 不会立刻坏，但会掉进宽限那条回头路，而且下一次轮换之后就再也回不来了。
+   */
+  deviceToken?: string
 }

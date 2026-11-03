@@ -1219,11 +1219,17 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
     types: ['ProtocolRefusal'],
   },
   {
+    home: 'protocol/auth-ops.ts',
+    values: ['handleAuthOp'],
+    types: ['AuthPort'],
+  },
+  {
     home: 'protocol/auth.ts',
     values: [
-      'ACCESS_TTL_MS', 'PAIRING_TTL_MS', 'PAIRING_MAX_ATTEMPTS', 'emptyCredentials', 'sha256Hex',
+      'ACCESS_TTL_MS', 'PAIRING_TTL_MS', 'PAIRING_MAX_ATTEMPTS', 'DEVICE_ROTATION_GRACE_MS',
+      'emptyCredentials', 'sha256Hex',
       'newPairingCode', 'newToken', 'bearerTokenOf', 'isPlausiblePairingCode', 'attemptPairing',
-      'issueAccess', 'isLiveAccess',
+      'issueAccess', 'isLiveAccess', 'rotateDeviceToken',
     ],
     types: ['StoredCredentials', 'PairingOutcome'],
   },
@@ -1647,3 +1653,25 @@ test('the console scan would catch a bare line if one appeared', () => {
   assert.equal([...code.matchAll(/\bconsole\s*\.\s*log\s*\(/g)].length, 1,
     '剥注释后应当只剩那一句真代码')
 })
+
+test('the http transport holds no pairing rules', () => {
+  // 判定住在 `protocol/auth-ops.ts`：分发、四种失败措辞、被拒时的 code。传输层只剩
+  // 「读体 → 调它 → 把 ok 映射成状态码」。这条守的是**别搬回去** —— 把一段判断放回
+  // 传输层不会让任何行为判据变红，只会让「协议是消息，不是 URL」这句话变成一句口号。
+  const source = readFileSync(join(SRC, 'remote', 'http.ts'), 'utf8')
+
+  // 活性锚：先确认它真的调了那个判定。少了这一条，一个被清空的 http.ts 也能过。
+  assert.ok(source.includes('handleAuthOp'),
+    '传输层没有调用协议层的判定 —— 这条判据此刻在测一个不存在的分支')
+
+  // 判据守的是**判定**，不是日志文案：`unknown device token` 这几个字在「关系被掐断」
+  // 那条 warn 里出现是正当的（它说的是发生了什么），而 `— pair again` 是回给客户端的
+  // 那句话，只该由判定给出。
+  const forbidden = ['invalid-pairing-code', 'unknown device token — pair again',
+                     'attemptPairing', 'vault.pair(', 'vault.refresh(']
+  for (const needle of forbidden) {
+    assert.equal(source.includes(needle), false,
+      `remote/http.ts 不该出现「${needle}」—— 配对规则住在 protocol/auth-ops.ts`)
+  }
+})
+

@@ -83,6 +83,11 @@ final class RpcClient {
                 Log.warn(Log.Module.gateway, "refresh answered without a ticket")
                 return .retryLater
             }
+            // 服务端每次续期都轮换设备凭证：**先存新的，再交票**。存不下就别往下走 ——
+            // 手里那张票只活 15 分钟，而凭证丢了要重新配对。
+            if let rotated = response.deviceToken {
+                credentials.saveDeviceToken(rotated)
+            }
             Log.debug(Log.Module.session, "access ticket renewed")
             return .issued(
                 .init(token: token, expiresAt: epochMilliseconds(expiresAt))

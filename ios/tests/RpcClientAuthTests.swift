@@ -249,4 +249,62 @@ final class RpcClientAuthTests: XCTestCase {
         XCTAssertEqual(stored, "device-token", "传输失败绝不能清掉设备凭证 —— 那是关系的本体")
         XCTAssertTrue(store.hasDeviceToken, "关系仍在 —— 凭证还在就是还在")
     }
+
+    // MARK: - 设备凭证轮换
+
+    /// 一句带轮换凭证的续期应答。
+    private static func rotatedTicket(_ deviceToken: String) -> ScriptedURLProtocol.Reply {
+        .init(status: 200,
+              body: #"{"v":2,"ok":true,"accessToken":"fresh","expiresAt":9999999999999,"deviceToken":"\#(deviceToken)"}"#)
+    }
+
+    /// 续期回包里带轮换后的设备凭证时，**必须存下来**。
+    ///
+    /// 服务端每次续期都换一枚：丢掉它不会立刻坏（旧的在宽限期内还能用一次），但下一次
+    /// 轮换之后就再也回不来了 —— 那时只能重新配对。所以这条判据钉的是「存没存」，
+    /// 不是「票换到没有」。
+    func testARotatedDeviceTokenFromRefreshIsPersisted() async throws {
+        Self.script(ticket: Self.rotatedTicket("rotated-1"))
+        var stored: String? = "device-token"
+        let store = CredentialStore(storage: .init(
+            read: { stored },
+            write: { stored = $0 },
+            delete: { stored = nil }
+        ))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ScriptedURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = RpcClient(session: { session },
+                               baseURL: { URL(string: "http://127.0.0.1:3081")! },
+                               credentials: store)
+
+        _ = try await fetchSessions(client)
+
+        XCTAssertEqual(stored, "rotated-1",
+                       "轮换后的凭证必须落盘 —— 丢掉它下一次只能靠宽限那条回头路")
+    }
+
+    /// 回包**没有**轮换字段时，凭证原样留着 —— 「没有新值」不是「清空」。
+    ///
+    /// 这一条守的是一种很容易写出来的错法：把可选字段当成「服务端说没有了」，
+    /// 于是每续一次期就把关系删掉一次。
+    func testARefreshWithoutARotatedTokenKeepsTheDeviceToken() async throws {
+        var stored: String? = "device-token"
+        let store = CredentialStore(storage: .init(
+            read: { stored },
+            write: { stored = $0 },
+            delete: { stored = nil }
+        ))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ScriptedURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = RpcClient(session: { session },
+                               baseURL: { URL(string: "http://127.0.0.1:3081")! },
+                               credentials: store)
+
+        _ = try await fetchSessions(client)
+
+        XCTAssertEqual(stored, "device-token", "没有轮换字段时不该动凭证")
+        XCTAssertTrue(store.hasDeviceToken, "关系仍在")
+    }
 }

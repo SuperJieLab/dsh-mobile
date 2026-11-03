@@ -193,12 +193,16 @@ struct PairResponse: GatewayResponse {
 }
 
 /// 续期回包：访问凭证与过期时刻（epoch 毫秒）。
+/// 续期回包。**`deviceToken` 是轮换后的设备凭证** —— 服务端每次续期都换一枚，
+/// 旧的在宽限期内还能用一次。丢掉这个字段不会立刻坏，但会掉进宽限那条回头路，
+/// 而下一次轮换之后就再也回不来了（那时只能重新配对）。
 struct RefreshResponse: GatewayResponse {
     let v: Int
     let ok: Bool
     let error: GatewayFailure?
     let accessToken: String?
     let expiresAt: Double?
+    let deviceToken: String?
 }
 
 /// 快照回包：opening 的 `model` 字段是协议面，

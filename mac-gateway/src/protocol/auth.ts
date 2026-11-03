@@ -25,11 +25,31 @@ export const PAIRING_TTL_MS = 10 * 60 * 1000
 /** 配对码容忍多少次错误尝试，超过即提前作废。 */
 export const PAIRING_MAX_ATTEMPTS = 5
 
+/**
+ * 上一枚 device token 还能换票的时长 —— 轮换留下的那条回头路。
+ *
+ * 轮换的目的是「让同时存在的第二个使用者暴露出来」，而不是「让客户端一崩就失联」。
+ * 客户端收到新凭证是同步写盘，但「收到之后、写盘之前被杀」永远可能发生 —— 那台手机
+ * 重启后读到的还是旧凭证。宽限让它还能换一次票、拿到新凭证，自己走回来。
+ *
+ * 取 24 小时：短于这个数会让「手机没电一天」变成「必须重新配对」，而那个代价落在
+ * 唯一一个正常用户身上；长于它则让泄漏方多活一天。失窃检测本来就不靠这里 ——
+ * 它靠的是「旧凭证被用了」这条日志。
+ */
+export const DEVICE_ROTATION_GRACE_MS = 24 * 60 * 60 * 1000
+
 /** 凭据文件的内容。吊销即重置为 `{ version: 1 }`。 */
 export interface StoredCredentials {
   version: 1
   /** device token 的 SHA-256 十六进制。未配对时缺省。 */
   deviceTokenHash?: string
+  /**
+   * 上一枚 device token 的哈希与它失效的时刻 —— 轮换的回头路。
+   *
+   * 只存一枚：两个使用者交替换票时，每一次轮换都会把「刚用过的那个」推进这里，
+   * 另一个因此在下一次被拒。那正是「同一层关系被两台设备用」的暴露方式。
+   */
+  previous?: { hash: string; until: number }
   /** 当前有效的配对码，已签发且未被消费时存在。 */
   pairing?: {
     code: string
@@ -139,7 +159,11 @@ function countAttempt(file: StoredCredentials): PairingOutcome {
 }
 
 function withoutPairing(file: StoredCredentials): StoredCredentials {
-  return { version: 1, ...(file.deviceTokenHash === undefined ? {} : { deviceTokenHash: file.deviceTokenHash }) }
+  return {
+    version: 1,
+    ...(file.deviceTokenHash === undefined ? {} : { deviceTokenHash: file.deviceTokenHash }),
+    ...(file.previous === undefined ? {} : { previous: file.previous }),
+  }
 }
 
 /**
@@ -151,12 +175,52 @@ export function issueAccess(
   presentedDeviceToken: unknown,
   now: number,
   random: () => number,
-): { status: 'ok'; token: string; tokenHash: string; expiresAt: number } | { status: 'denied' } {
-  if (file.deviceTokenHash === undefined) return { status: 'denied' }
+): {
+  status: 'ok'
+  token: string
+  tokenHash: string
+  expiresAt: number
+  /** 出示的是**上一枚**凭证（轮换的宽限里那条路）。调用方据此记一条「关系可能被共用」。 */
+  viaPrevious: boolean
+} | { status: 'denied' } {
   if (typeof presentedDeviceToken !== 'string' || presentedDeviceToken === '') return { status: 'denied' }
-  if (sha256Hex(presentedDeviceToken) !== file.deviceTokenHash) return { status: 'denied' }
+  const hash = sha256Hex(presentedDeviceToken)
+  const current = file.deviceTokenHash !== undefined && hash === file.deviceTokenHash
+  const previous = file.previous !== undefined && file.previous.hash === hash && now < file.previous.until
+  if (!current && !previous) return { status: 'denied' }
   const token = newToken(random)
-  return { status: 'ok', token, tokenHash: sha256Hex(token), expiresAt: now + ACCESS_TTL_MS }
+  return {
+    status: 'ok', token, tokenHash: sha256Hex(token), expiresAt: now + ACCESS_TTL_MS,
+    viaPrevious: previous,
+  }
+}
+
+/**
+ * 换一枚新的 device token：新的上台，**刚用过的那个**进宽限。
+ *
+ * 只保留一枚旧凭证是有意的：两个使用者交替换票时，每次轮换都把另一个挤掉，
+ * 它下一次换票就被拒 —— 那台设备于是暴露（并且掉线）。误判的代价是「同一台手机
+ * 上有两个实例」，而那种情况本来就不该发生。
+ */
+export function rotateDeviceToken(
+  file: StoredCredentials,
+  now: number,
+  random: () => number,
+): { file: StoredCredentials; deviceToken: string } {
+  const deviceToken = newToken(random)
+  const replaced = file.deviceTokenHash
+  return {
+    file: {
+      ...file,
+      deviceTokenHash: sha256Hex(deviceToken),
+      // 进宽限的是**被替换掉的那一枚**，不是刚出示的那一枚：后者可能本来就是
+      // 宽限里那条回头路，把它再存一遍等于让那条路永不关闭。
+      previous: replaced === undefined
+        ? undefined
+        : { hash: replaced, until: now + DEVICE_ROTATION_GRACE_MS },
+    },
+    deviceToken,
+  }
 }
 
 /** 内存中的 access 记录在 `now` 时刻是否仍然有效。 */

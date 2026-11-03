@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, unlinkSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CredentialVault } from '../../src/remote/credentials.ts'
+import { issueAccess, sha256Hex, type StoredCredentials } from '../../src/protocol/auth.ts'
 
 /** 每条用例一个临时目录：真凭据文件在 ~/.dsh 下，测试不许碰。 */
 function sandbox(): { dir: string; path: string; done: () => void } {
@@ -78,6 +79,77 @@ test('writing the file ourselves does not drop live tickets', () => {
 
     assert.equal(vault.authenticate(`Bearer ${ticket}`), true,
       '自己刚写的文件不该被当成「别人改的」而清掉票 —— 那会让每次配对码刷新踢掉在线客户端')
+  } finally {
+    done()
+  }
+})
+
+// MARK: - 设备凭证轮换
+
+test('every refresh hands back a new device token', () => {
+  const { path, done } = sandbox()
+  try {
+    const vault = new CredentialVault(path)
+    vault.seedDeviceToken('device-1')
+
+    const first = vault.refresh('device-1')
+    assert.equal(first.ok, true)
+    assert.ok(first.ok && first.deviceToken !== 'device-1', '续期必须轮换：回包里是新的那一枚')
+
+    const second = first.ok ? vault.refresh(first.deviceToken) : undefined
+    assert.equal(second?.ok, true)
+    assert.ok(second?.ok && second.deviceToken !== first.deviceToken, '每次都要换，不是只换第一次')
+  } finally {
+    done()
+  }
+})
+
+test('the replaced token is accepted exactly once inside the grace window', () => {
+  const { path, done } = sandbox()
+  try {
+    const vault = new CredentialVault(path)
+    vault.seedDeviceToken('device-1')
+    const first = vault.refresh('device-1')
+    assert.equal(first.ok, true)
+
+    // 被替换掉的那一枚进宽限：客户端崩在「收到新凭证、还没写盘」之间时靠它走回来。
+    assert.equal(vault.refresh('device-1').ok, true, '宽限里那条回头路必须通')
+
+    // 但它只值一次：第二次轮换已经把它挤出去了 —— 这正是「第二个使用者会暴露」的形状。
+    assert.deepEqual(vault.refresh('device-1'), { ok: false },
+      '同一枚旧凭证不能被无限次换票')
+  } finally {
+    done()
+  }
+})
+
+test('the grace window is a boundary, not a mood', () => {
+  const file: StoredCredentials = {
+    version: 1,
+    deviceTokenHash: sha256Hex('current'),
+    previous: { hash: sha256Hex('previous'), until: 5_000 },
+  }
+  const at = (now: number, token: string) => issueAccess(file, token, now, Math.random)
+
+  assert.equal(at(4_999, 'previous').status, 'ok', '到期前一毫秒还算数')
+  assert.equal(at(5_000, 'previous').status, 'denied', '到点即作废')
+  assert.equal(at(9_999, 'current').status, 'ok', '当前那枚不受宽限影响')
+  assert.equal(at(9_999, 'stranger').status, 'denied')
+})
+
+test('rotating does not invalidate tickets already in hand', () => {
+  const { path, done } = sandbox()
+  try {
+    const vault = new CredentialVault(path)
+    vault.seedDeviceToken('device-1')
+    const first = vault.refresh('device-1')
+    const ticket = first.ok ? first.accessToken : ''
+    assert.equal(vault.authenticate(`Bearer ${ticket}`), true, '前置：票是有效的')
+
+    if (first.ok) vault.refresh(first.deviceToken)
+
+    assert.equal(vault.authenticate(`Bearer ${ticket}`), true,
+      '换的是设备凭证，不是手里那张没到期的票 —— 作废它等于每 15 分钟踢一次在线客户端')
   } finally {
     done()
   }

@@ -26,6 +26,7 @@ import {
   issueAccess,
   newPairingCode,
   PAIRING_TTL_MS,
+  rotateDeviceToken,
   sha256Hex,
   type StoredCredentials,
 } from '../protocol/auth.ts'
@@ -157,13 +158,41 @@ export class CredentialVault {
     return { ok: false, reason: reasons[outcome.status] }
   }
 
-  /** 用 device token 换一枚 access token。被拒即关系不存在。 */
-  refresh(deviceToken: unknown): { ok: true; accessToken: string; expiresAt: number } | { ok: false } {
+  /**
+   * 用 device token 换一枚 access token。被拒即关系不存在。
+   *
+   * **每次成功都轮换设备凭证**：回包里带新的那枚，旧的进宽限。这样「同一层关系被两台
+   * 设备用」就有了暴露的方式 —— 它们会互相把对方挤出宽限，而每一次「旧凭证被用了」
+   * 都留一条 warn。不轮换的话，两个使用者的一切请求都长得一模一样，日志里看不出来。
+   */
+  refresh(deviceToken: unknown): {
+    ok: true
+    accessToken: string
+    expiresAt: number
+    /** 轮换后的设备凭证 —— 客户端必须存下它，否则下一次就要靠宽限那条回头路。 */
+    deviceToken: string
+  } | { ok: false } {
     this.reloadIfChanged()
-    const outcome = issueAccess(this.file, deviceToken, this.now(), this.random)
+    const now = this.now()
+    const outcome = issueAccess(this.file, deviceToken, now, this.random)
     if (outcome.status === 'denied') return { ok: false }
+
+    if (outcome.viaPrevious) {
+      // 关系可能被共用：正常客户端每次换票都用最新那枚，走到这里说明有一方落后了 ——
+      // 落后是「崩溃在写盘之前」，也可能是「另一台设备拿着旧凭证」。
+      log.warn('refresh accepted on the previous device token — the relationship may be shared')
+    }
+
+    const rotated = rotateDeviceToken(this.file, now, this.random)
+    this.file = rotated.file
+    this.persist()
     this.access.set(outcome.tokenHash, { expiresAt: outcome.expiresAt })
-    return { ok: true, accessToken: outcome.token, expiresAt: outcome.expiresAt }
+    return {
+      ok: true,
+      accessToken: outcome.token,
+      expiresAt: outcome.expiresAt,
+      deviceToken: rotated.deviceToken,
+    }
   }
 
   /** HTTP/WS 闸门：该 `Authorization` 头是否指向一枚活跃的 access token？ */
