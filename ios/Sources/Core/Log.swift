@@ -25,6 +25,17 @@ enum Log {
 
     private static let lock = NSLock()
 
+    /// 落盘口。`nil` = 只写 stderr（测试与未安装时）。装它要在启动最早期 ——
+    /// 晚装的每一行都只活在控制台里，而控制台在断开之后什么都没有。
+    private static var fileSink: ((String) -> Void)?
+
+    /// 装上落盘。幂等：装第二次只是换掉同一个口；传 `nil` 卸掉（判据要能还原现场）。
+    static func installFileLog(_ file: LogFile?) {
+        lock.lock()
+        defer { lock.unlock() }
+        fileSink = file?.append
+    }
+
     static func debug(_ module: String, _ message: String) { write("debug", module, message) }
     static func info(_ module: String, _ message: String) { write("info", module, message) }
     static func warn(_ module: String, _ message: String) { write("warn", module, message) }
@@ -39,6 +50,8 @@ enum Log {
         lock.lock()
         defer { lock.unlock() }
         FileHandle.standardError.write(Data(line.utf8))
+        // 同一个出口两处去向：控制台给人看，文件给「断开之后」看。
+        fileSink?(line)
     }
 
     // MARK: - 性能记录

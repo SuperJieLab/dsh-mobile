@@ -15,11 +15,18 @@ final class SettingsState {
     private let hasIdentity: () -> Bool
     /// 解除配对。闭包而非客户端：这一层不该知道怎么发请求。
     private let discardIdentity: () -> Void
+    /// 日志的落盘口与遥测落盘 —— 诊断包的两份原料。
+    private let logFile: LogFile
+    private let telemetryStore: TelemetryStore
 
     init(store: MeshStore,
+         logFile: LogFile,
+         telemetryStore: TelemetryStore,
          hasIdentity: @escaping () -> Bool,
          discardIdentity: @escaping () -> Void) {
         self.store = store
+        self.logFile = logFile
+        self.telemetryStore = telemetryStore
         self.hasIdentity = hasIdentity
         self.discardIdentity = discardIdentity
     }
@@ -38,5 +45,35 @@ final class SettingsState {
     /// 解除配对：清掉本地凭证与在手票。服务端那边由 Mac 侧撤销，这里只管本机。
     func unlink() {
         discardIdentity()
+    }
+
+    // MARK: - 诊断包
+
+    /// 组装一份诊断包并落成文件，返回地址；写不下去时返回 `nil`。
+    ///
+    /// 只取**最近几份**遥测：全带上会让包变成几百 KB，而排障时看的是最近那一次。
+    /// 版本与机型从 `Bundle` / `sysctlbyname` 拿 —— 判定层不许 import UIKit。
+    func prepareDiagnostics(at date: Date = Date()) -> URL? {
+        let info = Bundle.main.infoDictionary
+        let input = DiagnosticsBundle.Input(
+            generatedAt: date,
+            appVersion: info?["CFBundleShortVersionString"] as? String ?? "?",
+            appBuild: info?["CFBundleVersion"] as? String ?? "?",
+            system: ProcessInfo.processInfo.operatingSystemVersionString,
+            device: DiagnosticsBundle.machineModel(),
+            logTail: logFile.tail(),
+            telemetry: telemetryFiles()
+        )
+        return try? DiagnosticsExport.write(DiagnosticsBundle.text(input), at: date)
+    }
+
+    /// 两类遥测各取最近两份。
+    private func telemetryFiles() -> [(name: String, text: String)] {
+        TelemetryStore.Kind.allCases.flatMap { kind in
+            telemetryStore.files(kind).prefix(2).compactMap { url in
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+                return (name: url.lastPathComponent, text: text)
+            }
+        }
     }
 }

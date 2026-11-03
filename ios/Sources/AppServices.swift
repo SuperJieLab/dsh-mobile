@@ -22,8 +22,17 @@ struct AppServices {
     let approvals: ApprovalStore
     /// 端上遥测的订阅者。造好但不注册 —— 注册发生在 `start()` 里，与其余启动动作同处。
     let telemetry: MetricKitReporter
+    /// 日志的落盘口。诊断包读它取「上一次跑的尾巴」。
+    let logFile: LogFile
+    /// 遥测落盘。诊断包读它取最近几份 payload。
+    let telemetryStore: TelemetryStore
 
     init() {
+        // 落盘在这里装，是构造期唯一的例外：越早越好，而晚装的每一行都只活在控制台里 ——
+        // 控制台在断开之后什么都没有，而断开之后正是要查的时候。
+        let logFile = LogFile(url: LogFile.defaultURL())
+        Log.installFileLog(logFile)
+
         let node = TailnetNode()
         let store = MeshStore(node: node)
         let credentials = CredentialStore.shared
@@ -45,9 +54,8 @@ struct AppServices {
         )
         let events = EventStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
-        let telemetry = MetricKitReporter(
-            store: TelemetryStore(directory: TelemetryStore.defaultDirectory())
-        )
+        let telemetryStore = TelemetryStore(directory: TelemetryStore.defaultDirectory())
+        let telemetry = MetricKitReporter(store: telemetryStore)
 
         self.store = store
         self.credentials = credentials
@@ -56,6 +64,8 @@ struct AppServices {
         self.events = events
         self.approvals = approvals
         self.telemetry = telemetry
+        self.logFile = logFile
+        self.telemetryStore = telemetryStore
     }
 
     // MARK: - 编排

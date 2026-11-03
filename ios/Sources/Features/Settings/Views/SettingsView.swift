@@ -7,6 +7,9 @@ import SwiftUI
 struct SettingsView: View {
     let state: SettingsState
 
+    /// 已生成的诊断包。生成是点击时的一次 I/O，不该在求值时发生 —— 所以它是个状态。
+    @State private var exported: ExportedBundle?
+
     var body: some View {
         Form {
             Section("接入") {
@@ -21,7 +24,20 @@ struct SettingsView: View {
                     Text("配对")
                 }
             }
+
+            Section {
+                Button("导出诊断包") {
+                    exported = state.prepareDiagnostics().map(ExportedBundle.init(url:))
+                }
+            } header: {
+                Text("诊断")
+            } footer: {
+                Text("日志、崩溃与性能摘要打成一个文本，可发给别人看。")
+            }
         }
         .navigationTitle("设置")
+        .sheet(item: $exported) { item in
+            ShareSheet(items: [item.url])
+        }
     }
 }

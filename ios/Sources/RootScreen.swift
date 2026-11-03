@@ -58,6 +58,8 @@ struct RootScreen: View {
                                                approvals: services.approvals)
                     case .settings:
                         SettingsAssembler(store: services.store,
+                                          logFile: services.logFile,
+                                          telemetryStore: services.telemetryStore,
                                           hasIdentity: hasIdentity,
                                           discardIdentity: discardIdentity)
                     case .mesh:
