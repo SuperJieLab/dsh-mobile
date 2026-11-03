@@ -20,6 +20,8 @@ struct AppServices {
     let events: EventStream
     /// 待答审批。不随任何一屏生死：停在会话列表时它照样在收。
     let approvals: ApprovalStore
+    /// 端上遥测的订阅者。造好但不注册 —— 注册发生在 `start()` 里，与其余启动动作同处。
+    let telemetry: MetricKitReporter
 
     init() {
         let node = TailnetNode()
@@ -43,6 +45,9 @@ struct AppServices {
         )
         let events = EventStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
+        let telemetry = MetricKitReporter(
+            store: TelemetryStore(directory: TelemetryStore.defaultDirectory())
+        )
 
         self.store = store
         self.credentials = credentials
@@ -50,6 +55,7 @@ struct AppServices {
         self.link = link
         self.events = events
         self.approvals = approvals
+        self.telemetry = telemetry
     }
 
     // MARK: - 编排
@@ -59,6 +65,9 @@ struct AppServices {
     /// 2. **动作**（按 `StartupPlan` 走，组网那一步 await）。
     /// 等组网出结论：没有地址，后面几步都等不到任何数据。顺序与「等」是同一件事。
     func start() async {
+        // 遥测先注册：它不依赖任何别的服务，而晚注册会让这一轮已投递的 payload 等下一次。
+        // 放在这里而不是 `init`：构造期只该有「造对象」这一件事。
+        telemetry.start()
         wireCrossServiceTriggers()
 
         let steps = StartupPlan.steps(

@@ -14,6 +14,9 @@ enum Log {
         /// 工作空间的写链路：建 / 删 / 在其中建会话。与 `session` 分开是因为
         /// 这几个动作都不可逆或难观察（删注册、落在哪个目录），排障时要能单独拎出来。
         static let workspace = "workspace"
+        /// 端上遥测：MetricKit 的投递与落盘。与 `session` 分开是因为它按天发生，
+        /// 混进会话日志里会把它淹掉。
+        static let telemetry = "telemetry"
     }
 
     /// debug 级默认静默，DSH_LOG_DEBUG=1 打开。可变（而非 private let）是为测试能覆写；
