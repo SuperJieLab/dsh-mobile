@@ -66,6 +66,10 @@ final class SessionSync {
     private(set) var lastFrameAt: Date? = nil
     /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
     private(set) var displayedModel: ModelSelection? = nil
+    /// 每收到一条实时事件就叫一声，参数是它的类型。**单读者**：权限那一格靠它判断
+    /// 「宿主那边的当前权限可能变了」。判定住在权限域（`PermissionState.affectsCurrent`），
+    /// 这里只转发 —— 事件名是权限域的知识，不是编排的。
+    var onLiveEventType: ((String) -> Void)?
 
     private let client: RpcClient
     let sessionId: String
@@ -465,6 +469,8 @@ final class SessionSync {
         // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
         modelState.absorb(event: event)
         displayedModel = modelState.displayed
+        // 权限那一格只关心「当前值可能变了」那三类；哪些算，判定在权限域自己手里。
+        onLiveEventType?(event.type)
         // 事件帧只标脏，批到点一次全量重算（opening / HTTP 同步路径不经闸）。
         if refreshGate.eventArrived() == .openWindow { scheduleFlush() }
     }

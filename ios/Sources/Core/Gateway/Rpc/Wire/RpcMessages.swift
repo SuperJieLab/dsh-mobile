@@ -79,6 +79,27 @@ struct CommandExecuteRequest: GatewayRequest {
     let line: String
 }
 
+/// 权限预设的读：这个会话此刻能选什么、现在是什么。
+///
+/// 带 `sessionId` 是因为**当前值是会话级的**（选项是进程级的）—— 两样一次拿齐，
+/// 客户端就不必自己从沙箱模式与审批策略折叠出预设。
+struct PermissionCatalogRequest: GatewayRequest {
+    let v = gatewayProtocolVersion
+    let op = "permission-catalog"
+    let sessionId: String
+}
+
+/// 权限预设的写：**只发预设名**。
+///
+/// 不发沙箱模式与审批策略：那两格是宿主折叠出预设的输入，发出去等于邀请客户端自己算一遍。
+/// 预设名合不合法由宿主的目录说了算，客户端不维护第二份名单。
+struct PermissionSelectRequest: GatewayRequest {
+    let v = gatewayProtocolVersion
+    let op = "permission-select"
+    let sessionId: String
+    let preset: String
+}
+
 /// 协议里的时刻是 **epoch 毫秒**（`1758000000000`），不是秒。
 func epochMilliseconds(_ value: Double) -> Date {
     Date(timeIntervalSince1970: value / 1000)
@@ -288,4 +309,24 @@ struct CommandExecuteResponse: GatewayResponse {
     let ok: Bool
     let error: GatewayFailure?
     var commandId: String? = nil
+}
+
+/// 权限预设的读回包。
+///
+/// **`options` 缺席与空数组是两件事**：缺席 = 这个装配没有权限服务（界面不画那一格）；
+/// 空数组 = 服务在但一项都没配。合成一种，界面就会画一个点不开的格子。
+struct PermissionCatalogResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var current: String? = nil
+    var options: [PermissionOption]? = nil
+}
+
+/// 权限预设的写回包。`current` 是受理后**宿主重读投影**给的值，不是把发出去的那份当答案。
+struct PermissionSelectResponse: GatewayResponse {
+    let v: Int
+    let ok: Bool
+    let error: GatewayFailure?
+    var current: String? = nil
 }

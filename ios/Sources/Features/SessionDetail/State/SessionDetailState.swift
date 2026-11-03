@@ -17,6 +17,7 @@ final class SessionDetailState {
     let sync: SessionSync
     let catalog: ModelCatalogState
     let commands: CommandDirectory
+    let permission: PermissionState
     let composer: ComposerState
     /// 组网事实的来源（节点五态、路径、配置读坏）—— 这一屏只读，配置入口在设置页。
     let store: MeshStore
@@ -36,10 +37,20 @@ final class SessionDetailState {
         sync = SessionSync(client: client, sessionId: sessionId, link: link)
         catalog = ModelCatalogState { try await fetchCatalog(client) }
         commands = CommandDirectory { try await fetchCommands(client, sessionId: sessionId) }
+        let permissionState = PermissionState(
+            fetch: { try await fetchPermission(client, sessionId: sessionId) },
+            select: { try await selectPermission(client, sessionId: sessionId, preset: $0) }
+        )
+        permission = permissionState
         composer = ComposerState()
+        // 事件类型的转发接线：编排只负责「每来一条就叫一声」，判断哪几类算数归权限域。
+        // 弱捕获：这一屏离屏后容器与部件一起走，闭包不该把它们吊住。
+        sync.onLiveEventType = { [weak permissionState] type in
+            permissionState?.noteLiveEvent(type: type)
+        }
     }
 
-    /// 功能条三格的值 —— 从编排取数转成显示值的唯一一处。
+    /// 功能条四格的值 —— 从编排取数转成显示值的唯一一处。
     ///
     /// 兜底规则：选中值 ?? 目录默认 ?? 未知。目录默认只为「重拉期间不闪成未知」；
     /// 等级名与模型名读同一个 `shown`，两处各取一份会出现「模型是 A、等级是 B」。
@@ -52,7 +63,12 @@ final class SessionDetailState {
             carrier: meshPath,
             usage: sync.usage,
             modelName: modelDisplayName(shown),
-            effortName: catalog.effortLabel(for: shown)
+            effortName: catalog.effortLabel(for: shown),
+            // 档位名由权限域算好（宿主给的自定义名要原样用），这一层只取它的显示字。
+            // `nil` 透传下去：没有权限服务的装配里那一格不该出现。
+            permissionName: permission.showsCell
+                ? permission.currentLabel?.text ?? PermissionState.unknownLabel
+                : nil
         )
     }
 

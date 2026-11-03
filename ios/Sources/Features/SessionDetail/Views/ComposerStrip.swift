@@ -1,23 +1,29 @@
 import SwiftUI
 
-/// composer 上方那一排：网络 / 模型 / 占用。
+/// composer 上方那一排：网络 / 模型 / 权限 / 占用。
 ///
-/// 三格的显示值由 `ComposerStripModel` 承载（纯值，宿主算好传进来），本视图只把它们画出来。
-/// 固定高度：输入框不随连接态、占用多少上下跳。
+/// 四格的显示值由 `ComposerStripModel` 承载（纯值，宿主算好传进来），本视图只把它们画出来。
+/// 固定高度：输入框不随连接态、占用多少、权限是哪档上下跳。
 struct ComposerStrip: View {
 
     let model: ComposerStripModel
+    /// 权限那一格能点的项与当前档。空数组 = 没有可选项（格子仍在，点不开）。
+    let permissionChoices: [PermissionState.Choice]
+    let onSelectPermission: (PermissionState.Choice) -> Void
     /// 点模型格：打开模型面（列表 + 该模型的设置）。内容由宿主的面持有。
     let onTapModel: () -> Void
     let onTapNetwork: () -> Void
     let onTapUsage: () -> Void
 
-    /// 固定 32pt。三格都在这条线内，谁的内容长了就截断，不改高度。
+    /// 固定 32pt。四格都在这条线内，谁的内容长了就截断，不改高度。
     static let height: CGFloat = 32
 
     /// 网络格定宽（按最长的「连接中…」算）。不定宽的话，「直连」与「重连中…」差十来个点，
     /// 每次断连 / 恢复模型格都会横移一次。
     private static let networkWidth: CGFloat = 64
+    /// 权限格定宽 —— 按最长的「工作区内修改」六个字算。档位名长短差得多，
+    /// 不定宽会让模型格随档位横移。
+    private static let permissionWidth: CGFloat = 72
     /// 占用格定宽 —— 同理，`15%` 与 `--` 宽度不同，固定的右边界才不会让文字跳。
     private static let usageWidth: CGFloat = 40
 
@@ -34,12 +40,21 @@ struct ComposerStrip: View {
 
             Spacer(minLength: 0)
 
-            // 模型格吃剩余宽度：三项里只有它是不可压缩的自由文本。
+            // 模型格吃剩余宽度：四格里只有它是不可压缩的自由文本。
             ModelPickerView(label: model.modelLabel, onTap: onTapModel)
                 .lineLimit(1)
                 .layoutPriority(1)
 
             Spacer(minLength: 0)
+
+            // 没有权限服务的装配里这一格根本不出现（`permissionName == nil`）——
+            // 留一个空位等于告诉用户「这里本来有东西」。
+            if let permissionName = model.permissionName {
+                PermissionCell(label: permissionName,
+                               choices: permissionChoices,
+                               onSelect: onSelectPermission)
+                    .frame(width: Self.permissionWidth)
+            }
 
             Button(action: onTapUsage) {
                 Text(model.usageText)
@@ -65,10 +80,43 @@ struct ComposerStrip: View {
     }
 }
 
-/// 功能条三格的显示值 —— 纯值，宿主算好，视图只画。
+/// 权限那一格：一个短标签，点开是当前能选的档位。
 ///
-/// 三格分开：网络格单独成类型，因为它的映射是本期唯一有分歧的地方（异常靠文字、不靠图标）；
-/// 其余两格只是一段文案。分开之后测试可以对每一格单独下断言。
+/// 用 `Menu` 而不是推一个 sheet：选择型的面不该多一层（与模型格同口径）。档位名带勾，
+/// 一眼看出现在是哪档。**没有可选项时置灰**（不是隐藏）—— 隐藏会让模型格横移。
+private struct PermissionCell: View {
+    let label: String
+    let choices: [PermissionState.Choice]
+    let onSelect: (PermissionState.Choice) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(choices) { choice in
+                Button {
+                    onSelect(choice)
+                } label: {
+                    // 勾只标当前那一档：`isSelected` 由状态层判定，视图不比对字符串。
+                    if choice.isSelected {
+                        Label(choice.label.text, systemImage: "checkmark")
+                    } else {
+                        Text(choice.label.text)
+                    }
+                }
+            }
+        } label: {
+            Text(label)
+                .font(.caption2)
+                .lineLimit(1)
+                .foregroundStyle(choices.isEmpty ? Color.secondary : Color.primary)
+        }
+        .disabled(choices.isEmpty)
+    }
+}
+
+/// 功能条四格的显示值 —— 纯值，宿主算好，视图只画。
+///
+/// 各格分开：网络格单独成类型，因为它的映射是唯一有分歧的地方（异常靠文字、不靠图标）；
+/// 其余几格只是一段文案。分开之后测试可以对每一格单独下断言。
 struct ComposerStripModel: Equatable {
 
     let network: Network
@@ -77,6 +125,9 @@ struct ComposerStripModel: Equatable {
     let modelName: String
     /// 当前推理等级的名字；`nil` = 这个模型没有档位（或名字还不可知）。
     let effortName: String?
+    /// 权限格的那一段：当前档的名字，宿主不知道时是 `--`。**`nil` = 这个装配没有权限服务**，
+    /// 整格不画。
+    let permissionName: String?
     /// 模型格最终显示的那一段：「模型名 · 等级名」，没有等级时就是模型名。
     ///
     /// 拼接放在这里而不是视图里：要不要带分隔符、带什么，是判定不是渲染；
@@ -105,16 +156,20 @@ struct ComposerStripModel: Equatable {
 
 extension ComposerStripModel {
 
-    /// 三格的**唯一**映射入口 —— 视图与测试都从这里拿值。
+    /// 四格的**唯一**映射入口 —— 视图与测试都从这里拿值。
+    ///
+    /// `permissionName` 的默认值是 `nil`（整格不画）：漏传时宁可不显示，也不显示一个假档位。
     static func make(phase: ConnectionPhase,
                      mesh: MeshPhase,
                      carrier: CarrierPath?,
                      usage: UsagePayload?,
                      modelName: String,
-                     effortName: String? = nil) -> ComposerStripModel {
+                     effortName: String? = nil,
+                     permissionName: String? = nil) -> ComposerStripModel {
         ComposerStripModel(network: network(phase: phase, mesh: mesh, carrier: carrier),
                            modelName: modelName,
                            effortName: effortName,
+                           permissionName: permissionName,
                            usageText: usage?.percentText ?? "--",
                            usageIsEmpty: usage == nil)
     }

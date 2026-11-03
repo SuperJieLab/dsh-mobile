@@ -9,6 +9,8 @@ struct SessionDetailView: View {
     @State private var didInitialScroll = false
     /// 本屏四个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
     @State private var activeSheet: DetailSheet?
+    /// 等着确认的那一档。危险档位（完全权限 / 自动审查）先落在这里，确认后才发请求。
+    @State private var confirming: PermissionState.Choice?
     /// 输入框有没有焦点：打字时功能条收起，把高度让给内容与键盘。
     @FocusState private var isComposing: Bool
 
@@ -54,6 +56,24 @@ struct SessionDetailView: View {
                 )
             }
         }
+        // 危险档位的确认。文案来自 `Display/PermissionText.swift`，缺文案的档位不该走到这里
+        // （`pick` 只在 `needsConfirmation` 时置位，而那个集合里的每一档都有文案）。
+        .alert(confirming?.confirmation?.title ?? "", isPresented: isConfirming, presenting: confirming) { choice in
+            Button(choice.confirmation?.confirm ?? "") {
+                Task { await detail.permission.choose(choice.value) }
+            }
+            Button(PermissionState.Choice.cancel, role: .cancel) { confirming = nil }
+        } message: { choice in
+            Text(choice.confirmation?.message ?? "")
+        }
+    }
+
+    /// 确认框开着没有 —— `confirming` 是唯一出处，关掉它即关闭。
+    private var isConfirming: Binding<Bool> {
+        Binding(
+            get: { confirming != nil },
+            set: { if !$0 { confirming = nil } }
+        )
     }
 
     /// 有内容之后才挂的那一屏 —— 创建时机就是「一进去停在最底部」的判据。
@@ -159,6 +179,11 @@ struct SessionDetailView: View {
                 noticeRow(notice)
             }
 
+            // 切权限失败单独一行：那一格本身要保持原值（不乐观更新），失败只能在这里说。
+            if let failure = detail.permission.failureLine {
+                permissionFailureRow(failure)
+            }
+
             if let query = detail.composer.paletteQuery {
                 CommandPalette(directory: detail.commands, query: query) { command in
                     // 只回填，不执行：带参数的命令要用户自己补完再按发送。
@@ -169,6 +194,8 @@ struct SessionDetailView: View {
             if !isComposing {
                 ComposerStrip(
                     model: detail.stripModel(),
+                    permissionChoices: detail.permission.choices,
+                    onSelectPermission: pick,
                     onTapModel: { activeSheet = .model },
                     onTapNetwork: { activeSheet = .network },
                     onTapUsage: { activeSheet = .usage }
@@ -231,6 +258,28 @@ struct SessionDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 4)
         .padding(.bottom, 4)
+    }
+
+    /// 切权限失败那一行。橙色、不带图标 —— 它不是「内容接不上」，是一次动作没成。
+    private func permissionFailureRow(_ line: String) -> some View {
+        Text(line)
+            .font(.footnote)
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+            .padding(.bottom, 4)
+    }
+
+    // MARK: - 权限
+
+    /// 点一档：危险档位先过一次确认，其余直接切。
+    /// 「哪几档危险」是判定（`Choice.needsConfirmation`），视图不比对字符串。
+    private func pick(_ choice: PermissionState.Choice) {
+        if choice.needsConfirmation {
+            confirming = choice
+        } else {
+            Task { await detail.permission.choose(choice.value) }
+        }
     }
 
     /// 输入行：宽度全给输入框，发送键在最右。输入框不带边框 —— 它坐在玻璃上，再加描边就是两层皮。

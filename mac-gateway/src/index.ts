@@ -25,7 +25,7 @@ import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
-import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
+import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, permissionChannelOver, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
@@ -147,14 +147,18 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // `inject` 里（它是扩展，缺席不该让整个网关 pending），所以端口在第一次调用时才取
   // 那份服务；取不到就由协议层折成 `internal-error`。
   const commandPort = commandChannelOver(ctx)
+  // 权限通道：读目录与当前值、写一档（写走 `/permission` 命令）。与命令通道同形 ——
+  // 预设服务不在 `inject` 里，所以端口在第一次调用时才取；取不到不是错误，只是
+  // 「这个装配没有权限格」，手机据此不画那一格。
+  const permissionPort = permissionChannelOver(ctx)
   // 列表分组：组清单与每行归属都取自工作空间注册表。它与会话列表同一次应答
   // 发出，所以没有自己的一条流。
   const workspacePort = workspacePortOver(ctx)
 
-  log.info('plugin loaded — auth on both channels, write + model channels on, command channel on demand')
+  log.info('plugin loaded — auth on both channels, write + model channels on, command + permission channels on demand')
 
   ctx.effect(() => {
-    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort })
+    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort, permissionPort })
 
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。

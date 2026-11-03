@@ -31,6 +31,8 @@ enum GatewayErrorCode: String, CaseIterable {
     case windowTooLarge = "window-too-large"
     /// 那一行解析不出已注册的命令名，或语法不对 —— 用户改字就能修好，与「执行失败」不同。
     case unknownCommand = "unknown-command"
+    /// 这个名字不在宿主此刻的权限目录里（插件装卸、装配改过）—— 重拉一次目录再选。
+    case unknownPreset = "unknown-preset"
 }
 
 /// 失败信封里的 `error` 对象。

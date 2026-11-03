@@ -115,4 +115,21 @@ final class ComposerStripTests: XCTestCase {
                                                    usage: nil, modelName: "deepseek-v3.2")
         XCTAssertEqual(withoutLevel.modelLabel, "deepseek-v3.2", "没有等级时不该留下分隔符")
     }
+
+    /// 权限格：宿主算好的名字原样落进那一格；没有权限服务时整格不画（`nil`）。
+    ///
+    /// 判据要能区分「传了值」与「没传」—— 只断言「非空」的话，把参数丢掉仍然绿。
+    func testPermissionCellCarriesTheNameOrDisappears() {
+        let shown = ComposerStripModel.make(phase: .ready, mesh: .ready, carrier: .direct,
+                                            usage: nil, modelName: "m", permissionName: "工作区内修改")
+        XCTAssertEqual(shown.permissionName, "工作区内修改")
+
+        let unknown = ComposerStripModel.make(phase: .ready, mesh: .ready, carrier: .direct,
+                                              usage: nil, modelName: "m", permissionName: "--")
+        XCTAssertEqual(unknown.permissionName, "--", "宿主不知道时留位，不消失")
+
+        let absent = ComposerStripModel.make(phase: .ready, mesh: .ready, carrier: .direct,
+                                             usage: nil, modelName: "m")
+        XCTAssertNil(absent.permissionName, "没有权限服务：整格不画")
+    }
 }

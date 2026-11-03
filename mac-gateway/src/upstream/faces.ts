@@ -20,7 +20,10 @@ import type { WorkspacePort } from '../ports/workspace.ts'
 import type { FollowSource } from '../ports/follow.ts'
 import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { commandPortOver, type CommandsLike, type LiveAgentsLike } from './command.ts'
-import { callThrough, openStreamThrough, parameterNamesOf, type PeerScopeLike } from './call-through.ts'
+import { permissionPortOver, type PermissionSources } from './permission.ts'
+import type { PermissionPort } from '../ports/permission.ts'
+import type { PermissionOption } from '../wire/permission.ts'
+import { callThrough, openStreamThrough, parameterNamesOf, signatureNoteOf, type PeerScopeLike } from './call-through.ts'
 import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventAnswerLike } from './write.ts'
 import type { RemoteEventStreamLike } from './remote-events.ts'
 import type { UpstreamWireFrame } from '../ports/events.ts'
@@ -299,6 +302,108 @@ export function commandChannelOver(ctx: HostContext): CommandPort {
     log.info('command channel wired')
     return resolved
   }
+}
+
+/**
+ * 协议层眼中的权限通道。
+ *
+ * 与命令通道同形：`permissionPresets` 与 `commands` 都不在 `inject` 里（它们是扩展，
+ * 缺席不该让整个网关 pending），所以经 `ctx.reflect.get` 取、调用时解析并缓存 ——
+ * 插件晚于网关就绪时，下一次调用自己接上。
+ *
+ * **能力缺席不是错误**：预设服务不在时这个端口照常应答，只是 `options` 缺席 ——
+ * 手机据此不画那一格。写 op 没得谈，抛出去由协议层折成 `internal-error`。
+ */
+export function permissionChannelOver(ctx: HostContext): PermissionPort {
+  let resolved: PermissionPort | undefined
+  return {
+    catalog: sessionId => port().catalog(sessionId),
+    select: (sessionId, preset) => port().select(sessionId, preset),
+  }
+
+  function port(): PermissionPort {
+    if (resolved !== undefined) return resolved
+    const presets = ctx.reflect.get('permissionPresets') as Partial<PermissionPresetsLike> | undefined
+    if (typeof presets?.catalog !== 'function') {
+      log.info('permission channel: no permission-presets service — the client hides the cell')
+      resolved = ABSENT_PERMISSION
+      return resolved
+    }
+    const commands = ctx.reflect.get('commands') as Partial<CommandsLike> | undefined
+    const agents = ctx.agents as Partial<LiveAgentsLike> | undefined
+    const sessions = ctx.sessions as Partial<SessionsLike> | undefined
+    const projections = ctx.sessionProjections as Partial<ProjectionsLike> | undefined
+    if (
+      typeof commands?.execute !== 'function' ||
+      typeof agents?.get !== 'function' ||
+      typeof sessions?.get !== 'function' ||
+      typeof projections?.snapshot !== 'function'
+    ) {
+      throw new Error('permission channel: the host is missing a face it needs — permission ops cannot be served')
+    }
+
+    const readable = presets as PermissionPresetsLike
+    const exec = commands as CommandsLike
+    const live = agents as LiveAgentsLike
+    const stored = sessions as SessionsLike
+    const read = projections as ProjectionsLike
+
+    // 组装期签名检查：切换走的是命令门，目录走的是预设服务 —— 两处形参表变了都要在
+    // 启动时出声，而不是第一次点格子时。
+    for (const [target, member, expected] of [
+      [readable, 'catalog', []],
+      [exec, 'execute', ['agent', 'line', 'submittedAttachments', 'signal']],
+    ] as const) {
+      const note = signatureNoteOf(target, member, expected)
+      if (note !== undefined) log.warn(`permission adapter: ${note} — calling positionally`)
+    }
+
+    const sources: PermissionSources = {
+      options: () => readable.catalog().options,
+      currentOf: sessionId => {
+        const session = stored.get(sessionId)
+        if (session === undefined) return undefined
+        const view = read.snapshot(session, PERMISSION_KEYS)?.values.permissions
+        if (typeof view !== 'object' || view === null) return undefined
+        const value = (view as { currentValue?: unknown }).currentValue
+        return typeof value === 'string' && value !== '' ? value : undefined
+      },
+      execute: async (sessionId, line) => {
+        // 会话与 agent 可能在这两次读之间被回收：那不是一个可归因的「名字不对」，
+        // 所以取不到就如实回报，而不是把它混进 `unparsable`。
+        const agent = live.get(sessionId)
+        if (agent === undefined) return { kind: 'no-agent' }
+        const acceptance = await exec.execute(agent, line, [], AbortSignal.timeout(SELECT_TIMEOUT_MS))
+        return acceptance === undefined
+          ? { kind: 'unparsable' }
+          : { kind: 'accepted', commandId: acceptance.commandId }
+      },
+    }
+    resolved = permissionPortOver(sources)
+    log.info('permission channel wired')
+    return resolved
+  }
+}
+
+/** 预设服务缺席时的端口：读回一个「什么都不知道」的面，写直接抛。 */
+const ABSENT_PERMISSION: PermissionPort = {
+  async catalog() {
+    return {}
+  },
+  async select() {
+    throw new Error('permission-presets service is not composed — permission-select cannot be served')
+  },
+}
+
+/** 读当前值所基于的投影键 —— 具名常量使读取不会物化无人消费的视图。 */
+const PERMISSION_KEYS = ['permissions'] as const
+
+/** 切换一档的受理超时 —— 与命令通道同款：受理很快，排上队之后回合自己继续。 */
+const SELECT_TIMEOUT_MS = 30_000
+
+/** 本模块用到的 `ctx.permissionPresets` 部分。 */
+interface PermissionPresetsLike {
+  catalog(): { options: readonly PermissionOption[] }
 }
 
 /**

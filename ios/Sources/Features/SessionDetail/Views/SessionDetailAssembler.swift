@@ -55,6 +55,8 @@ struct SessionDetailAssembler: View {
             created.sync.startFollowing()
             // 目录进屏拉一次。挂在格子上的话，功能条每次因键盘收起而重建都会重拉一遍。
             await created.catalog.reload()
+            // 权限同样进屏拉一次：那一格要显示当前档，而它的值只能从宿主读。
+            await created.permission.reload()
             // 离屏时这个 `.task` 会被取消。若 `onDisappear` 早于这里执行，它看到的
             // `detail` 还是 nil，那条流就没人关 —— 关一次是幂等的，这里补上。
             if Task.isCancelled { created.sync.stopFollowing() }

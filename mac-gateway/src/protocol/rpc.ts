@@ -17,6 +17,7 @@ import type { SessionPort } from '../ports/session.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { CommandPort } from '../ports/command.ts'
+import type { PermissionPort } from '../ports/permission.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type {
@@ -28,6 +29,7 @@ import type {
 } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
+import { permissionSelectRequestOf } from '../wire/permission.ts'
 import { approvalAnswerOf, sessionCreateTargetOf, sessionPromptOf } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
@@ -84,6 +86,7 @@ export async function handle(
   model?: ModelPort,
   command?: CommandPort,
   workspace?: WorkspacePort,
+  permission?: PermissionPort,
 ): Promise<Response> {
   const envelope = asRecord(message)
   if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
@@ -119,6 +122,15 @@ export async function handle(
         // 写 op：整行原样交给宿主，但「是不是一条命令行」在这里先判。
         if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
         return await commandExecute(envelope, command)
+      case 'permission-catalog':
+        // 读 op。端口缺席只发生在只读测试装配里；生产装配的端口总在，而「权限服务
+        // 没装」这件事由端口自己用「options 缺席」表达，不在这里判。
+        if (permission === undefined) return failure('internal-error', `permission channel not wired for "${op}"`)
+        return await permissionCatalog(envelope, permission)
+      case 'permission-select':
+        // 写 op：线上只收预设名，拼命令与目录校验都在适配层。
+        if (permission === undefined) return failure('internal-error', `permission channel not wired for "${op}"`)
+        return await permissionSelect(envelope, permission)
       case 'session-create': {
         // 写 op（建实体）。载荷只有一格：落在哪个工作空间；不带就交给宿主当前目录。
         if (write === undefined) return failure('internal-error', `write channel not wired for "${op}"`)
@@ -300,6 +312,54 @@ async function commandExecute(envelope: Record<string, unknown>, command: Comman
   const outcome = await command.execute(request.sessionId, request.line)
   if (!outcome.ok) return failure(outcome.code, outcome.message)
   return { v: PROTOCOL_VERSION, ok: true, commandId: outcome.commandId }
+}
+
+/**
+ * 权限预设：该会话此刻能选什么、现在是什么。
+ *
+ * 两格都可以缺席，含义不同（见 `wire/permission.ts`）—— `options` 缺席 = 这个装配没有
+ * 权限服务，客户端据此不画那一格；`current` 缺席 = 宿主不知道，客户端显示 `--`。
+ * 两者都不补默认值：补出来的档位会与 Web UI 显示的那个不一致。
+ */
+async function permissionCatalog(
+  envelope: Record<string, unknown>,
+  permission: PermissionPort,
+): Promise<Response> {
+  const sessionId = envelope.sessionId
+  if (typeof sessionId !== 'string' || sessionId === '') {
+    return failure('unknown-session', 'sessionId must be a non-empty string')
+  }
+  const view = await permission.catalog(sessionId)
+  return {
+    v: PROTOCOL_VERSION,
+    ok: true,
+    ...view.current === undefined ? {} : { current: view.current },
+    ...view.options === undefined ? {} : { options: [...view.options] },
+  }
+}
+
+/**
+ * 切到一档。`ok` 意为*宿主已受理* —— 落地证据是流里的 `permission/preset` 与随之的两个
+ * knob 事件；回包里的 `current` 是受理后重读投影拿到的值。
+ *
+ * 两类拒绝保留自己的码：`unknown-preset` 说这个名字不在宿主目录里（客户端重拉目录再选），
+ * `unknown-session` 说会话没有活着的 agent（切不了）。
+ */
+async function permissionSelect(
+  envelope: Record<string, unknown>,
+  permission: PermissionPort,
+): Promise<Response> {
+  const request = permissionSelectRequestOf(envelope)
+  if (request === undefined) {
+    return failure('invalid-request', 'permission-select needs sessionId and a non-empty preset')
+  }
+  const outcome = await permission.select(request.sessionId, request.preset)
+  if (!outcome.ok) return failure(outcome.code, outcome.message)
+  return {
+    v: PROTOCOL_VERSION,
+    ok: true,
+    ...outcome.current === undefined ? {} : { current: outcome.current },
+  }
 }
 
 /**

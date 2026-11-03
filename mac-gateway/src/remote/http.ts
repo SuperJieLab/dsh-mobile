@@ -11,6 +11,7 @@ import { failure, handle, success, type Limits } from '../protocol/rpc.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { CommandPort } from '../ports/command.ts'
+import type { PermissionPort } from '../ports/permission.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
@@ -61,6 +62,8 @@ export interface RpcListenerDeps {
   writePort: WritePort
   modelPort: ModelPort | undefined
   commandPort: CommandPort | undefined
+  /** 权限预设的读与切换；只读装配可以不给，那时两条 op 都拒答。 */
+  permissionPort: PermissionPort | undefined
   /** 列表分组的来源；只读装配可以不给，那时应答里没有组清单。 */
   workspacePort: WorkspacePort | undefined
 }
@@ -153,7 +156,7 @@ async function respondInScope(
   }
 
   const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort,
-                              deps.modelPort, deps.commandPort, deps.workspacePort)
+                              deps.modelPort, deps.commandPort, deps.workspacePort, deps.permissionPort)
   // 拒绝在服务端留证据：手机对一次失败的写 op 只显示一行状态，对一次失败的读 op
   // 只在它自己那一屏留个提示 —— 归因要回到网关日志。静默的例外见 {@link SILENT_REFUSALS}。
   if (!answer.ok && typeof op === 'string' && !SILENT_REFUSALS.has(op)) {

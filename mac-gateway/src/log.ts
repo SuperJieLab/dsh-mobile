@@ -18,6 +18,9 @@ export const LogModule = {
   faces: "faces",
   model: "model",
   command: "command",
+  // 权限预设：目录读取与「切一档」那次命令调用。与 `command` 分开是因为它失败时
+  // 手机上的落点不同（那一格显示旧值），排障时要知道是目录读不出还是切换被拒。
+  permission: "permission",
   usage: "usage",
   // 工作空间的写链路：问系统要根、建目录、注册、解注册。与 `faces` 分开是因为
   // 这条链有一步在进程之外（osascript），排障时要能把它单独拎出来看。
