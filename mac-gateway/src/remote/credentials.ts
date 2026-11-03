@@ -12,7 +12,7 @@
  * （M4 §3.3）。
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createLogger, LogModule } from '../log.ts'
@@ -43,6 +43,14 @@ export class CredentialVault {
   private readonly path: string
   private readonly random: () => number
   private readonly now: () => number
+  /**
+   * 上一次读或写这个文件时的指纹（`mtime:size`）。`undefined` = 那时它不存在。
+   *
+   * 存在的理由只有一个：**撤销要立刻生效**。删掉凭据文件是唯一的撤销手段，而
+   * 读盘若只发生在构造时，删了文件进程仍认着内存里那份关系，手里那枚 access 票
+   * 也还能用满 15 分钟。指纹比对让「删文件」在下一个请求上就生效。
+   */
+  private stamp: string | undefined
 
   constructor(
     path: string = DEFAULT_CREDENTIALS_PATH,
@@ -70,6 +78,36 @@ export class CredentialVault {
       // 会签发新码。
       this.file = emptyCredentials()
     }
+    this.stamp = this.fingerprint()
+  }
+
+  /**
+   * 文件的指纹；不存在或 stat 不了时是 `undefined`。
+   *
+   * 三样一起看：**删除后重建**（inode 变）、**内容长度变**、**改动时刻变**。单看 mtime
+   * 挡不住「同一毫秒内换掉文件」，单看 size 挡不住「等长替换」—— 而这是撤销路径，
+   * 宁可多算一个字段。
+   */
+  private fingerprint(): string | undefined {
+    try {
+      const stats = statSync(this.path)
+      return `${stats.mtimeMs}:${stats.size}:${stats.ino}`
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 文件在盘上变了就重读 —— 每个闸门进来先问一次。
+   *
+   * **重读时必须一并清掉 access 表**：那是 15 分钟的票，而删文件的意思是「这层关系
+   * 结束了」。只换关系不清票，撤销就还要等票自己过期 —— 那正是这条要修的东西。
+   */
+  private reloadIfChanged(): void {
+    if (this.fingerprint() === this.stamp) return
+    log.info('credentials file changed on disk — reloading (access tickets dropped)')
+    this.load()
+    this.access.clear()
   }
 
   private persist(): void {
@@ -79,6 +117,8 @@ export class CredentialVault {
     } catch (error) {
       log.error(`could not persist credentials: ${String(error)}`)
     }
+    // 自己写的那一次不该在下一个请求上被当成「别人改的」。
+    this.stamp = this.fingerprint()
   }
 
   /**
@@ -86,6 +126,7 @@ export class CredentialVault {
    * 已经无法被回答的码不得继续展示。
    */
   pairingCode(): string {
+    this.reloadIfChanged()
     const now = this.now()
     const pairing = this.file.pairing
     if (pairing !== undefined && now < pairing.expiresAt) return pairing.code
@@ -118,6 +159,7 @@ export class CredentialVault {
 
   /** 用 device token 换一枚 access token。被拒即关系不存在。 */
   refresh(deviceToken: unknown): { ok: true; accessToken: string; expiresAt: number } | { ok: false } {
+    this.reloadIfChanged()
     const outcome = issueAccess(this.file, deviceToken, this.now(), this.random)
     if (outcome.status === 'denied') return { ok: false }
     this.access.set(outcome.tokenHash, { expiresAt: outcome.expiresAt })
@@ -126,6 +168,7 @@ export class CredentialVault {
 
   /** HTTP/WS 闸门：该 `Authorization` 头是否指向一枚活跃的 access token？ */
   authenticate(authorizationHeader: string | undefined): boolean {
+    this.reloadIfChanged()
     const token = bearerTokenOf(authorizationHeader)
     if (token === undefined) return false
     return isLiveAccess(this.access.get(sha256Hex(token)), this.now())
