@@ -37,8 +37,7 @@ function workspacePort(
 
 /** 发一条 `workspace-create`。端口按位置追加在 `handle` 的末尾。 */
 function ask(name: unknown, port: WorkspacePort | undefined) {
-  return handle({ v: 2, op: 'workspace-create', name }, PORT, Date.now,
-                undefined, undefined, undefined, undefined, port)
+  return handle({ v: 2, op: 'workspace-create', name }, { session: PORT, workspace: port }, Date.now)
 }
 
 interface Answer {

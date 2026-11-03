@@ -30,7 +30,7 @@ test('session-create answers the id the host handed back', async () => {
     return 's-test'
   })
 
-  const answer = await handle({ v: 2, op: 'session-create' }, PORT, Date.now, undefined, port)
+  const answer = await handle({ v: 2, op: 'session-create' }, { session: PORT, write: port }, Date.now)
 
   assert.equal(calls, 1, '一次 op 只该问宿主一次')
   assert.deepEqual(answer, { v: 2, ok: true, sessionId: 's-test' },
@@ -42,7 +42,7 @@ test('session-create folds a host refusal into internal-error', async () => {
     throw new Error('host said no')
   })
 
-  const answer = await handle({ v: 2, op: 'session-create' }, PORT, Date.now, undefined, port)
+  const answer = await handle({ v: 2, op: 'session-create' }, { session: PORT, write: port }, Date.now)
 
   assert.equal(answer.ok, false, '宿主拒绝不得变成 ok')
   assert.equal((answer as { error?: { code?: string } }).error?.code, 'internal-error',
@@ -50,7 +50,7 @@ test('session-create folds a host refusal into internal-error', async () => {
 })
 
 test('session-create refuses when the write channel is not wired', async () => {
-  const answer = await handle({ v: 2, op: 'session-create' }, PORT)
+  const answer = await handle({ v: 2, op: 'session-create' }, { session: PORT })
 
   assert.equal(answer.ok, false)
   assert.equal((answer as { error?: { code?: string } }).error?.code, 'internal-error',
@@ -76,7 +76,7 @@ function writeRecording(): { port: WritePort; targets: (string | undefined)[] } 
 test('session-create hands the workspace to the host when the request names one', async () => {
   const { port, targets } = writeRecording()
 
-  await handle({ v: 2, op: 'session-create', workspaceId: 'w-a' }, PORT, Date.now, undefined, port)
+  await handle({ v: 2, op: 'session-create', workspaceId: 'w-a' }, { session: PORT, write: port }, Date.now)
 
   assert.deepEqual(targets, ['w-a'], '手机点的那个组必须原样传到宿主')
 })
@@ -84,7 +84,7 @@ test('session-create hands the workspace to the host when the request names one'
 test('session-create without a target keeps the host default', async () => {
   const { port, targets } = writeRecording()
 
-  await handle({ v: 2, op: 'session-create' }, PORT, Date.now, undefined, port)
+  await handle({ v: 2, op: 'session-create' }, { session: PORT, write: port }, Date.now)
 
   assert.deepEqual(targets, [undefined],
     '不带就是不带 —— 传空串会假装「指定了一个工作空间」，而宿主会用空 cwd 去建会话')
@@ -93,7 +93,7 @@ test('session-create without a target keeps the host default', async () => {
 test('a malformed workspace target is refused before the host is asked', async () => {
   for (const workspaceId of ['', 42, null, {}]) {
     const { port, targets } = writeRecording()
-    const answer = await handle({ v: 2, op: 'session-create', workspaceId }, PORT, Date.now, undefined, port)
+    const answer = await handle({ v: 2, op: 'session-create', workspaceId }, { session: PORT, write: port }, Date.now)
 
     assert.equal(answer.ok, false, `${JSON.stringify(workspaceId)} 该被拒`)
     assert.equal((answer as { error?: { code?: string } }).error?.code, 'invalid-request',

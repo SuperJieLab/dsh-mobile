@@ -49,7 +49,7 @@ function fakeModel(): ModelPort {
 // -- model-catalog (G1) ------------------------------------------------------
 
 test('model-catalog: the catalog comes back as the envelope body', async () => {
-  const reply = await handle({ v: 2, op: 'model-catalog' }, PORT, undefined, undefined, undefined, fakeModel())
+  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: fakeModel() })
   assert.equal(reply.ok, true)
   if (!reply.ok) return
   assert.deepEqual(reply.default, { provider: 'deepseek', model: 'deepseek-chat' })
@@ -60,10 +60,10 @@ test('model-catalog: the catalog comes back as the envelope body', async () => {
 test('model-catalog: upstream default absent means the field is absent', async () => {
   const model = fakeModel()
   const bare = { ...CATALOG, default: undefined }
-  const reply = await handle({ v: 2, op: 'model-catalog' }, PORT, undefined, undefined, undefined, {
+  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: {
     ...model,
     catalog: async () => bare,
-  })
+  } })
   assert.equal(reply.ok, true)
   if (!reply.ok) return
   assert.equal('default' in reply, false)
@@ -78,10 +78,10 @@ test('model-catalog: a model\'s reasoning levels ride along untouched', async ()
     ...CATALOG,
     groups: [{ ...CATALOG.groups[0], models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', reasoning }] }],
   }
-  const reply = await handle({ v: 2, op: 'model-catalog' }, PORT, undefined, undefined, undefined, {
+  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: {
     ...fakeModel(),
     catalog: async () => withLevels,
-  })
+  } })
   assert.equal(reply.ok, true)
   if (!reply.ok) return
   const groups = reply.groups as typeof withLevels.groups
@@ -118,10 +118,7 @@ test('model-select: malformed payloads are refused, not normalized (fail-closed,
 })
 
 test('model-select: accepted selection comes back as the normalized choice', async () => {
-  const reply = await handle(
-    { v: 2, op: 'model-select', sessionId: 's', provider: 'deepseek', model: 'deepseek-chat' },
-    PORT, undefined, undefined, fakeWritePort(), fakeModel(),
-  )
+  const reply = await handle({ v: 2, op: 'model-select', sessionId: 's', provider: 'deepseek', model: 'deepseek-chat' }, { session: PORT, write: fakeWritePort(), model: fakeModel() })
   assert.deepEqual(reply, {
     v: 2,
     ok: true,
@@ -138,10 +135,7 @@ test('model-select: upstream refusals come back with their own code', async () =
       message: 'no adapter serves provider "x"',
     }),
   }
-  const reply = await handle(
-    { v: 2, op: 'model-select', sessionId: 's', provider: 'x', model: 'm' },
-    PORT, undefined, undefined, fakeWritePort(), refusing,
-  )
+  const reply = await handle({ v: 2, op: 'model-select', sessionId: 's', provider: 'x', model: 'm' }, { session: PORT, write: fakeWritePort(), model: refusing })
   assert.deepEqual(reply, {
     v: 2,
     ok: false,
@@ -153,10 +147,7 @@ test('model-select: malformed payload is invalid-request, never reaches the port
   const model = fakeModel()
   let asked = false
   const spy: ModelPort = { ...model, select: async (r) => { asked = true; return model.select(r) } }
-  const reply = await handle(
-    { v: 2, op: 'model-select', sessionId: 's', provider: '' , model: 'm' },
-    PORT, undefined, undefined, fakeWritePort(), spy,
-  )
+  const reply = await handle({ v: 2, op: 'model-select', sessionId: 's', provider: '' , model: 'm' }, { session: PORT, write: fakeWritePort(), model: spy })
   assert.equal(reply.ok, false)
   if (!reply.ok) assert.equal(reply.error.code, 'invalid-request')
   assert.equal(asked, false)
@@ -164,12 +155,12 @@ test('model-select: malformed payload is invalid-request, never reaches the port
 
 test('model-catalog: a wedged catalog source is an internal-error envelope, not a crash', async () => {
   const model = fakeModel()
-  const reply = await handle({ v: 2, op: 'model-catalog' }, PORT, undefined, undefined, undefined, {
+  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: {
     ...model,
     catalog: async () => {
       throw new Error('registry exploded')
     },
-  })
+  } })
   assert.deepEqual(reply, {
     v: 2,
     ok: false,

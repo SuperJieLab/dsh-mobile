@@ -1910,20 +1910,30 @@ final class LayeringTests: XCTestCase {
                        "「直连 / 中继」应只声明一次，实际：\(declarations.sorted())")
     }
 
-    /// 路径的两个说法只在一处出现。
+    /// 路径的两个说法只在一个文件里出现。
     ///
-    /// 判决依据是「同一事实不该有两个词」：同一份 `CarrierPath` 在两块屏上出现两个说法时，
-    /// 没有任何东西会红。守的是**字面量的集中度**而不是某个文件路径：挪文件时只改这一行指向。
+    /// 判决依据是「同一事实不该有两个词、也不该散在两处」：同一份 `CarrierPath` 在两块屏上
+    /// 出现两个说法时，没有任何东西会红。守的是**字面量的集中度**而不是某个文件路径：
+    /// 挪文件时只改这一行指向。
+    ///
+    /// **不数「恰好两处」** —— 那是当前实现的快照：加第三个合法用途（日志、无障碍标签）
+    /// 就假红，而失败信息还会让人以为是自己错了。闭集是 `CarrierPath` 的两支，
+    /// 所以这里只钉「两支都在」（活性锚）与「都在一个文件里」。
     func testThePathWordingLivesInOnePlace() throws {
         var sites: [String] = []
+        var wordings: Set<String> = []
         for file in swiftFiles(under: sourcesRoot) {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-            for (line, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8))
-            where code.contains("\"直连\"") || code.contains("\"中继\"") {
-                sites.append("\(relative):\(line)")
+            for (line, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
+                for wording in ["\"直连\"", "\"中继\""] where code.contains(wording) {
+                    sites.append("\(relative):\(line)")
+                    wordings.insert(wording)
+                }
             }
         }
-        XCTAssertEqual(sites.count, 2, "「直连 / 中继」的字面量应恰好两处：\(sites)")
+        // 活性锚：一个字面量都没扫到的话，「只在一个文件里」对空集恒真。
+        XCTAssertEqual(wordings.count, 2,
+                       "两支说法都该在（扫到的是 \(wordings.sorted())）—— 少了先怀疑路径推算或写法变了")
         let files = Set(sites.compactMap { $0.split(separator: ":").first.map(String.init) })
         XCTAssertEqual(files.count, 1, "路径文案散在多个文件：\(files.sorted())")
     }

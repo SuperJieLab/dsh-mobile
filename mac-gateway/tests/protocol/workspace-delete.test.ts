@@ -39,8 +39,7 @@ function workspacePort(remove: (id: string) => Promise<void>): {
 
 /** 发一条 `workspace-delete`。端口按位置追加在 `handle` 的末尾。 */
 function ask(workspaceId: unknown, port: WorkspacePort | undefined) {
-  return handle({ v: 2, op: 'workspace-delete', workspaceId }, PORT, Date.now,
-                undefined, undefined, undefined, undefined, port)
+  return handle({ v: 2, op: 'workspace-delete', workspaceId }, { session: PORT, workspace: port }, Date.now)
 }
 
 interface Answer {

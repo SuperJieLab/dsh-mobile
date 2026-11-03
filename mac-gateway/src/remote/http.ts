@@ -155,8 +155,7 @@ async function respondInScope(
     return
   }
 
-  const answer = await handle(message, deps.sessionPort, Date.now, deps.limits, deps.writePort,
-                              deps.modelPort, deps.commandPort, deps.workspacePort, deps.permissionPort)
+  const answer = await handle(message, { session: deps.sessionPort, write: deps.writePort, model: deps.modelPort, command: deps.commandPort, workspace: deps.workspacePort, permission: deps.permissionPort }, Date.now, deps.limits)
   // 拒绝在服务端留证据：手机对一次失败的写 op 只显示一行状态，对一次失败的读 op
   // 只在它自己那一屏留个提示 —— 归因要回到网关日志。静默的例外见 {@link SILENT_REFUSALS}。
   if (!answer.ok && typeof op === 'string' && !SILENT_REFUSALS.has(op)) {

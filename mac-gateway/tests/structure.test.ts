@@ -1205,7 +1205,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   {
     home: 'protocol/rpc.ts',
     values: ['DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault', 'failure', 'success'],
-    types: ['Limits'],
+    types: ['Limits', 'Ports'],
   },
   {
     home: 'protocol/window.ts',

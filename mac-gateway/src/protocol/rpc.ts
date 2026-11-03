@@ -67,10 +67,27 @@ export const DEFAULT_PAGE_MESSAGES = 50
 
 
 /**
+ * 一次调用要用到的数据源。
+ *
+ * **具名，不按位置。** 除 `session` 外都可选，而可选参数按位置传时「顺序写错」不会
+ * 编译失败 —— 它会让某个 op 拿到另一个端口，在运行时表现为「权限 op 读到了工作空间」
+ * 这类静默错位。具名之后，漏传是缺席、传错是类型错。
+ */
+export interface Ports {
+  /** 读路径与列表路径的唯一必需依赖。 */
+  session: SessionPort
+  write?: WritePort
+  model?: ModelPort
+  command?: CommandPort
+  workspace?: WorkspacePort
+  permission?: PermissionPort
+}
+
+/**
  * 应答一条消息。
  *
  * @param message - 解析后的 JSON 主体，构造上形状未知。
- * @param port - 数据源；所有读都经它。
+ * @param ports - 数据源；所有读都经它。缺席的端口对应的 op 一律拒答（见各分支）。
  * @param now - `serverTime` 用的时钟，可注入以保测试确定性。
  * @param limits - 应答上限；无意义值回退到 {@link DEFAULT_LIMITS}，
  *   绝不产生客户端永远无法读完的应答。
@@ -79,15 +96,11 @@ export const DEFAULT_PAGE_MESSAGES = 50
  */
 export async function handle(
   message: unknown,
-  port: SessionPort,
+  ports: Ports,
   now: () => number = Date.now,
   limits: Limits = DEFAULT_LIMITS,
-  write?: WritePort,
-  model?: ModelPort,
-  command?: CommandPort,
-  workspace?: WorkspacePort,
-  permission?: PermissionPort,
 ): Promise<Response> {
+  const { session: port, write, model, command, workspace, permission } = ports
   const envelope = asRecord(message)
   if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
     return failure('unsupported-version', `expected an object with v: ${PROTOCOL_VERSION}`)

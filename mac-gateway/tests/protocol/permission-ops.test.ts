@@ -46,7 +46,7 @@ function fakePermission(overrides: Partial<PermissionPort> = {}): PermissionPort
 
 /** 只给权限端口的一条消息 —— 其余七个端口一律不给（它们的 op 与本文件无关）。 */
 function ask(message: Record<string, unknown>, permission?: PermissionPort) {
-  return handle(message, PORT, undefined, undefined, undefined, undefined, undefined, undefined, permission)
+  return handle(message, { session: PORT, permission: permission })
 }
 
 // -- permission-catalog ------------------------------------------------------

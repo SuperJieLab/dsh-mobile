@@ -41,8 +41,7 @@ function fakeCommand(overrides: Partial<CommandPort> = {}): CommandPort & { call
 // -- command-catalog (U1 / U2) -----------------------------------------------
 
 test('command-catalog: the host command list comes back verbatim', async () => {
-  const reply = await handle({ v: 2, op: 'command-catalog', sessionId: 's' },
-    PORT, undefined, undefined, undefined, undefined, fakeCommand())
+  const reply = await handle({ v: 2, op: 'command-catalog', sessionId: 's' }, { session: PORT, command: fakeCommand() })
   assert.equal(reply.ok, true)
   if (!reply.ok) return
   assert.deepEqual(reply.commands, [
@@ -52,8 +51,7 @@ test('command-catalog: the host command list comes back verbatim', async () => {
 })
 
 test('command-catalog: a descriptor without an input hint carries no inputHint key', async () => {
-  const reply = await handle({ v: 2, op: 'command-catalog', sessionId: 's' },
-    PORT, undefined, undefined, undefined, undefined, fakeCommand())
+  const reply = await handle({ v: 2, op: 'command-catalog', sessionId: 's' }, { session: PORT, command: fakeCommand() })
   assert.equal(reply.ok, true)
   if (!reply.ok) return
   const commands = reply.commands as { name: string; inputHint?: string }[]
@@ -82,16 +80,14 @@ test('command-execute: a line must start with a slash and be non-empty', () => {
 
 test('command-execute: a well-formed line reaches the port verbatim, with arguments intact', async () => {
   const command = fakeCommand()
-  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: '/goal 把剩下的活干完' },
-    PORT, undefined, undefined, undefined, undefined, command)
+  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: '/goal 把剩下的活干完' }, { session: PORT, command: command })
   assert.equal(reply.ok, true)
   // 整行原样：不 trim、不重新拼参数 —— 语法归宿主，我们只转达。
   assert.deepEqual(command.calls, [{ sessionId: 's', line: '/goal 把剩下的活干完' }])
 })
 
 test('command-execute: the reply carries only the acceptance id, never a result', async () => {
-  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: '/compact' },
-    PORT, undefined, undefined, undefined, undefined, fakeCommand())
+  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: '/compact' }, { session: PORT, command: fakeCommand() })
   // 结果从流里来（command/run + command/done）。回包里多一个 result 字段，
   // 就多一处会与流里那条说法分叉的地方。
   assert.deepEqual(reply, { v: 2, ok: true, commandId: 'cmd-1' })
@@ -101,8 +97,7 @@ test('command-execute: an unparsable name is unknown-command, not success', asyn
   const command = fakeCommand({
     execute: async () => ({ ok: false, code: 'unknown-command', message: 'no such command: /nosuchcmd' }),
   })
-  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: '/nosuchcmd' },
-    PORT, undefined, undefined, undefined, undefined, command)
+  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: '/nosuchcmd' }, { session: PORT, command: command })
   assert.deepEqual(reply, {
     v: 2,
     ok: false,
@@ -112,8 +107,7 @@ test('command-execute: an unparsable name is unknown-command, not success', asyn
 
 test('command-execute: a line that is not a command is invalid-request, never reaches the port', async () => {
   const command = fakeCommand()
-  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: 'hello there' },
-    PORT, undefined, undefined, undefined, undefined, command)
+  const reply = await handle({ v: 2, op: 'command-execute', sessionId: 's', line: 'hello there' }, { session: PORT, command: command })
   assert.equal(reply.ok, false)
   if (!reply.ok) assert.equal(reply.error.code, 'invalid-request')
   assert.deepEqual(command.calls, [], '畸形载荷绝不进宿主')
@@ -121,8 +115,7 @@ test('command-execute: a line that is not a command is invalid-request, never re
 
 test('command-catalog: a missing session is unknown-session, not an empty list', async () => {
   const command = fakeCommand({ list: async () => undefined })
-  const reply = await handle({ v: 2, op: 'command-catalog', sessionId: 'gone' },
-    PORT, undefined, undefined, undefined, undefined, command)
+  const reply = await handle({ v: 2, op: 'command-catalog', sessionId: 'gone' }, { session: PORT, command: command })
   assert.equal(reply.ok, false)
   if (!reply.ok) assert.equal(reply.error.code, 'unknown-session')
 })
@@ -132,7 +125,7 @@ test('command ops: an unwired command channel is internal-error on both', async 
     { v: 2, op: 'command-catalog', sessionId: 's' },
     { v: 2, op: 'command-execute', sessionId: 's', line: '/compact' },
   ]) {
-    const reply = await handle(message, PORT)
+    const reply = await handle(message, { session: PORT })
     assert.equal(reply.ok, false, JSON.stringify(message))
     if (!reply.ok) assert.equal(reply.error.code, 'internal-error')
   }

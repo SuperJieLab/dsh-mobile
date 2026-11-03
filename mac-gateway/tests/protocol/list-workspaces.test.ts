@@ -36,7 +36,7 @@ function workspacePort(snapshot: WorkspaceSnapshot): WorkspacePort {
  * 这个包装让每条用例里那句调用只写与本题有关的东西。
  */
 function listSessions(port: SessionPort, workspaces?: WorkspacePort) {
-  return handle({ v: 2, op: 'list-sessions' }, port, Date.now, undefined, undefined, undefined, undefined, workspaces)
+  return handle({ v: 2, op: 'list-sessions' }, { session: port, workspace: workspaces }, Date.now)
 }
 
 interface ListAnswer {
