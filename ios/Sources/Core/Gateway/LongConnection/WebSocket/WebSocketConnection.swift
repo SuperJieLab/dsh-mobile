@@ -63,6 +63,15 @@ final class WebSocketConnection: Channel {
     private var missedPongs = 0
     /// 本拍内是否收到过对端的东西（一帧，或我们 ping 的 pong）。心跳每拍消费一次。
     private(set) var heardFromPeer = false
+    /// 最后一次收到任何证据的时刻。与 `heardFromPeer` 是两件事：那个每拍被消费，
+    /// 回答「这一拍有没有」；这个不被消费，回答「多久没有了」—— 回前台重连要用后者。
+    private(set) var lastEvidenceAt: Date?
+    /// 回前台时「还听得到对端」的宽限：宽限之内不重连。
+    ///
+    /// 取三拍（6 秒）：正常空闲会话里每 2 秒就有一次 pong，三拍没证据基本可以断定死了。
+    /// 判错方向的代价不对称 —— 判「活着」其实死了只是多连一次（一次快照重读），
+    /// 判「死了」其实活着则要白掐一条好连接，所以宽限取短的那一侧。
+    var evidenceGrace: TimeInterval = WebSocketConnection.pingInterval * 3
     private var reconnectWorkItem: DispatchWorkItem?
     /// 是否要有一条连接 —— 只有它决定连不连，与「要开哪几条流」无关。
     private var active = false
@@ -137,7 +146,13 @@ final class WebSocketConnection: Channel {
     /// - Parameter reason: 谁在要 —— 四个触发点，不写原因排障时看到一串一模一样的行。
     func reconnectNow(reason: String) {
         guard active else { return }
-        guard phase != .ready, phase != .connecting else { return }
+        guard Self.shouldReconnectOnForeground(
+            phase: phase, lastEvidenceAt: lastEvidenceAt, now: Date(), grace: evidenceGrace
+        ) else {
+            Log.info(Log.Module.session,
+                     "reconnect now (\(reason)) — still hearing from peer, staying")
+            return
+        }
         // 「跳过退避」的前提是有东西可跳：没有地址时什么都不做，等组网就绪那一刻再来。
         // 这条不能并进上面的 guard —— 组网就绪时 `phase` 正好是 `.awaitingMesh`，那里必须放行。
         // 缺了它，本方法会先 cancel 掉排着的定时器再连不上，那一拍退避被吃掉且不再重排。
@@ -174,6 +189,7 @@ final class WebSocketConnection: Channel {
         // 心跳判据随代次清零：上一代的连失数算到这一代头上会自锁，此后每代都在第一拍被判死。
         missedPongs = 0
         heardFromPeer = false
+        lastEvidenceAt = nil
         phase = .connecting
         Log.perf(Log.Module.session, PerfRecord(
             seg: .dev, t: PerfRecord.nowMs(),
@@ -254,6 +270,7 @@ final class WebSocketConnection: Channel {
     func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
         // 收到任何一帧都是「对端还活着」的证据，由心跳那一拍消费 —— 系统不暴露字节进度。
         heardFromPeer = true
+        lastEvidenceAt = Date()
         guard case .string(let text) = message else {
             Log.debug(Log.Module.session, "g\(current) non-text frame ignored")
             return
@@ -288,7 +305,10 @@ final class WebSocketConnection: Channel {
                     webSocketTask.sendPing { [weak self] error in
                         Task { @MainActor [weak self] in
                             // pong 回来了（completion 无错即 pong 已达）：对端活着。
-                            if error == nil { self?.heardFromPeer = true }
+                            if error == nil {
+                                self?.heardFromPeer = true
+                                self?.lastEvidenceAt = Date()
+                            }
                         }
                     }
                 case .dead:
@@ -343,6 +363,35 @@ final class WebSocketConnection: Channel {
        - heardFromPeer: 本拍内是否收到过对端的东西（一帧，或我们 ping 的 pong）。
        - missed: 本拍之前累计的连失数。
      */
+    /**
+     回前台时该不该重连 —— 纯判定，入参是全部输入。
+
+     `.connecting` 不该：一次握手正在路上，再插一次只会把它掐掉。
+     `.ready` 要看证据：**半开连接正停在 `.ready`**（对端进程死了、NAT 静默丢了映射），
+     而判死窗口是 60 秒 —— 回前台时问一句「多久没证据」比等满 60 秒划算。
+     其余阶段（等组网 / 等待退避 / 空闲）都该重连：那些本来就没有连接在手。
+
+     为什么不另立一条判活阈值：判死仍然是心跳那一件事，这里只决定**要不要提前**做它。
+     宽限取短的那一侧，理由见 `evidenceGrace`。
+     */
+    static func shouldReconnectOnForeground(
+        phase: ConnectionPhase,
+        lastEvidenceAt: Date?,
+        now: Date,
+        grace: TimeInterval
+    ) -> Bool {
+        switch phase {
+        case .connecting:
+            return false
+        case .ready:
+            // 从没收到过证据 = 不知道该不该信这条连接；重连一次比干等强。
+            guard let lastEvidenceAt else { return true }
+            return now.timeIntervalSince(lastEvidenceAt) >= grace
+        default:
+            return true
+        }
+    }
+
     static func livenessTick(window: TimeInterval, heardFromPeer: Bool, missed: Int) -> Liveness {
         guard !heardFromPeer else { return .probe(missed: 0) }
         let next = missed + 1

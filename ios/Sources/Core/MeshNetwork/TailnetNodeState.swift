@@ -20,7 +20,10 @@ enum TailnetNodeState: Equatable {
     /// 事件（输入只有节点回调与用户动作，状态机不发起任何 I/O）。
     enum Event: Equatable {
         /// App 启动：沙盒有无 key + 上次节点持久状态是否完好（tsnet 状态目录）。
-        case launch(keyPresent: Bool, nodeStateHealthy: Bool)
+        /// 启动时读到的三件事实。`nodeStateHealthy` 只回答「目录在不在、读不读得了」；
+        /// `controlPlaneMatches` 回答「目录里那份身份是不是这一家控制面的」—— 两者分开，
+        /// 因为它们的补救一样（重新注册）而原因完全不同，合成一个布尔就查不出是哪一条。
+        case launch(keyPresent: Bool, nodeStateHealthy: Bool, controlPlaneMatches: Bool)
         /// 设置页提交接入 key（含 failed 后重输）。
         case keySubmitted
         case registrationSucceeded
@@ -42,11 +45,14 @@ enum TailnetNodeState: Equatable {
     static func handle(_ event: Event, from state: TailnetNodeState = .noKey) -> TailnetNodeState {
         switch (state, event) {
         // 启动（初始 state 无意义，launch 自带全部输入）
-        case (_, .launch(let keyPresent, let nodeStateHealthy)):
-            switch (keyPresent, nodeStateHealthy) {
-            case (false, _):      return .noKey
-            case (true, true):    return .running   // 重开不重注册
-            case (true, false):   return .registering
+        case (_, .launch(let keyPresent, let nodeStateHealthy, let controlPlaneMatches)):
+            switch (keyPresent, nodeStateHealthy, controlPlaneMatches) {
+            case (false, _, _):        return .noKey
+            // 换了控制面：目录里的身份属于上一家，拿它连新控制面会「连上但通不了」。
+            // 判成未注册，重新走一遍注册。
+            case (true, _, false):     return .registering
+            case (true, true, true):   return .running   // 重开不重注册
+            case (true, false, true):  return .registering
             }
         // noKey / failed → 用户动作 → registering
         case (.noKey, .keySubmitted),

@@ -11,15 +11,32 @@ import XCTest
 final class MeshNodeStateTests: XCTestCase {
 
     func testTransitions() {
-        // —— 启动（读沙盒 key + 上次节点持久状态）——
-        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: false, nodeStateHealthy: false)) == .noKey,
+        // —— 启动（读沙盒 key + 上次节点持久状态 + 那状态属于哪家控制面）——
+        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: false, nodeStateHealthy: false,
+                                                      controlPlaneMatches: true)) == .noKey,
                       "MS1 无 key 启动 → noKey")
-        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: false, nodeStateHealthy: true)) == .noKey,
+        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: false, nodeStateHealthy: true,
+                                                      controlPlaneMatches: true)) == .noKey,
                       "MS2 有残留节点状态但无 key → noKey（key 是唯一准入事实）")
-        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: true, nodeStateHealthy: true)) == .running,
+        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: true, nodeStateHealthy: true,
+                                                      controlPlaneMatches: true)) == .running,
                       "MS3 有 key 且节点持久状态完好 → running（重开不重注册）")
-        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: true, nodeStateHealthy: false)) == .registering,
+        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: true, nodeStateHealthy: false,
+                                                      controlPlaneMatches: true)) == .registering,
                       "MS4 有 key 但节点状态不在/损坏过 → registering")
+        // 换了控制面：目录完好也不算数 —— 里面那份身份是上一家的，拿它连新控制面
+        // 会「连上但通不了」。这一格是 C52 的判据本体：把 controlPlaneMatches 从判定里
+        // 拿掉，它就从 registering 变 running（旧行为）。
+        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: true, nodeStateHealthy: true,
+                                                      controlPlaneMatches: false)) == .registering,
+                      "MS4′ 有 key、目录完好、但控制面换了 → registering（旧身份对新控制面无效）")
+        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: true, nodeStateHealthy: false,
+                                                      controlPlaneMatches: false)) == .registering,
+                      "MS4″ 控制面换了且目录坏了 → registering（两条原因指向同一个补救）")
+        // 无 key 时控制面是否一致不参与判定：本来就要重新注册。
+        XCTAssertTrue(TailnetNodeState.handle(.launch(keyPresent: false, nodeStateHealthy: true,
+                                                      controlPlaneMatches: false)) == .noKey,
+                      "MS4‴ 无 key 且控制面换了 → noKey（key 仍然优先）")
 
         // —— noKey → 注册 ——
         XCTAssertTrue(TailnetNodeState.handle(.keySubmitted, from: .noKey) == .registering,

@@ -401,4 +401,59 @@ final class WebSocketConnectionTests: XCTestCase {
         XCTAssertEqual(hopeless.phase, .idle, "不会自愈就不空转")
         hopeless.deactivate()
     }
+
+    // MARK: - 回前台：停在 ready 的半死连接
+
+    /// 半开连接（对端进程死了、NAT 静默丢了映射）**停在 `.ready`** —— 于是「回前台就重连」
+    /// 若只看阶段，就永远碰不到它，只能等 60 秒的心跳判死。
+    ///
+    /// 判据分两半：纯判定穷举四格（阶段 × 证据），再加一条打适配器的 —— 只有后者能证明
+    /// `reconnectNow` 真的问了那个判定。
+    func testForegroundReconnectVerdict() {
+        let now = Date()
+        let grace: TimeInterval = 6
+
+        // 握手中：一次握手正在路上，再插一次只会把它掐掉。
+        XCTAssertFalse(WebSocketConnection.shouldReconnectOnForeground(
+            phase: .connecting, lastEvidenceAt: now, now: now, grace: grace))
+
+        // 就绪且刚有证据：不重连 —— 每次回前台都白掐一条好连接。
+        XCTAssertFalse(WebSocketConnection.shouldReconnectOnForeground(
+            phase: .ready, lastEvidenceAt: now.addingTimeInterval(-1), now: now, grace: grace),
+            "宽限之内不该重连")
+
+        // 就绪但证据过期：重连。这一格就是半开连接。
+        XCTAssertTrue(WebSocketConnection.shouldReconnectOnForeground(
+            phase: .ready, lastEvidenceAt: now.addingTimeInterval(-7), now: now, grace: grace),
+            "超过宽限没有任何证据 = 半开连接，该重连")
+
+        // 就绪但从没收到过证据：不知道该不该信它，重连一次比干等强。
+        XCTAssertTrue(WebSocketConnection.shouldReconnectOnForeground(
+            phase: .ready, lastEvidenceAt: nil, now: now, grace: grace))
+
+        // 其余阶段本来就没有连接在手，一律重连。
+        XCTAssertTrue(WebSocketConnection.shouldReconnectOnForeground(
+            phase: .waiting(ms: 1_000), lastEvidenceAt: now, now: now, grace: grace))
+        XCTAssertTrue(WebSocketConnection.shouldReconnectOnForeground(
+            phase: .awaitingMesh, lastEvidenceAt: now, now: now, grace: grace))
+    }
+
+    /// 适配器那一半：`reconnectNow` 在就绪且静默时真的会重连。
+    func testForegroundReconnectWakesASilentReadyConnection() {
+        let silent = transport()
+        silent.activate()
+        silent.handleMessage(.string(#"{"type":"item","streamId":"nobody","payload":{}}"#),
+                             generation: 1)
+        XCTAssertEqual(silent.phase, .ready, "前置：这一代真的通了")
+
+        // 刚收到帧：宽限之内，什么都不该发生。
+        silent.reconnectNow(reason: "foreground")
+        XCTAssertEqual(silent.phase, .ready, "刚有证据就不该重连")
+
+        // 把宽限压到 0，等价于「证据已经过期」—— 重连必须发生。
+        silent.evidenceGrace = 0
+        silent.reconnectNow(reason: "foreground")
+        XCTAssertEqual(silent.phase, .connecting, "证据过期后回前台必须重连")
+        silent.deactivate()
+    }
 }

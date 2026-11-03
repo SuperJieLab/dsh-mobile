@@ -78,11 +78,24 @@ final class TailnetNode {
     func launch(config: MeshConfig) async {
         let key = TailnetKeyStore.load()
         let healthy = Self.stateStoreHealthy()
-        Log.info(Log.Module.mesh, "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy) controlURL=\(config.controlURL?.absoluteString ?? "<invalid>") gateway=\(config.gatewayURLString)")
-        transition(.launch(keyPresent: key != nil, nodeStateHealthy: healthy))
+        let sameControlPlane = ControlPlaneRecord.matches(config.controlURL)
+        Log.info(Log.Module.mesh,
+                 "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy)"
+                 + " controlPlaneMatches=\(sameControlPlane)"
+                 + " controlURL=\(config.controlURL?.absoluteString ?? "<invalid>")"
+                 + " gateway=\(config.gatewayURLString)")
+        transition(.launch(keyPresent: key != nil,
+                           nodeStateHealthy: healthy,
+                           controlPlaneMatches: sameControlPlane))
 
         switch state {
         case .registering:
+            // 换了控制面：目录里那份登录身份属于上一家，留着只会让新节点「连上但通不了」。
+            // 只在这条路上清 —— 目录坏了（`healthy == false`）不清，那是半份本地文件，
+            // 上游自己会重建；而这里清的是「另一家的身份」，它对这一家一文不值。
+            if key != nil, !sameControlPlane {
+                discardNodeState(from: "control plane changed")
+            }
             // 启动编排这一代就是「此刻那一个」：期间若有提交把代号推走，这次 up 会被判出局。
             await up(key: key, config: config, generation: generation)
         case .running:
@@ -356,6 +369,9 @@ final class TailnetNode {
                 // 顺序调过来，「就绪」这个词才名副其实：看到 Running 时产物已经在那儿了。
                 // 也正因为状态那条通知**不带 session**，产物只能从这条回调交出去。
                 onVerifiedRunning?(session)
+                // 记下这一家用的是哪家控制面 —— 下一次启动靠它认出「身份是谁的」。
+                // 排在 transition 之前：就绪一旦宣布，下一次 launch 就可能已经开始了。
+                ControlPlaneRecord.save(config.controlURL)
                 transition(.registrationSucceeded)
                 startPathPolling()
                 return
@@ -534,5 +550,23 @@ final class TailnetNode {
             return false
         }
         return isDirectory.boolValue && FileManager.default.isReadableFile(atPath: dir.path)
+    }
+
+    /// 丢掉节点持久状态（整个目录）。**只有一条路会走到这里：换了控制面。**
+    ///
+    /// 那包文件是 tsnet 的 node state，含登录身份与 node key —— 全部属于上一家控制面。
+    /// 不删的后果不是报错，是「连上了但什么都通不了」，比删掉难查得多。
+    /// 删完不补任何东西：下一次 `up` 会当成干净首启重建。
+    private func discardNodeState(from reason: String) {
+        let dir = Self.stateDir
+        guard FileManager.default.fileExists(atPath: dir.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: dir)
+            Log.info(Log.Module.mesh, "node state discarded (\(reason)) — next up starts clean")
+        } catch {
+            // 删不掉就照旧起：坏结果只是「可能连上但通不了」，而这是原本就有的行为。
+            Log.warn(Log.Module.mesh,
+                     "node state could not be discarded (\(reason)): \(String(describing: error))")
+        }
     }
 }
