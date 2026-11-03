@@ -101,13 +101,21 @@ jobs:
             echo "bash=$(bash --version | head -1)"
             echo "python3=$(command -v python3 || echo 缺失)"
             echo "xcode=$(xcodebuild -version | head -1)"
+            echo "可用的 Xcode：$(ls /Applications | grep -c '^Xcode') 个"
+            ls -d /Applications/Xcode*.app 2>/dev/null | head -5
           }
           echo "--- ci-out ---"
           ls -la ci-out 2>&1 | head -6
           for f in ci-out/*.log; do
             [ -f "$f" ] || continue
+            # 先抓 error 行：日志尾部通常是构建命令，真正的错在中间。
             # `::` 在 annotation 语法里有特殊含义，换成 `:` 免得内容被截断。
-            echo "::error file=${f}::$(tail -c 1200 "$f" | tr '\n' ' ' | tr -d '\r' | sed 's/::/:/g')"
+            errs=$(grep -E 'error:|error TS[0-9]+' "$f" | head -8 | tr '\n' ' ' | tr -d '\r' | sed 's/::/:/g')
+            if [ -n "$errs" ]; then
+              echo "::error file=${f}::${errs}"
+            else
+              echo "::error file=${f}::$(tail -c 800 "$f" | tr '\n' ' ' | tr -d '\r' | sed 's/::/:/g')"
+            fi
           done
 
       - uses: actions/upload-artifact@v4
