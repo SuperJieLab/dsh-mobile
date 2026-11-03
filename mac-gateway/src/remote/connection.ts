@@ -50,6 +50,8 @@ export interface HeartbeatSocket {
   readonly destroyed: boolean
   destroy(): void
   write(buffer: Buffer): unknown
+  /** 把已写出的字节冲刷完再关 —— 关闭帧要靠它才发得出去。 */
+  end(): unknown
 }
 
 /** 一段连接的心跳句柄。 */
@@ -108,7 +110,9 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
       // （客户端那半边见 `GatewayConnection` 心跳放弃时的 warn）。
       log.info(`heartbeat: no pong in ${limit + 1} rounds — closing socket`)
       killed = true
-      socket.destroy()
+      // 带码关闭：手机侧才知道这次是「我们判它死了」，而不是链路掉了。
+      socket.write(encodeClose(1001, 'no pong'))
+      socket.end()
       return
     }
     socket.write(encodePing())
@@ -256,10 +260,14 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
           //   重复编号 —— 客户端坏了，这条连接上的一切都不再可信；
           //   归不到流 —— 帧读不出编号，没有可拒收它的流（有编号的坏载荷不走这条路）。
           // 静默忽略的表现是「客户端等 45 秒就绪超时」，两端都看不出原因。
-          log.error(outcome.reason === 'duplicate-id'
+          const why = outcome.reason === 'duplicate-id'
             ? 'stream protocol violation: duplicate stream id — closing the connection'
-            : `stream protocol violation: frame belongs to no stream (${outcome.excerpt}) — closing the connection`)
-          socket.destroy()
+            : `stream protocol violation: frame belongs to no stream (${outcome.excerpt}) — closing the connection`
+          log.error(why)
+          // 1008 = 策略违规。码与原因都发出去：手机上「被网关判违规」与「链路掉了」是
+          // 两种完全不同的补救（前者升级客户端，后者等重连）。
+          write(socket, encodeClose(1008, outcome.reason))
+          socket.end()
           return
         }
       }

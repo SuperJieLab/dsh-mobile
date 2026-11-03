@@ -12,15 +12,23 @@ final class EventStream {
     /// 它不跟踪「这一头断没断」：socket 断开期间这个值保持原样，单看它会得出「断线期间还新」。
     private(set) var generation: Int?
 
+    /// 一个听众：一个 token（退订用）与它的回调。
+    ///
+    /// 三张表都用它而不是裸闭包：退订要能**按身份**摘掉一个，闭包按相等性比较不可靠。
+    private struct Entry<T> {
+        let token: UUID
+        let call: (T) -> Void
+    }
+
     /// 代次变化的听众，按注册顺序调用。失效那一次带 `nil`。
-    private var generationHandlers: [(Int?) -> Void] = []
+    private var generationHandlers: [Entry<Int?>] = []
 
     /// 按事件名分派的听众。名字原样来自上游，本类不解释。
-    private var handlers: [String: [(JSONValue) -> Void]] = [:]
+    private var handlers: [String: [Entry<JSONValue>]] = [:]
 
     /// 按货物名分派的听众。与上面那个口是**两个命名空间**（emit 的名字在载荷里、kind 在
     /// 外壳里）—— 分开注册，将来真有一条叫 `cancel` 的事件也不会串。
-    private var cargoHandlers: [String: [(JSONValue) -> Void]] = [:]
+    private var cargoHandlers: [String: [Entry<JSONValue>]] = [:]
 
     /// 这条流本身。`close()` / `restart()` 都在它上面 —— 连接级动作一个都不在这里。
     private var stream: LogicalStream?
@@ -39,18 +47,32 @@ final class EventStream {
     }
 
     /// 源换代次时叫醒：消费方在这里重读基线 —— 断线期间的事件永不补发。失效也叫一次，带 `nil`。
-    func onGeneration(_ handler: @escaping (Int?) -> Void) {
-        generationHandlers.append(handler)
+    ///
+    /// @returns 退订 token。**三个注册口都给**：多读者必须能退订，否则「先于进程消失的
+    /// 消费方」只能靠闭包捕获的对象被弱引用掉来停止 —— 那不是一种保证。
+    @discardableResult
+    func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void {
+        let token = UUID()
+        generationHandlers.append(Entry(token: token, call: handler))
+        return { [weak self] in self?.generationHandlers.removeAll { $0.token == token } }
     }
 
     /// 订阅一类事件。同一个名字可以有两个听众。
-    func on(_ event: String, _ handler: @escaping (JSONValue) -> Void) {
-        handlers[event, default: []].append(handler)
+    /// @returns 退订 token（同上）。
+    @discardableResult
+    func on(_ event: String, _ handler: @escaping (JSONValue) -> Void) -> () -> Void {
+        let token = UUID()
+        handlers[event, default: []].append(Entry(token: token, call: handler))
+        return { [weak self] in self?.handlers[event]?.removeAll { $0.token == token } }
     }
 
     /// 订阅一种具名货物。同一个 kind 可以有两个听众。
-    func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) {
-        cargoHandlers[type, default: []].append(handler)
+    /// @returns 退订 token（同上）。
+    @discardableResult
+    func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) -> () -> Void {
+        let token = UUID()
+        cargoHandlers[type, default: []].append(Entry(token: token, call: handler))
+        return { [weak self] in self?.cargoHandlers[type]?.removeAll { $0.token == token } }
     }
 
     /// 作废当前这条流的登记 —— **只标状态，不重复关**。
@@ -68,11 +90,11 @@ final class EventStream {
             generation = reported
             // 每个 ready 都通知，**不比较新旧**：网关每次开流都发一条，
             // 语义就是「从这一刻起你看到的都是新的」。
-            for handler in generationHandlers { handler(reported) }
+            for entry in generationHandlers { entry.call(reported) }
         case let .emit(name, args):
-            for handler in handlers[name] ?? [] { handler(args) }
+            for entry in handlers[name] ?? [] { entry.call(args) }
         case let .cargo(type, payload):
-            for handler in cargoHandlers[type] ?? [] { handler(payload) }
+            for entry in cargoHandlers[type] ?? [] { entry.call(payload) }
         case let .refused(failure):
             // 不进消费方（拒绝讲的是「接下来怎么办」），但**要留痕**：屏幕上看不见，
             // 版本旧与装配漏了只在这行里分得开。

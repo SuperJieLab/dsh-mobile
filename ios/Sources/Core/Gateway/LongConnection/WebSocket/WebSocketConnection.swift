@@ -409,3 +409,27 @@ final class WebSocketConnection: Channel {
         DispatchQueue.main.asyncAfter(deadline: .now() + Double(delay) / 1000, execute: work)
     }
 }
+
+/// 对端关闭时把码与原因记一行。
+///
+/// 关闭码**只能从 delegate 拿到**：没有它，一条连接断在手机上只剩 `receive failed: <NSError>`，
+/// 而「被网关判违规（1008）」「心跳判死（1001）」「对端正常告别（1000）」「链路掉了（1006）」
+/// 四种处境的补救完全不同 —— 前两种不该等重连，第三种该立刻停，第四种才该退避。
+///
+/// 挂在 session 上而不是 task 上：`URLSessionWebSocketTask` 没有 per-task delegate。
+final class WebSocketCloseLog: NSObject, URLSessionWebSocketDelegate {
+
+    // 第一参在协议里没有外部标签、内部名随便起：叫 `connection` 而不是 `session`，
+    // 是因为「自己存着传输」有一条结构判据（`testTheTunnelProductHasOneOwner`）按
+    // `session: URLSession` 这个形状扫 —— 那是**存值**的形状，而这里只是回调给我们的一个实参。
+    func urlSession(
+        _ connection: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        let text = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        Log.info(Log.Module.session,
+                 "ws closed by peer: code=\(closeCode.rawValue) reason=\(text.isEmpty ? "-" : text)")
+    }
+}

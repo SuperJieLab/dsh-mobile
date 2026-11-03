@@ -194,12 +194,14 @@ final class ApprovalStoreTests: XCTestCase {
         private(set) var cargoRegistrations: [String] = []
         private(set) var generationRegistrations = 0
 
-        func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) {
+        func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) -> () -> Void {
             cargoRegistrations.append(type)
+            return {}
         }
 
-        func onGeneration(_ handler: @escaping (Int?) -> Void) {
+        func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void {
             generationRegistrations += 1
+            return {}
         }
     }
 

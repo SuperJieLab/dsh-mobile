@@ -34,9 +34,14 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 /// 待答表要的订阅面：三种事件、两个入口。
 /// 收窄不是为了少方法，而是让闸能红 —— `EventStream` 的注册表是 private、类型是具体类，替不进去。
 @MainActor
+/// 审批域从事件流上要的两件事。**两个口都给退订 token**：多读者必须能退订，
+/// 而「消费者都是 App 级」是当下的处境，不是这个口该有的形状。
+/// 本域的消费者确实与进程同寿（`attach` 里丢弃 token），所以它现在不退。
 protocol ApprovalEventSink {
-    func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void)
-    func onGeneration(_ handler: @escaping (Int?) -> Void)
+    @discardableResult
+    func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    @discardableResult
+    func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void
 }
 
 extension EventStream: ApprovalEventSink {}

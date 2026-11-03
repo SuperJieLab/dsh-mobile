@@ -728,7 +728,9 @@ test('U2: a second open under the same id is a protocol violation — the connec
     send(socket, { type: 'open', streamId: 'dup', payload: { op: 'follow', sessionId: 's1' } })
 
     const code = await waitForClose(socket)
-    assert.equal(code, 1006, `连接必须被关掉（destroy 的指纹是 1006）；实际 code=${code}`)
+    // 1008 = 策略违规：帧协议被破坏。带码而不是 destroy（1006）—— 手机侧要靠这个码
+    // 分清「被网关判违规」（升级客户端）与「链路掉了」（等重连）。
+    assert.equal(code, 1008, `协议违规要带 1008 关；实际 code=${code}`)
   } finally {
     server.closeAllConnections()
     server.close()
@@ -888,7 +890,7 @@ test('U6: cancel does not drop the entry while the pump is still winding down', 
     send(socket, { type: 'open', streamId: 'a', payload: { op: 'follow', sessionId: 's1' } })
 
     const code = await waitForClose(socket)
-    assert.equal(code, 1006, `取消后同号开流必须被拒（destroy 的指纹是 1006）；实际 code=${code}`)
+    assert.equal(code, 1008, `取消后同号开流要带 1008 关；实际 code=${code}`)
   } finally {
     source.release() // 放泵退出，别把定时器留给下一轮
     server.closeAllConnections()
@@ -943,7 +945,7 @@ test('E1b: a frame that cannot be attributed to any stream closes the connection
 
     send(socket, { type: 'open' }) // 没有编号：读不出它属于哪条流
     const code = await waitForClose(socket)
-    assert.equal(code, 1006, `一条归不到任何流的帧要关连接；实际 code=${code}`)
+    assert.equal(code, 1008, `一条归不到任何流的帧要带 1008 关连接；实际 code=${code}`)
   } finally {
     server.closeAllConnections()
     server.close()
@@ -1227,7 +1229,7 @@ test('E5b: a second open(events) under the same id is a protocol violation — t
 
     send(socket, { type: 'open', streamId: 'dup', payload: { op: 'events' } })
     const code = await waitForClose(socket)
-    assert.equal(code, 1006, `同号重开事件流必须被拒（destroy 的指纹是 1006）；实际 code=${code}`)
+    assert.equal(code, 1008, `同号重开事件流要带 1008 关；实际 code=${code}`)
   } finally {
     server.closeAllConnections()
     server.close()

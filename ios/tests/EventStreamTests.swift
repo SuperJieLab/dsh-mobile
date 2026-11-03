@@ -361,3 +361,64 @@ final class EventStreamTests: XCTestCase {
         XCTAssertEqual(ended.next, .reopen, "收尾要在同一条连接上重开")
     }
 }
+
+// MARK: - 三个注册口都能退订
+
+/// 注册口返回的 token 真的摘得掉那一个听众 —— 而且是**只摘那一个**。
+///
+/// 判据要能区分「按身份摘」与「按名字清」：后者在同名两个听众时会把另一个也带走，
+/// 而那种错法在只有一个听众的样本上照样绿。所以每个口都摆两个听众、退一个、看另一个还在。
+@MainActor
+final class EventStreamSubscriptionTests: XCTestCase {
+
+    private func ready(_ generation: Int?) -> EventReading {
+        EventReading(content: .ready(generation: generation))
+    }
+
+    private func emit(_ name: String) -> EventReading {
+        EventReading(content: .emit(name: name, args: .object([:])))
+    }
+
+    private func cargo(_ type: String) -> EventReading {
+        EventReading(content: .cargo(type: type, payload: .object([:])))
+    }
+
+    func testUnsubscribingRemovesOnlyThatListener() {
+        let stream = EventStream()
+        var heard: [String] = []
+
+        let stopGenerationA = stream.onGeneration { _ in heard.append("genA") }
+        _ = stream.onGeneration { _ in heard.append("genB") }
+        let stopEventA = stream.on("x") { _ in heard.append("eventA") }
+        _ = stream.on("x") { _ in heard.append("eventB") }
+        let stopCargoA = stream.onCargo("y") { _ in heard.append("cargoA") }
+        _ = stream.onCargo("y") { _ in heard.append("cargoB") }
+
+        stream.handle(ready(1))
+        stream.handle(emit("x"))
+        stream.handle(cargo("y"))
+        XCTAssertEqual(heard, ["genA", "genB", "eventA", "eventB", "cargoA", "cargoB"])
+
+        stopGenerationA()
+        stopEventA()
+        stopCargoA()
+
+        heard = []
+        stream.handle(ready(2))
+        stream.handle(emit("x"))
+        stream.handle(cargo("y"))
+        // 退掉的那三个不在，同名的另一个还在 —— 「按名字清空整张表」会让这三行只剩空数组。
+        XCTAssertEqual(heard, ["genB", "eventB", "cargoB"])
+    }
+
+    /// 退订两次不炸、也不影响别人（token 是幂等的）。
+    func testUnsubscribingTwiceIsHarmless() {
+        let stream = EventStream()
+        var count = 0
+        let stop = stream.onGeneration { _ in count += 1 }
+        stop()
+        stop()
+        stream.handle(ready(1))
+        XCTAssertEqual(count, 0)
+    }
+}

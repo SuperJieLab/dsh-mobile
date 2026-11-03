@@ -2859,8 +2859,10 @@ final class LayeringTests: XCTestCase {
             XCTFail("EventStream 里找不到 onCargo —— 扫错文件了")
             return
         }
-        let body = stream[start...].prefix(4).map(\.1).joined(separator: "\n")
-        XCTAssertTrue(body.contains("cargoHandlers[type, default: []].append(handler)"),
+        let body = stream[start...].prefix(5).map(\.1).joined(separator: "\n")
+        // 钉「无条件追加一个带 token 的听众」这个形状，不钉元素的具体类型：
+        // 加退订 token 改的是元素，不是「有没有闸」。
+        XCTAssertTrue(body.contains("append(Entry(token:"),
                       "注册面不再是无条件追加 —— 改它之前先想清楚全部订阅方")
         XCTAssertFalse(body.contains("guard"),
                        "闸加到了注册面上 —— 全部订阅方的语义都会跟着变")

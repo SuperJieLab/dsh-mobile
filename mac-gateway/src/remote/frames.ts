@@ -193,9 +193,22 @@ export function encodePing(): Buffer {
   return encodeFrame(0x9, Buffer.alloc(0))
 }
 
-/** 编码干净的 close 帧。 */
-export function encodeClose(): Buffer {
-  return encodeFrame(0x8, Buffer.alloc(0))
+/**
+ * 编码 close 帧。
+ *
+ * **带码与原因**（RFC 6455 §5.5.1：两字节码 + UTF-8 原因，控制帧载荷 ≤125 字节）。
+ * 不带码的关闭帧在客户端侧只剩一行 `NSError`，「被网关判违规」「心跳判死」「对端告别」
+ * 三种处境长得一模一样 —— 归因只能回到 Mac 日志，而那正是手机不在跟前的时候。
+ *
+ * 1000 = 正常告别；1001 = 这一端要走了（心跳判死）；1008 = 策略违规（帧协议被破坏）。
+ */
+export function encodeClose(code: number = 1000, reason: string = ''): Buffer {
+  // 原因截到 123 字节：两字节码 + 原因必须装进 125 字节的控制帧载荷。
+  const text = Buffer.from(reason, 'utf8').subarray(0, 123)
+  const payload = Buffer.alloc(2 + text.length)
+  payload.writeUInt16BE(code, 0)
+  text.copy(payload, 2)
+  return encodeFrame(0x8, payload)
 }
 
 function encodeFrame(opcode: number, payload: Buffer): Buffer {

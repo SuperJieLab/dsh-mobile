@@ -68,6 +68,10 @@ enum TailnetURLSession {
     /// 建一只把全部流量送进 tailnet 的 URLSession。必须在节点 `up()` 成功后调用。
     static func makeSession(for node: TailscaleNode) async throws -> URLSession {
         let (configuration, _) = try await URLSessionConfiguration.tailscaleSession(node)
-        return URLSession(configuration: configuration)
+        // delegate 只为关闭码而挂：它记一行「对端用什么码关的」，于是手机上分得出
+        // 「被网关判违规」与「链路掉了」。URLSession 自己持有 delegate，不必另存。
+        return URLSession(configuration: configuration,
+                          delegate: WebSocketCloseLog(),
+                          delegateQueue: nil)
     }
 }

@@ -48,8 +48,11 @@ function fakeSocket(writableLength: number) {
     writableLength,
     destroyed: false,
     writes: 0,
+    ended: false,
+    written: [] as Buffer[],
     destroy(): void { socket.destroyed = true },
-    write(): void { socket.writes += 1 },
+    write(buffer: Buffer): void { socket.writes += 1; socket.written.push(buffer) },
+    end(): void { socket.ended = true },
   }
   return socket
 }
@@ -77,7 +80,13 @@ test('heartbeat: a socket still draining a big frame is not judged dead', { time
 
     // ③ 排空了、pong 不再回：判死 —— 半开连接仍然会被发现
     await sleep(60)
-    assert.equal(socket.destroyed, true, 'once drained, silence is still death')
+    assert.equal(socket.ended, true, 'once drained, silence is still death')
+    // 判死要**带码关**：不带码的关闭帧到了手机侧只剩一行 NSError，
+    // 「我们判它死了」与「链路掉了」长得一模一样。
+    const closing = socket.written.at(-1)
+    assert.ok(closing !== undefined, '判死时至少写出了关闭帧')
+    assert.equal(closing[0], 0x88, 'close 帧的 opcode')
+    assert.equal(closing.readUInt16BE(2), 1001, '1001 = 这一端要走了')
   } finally {
     beat.stop()
   }
@@ -117,7 +126,7 @@ test('heartbeat: a killed connection can name its killer, an untouched one says 
   const killer = startHeartbeat(doomed, { intervalMs: 10, missedPongLimit: 1 })
   try {
     await sleep(60)
-    assert.equal(doomed.destroyed, true)
+    assert.equal(doomed.ended, true)
     assert.equal(killer.killed, true, 'the heartbeat must be able to name itself as the closer')
   } finally {
     killer.stop()
