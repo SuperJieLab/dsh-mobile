@@ -59,7 +59,7 @@ jobs:
         if: always()
         with:
           name: gateway-log
-          path: .ci-out/
+          path: ci-out/
           retention-days: 7
 
   ios:
@@ -91,9 +91,28 @@ jobs:
         env:
           DSH_MIN_IOS: '420'
 
+      # 失败时把现场变成 annotation。Actions 的日志下载要认证，而 annotation 匿名可读 ——
+      # 这是「没登录的人」也能看到失败原因的唯一通道，也是我第一次红的时候最缺的东西。
+      - name: 失败时暴露现场
+        if: failure()
+        run: |
+          {
+            echo "pwd=$(pwd)"
+            echo "bash=$(bash --version | head -1)"
+            echo "python3=$(command -v python3 || echo 缺失)"
+            echo "xcode=$(xcodebuild -version | head -1)"
+          }
+          echo "--- ci-out ---"
+          ls -la ci-out 2>&1 | head -6
+          for f in ci-out/*.log; do
+            [ -f "$f" ] || continue
+            # `::` 在 annotation 语法里有特殊含义，换成 `:` 免得内容被截断。
+            echo "::error file=${f}::$(tail -c 1200 "$f" | tr '\n' ' ' | tr -d '\r' | sed 's/::/:/g')"
+          done
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ios-log
-          path: .ci-out/
+          path: ci-out/
           retention-days: 7

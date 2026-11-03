@@ -22,7 +22,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${ROOT}/.ci-out"
+# 不带前导点：`actions/upload-artifact@v4` 默认排除隐藏文件（include-hidden-files
+# 默认 false），叫 .ci-out 会让日志在 CI 上「上传成功但没有文件」。
+OUT="${ROOT}/ci-out"
 mkdir -p "$OUT"
 
 FAILED=0
@@ -124,37 +126,19 @@ pick_simulator() {
     printf '%s' "$DSH_SIM_UDID"; return
   fi
 
+  # 不依赖 python3：runner 上它不一定在 PATH 上，而这里要的只是「从一行里抠出 UDID」。
+  # `simctl` 的输出按运行时分成 `-- iOS 27.0 --` 这样的节，别的运行时里也有叫 iPhone 的
+  # 配对设备，所以要先限定在 iOS 节内再找。
   local udid
-  udid=$(xcrun simctl list devices booted -j 2>/dev/null | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-for runtime, devices in data.get("devices", {}).items():
-    for d in devices:
-        if d.get("isAvailable") and d.get("name", "").startswith("iPhone"):
-            print(d["udid"]); sys.exit(0)
-')
+  udid=$(xcrun simctl list devices booted 2>/dev/null \
+         | awk '/^-- iOS/{f=1; next} /^-- /{f=0} f && /iPhone/{print; exit}' \
+         | sed -E 's/.*\(([0-9A-Fa-f-]+)\).*/\1/')
   if [[ -n "$udid" ]]; then printf '%s' "$udid"; return; fi
 
-  xcrun simctl list devices available -j 2>/dev/null | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-best = None
-for runtime, devices in data.get("devices", {}).items():
-    # 只在 iOS 运行时里挑；watchOS / tvOS 也有叫 iPhone 的配对设备。
-    if "iOS" not in runtime:
-        continue
-    for d in devices:
-        if d.get("isAvailable") and d.get("name", "").startswith("iPhone"):
-            if best is None:
-                best = d["udid"]
-print(best or "")
-'
+  udid=$(xcrun simctl list devices available 2>/dev/null \
+         | awk '/^-- iOS/{f=1; next} /^-- /{f=0} f && /iPhone/{print; exit}' \
+         | sed -E 's/.*\(([0-9A-Fa-f-]+)\).*/\1/')
+  printf '%s' "$udid"
 }
 
 # ── iOS ─────────────────────────────────────────────────────────────────────
