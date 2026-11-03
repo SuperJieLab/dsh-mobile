@@ -29,7 +29,9 @@ mac-gateway/deploy/tls/
 /build/
 
 # Xcode
-ios/Frameworks/
+# 注意：`ios/Frameworks/` **不在这里** —— TailscaleKit.xcframework 是构建依赖
+# （由 ios/scripts/build-tailscale-kit.sh 从 pinned 的 libtailscale 编出来），
+# 不是产物。忽略它，CI 上 checkout 完就编不过，而本地因为文件还在所以永远绿。
 ios/build/
 ios/.build/
 ios/.dd/
