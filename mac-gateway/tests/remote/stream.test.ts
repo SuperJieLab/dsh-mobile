@@ -73,6 +73,36 @@ test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 
   }
 })
 
+test('the follow request asks the host to activate the session — the same as the browser client', { timeout: 10_000 }, async () => {
+  // 上游自己的浏览器客户端每次 follow 都带 `activate: true`
+  // （`api/session-controller/src/client/transport.ts` 的 `follow`）：在它那里「看一眼会话」
+  // 与「这个会话是活的」是同一件事。我们不带的时候，会话只被被动观察 —— `ctx.agents` 里
+  // 没有它，于是手机上一切正常，一发消息 / 敲一条命令 / 切一次权限就得到「会话不在」。
+  const source = fakeSource([snapshotFrame([event(0)], 1)])
+  const server = createServer()
+  attachStreamHandler(server, source, { authenticate: () => true })
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+    const socket = await connect(server)
+
+    send(socket, { type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } })
+    await receive(socket)
+
+    assert.equal(source.requests.length, 1)
+    const request = source.requests[0] as { activate?: unknown; assistantStream?: unknown }
+    assert.equal(request.activate, true, '打开即激活')
+    // 正控：这条请求确实是我们的 follow 构造出来的，而不是夹具里另一个对象。
+    assert.equal(request.assistantStream, true)
+
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
 test('S1 at the adapter: the WS opening equals the HTTP page window', { timeout: 10_000 }, async () => {
   // The window the fake source cuts (the last 50 messages) must equal what a
   // `page` over the same log returns — same rule, same boundary.
@@ -227,6 +257,7 @@ test('the opening asks upstream for a window that starts on a turn boundary', { 
     maxMessages: 100,
     turnWindow: { minMessages: 50, minTurns: 1 },
     assistantStream: true,
+    activate: true,
   }])
 })
 
@@ -254,6 +285,7 @@ test('an explicit maxMessages reaches upstream as its own target, not the defaul
     maxMessages: 14,
     turnWindow: { minMessages: 7, minTurns: 1 },
     assistantStream: true,
+    activate: true,
   }])
 })
 

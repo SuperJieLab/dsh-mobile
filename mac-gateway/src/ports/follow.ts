@@ -28,6 +28,16 @@ export interface FollowSource {
        */
       turnWindow?: { minMessages: number; minTurns: number }
       assistantStream: true
+      /**
+       * 打开会话时顺手把它激活（宿主的 `promote`）。
+       *
+       * **不是可选项、也不该由我们挑**：上游自己的浏览器客户端每次 follow 都带它
+       * （`api/session-controller/src/client/transport.ts` 的 `follow`），因为「看一眼会话」
+       * 与「这个会话是活的」在上游是同一件事。我们不带的时候，会话只被被动观察 ——
+       * `ctx.agents` 里没有它，于是任何需要 agent 的动作（发消息、执行命令、切权限）都
+       * 会被答成「会话不在」。
+       */
+      activate: true
     },
     signal: AbortSignal,
   ): AsyncIterable<UpstreamFollowFrame>

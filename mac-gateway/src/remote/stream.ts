@@ -345,6 +345,9 @@ async function pump(
       // 打开因此始于 turn 边界。
       ...upstreamWindow(request.maxMessages ?? DEFAULT_FOLLOW_MESSAGES),
       assistantStream: true,
+      // 与上游浏览器客户端同一条路：打开即激活。少了它，这个会话在宿主里只被被动观察，
+      // `ctx.agents` 里没有它 —— 手机上看着一切正常，一发消息就是「会话不在」。
+      activate: true,
     }, signal)
 
     let expectedSeq: number | undefined // 下一个事件 seq，取自打开的 cursor

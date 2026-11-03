@@ -65,7 +65,7 @@ async function countEvents(rate: number, windowMs: number): Promise<number> {
   let count = 0
   try {
     const stream = upstream.controller.follow(
-      { address: { kind: 'session', sessionId: 's1' }, assistantStream: true },
+      { address: { kind: 'session', sessionId: 's1' }, assistantStream: true, activate: true },
       abort.signal,
     )
     const start = Date.now()
@@ -108,7 +108,7 @@ test('H1: 生成器落后量随产出被记录（决定 2 的旁证在场）', a
   const abort = new AbortController()
   try {
     const stream = upstream.controller.follow(
-      { address: { kind: 'session', sessionId: 's1' }, assistantStream: true },
+      { address: { kind: 'session', sessionId: 's1' }, assistantStream: true, activate: true },
       abort.signal,
     )
     for await (const frame of stream) {
@@ -135,7 +135,7 @@ test('backlogSeq=N 时打开帧携带 N 条历史，续发事件 seq 连着走',
   const abort = new AbortController()
   try {
     const stream = upstream.controller.follow(
-      { address: { kind: 'session', sessionId: 's1' }, assistantStream: true },
+      { address: { kind: 'session', sessionId: 's1' }, assistantStream: true, activate: true },
       abort.signal,
     )
     let snapshotCursor: number | undefined
