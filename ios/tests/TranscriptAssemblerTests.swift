@@ -556,4 +556,60 @@ final class TranscriptAssemblerTests: XCTestCase {
         let result = assemble([run, done])
         XCTAssertEqual(result.unknown, [], "命令事件有处理器，不该进未知类型的上报")
     }
+
+    // MARK: - 上游这份版本认识的事件类型
+
+    /// `packages/core/session/src/known-event-types.ts` 的 `KNOWN_SESSION_EVENT_TYPES` 抄录
+    /// （2026-11-03，62 条）。**升级 harness 时重抄一遍**，然后跑下面那条判据。
+    ///
+    /// 它是「上游到底有哪些类型」的唯一记录：漏抄不会假绿 —— 判据的活性锚是同一次跑里
+    /// 一个真的新类型必须被报出来；但**多抄一个上游已经没有的类型**不会被发现，因为那种
+    /// 情况下它照样被旁路清单盖住。抄的时候照原样抄，别顺手删。
+    private static let upstreamEventTypes = [
+        "agent-preset/selected", "agent/inbox/spliced", "approval/asked", "approval/decided",
+        "approval/policy", "assistant/attempt", "assistant/message", "command/done",
+        "command/run", "compaction/end", "compaction/prune", "compaction/start",
+        "compaction/summary", "deliverables/presented", "developer/message",
+        "feedback/message-delete", "feedback/message-put", "feedback/record", "goal/change",
+        "hook/invoked", "hook/result", "image/offload", "job/registered", "job/settled",
+        "llm/retry", "llm/retry-started", "model/selection", "permission/preset", "plan/mode",
+        "request/context", "request/header", "sandbox/mode", "schedule/change",
+        "session-log-deepseek/delivery-accepted", "session/end-seed", "session/title",
+        "session/title-llm-request", "step/end", "step/start", "subagent/catalog",
+        "subagent/descriptor", "subagent/model-selection-policy", "system/message",
+        "team/member", "team/message/delivered", "team/message/queued", "team/task",
+        "todo/write", "tool-workflow/agent-end", "tool-workflow/agent-start",
+        "tool-workflow/run-end", "tool-workflow/run-start", "tool/call", "tool/ptc-dispatch",
+        "tool/ptc-dispatch-start", "tool/result", "turn/end", "turn/start", "user/message",
+        "web/deepseek-search-llm-request", "working-directory/change", "workspace/changes"
+    ]
+
+    /// 上游这份版本里的每一个类型，都不该被当成「上游加了新东西」报出来。
+    ///
+    /// 这一条守的是**降噪清单的保质期**。清单是前缀式的，上游每加一个命名空间
+    /// （`job/`、`team/`、`tool-workflow/`…）就会有一批已知类型落进 `default` 分支，
+    /// 于是每次打开会话都在 Xcode 里刷一片「不认识的事件类型」—— 而它们既不改变显示，
+    /// 也不是新东西。实测栽过一次：`deliverables/presented` 被写成 `deliverable/`（少个 s），
+    /// 于是每打开一次会话都报一次。
+    ///
+    /// 判据打的是**行为**而不是那个清单本身：`isKnownBypass` 是 fileprivate，
+    /// 而真正要守的也正是「这条事件进来之后有没有被上报」。
+    func testEveryUpstreamEventTypeIsAccountedFor() {
+        XCTAssertGreaterThanOrEqual(Self.upstreamEventTypes.count, 50, "清单太短 —— 抄漏了")
+        XCTAssertEqual(Set(Self.upstreamEventTypes).count, Self.upstreamEventTypes.count,
+                       "清单里有重复：抄的时候按原样抄，不要手工去重")
+
+        let batch = Self.upstreamEventTypes.map {
+            #"{"type":"\#($0)","seq":1,"time":1,"data":{}}"#
+        }
+        let reported = assemble(batch).unknown
+        XCTAssertEqual(reported, [],
+                       "这些是上游这份版本自己的类型，不该报成「上游加了新东西」：\(reported)")
+
+        // 活性锚：同一次装配里，一个真的不在清单里的类型必须被报出来 ——
+        // 否则上面那条对「永远不会上报」的实现也成立。
+        let control = assemble([#"{"type":"future/not-in-this-build","seq":1,"time":1,"data":{}}"#])
+        XCTAssertEqual(control.unknown, ["future/not-in-this-build"],
+                       "上报这条路断了 —— 上面那条此刻在测一个不会发生的分支")
+    }
 }

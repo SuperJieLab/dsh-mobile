@@ -518,12 +518,24 @@ private extension TranscriptAssembler {
 
     // MARK: 事件类型的认识范围
 
-        /// 会话日志里必然出现、但归别的链路管的事件类型前缀（审批、投影、沙箱、子代理…）。
-        /// 这是降噪清单，不是支持清单 —— 没有它每次打开会话都是一片噪音。
+    /// 会话日志里必然出现、但归别的链路管的事件类型**前缀**（审批、投影、沙箱、子代理…）。
+    ///
+    /// 这是降噪清单，不是支持清单 —— 没有它，每次打开会话都会刷一片「不认识的事件类型」。
+    /// 按**命名空间**而不是逐条列举：上游每加一个同族类型（`team/` 下又多了个 `team/task`），
+    /// 逐条列举就要跟着改一次，而改的人多半不会想到改这里。
+    ///
+    /// 权威在 `deepseek-harness/packages/core/session/src/known-event-types.ts`（上游自己生成
+    /// 的那份清单）。升级 harness 时照它核一遍，`testEveryUpstreamEventTypeIsAccountedFor`
+    /// 会把「既没渲染、也没归到旁路」的类型点名。
+    ///
+    /// 两处**不能用前缀盖住**：`tool/` 里有我们渲染的 `tool/call` 与 `tool/result`，所以只盖
+    /// `tool/ptc-`；`session-log` 不带斜杠，是因为上游那个类型是 `session-log-deepseek/…`。
     static let knownBypassPrefixes = [
-        "approval/", "session/", "session-log", "request/", "agent/",
-        "web/", "sandbox/", "permission/", "system/", "assistant/",
-        "turn/", "step/", "deliverable/",
+        "agent-preset/", "agent/", "approval/", "assistant/", "compaction/", "deliverables/",
+        "developer/", "feedback/", "goal/", "hook/", "image/", "job/", "llm/", "model/",
+        "permission/", "plan/", "request/", "sandbox/", "schedule/", "session-log", "session/",
+        "step/", "subagent/", "system/", "team/", "todo/", "tool-workflow/", "tool/ptc-",
+        "turn/", "web/", "working-directory/", "workspace/",
     ]
 
     static func isKnownBypass(_ type: String) -> Bool {

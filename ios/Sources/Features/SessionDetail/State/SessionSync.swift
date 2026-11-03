@@ -93,7 +93,9 @@ final class SessionSync {
     /// 事件 → 显示节点。它跨刷新保留 —— 状态与去重理由见 `TranscriptAssembler`。
     private var assembler = TranscriptAssembler { type in
         // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
-        Log.warn(Log.Module.session, "TranscriptAssembler 不认识的事件类型：\(type)")
+        // 措辞点明范围：不认识的只是**正文组装**这一层，消息流本身是认识的
+        // （`model/selection` 这类还另有消费者）。
+        Log.warn(Log.Module.session, "正文组装跳过不认识的事件类型：\(type)（会话照常显示）")
     }
     /// 占用值的吸收，判定在 `UsageState`。
     private var usageState = UsageState()
