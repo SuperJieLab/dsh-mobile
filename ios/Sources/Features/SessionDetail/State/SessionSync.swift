@@ -1,42 +1,18 @@
 import Foundation
 
-/// 一个会话的同步编排：把「取窗口 / 追新增 / 往回翻」接到状态机上。状态机只管判定，
+/// 一个会话的**读侧**编排：把「取窗口 / 追新增 / 往回翻」接到状态机上。状态机只管判定，
 /// 这里管调用顺序与失败收场：单飞、拉完为止、先窗口后增量。
+///
+/// 本类只做读：镜像、事件装配、占用、告知、流式未定稿。三样相邻的东西各住一处 ——
+/// 状态行（`SessionStatus`）、当前模型（`SessionModelMirror`）、用户动作（`SessionActions`）、
+/// 流的开关（`SessionFollowing`）。它们由本类装配并向视图转发，所以视图仍然只认识本对象。
+///
+/// 拆开的理由是变化触发源不同：读侧随「窗口与快照的协议」变，写侧随「产品动作的语义」变，
+/// 流开关随「流的生命周期」变。合成一个类时，改任一处都要重读另外两处的上下文。
 /// 用户看得见的句子住 `Display/SyncText.swift`。
 @MainActor
 @Observable
 final class SessionSync {
-
-    /// 状态行要说的事 —— 只报「哪一步 + 哪一类原因」，句子在 `Display/SyncText.swift`。
-    enum Status {
-        case idle
-        case syncing
-        case done(added: Int, recovered: Bool)
-        case failed(step: Step, cause: Cause)
-    }
-
-    /// 失败发生在哪一步 —— 每步各有一句说法。
-    enum Step {
-        case opening
-        case paging
-        case syncing
-        case sending
-        case executing
-        case selecting
-        case streaming
-    }
-
-    /// 失败属于哪一类 —— 按「谁说的」分，不按 `RpcClientError` 的 case 分。
-    enum Cause {
-        /// 镜像只说「没成」：取窗口 / 追新增 / 往回翻的传输失败都没有错误对象。
-        case transport
-        /// 服务端按信封拒绝，但镜像只留了协议码。
-        case refusal(code: String)
-        /// 编排自己执行的重置撞上了缺口，连着两次。
-        case resetLoop(ResetReason)
-        /// 抛出来的错误原样带过去：编排查不出它属于哪一类，也不需要查 —— 显示层会解释。
-        case thrown(any Error)
-    }
 
     /// 屏幕上要画的东西 —— 消息**与过程**；由组装器从同一批事件算出。
     private(set) var nodes: [TranscriptNode] = []
@@ -52,44 +28,68 @@ final class SessionSync {
     private(set) var eventCount = 0
     /// 还能往回翻吗。为真时界面给出入口。
     private(set) var hasOlder = false
-    private(set) var status: Status = .idle
     /// 「对不上」的告知 —— 底部固定面的数据源；判定在 `ResyncNoticeState`。
     private(set) var notice: ResyncNotice?
     /// 正在生成的回复（流式输出）；没有进行中的 attempt 就是空串。
     private(set) var transientText = ""
-    /// 正在往回翻页 —— 与 `status` 分开：界面要的是「顶部在等」。
+    /// 正在往回翻页 —— 与状态行分开：界面要的是「顶部在等」。
     private(set) var isPagingOlder = false
     /// 上下文占用；`nil` 时格子显示 `--` 而不消失（消失会让模型格横移）。
     private(set) var usage: UsagePayload? = nil
     /// 最后一次收到数据帧的时刻。**不参与观察**：每帧都变，被追踪会让合并刷新失效。
     @ObservationIgnored
     private(set) var lastFrameAt: Date? = nil
-    /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
-    private(set) var displayedModel: ModelSelection? = nil
     /// 每收到一条实时事件就叫一声，参数是它的类型。**单读者**：权限那一格靠它判断
     /// 「宿主那边的当前权限可能变了」。判定住在权限域（`PermissionState.affectsCurrent`），
     /// 这里只转发 —— 事件名是权限域的知识，不是编排的。
     var onLiveEventType: ((String) -> Void)?
 
+    // MARK: - 三样共享的状态与两族动作
+
+    /// 状态行 —— 三族动作共写同一条，所以它是一个持有者而不是三份拷贝。
+    let statusBox: SessionStatus
+    /// 当前显示的模型 —— 读写两侧共写同一个镜像。
+    let models: SessionModelMirror
+    /// 用户动作（发消息 / 命令 / 选模型）。
+    let actions: SessionActions
+    /// 本屏那一条流的开关。**惰性**：它的三个闭包都要捕获本对象，而在 `init` 里
+    /// 捕获 `self` 要等全部存储属性就位 —— 惰性让「就位」发生在第一次用到时。
+    @ObservationIgnored
+    private lazy var followingStorage = SessionFollowing(
+        makeStream: { [unowned self] in
+            self.factory.makeStream(SessionBehavior(owner: self))
+        },
+        isTranscriptEmpty: { [unowned self] in self.mirror.isEmpty },
+        syncNow: { [unowned self] in await self.sync() }
+    )
+    var following: SessionFollowing { followingStorage }
+
+    // MARK: - 视图读的三个面（转发，不改视图的调用形状）
+
+    /// 状态行。类型别名让 `Display/SyncText.swift` 的句子继续挂在 `SessionSync.Status` 上。
+    typealias Status = SessionStatus.Value
+    typealias Step = SessionStatus.Step
+    typealias Cause = SessionStatus.Cause
+
+    var status: Status { statusBox.value }
+    /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
+    var displayedModel: ModelSelection? { models.displayed }
+
     private let client: RpcClient
     let sessionId: String
+    /// 造流口 —— 窄接口，连接级动作在此写不出来。
+    private let factory: any StreamFactory
     /// 内存里的镜像；视图重建即重取窗口。
     private var mirror = SessionMirror()
     private var syncInFlight = false
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
 
-    /// 造流口 —— 窄接口，连接级动作在此写不出来。
-    private let factory: any StreamFactory
-    /// 本屏那一条流。关它、重开它都是它自己的方法 —— 连接与别的流不动。
-    private var stream: LogicalStream?
     /// 连接阶段 —— 读穿而不是镜像，观察机制会跟到源头。
     var phase: ConnectionPhase { connectionPhase() }
     private let connectionPhase: () -> ConnectionPhase
     private var transient = TransientChannel()
 
-    /// 首屏兜底：WS 迟迟不给窗口时用 HTTP 拉一次，`opening` 到达即取消。
-    private var firstScreenFallback: Task<Void, Never>?
     /// 事件 → 显示节点。它跨刷新保留 —— 状态与去重理由见 `TranscriptAssembler`。
     private var assembler = TranscriptAssembler { type in
         // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
@@ -97,8 +97,6 @@ final class SessionSync {
     }
     /// 占用值的吸收，判定在 `UsageState`。
     private var usageState = UsageState()
-    /// 当前模型的订阅更新，判定在 `ModelSelectionState`。
-    private var modelState = ModelSelectionState()
     /// 刷新合并闸：事件帧批处理，判定在值类型 `RefreshGate`。
     private var refreshGate = RefreshGate()
     /// flush 是否已有一次调度在途（防重复调度）。
@@ -111,61 +109,34 @@ final class SessionSync {
         self.sessionId = sessionId
         self.factory = link
         self.connectionPhase = { [weak link] in link?.phase ?? .idle }
+
+        let statusBox = SessionStatus()
+        let models = SessionModelMirror()
+        self.statusBox = statusBox
+        self.models = models
+        self.actions = SessionActions(client: client, sessionId: sessionId,
+                                      status: statusBox, models: models)
     }
 
-    /// 下发一条指令；返回「是否已受理」，调用方据此决定清不清草稿。
-    private func sendPrompt(_ text: String) async -> Bool {
-        // 与发送按钮的置灰读同一份判定 —— 「判空」与「取值」同源。
-        guard let trimmed = PromptDraft.normalized(text) else { return false }
-        do {
-            try await promptSession(
-                client, sessionId: sessionId, text: trimmed, promptId: UUID().uuidString
-            )
-            return true
-        } catch {
-            status = .failed(step: .sending, cause: .thrown(error))
-            refreshView()
-            return false
-        }
-    }
-
-    // MARK: - 命令
+    // MARK: - 用户动作（转给写侧）
 
     /// 把一行字送出去 —— 走哪条路由 `ComposerState` 判好交进来。
     func deliver(_ dispatch: SlashDispatch) async -> Bool {
-        switch dispatch {
-        case .command(let line): return await executeCommand(line)
-        case .prompt(let text): return await sendPrompt(text)
-        }
-    }
-    /// 执行一整行命令；回包 ok = 已受理，结果从订阅流来。
-    private func executeCommand(_ line: String) async -> Bool {
-        do {
-            try await runCommand(client, sessionId: sessionId, line: line)
-            return true
-        } catch {
-            status = .failed(step: .executing, cause: .thrown(error))
-            refreshView()
-            return false
-        }
+        await actions.deliver(dispatch)
     }
 
-    // MARK: - 模型选择
-
-    /// 安装一次会话级选择：本地先记代号，回包对号落地。
+    /// 安装一次会话级选择。
     func selectModel(_ selection: ModelSelection) async {
-        let generation = modelState.beginSelect()
-        do {
-            let selected = try await installModelSelection(
-                client, sessionId: sessionId, selection: selection
-            )
-            if modelState.settle(generation: generation, selected: selected) {
-                displayedModel = modelState.displayed
-            }
-        } catch {
-            status = .failed(step: .selecting, cause: .thrown(error))
-        }
+        await actions.selectModel(selection)
     }
+
+    // MARK: - 流的开关（转给流开关）
+
+    func startFollowing() { following.start() }
+    func retry() { following.retry() }
+    func stopFollowing() { following.stop() }
+
+    // MARK: - 读侧编排
 
     /// 同步一次：空则先取窗口，然后从末尾追到最新。幂等。
     func sync() async {
@@ -174,7 +145,7 @@ final class SessionSync {
         defer { syncInFlight = false }
         // 与 `loadOlder` 对照用：debug 级，`DSH_LOG_DEBUG=1` 才出来（这条可能一秒一次）。
         Log.debug(Log.Module.session, "sync start events=\(mirror.events.count) empty=\(mirror.isEmpty)")
-        status = .syncing
+        statusBox.set(.syncing)
 
         var added = 0
         var recovered = false
@@ -191,11 +162,11 @@ final class SessionSync {
                 mirror.reset()
                 recovered = true
             case .refused(let code):
-                status = .failed(step: .opening, cause: .refusal(code: code))
+                statusBox.set(.failed(step: .opening, cause: .refusal(code: code)))
                 refreshView()
                 return
             case .failed:
-                status = .failed(step: .opening, cause: .transport)
+                statusBox.set(.failed(step: .opening, cause: .transport))
                 refreshView()
                 return
             }
@@ -217,7 +188,7 @@ final class SessionSync {
             case .resetRequired(let reason):
                 // 重置只做一次：再要求重置说明不会收敛。
                 guard !recovered else {
-                    status = .failed(step: .syncing, cause: .resetLoop(reason))
+                    statusBox.set(.failed(step: .syncing, cause: .resetLoop(reason)))
                     refreshView()
                     return
                 }
@@ -225,18 +196,18 @@ final class SessionSync {
                 mirror.reset()
                 // 编排自己执行的重置：保留无法收敛，一律重置并如实记「已重置」。
                 noteReset(reason)
-                status = .done(added: added, recovered: true)
+                statusBox.set(.done(added: added, recovered: true))
                 refreshView()
                 return
 
             case .refused(let code):
-                status = .failed(step: .syncing, cause: .refusal(code: code))
+                statusBox.set(.failed(step: .syncing, cause: .refusal(code: code)))
                 refreshView()
                 return
 
             case .failed:
                 // 传输失败：视图保持原样，只把状态说清楚。
-                status = .failed(step: .syncing, cause: .transport)
+                statusBox.set(.failed(step: .syncing, cause: .transport))
                 refreshView()
                 return
             }
@@ -246,7 +217,7 @@ final class SessionSync {
 
         // 干净走完 = 已对齐，「未接上」到此为止。
         clearNotice()
-        status = .done(added: added, recovered: recovered)
+        statusBox.set(.done(added: added, recovered: recovered))
         refreshView()
     }
 
@@ -262,7 +233,7 @@ final class SessionSync {
             syncInFlight = false
             isPagingOlder = false
         }
-        status = .syncing
+        statusBox.set(.syncing)
 
         // 上限 3 页：再多说明服务端在挤牙膏，让用户看见状态行比继续闷拉更有用。
         for _ in 0..<3 {
@@ -271,9 +242,9 @@ final class SessionSync {
 
             switch verdict {
             case .merged(let count):
-                status = .done(added: count, recovered: false)
+                statusBox.set(.done(added: count, recovered: false))
             case .caughtUp:
-                status = .done(added: 0, recovered: false)
+                statusBox.set(.done(added: 0, recovered: false))
             case .resetRequired(let reason):
                 // 更早的历史接不上不影响当前视图的真实性：`.gap` 保留（清空等于
                 // 用「你多点一下」换掉已读到的全部内容），只有位置被否定才清空重来。
@@ -282,11 +253,11 @@ final class SessionSync {
                 refreshView()
                 return
             case .refused(let code):
-                status = .failed(step: .paging, cause: .refusal(code: code))
+                statusBox.set(.failed(step: .paging, cause: .refusal(code: code)))
                 refreshView()
                 return
             case .failed:
-                status = .failed(step: .paging, cause: .transport)
+                statusBox.set(.failed(step: .paging, cause: .transport))
                 refreshView()
                 return
             }
@@ -313,44 +284,7 @@ final class SessionSync {
         }
     }
 
-    // MARK: - 订阅
-
-    /// 进会话详情即登记一条流：opening 与事件帧都喂给同一台 `SessionMirror`
-    /// （opening 走 `realign`：本地更早的部分保留、只换尾部）。
-    /// 开流文本在这一层拼，编号由连接层给。
-    func startFollowing() {
-        // 一次屏幕只造一条：重复调用不换号、也不多一条流（视图重算会让这里被调多次）。
-        guard stream == nil else { return }
-        stream = factory.makeStream(SessionBehavior(owner: self))
-        // 首屏兜底与开流成败无关：编不出帧时它是唯一还能把内容送到屏幕上的路。
-        scheduleFirstScreenFallback()
-    }
-
-    /// 只重开这一条流 —— 流级动作，不动连接与别的流。
-    func retry() {
-        stream?.restart()
-    }
-
-    /// 2.5 秒是「明显慢了」与「还在握手」的分界；只在手里还空时兜。
-    private func scheduleFirstScreenFallback() {
-        firstScreenFallback?.cancel()
-        firstScreenFallback = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
-            guard !Task.isCancelled, let self, self.mirror.isEmpty else { return }
-            Log.info(Log.Module.session, "first-screen fallback: ws silent, fetching over http")
-            await self.sync()
-        }
-    }
-
-    /// 离开会话详情：注销这条流、清未定稿。连接留在原处（App 级），镜像随本对象消失。
-    func stopFollowing() {
-        firstScreenFallback?.cancel()
-        firstScreenFallback = nil
-        stream?.close()
-        stream = nil
-        transient = TransientChannel()
-        transientText = ""
-    }
+    // MARK: - 事件吸收
 
     /// 打开帧与事件帧的埋点；其余类别一个渲染帧就完了，计时只会撑大日志。
     /// 与 `apply` 分开是为了顺序：两者之差正是这一跳的耗时。
@@ -398,7 +332,7 @@ final class SessionSync {
     private func applyOpening(_ opening: OpeningFrame) {
         lastFrameAt = Date()
         // WS 自己把窗口送到了，HTTP 兜底取消，免得两秒后又拉一次。
-        firstScreenFallback?.cancel()
+        following.cancelFirstScreenFallback()
         // 手空着时等价于「打开」，重连时走「重对齐」：保留本地更早的部分。
         let wasEmpty = mirror.isEmpty
         let verdict = mirror.realign(with: SessionPage(opening: opening))
@@ -412,10 +346,7 @@ final class SessionSync {
         transientText = transient.text
 
         // 模型基线：opening 的 `model` 是进会话那一刻权威的「下一轮用什么」；不在 = 不知道。
-        if let baseline = opening.model {
-            modelState.absorb(baseline: baseline)
-            displayedModel = modelState.displayed
-        }
+        models.absorb(baseline: opening.model)
 
         // 占用基线：opening 带的这一份是**这条流上最后一个读数**，后续的 `usage` 帧只在读数
         // 变化时才来（网关拿它当基线）。不采纳它，没有新轮次的会话就永远显示 `--`，
@@ -424,7 +355,7 @@ final class SessionSync {
 
         // 状态行只在首次建立窗口时更新：重连是传输层事件。
         if wasEmpty {
-            status = .done(added: addedCount(verdict), recovered: false)
+            statusBox.set(.done(added: addedCount(verdict), recovered: false))
         } else if case .resetRequired(let reason) = verdict {
             // 分档判在 `ResetReason.invalidatesLocalContent`，这里只执行。
             if reason.invalidatesLocalContent { mirror.reset() }
@@ -467,8 +398,7 @@ final class SessionSync {
         // 「未接上」之后事件进不来；告知要跟上现状，否则界面静止却看起来正常。
         if case .resetRequired = verdict { observeNotice(verdict) }
         // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
-        modelState.absorb(event: event)
-        displayedModel = modelState.displayed
+        models.absorb(event: event)
         // 权限那一格只关心「当前值可能变了」那三类；哪些算，判定在权限域自己手里。
         onLiveEventType?(event.type)
         // 事件帧只标脏，批到点一次全量重算（opening / HTTP 同步路径不经闸）。
@@ -495,7 +425,7 @@ final class SessionSync {
         if verdict == .broken {
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
             Log.warn(Log.Module.session, "TransientChannel broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
-            stream?.restart()
+            following.retry()
             return
         }
         transientText = transient.text
@@ -503,7 +433,7 @@ final class SessionSync {
 
     private func handleStreamRefusal(_ failure: GatewayFailure) {
         // 包成「抛出来的错误」：显示层会解释成「订阅流被拒绝：…」。
-        status = .failed(step: .streaming, cause: .thrown(RpcClientError.refused(failure)))
+        statusBox.set(.failed(step: .streaming, cause: .thrown(RpcClientError.refused(failure))))
         refreshView()
     }
 
@@ -550,8 +480,7 @@ final class SessionSync {
         do {
             let snapshot = try await readSnapshot(client, sessionId: sessionId, since: mirror.cursor)
             // snapshot 回应带着「下一轮用什么」，只有这一路能补上。
-            modelState.absorb(baseline: snapshot.model)
-            displayedModel = modelState.displayed
+            models.absorb(baseline: snapshot.model)
             // 协议回应就是状态机的输入形状 —— 同形的东西只有一份，不在此逐字段搬。
             return .received(snapshot)
         } catch let error as RpcClientError {
