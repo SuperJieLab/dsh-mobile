@@ -8,7 +8,7 @@ struct SessionListAssembler: View {
     private let client: RpcClient
     /// 订阅要它：列表「跟着别的设备动」全靠这条流。
     private let events: EventStream
-    /// 渲染段读它的投影：`phase` 驱动「就绪即首载」，`meshPath` 给徽章，`route` 给页脚地址。
+    /// 渲染段读它的投影：`phase` 驱动「就绪即首载」，`meshPath` 给底部那条状态带。
     private let store: MeshStore
     /// 新建成功后要进哪一屏。由组合根给（那里握着 `NavigationStack` 的 path）。
     private let navigate: (Destination) -> Void

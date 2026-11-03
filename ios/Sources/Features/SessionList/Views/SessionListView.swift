@@ -5,7 +5,7 @@ import SwiftUI
 /// **它永远是根**：前置条件不满足时不换屏，只在顶部给一条提示。
 struct SessionListView: View {
     let list: SessionListState
-    /// `phase` 驱动「就绪即首载」，`meshPath` 给徽章，`route` 给页脚地址。
+    /// `phase` 驱动「就绪即首载」，`meshPath` 给底部那条状态带。
     let store: MeshStore
 
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
@@ -126,14 +126,12 @@ struct SessionListView: View {
         return title.isEmpty ? "（未命名工作空间）" : title
     }
 
-    /// 页脚：平时只说总数，连不上时才带上地址。
+    /// 底部那条状态带。`nil` = 没什么要说，整条不出现（直连且没出错时的常态）。
     ///
-    /// 地址不是日常浏览信息，但它不能直接删掉 —— 设置页显示的是**用户填的那个**地址，
-    /// 而运行时**实际连上的**那个只在这里出现过。连不上时，两者的差别正是要查的东西。
-    private var footerText: String {
-        let count = "\(list.sessions.count) 个会话"
-        guard list.failureText != nil || list.blockedReason != nil else { return count }
-        return "\(count) · \(gatewayAddressLine(store.route?.baseURL))"
+    /// 判定在 `ConnectionStatusBarModel.make`：这里只把两个来源交进去 ——
+    /// 路径来自组网，失败来自列表自己的上一次读取。
+    private var statusBar: ConnectionStatusBarModel? {
+        ConnectionStatusBarModel.make(carrier: store.meshPath, failure: list.failureText)
     }
 
     /// 确认框的标题：点的是哪一组就点它的名。
@@ -205,12 +203,6 @@ struct SessionListView: View {
                     }
                 }
             }
-
-            Section {
-                EmptyView()
-            } footer: {
-                Text(footerText)
-            }
         }
         // 显式声明分组样式：一组一张卡这件事要靠它，而不是靠默认值 -- 默认值随平台
         // 与层级变化，而「组是卡片、组之间有空隙」是这一屏的结构，不是巧合。
@@ -250,6 +242,15 @@ struct SessionListView: View {
             Text(WorkspaceDeletionText.message(sessionCount: target.sessionCount))
         }
         .refreshable { await list.reload() }
+        // 状态带贴在底边而不是进 List 的页脚：页脚跟着内容滚，用户往回翻时正好看不见，
+        // 而「现在断没断」恰恰是那时候最需要知道的。
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let statusBar {
+                ConnectionStatusBar(model: statusBar) {
+                    Task { await list.reload() }
+                }
+            }
+        }
         // 进屏首载。事件订阅不在这里：那是造这个 state 的装配段接的线（见
         // `SessionListAssembler`）。本屏只负责「什么时候取」——那是手势与平台事件。
         .task { await list.reload() }
@@ -267,13 +268,6 @@ struct SessionListView: View {
             Task { await list.reload() }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                // 只喂 `failureText`：`.blocked` 时它是 nil，于是「还差一步配置」不会显示
-                // 成「已断开」—— 网络本身可能好好的。
-                ConnectionBadge(state: ConnectionBadge.Status(isLoading: list.isLoading,
-                                                             lastFailure: list.failureText),
-                                meshPath: store.meshPath)
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 // 顶层唯一的「新建」：造一个工作空间。会话由各组的标题行按钮建 ——
                 // 两步各自只做一件事，谁失败都看得出是哪一步。

@@ -3108,8 +3108,8 @@ final class LayeringTests: XCTestCase {
 
     /// 递归收集若干目录下声明的类型名。
     ///
-    /// `topLevelOnly` 用于方向检查：内层同名类型（`TailnetNode.MeshPath` 与
-    /// `ConnectionBadge.MeshPath`）会互相误报；而跨层引用一个嵌套类型必须写出它的外层名字，
+    /// `topLevelOnly` 用于方向检查：内层同名类型（`MarkdownParser.Kind` 与
+    /// `ResyncNotice.Kind`）会互相误报；而跨层引用一个嵌套类型必须写出它的外层名字，
     /// 外层名字本身就在集合里 —— 所以只取顶层不会漏。
     /// 收集实现层声明的类型名。
     ///
