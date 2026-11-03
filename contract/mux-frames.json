@@ -1,0 +1,58 @@
+{
+  "about": [
+    "两端共守的 mux 帧样本 —— 手机端与网关端各有一条判据读这一份。",
+    "改这里的任何一行，两端都会红；只改一端自己的断言，另一端不会。",
+    "client 段：字节由手机端编出，网关端解析。text 是精确字节（手机端按 .sortedKeys 编码，键序确定）。",
+    "server 段：网关端编出，手机端解析。这里钉的是语义而不是字节 —— 服务端用 JSON.stringify，",
+    "键序跟着对象字面量走，钉字节会把「加一个字段」变成一次无意义的红。"
+  ],
+  "client": [
+    {
+      "name": "follow",
+      "text": "{\"payload\":{\"op\":\"follow\",\"sessionId\":\"s-1\"},\"streamId\":\"s-9\",\"type\":\"open\"}",
+      "type": "open",
+      "streamId": "s-9",
+      "op": "follow",
+      "sessionId": "s-1"
+    },
+    {
+      "name": "events",
+      "text": "{\"payload\":{\"op\":\"events\"},\"streamId\":\"e-1\",\"type\":\"open\"}",
+      "type": "open",
+      "streamId": "e-1",
+      "op": "events"
+    },
+    {
+      "name": "cancel",
+      "text": "{\"streamId\":\"s-9\",\"type\":\"cancel\"}",
+      "type": "cancel",
+      "streamId": "s-9"
+    }
+  ],
+  "server": [
+    {
+      "name": "item-follow-opening",
+      "text": "{\"type\":\"item\",\"streamId\":\"s-9\",\"payload\":{\"sessionId\":\"s-1\",\"cursor\":3,\"pageStart\":1,\"hasOlder\":false,\"events\":[]}}",
+      "type": "item",
+      "streamId": "s-9"
+    },
+    {
+      "name": "item-events-waterfall",
+      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"payload\":{\"kind\":\"waterfall\",\"event\":\"permission\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{}}}",
+      "type": "item",
+      "streamId": "e-1"
+    },
+    {
+      "name": "end",
+      "text": "{\"type\":\"end\",\"streamId\":\"s-9\"}",
+      "type": "end",
+      "streamId": "s-9"
+    },
+    {
+      "name": "error",
+      "text": "{\"type\":\"error\",\"streamId\":\"s-9\",\"payload\":{\"code\":\"unknown-op\",\"message\":\"no such op\"}}",
+      "type": "error",
+      "streamId": "s-9"
+    }
+  ]
+}
