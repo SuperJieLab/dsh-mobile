@@ -24,6 +24,10 @@ mac-gateway/deploy/tls/
 *.key
 *.pem
 
+# 归档产物（scripts/release.sh 的 .xcarchive 与 ipa）
+# 锚定根目录（前导斜杠）：只挡仓库根的 build/，不误伤子目录里叫 build 的东西。
+/build/
+
 # Xcode
 ios/Frameworks/
 ios/build/
