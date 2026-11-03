@@ -21,15 +21,20 @@ enum SessionListChange: Equatable {
         case "added":
             guard let row = payload["row"],
                   let id = row["id"]?.string, !id.isEmpty,
-                  let updatedAt = row["updatedAt"]?.number
+                  let updatedAt = row["updatedAt"]?.number,
+                  // 两个布尔在契约与网关出站类型里都是**必填**。缺失就丢这一条，
+                  // 不补 `false`：补出来的行看起来完全正常，只是在屏幕上说「这个会话不在跑」——
+                  // 而真相是这一条我们根本没读懂。
+                  let running = row["running"]?.bool,
+                  let blank = row["blank"]?.bool
             else { return nil }
             return .added(SessionSummary(
                 id: id,
                 title: row["title"]?.string,
                 createdAt: nil,
                 updatedAt: updatedAt,
-                running: row["running"]?.bool ?? false,
-                blank: row["blank"]?.bool ?? false,
+                running: running,
+                blank: blank,
                 origin: row["origin"]?.string,
                 workspaceId: row["workspaceId"]?.string
             ))

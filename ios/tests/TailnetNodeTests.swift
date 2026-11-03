@@ -413,4 +413,34 @@ final class TailnetNodeTests: XCTestCase {
         await old.releaseEverything()
         _ = await first.value
     }
+
+    // MARK: - 状态目录健康判定
+
+    /// 启动路径上的一个判定，三条分支各有后果 —— 它决定「重开不重注册」还是「重新注册」。
+    ///
+    /// 三条都要断言：只测「可读 → true」的话，把整个函数写成 `return true` 也绿；
+    /// 而那个错法在真机上表现为「拿半份身份去起节点，起不来还看不出为什么」。
+    func testStateStoreHealthTellsTheThreeCasesApart() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("dsh-state-health-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        // ① 不存在 = 干净首启。
+        XCTAssertFalse(TailnetNode.stateStoreHealthy(in: root), "目录不存在：视为未注册")
+
+        // ② 存在且可读 = 重开不重注册。
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        XCTAssertTrue(TailnetNode.stateStoreHealthy(in: root), "可读的目录：视为已注册")
+
+        // ③ 存在但不是目录 = 半途写坏，fail-closed。
+        let file = root.appendingPathComponent("not-a-dir")
+        try Data("x".utf8).write(to: file)
+        XCTAssertFalse(TailnetNode.stateStoreHealthy(in: file), "同名文件不是状态目录")
+
+        // ④ 存在但读不了 = 写坏，fail-closed。
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+        XCTAssertFalse(TailnetNode.stateStoreHealthy(in: root), "不可读：视为未注册")
+        // 还原权限，否则 defer 里的删除也会失败（留一个空目录在临时区）。
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+    }
 }

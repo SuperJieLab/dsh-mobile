@@ -317,18 +317,37 @@ final class ApprovalStoreTests: XCTestCase {
 
     // MARK: - 清空
 
-    /// 换代清空：卡与状态一起没了，之后重投一条就回来一条。
-    func testClearDropsEveryEntryAndEveryState() {
-        let store = ApprovalStore(answerer: FakeAnswerer())
+    /// 换代清空：卡、状态、说明一起没了。
+    ///
+    /// **必须先让三样都非空**，否则「清空后都没了」对从未置位的键恒真 —— 这条用例原先
+    /// 断言的是两个从未存在过的身份（`e1` 从未置状态、`c2` 从未出现），两条都是恒真的。
+    /// 造非空的三条路各走一次：成功应答写通知、传输失败留状态、卡本身在表里。
+    func testClearDropsEveryEntryAndEveryState() async {
+        let answerer = FakeAnswerer()
+        let store = ApprovalStore(answerer: answerer)
         store.receive(waterfall(session: "s1", eventId: "e1"))
         store.receive(waterfall(session: "s2", eventId: "e2"))
+
+        guard let first = store.pending(in: "s1").first,
+              let second = store.pending(in: "s2").first else {
+            return XCTFail("前置：两张卡都该在表里")
+        }
+        // e1 走成功：撤卡 + 写一句说明。
+        await store.answer(first, allow: true)
+        // e2 走传输失败：卡留着、状态停在 `.unknown`。
+        answerer.outcome = .failure(RpcClientError.notActivated)
+        await store.answer(second, allow: true)
+
+        // 正控：三样都真的非空 —— 少了这一步，下面的断言只是在测 nil == nil。
+        XCTAssertNotNil(store.notice(for: "s1"), "成功应答该留下一条说明")
+        XCTAssertNotNil(store.state(for: "e2"), "传输失败该留下一个状态行")
+        XCTAssertFalse(store.pending(in: "s2").isEmpty, "失败不撤卡")
 
         store.clear()
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty)
         XCTAssertTrue(store.pending(in: "s2").isEmpty)
-        XCTAssertNil(store.state(for: "e1"))
-        XCTAssertNil(store.state(for: "c2"))
+        XCTAssertNil(store.state(for: "e2"), "状态行不留看不见的旧值")
         XCTAssertNil(store.notice(for: "s1"), "上一代的说明也过时了")
     }
 }

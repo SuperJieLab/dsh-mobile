@@ -520,10 +520,18 @@ final class TailnetNode {
 
     /// 目录存在但读不了 = 半途被杀写坏 = 视为未注册（fail-closed）；不存在 = 干净首启。
     private static func stateStoreHealthy() -> Bool {
-        let dir = stateDir
+        stateStoreHealthy(in: stateDir)
+    }
+
+    /// 判定的本体 —— 入参就是全部输入，判据直接打这里，不碰 App 沙盒。
+    ///
+    /// 三条分支各有后果：**不存在** = 干净首启（有 key 就走 `registering`）；**存在但读不了**
+    /// 或**不是目录** = 半途被杀写坏，视为未注册（fail-closed，宁可重新注册也不拿半份身份起）；
+    /// **可读** = 重开不重注册。
+    static func stateStoreHealthy(in dir: URL) -> Bool {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDirectory) else {
-            return false   // 首启：走 registering（有 key 时）
+            return false
         }
         return isDirectory.boolValue && FileManager.default.isReadableFile(atPath: dir.path)
     }

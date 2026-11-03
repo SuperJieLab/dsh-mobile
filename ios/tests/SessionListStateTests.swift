@@ -123,7 +123,7 @@ final class SessionListStateTests: XCTestCase {
         fetch.rows = .success([row("a", updatedAt: 100)])
         let state = make(fetch)
 
-        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300}}"#))
+        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":false}}"#))
         XCTAssertEqual(state.sessions.map(\.id), ["b"], "事件先到：列表只有它")
 
         await state.reload()
@@ -148,7 +148,7 @@ final class SessionListStateTests: XCTestCase {
         let pull = Task { await state.reload() }
         await settle()
 
-        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300}}"#))
+        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":false}}"#))
         state.apply(try change(#"{"kind":"activity","id":"a","updatedAt":200}"#))
         // 在途期间就已经生效：用户不必等这一发回来才看见。
         XCTAssertEqual(state.sessions.map(\.id), ["b", "a", "z"], "立即生效，而不是攒着等")
@@ -185,7 +185,7 @@ final class SessionListStateTests: XCTestCase {
 
         let pull = Task { await state.reload() }
         await settle()
-        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300}}"#))
+        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":false}}"#))
 
         fetch.release()
         await pull.value
@@ -203,16 +203,16 @@ final class SessionListStateTests: XCTestCase {
     func testInvisibleRowsFromEventsNeverEnterTheList() throws {
         let state = make(FakeFetch())
         state.apply(try change("""
-        {"kind":"added","row":{"id":"s1","updatedAt":100,"blank":true}}
+        {"kind":"added","row":{"id":"s1","updatedAt":100,"running":false,"blank":true}}
         """))
         XCTAssertTrue(state.sessions.isEmpty, "blank 行不显示")
 
         state.apply(try change("""
-        {"kind":"added","row":{"id":"s2","updatedAt":90,"origin":"subagent"}}
+        {"kind":"added","row":{"id":"s2","updatedAt":90,"running":false,"blank":false,"origin":"subagent"}}
         """))
         XCTAssertTrue(state.sessions.isEmpty, "子会话不显示")
 
-        state.apply(try change(#"{"kind":"added","row":{"id":"s3","updatedAt":80}}"#))
+        state.apply(try change(#"{"kind":"added","row":{"id":"s3","updatedAt":80,"running":false,"blank":false}}"#))
         XCTAssertEqual(state.sessions.map(\.id), ["s3"], "普通行照常出现")
     }
 
@@ -225,7 +225,7 @@ final class SessionListStateTests: XCTestCase {
         let pull = Task { await state.reload() }
         await settle()
         state.apply(try change("""
-        {"kind":"added","row":{"id":"b","updatedAt":300,"blank":true}}
+        {"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":true}}
         """))
         fetch.release()
         await pull.value
@@ -247,7 +247,7 @@ final class SessionListStateTests: XCTestCase {
 
         let data = Data("""
         {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
-          "kind":"added","row":{"id":"s1","updatedAt":100}}}}
+          "kind":"added","row":{"id":"s1","updatedAt":100,"running":false,"blank":false}}}}
         """.utf8)
         let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: data)
         events.handle(EventReader.read(envelope: envelope))

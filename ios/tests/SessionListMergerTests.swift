@@ -63,6 +63,25 @@ final class SessionListMergerTests: XCTestCase {
         }
     }
 
+    /// `running` 与 `blank` 是契约必填：缺了要**丢这一条**，不能补一个 `false`。
+    ///
+    /// 补默认值的后果不是崩，是屏幕上多一行「不在跑」的会话，而它看起来完全正常 ——
+    /// 这种错没有任何东西会喊。两个字段各测一次：只测一个的话，另一个退回默认值仍然绿。
+    func testAnAddedRowWithoutItsRequiredBooleansIsDropped() throws {
+        XCTAssertNil(SessionListChange.decode(try json("""
+        {"kind":"added","row":{"id":"s1","updatedAt":100,"blank":false}}
+        """)), "缺 running：不能补 false")
+
+        XCTAssertNil(SessionListChange.decode(try json("""
+        {"kind":"added","row":{"id":"s1","updatedAt":100,"running":true}}
+        """)), "缺 blank：不能补 false")
+
+        // 正控：两个都在时照常解出来 —— 否则上面两条在「这一支整个坏了」时也绿。
+        XCTAssertNotNil(SessionListChange.decode(try json("""
+        {"kind":"added","row":{"id":"s1","updatedAt":100,"running":true,"blank":false}}
+        """)))
+    }
+
     // MARK: - L1 事件不是基线
 
     /// 只喂变更、不给基线：一行的来源只有变更时它才出现 —— 这里断的是「合并**不**凭空
