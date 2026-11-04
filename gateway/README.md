@@ -1,4 +1,4 @@
-# mac-gateway
+# dsh-mobile-gateway
 
 Mac 侧的 DSH 插件：把本机 dsh 进程里的会话状态暴露给手机。
 

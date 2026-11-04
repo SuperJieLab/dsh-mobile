@@ -33,10 +33,10 @@ jobs:
           # 与本地开发用的版本对齐。跳大版本前先在本地跑一遍 scripts/ci.sh。
           node-version: '22'
           cache: npm
-          cache-dependency-path: mac-gateway/package-lock.json
+          cache-dependency-path: gateway/package-lock.json
 
       - name: 装依赖
-        working-directory: mac-gateway
+        working-directory: gateway
         run: npm ci
 
       # 环境版本进摘要：红了第一件事是分清「代码变了」还是「环境变了」。

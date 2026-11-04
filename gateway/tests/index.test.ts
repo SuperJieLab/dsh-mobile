@@ -26,7 +26,7 @@ function freshPort(base: number): number {
 
 /** One temp sandbox per test: a credentials file the real home never sees. */
 function tempCredentialsPath(): string {
-  return join(mkdtempSync(join(tmpdir(), 'mac-gateway-test-')), 'credentials.json')
+  return join(mkdtempSync(join(tmpdir(), 'dsh-mobile-gateway-test-')), 'credentials.json')
 }
 
 /** Device token the tests pair with — the raw side of the vault's hash. */
@@ -262,7 +262,7 @@ test('the assembled plugin answers a real request on a real port', async () => {
     const response = await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     assert.equal(response.status, 200)
     const body = await response.text()
-    assert.match(body, /mac-gateway alive/)
+    assert.match(body, /dsh-mobile-gateway alive/)
     // 版本号取常量作期望值：写死 `v2` 的断言与写死 `v2` 的实现一起过期，
     // 于是那句话可以静默说谎（升到 v3 时报的仍是 2）。
     assert.ok(body.includes(`protocol v${PROTOCOL_VERSION},`),

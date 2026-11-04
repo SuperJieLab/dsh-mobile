@@ -1,6 +1,6 @@
 # 术语回潮检查的反模式表（R13 期2）
 #
-# 单一来源：`mac-gateway/tests/terms.test.ts` 与 `ios/tests/TermsTests.swift` 读同一份，
+# 单一来源：`gateway/tests/terms.test.ts` 与 `ios/tests/TermsTests.swift` 读同一份，
 # 结构上不可能漂移。
 #
 # 格式（分号分隔，`#` 开头为注释）：

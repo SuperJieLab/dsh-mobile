@@ -1,7 +1,7 @@
 import Foundation
 
 /**
- * 性能记录 —— 与网关 `mac-gateway/src/perf.ts` 的 `PerfRecord` 同构：`seg` / `t` /
+ * 性能记录 —— 与网关 `gateway/src/perf.ts` 的 `PerfRecord` 同构：`seg` / `t` /
  * `sessionId` / `seq` 是公共字段，其余按 seg 不同（iOS 侧只产 `dev` 与 `clock`）。
  * 缺的字段整个缺席，不填默认值 ——「这一条不适用」与「值为零」是两件事。
  */

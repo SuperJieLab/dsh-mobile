@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# mac-gateway — 把本插件装进一个 dsh profile。
+# dsh-mobile-gateway — 把本插件装进一个 dsh profile。
 #
 # 为什么需要脚本：装插件要在 profile 的 package.json 里记一条「插件在哪」的
 # 绝对路径。手抄那串路径就是「同一个事实写两处」，抄错还不会报错。脚本自己
@@ -10,8 +10,8 @@
 # 下一步怎么启动、怎么配对）。直接跑本脚本只做「装 + 自检」。
 #
 # 用法：
-#   ./mac-gateway/install.sh            只安装
-#   ./mac-gateway/install.sh --revoke   撤销全部已配对设备（清空凭证文件）
+#   ./gateway/install.sh            只安装
+#   ./gateway/install.sh --revoke   撤销全部已配对设备（清空凭证文件）
 #                                       撤销后手机的下一次请求即 401，重新配对即恢复
 #
 # 环境变量：
@@ -63,6 +63,24 @@ if [ "${1:-}" = "--revoke" ]; then
   exit 0
 fi
 
+# ── 迁移旧 id 的配置段 ──────────────────────────────────────────────────────
+# profile 里的 `- id: mac-gateway` + `config:` 是「给已有行传配置」。插件 id 改成
+# `dsh-mobile-gateway` 之后，那一段就指向一个不存在的行 —— 而报错不会说「你配的 id 过期了」。
+#
+# 只替换**完全匹配**的那一行：`config:` 的内容原样留着。用 node 而不是 sed，
+# 因为 `sed -i` 的后缀在 GNU 与 BSD 上不同。
+PATCH="$DSH_HOME/profiles/$PROFILE/cordis.patch.yml"
+if [ -f "$PATCH" ] && grep -q '^- id: mac-gateway$' "$PATCH" 2>/dev/null; then
+  say "→ 迁移 profile 配置：id: mac-gateway → id: dsh-mobile-gateway"
+  node -e '
+const fs = require("fs");
+const [path] = process.argv.slice(1);
+const before = fs.readFileSync(path, "utf8");
+const after = before.replace(/^- id: mac-gateway$/gm, "- id: dsh-mobile-gateway");
+if (after !== before) fs.writeFileSync(path, after);
+' "$PATCH"
+fi
+
 # ── 安装 ────────────────────────────────────────────────────────────────────
 # 用绝对路径：dsh 会把相对路径先按**调用时的当前目录**锚定，
 # 而这里要装的确定是 $PACKAGE，不该随调用者所在目录变化。
@@ -70,32 +88,32 @@ say "→ 把 $PACKAGE 装进 profile「${PROFILE}」"
 # shellcheck disable=SC2086
 $DSH_CMD plugin --profile "$PROFILE" add "$PACKAGE"
 
-# ── 自检：数组合树里有几行 mac-gateway ──────────────────────────────────────
+# ── 自检：数组合树里有几行 dsh-mobile-gateway ──────────────────────────────────────
 # **不数行的话，「进了树两次」是看不出来的** —— 症状是端口被占两次、事件被处理两遍，
 # 而报错不会说「你装了两遍」。`--dump-config` 无副作用（组合树但不调用插件的 apply），
 # 所以这一步可以放心跑。
 #
-# 为什么不用「装之前 grep patch 文件」：profile 里合法的写法是 `- id: mac-gateway`
+# 为什么不用「装之前 grep patch 文件」：profile 里合法的写法是 `- id: dsh-mobile-gateway`
 # 后面跟 `config:`（配置覆盖，没有 `insert:` 包装），而重复项是 `- insert:` 下面
-# 包着 `- id: mac-gateway`。只看 `id: mac-gateway` 这个字符串会把**正常配置**当成
+# 包着 `- id: dsh-mobile-gateway`。只看 `id: dsh-mobile-gateway` 这个字符串会把**正常配置**当成
 # 重复项，于是「想给网关传 host」的人连装都装不上。数组合树是看事实，不是猜意图。
 # shellcheck disable=SC2086
 TREE="$($DSH_CMD --profile "$PROFILE" --dump-config 2>/dev/null)"
-COUNT=$(printf '%s\n' "$TREE" | grep -c 'id: mac-gateway' || true)
+COUNT=$(printf '%s\n' "$TREE" | grep -c 'id: dsh-mobile-gateway' || true)
 COUNT=${COUNT:-0}
 
 case "$COUNT" in
   0)
-    die "组合树里没有 mac-gateway 行 —— 看上面 pnpm 的输出。"
+    die "组合树里没有 dsh-mobile-gateway 行 —— 看上面 pnpm 的输出。"
     ;;
   1)
-    say "✅ mac-gateway 已进入组合树"
+    say "✅ dsh-mobile-gateway 已进入组合树"
     ;;
   *)
-    die "组合树里有 $COUNT 行 mac-gateway —— 插件进了树两次，端口与事件都会被处理两遍。
+    die "组合树里有 $COUNT 行 dsh-mobile-gateway —— 插件进了树两次，端口与事件都会被处理两遍。
 
     查 $DSH_HOME/profiles/$PROFILE/cordis.patch.yml：
-      · 有一段 \`- insert:\` 包着 \`- id: mac-gateway\` → 那是重复项，删掉它；
-      · \`- id: mac-gateway\` 后面直接跟 \`config:\` → 那是配置覆盖，**要留着**。"
+      · 有一段 \`- insert:\` 包着 \`- id: dsh-mobile-gateway\` → 那是重复项，删掉它；
+      · \`- id: dsh-mobile-gateway\` 后面直接跟 \`config:\` → 那是配置覆盖，**要留着**。"
     ;;
 esac

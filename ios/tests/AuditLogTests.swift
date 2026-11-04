@@ -135,7 +135,7 @@ final class AuditLogTests: XCTestCase {
             .deletingLastPathComponent()   // tests
             .deletingLastPathComponent()   // ios
             .deletingLastPathComponent()   // 仓库根
-        let source = try String(contentsOf: root.appendingPathComponent("mac-gateway/src/audit.ts"),
+        let source = try String(contentsOf: root.appendingPathComponent("gateway/src/audit.ts"),
                                 encoding: .utf8)
 
         guard let start = source.range(of: "WRITE_OPS = ["),

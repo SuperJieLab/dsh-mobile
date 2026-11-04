@@ -1,7 +1,7 @@
 /**
  * 日志时间戳：形状、极性、毫秒补零，以及「写下的时刻就是那一刻」。
  *
- * 与网关侧同一组样本（`mac-gateway/tests/timestamp.test.ts`）—— 两份实现靠字面量对齐，
+ * 与网关侧同一组样本（`gateway/tests/timestamp.test.ts`）—— 两份实现靠字面量对齐，
  * 不靠「记得同步」。两边都跑 `INSTANT` 那一组偏移，输出必须逐字相同。
  */
 import Foundation

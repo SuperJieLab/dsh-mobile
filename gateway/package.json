@@ -1,5 +1,5 @@
 {
-  "name": "dsh-mobile-mac-gateway",
+  "name": "dsh-mobile-gateway",
   "version": "0.1.0",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

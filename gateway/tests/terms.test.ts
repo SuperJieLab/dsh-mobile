@@ -25,7 +25,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** 仓库根：本文件在 `mac-gateway/tests/`，向上两级。 */
+/** 仓库根：本文件在 `gateway/tests/`，向上两级。 */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 /** 网关侧要扫的活文档（`dev/features/*` 是过程留痕，不在范围内）。 */
@@ -153,9 +153,9 @@ test('术语回潮检查：网关源码、测试、工具与活文档里不出�
   const docs = devExists ? DOCS.map((d) => join(ROOT, d)) : []
 
   const files = [
-    ...collectFiles(join(ROOT, 'mac-gateway/src'), '.ts'),
-    ...collectFiles(join(ROOT, 'mac-gateway/tests'), '.ts').filter((f) => !f.endsWith('terms.test.ts')),
-    ...collectFiles(join(ROOT, 'mac-gateway/tools'), '.ts'),
+    ...collectFiles(join(ROOT, 'gateway/src'), '.ts'),
+    ...collectFiles(join(ROOT, 'gateway/tests'), '.ts').filter((f) => !f.endsWith('terms.test.ts')),
+    ...collectFiles(join(ROOT, 'gateway/tools'), '.ts'),
     ...docs,
   ]
   // 扫到 0 个文件时 hits 也是空 —— 那会静默变绿，所以先断言扫到了东西。

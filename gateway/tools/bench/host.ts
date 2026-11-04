@@ -138,7 +138,7 @@ export async function installBench(
   }
 
   const cleanups: (() => void)[] = []
-  const credentialsDir = mkdtempSync(join(tmpdir(), 'mac-gateway-bench-'))
+  const credentialsDir = mkdtempSync(join(tmpdir(), 'dsh-mobile-gateway-bench-'))
   const credentialsPath = join(credentialsDir, 'credentials.json')
 
   let lastError: unknown

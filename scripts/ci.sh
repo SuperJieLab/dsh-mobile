@@ -57,7 +57,7 @@ run_gateway() {
   hr; say "网关 · npm test"; hr
   local log="$OUT/gateway.log"
 
-  ( cd "$ROOT/mac-gateway" && npm test ) >"$log" 2>&1
+  ( cd "$ROOT/gateway" && npm test ) >"$log" 2>&1
   local status=$?
 
   # `# tests N` / `# fail N` 是 node:test 的 TAP 尾巴。

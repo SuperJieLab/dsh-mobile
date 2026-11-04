@@ -1,7 +1,7 @@
 /**
  * 两端共守的 mux 帧样本 —— 这里读的是**同一份文件**，不是各写一份字面量。
  *
- * 网关那条在 `mac-gateway/tests/wire/mux-fixture.test.ts`。两边各写自己的样本时，
+ * 网关那条在 `gateway/tests/wire/mux-fixture.test.ts`。两边各写自己的样本时，
  * 改一端而另一端没跟上，两边的测试都还绿 —— 只有联调或真机才暴露。
  *
  * 两个方向各有一条判据：

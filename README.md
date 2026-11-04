@@ -36,7 +36,7 @@ npx @deepseek-ai/dsh@alpha web
 看到这行就是起来了：
 
 ```
-[mac-gateway] listening on http://0.0.0.0:3081
+[dsh-mobile-gateway] listening on http://0.0.0.0:3081
 ```
 
 ### 2. 手机侧

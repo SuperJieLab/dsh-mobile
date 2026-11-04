@@ -98,7 +98,7 @@ function hostServices(): Record<string, unknown> {
 }
 
 test('the plugin starts on a real cordis context and never reads a service it did not inject', async () => {
-  const credentialsDir = mkdtempSync(join(tmpdir(), 'mac-gateway-assembly-'))
+  const credentialsDir = mkdtempSync(join(tmpdir(), 'dsh-mobile-gateway-assembly-'))
   const credentialsPath = join(credentialsDir, 'credentials.json')
   const port = 34_912
   const root = new Context()

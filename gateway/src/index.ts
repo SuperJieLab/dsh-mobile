@@ -1,5 +1,5 @@
 /**
- * mac-gateway —— dsh-mobile 的 Mac 侧 DSH 插件：只做装配。本文件把它们接起来，
+ * dsh-mobile-gateway —— dsh-mobile 的 Mac 侧 DSH 插件：只做装配。本文件把它们接起来，
  * 并管监听器的生命周期。目录按「改它要不要动手机端」分：
  *
  *   wire/      两端共守的形状与编解码 —— 改它，手机端必须同改
@@ -36,7 +36,7 @@ import { createLogger, LogModule, startResourceSampler } from './log.ts'
 const log = createLogger(LogModule.main)
 
 /** dsh 诊断用的展示元数据。 */
-export const name = 'mac-gateway'
+export const name = 'dsh-mobile-gateway'
 
 /**
  * 插件启动前所需的服务；就绪之前 cordis 扣住 fiber（见模块注释）。
@@ -216,7 +216,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       server.closeAllConnections()
       server.close()
     }
-  }, 'mac-gateway.listener')
+  }, 'dsh-mobile-gateway.listener')
 }
 
 /**

@@ -109,7 +109,7 @@ async function respond(
     // 也不涉信封。版本号取常量而非硬编码 —— 它能升，这句话不能跟着说谎。
     response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
     response.end(path === '/'
-      ? `mac-gateway alive — protocol v${PROTOCOL_VERSION}, POST /rpc for the protocol\n`
+      ? `dsh-mobile-gateway alive — protocol v${PROTOCOL_VERSION}, POST /rpc for the protocol\n`
       : 'not found\n')
     return
   }

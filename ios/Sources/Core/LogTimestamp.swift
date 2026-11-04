@@ -12,7 +12,7 @@
  * 静默来源），而且要按需重建才安全。这里按日历取分量、按 `secondsFromGMT(for:)` 取偏移 ——
  * 夏令时在那一刻的偏移由系统回答，不需要我们判断。
  *
- * 与网关侧（`mac-gateway/src/timestamp.ts`）同一组样本，两份实现靠字面量对齐。
+ * 与网关侧（`gateway/src/timestamp.ts`）同一组样本，两份实现靠字面量对齐。
  */
 import Foundation
 

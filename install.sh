@@ -2,7 +2,7 @@
 #
 # dsh-mobile — 装好网关插件，并告诉你下一步做什么。
 #
-# 真正的安装逻辑在 `mac-gateway/install.sh`：那份自洽（进那个目录就能装自己）。
+# 真正的安装逻辑在 `gateway/install.sh`：那份自洽（进那个目录就能装自己）。
 # 本脚本只做编排 —— 调它，然后打印「怎么启动、怎么配对」。**不复制它的逻辑**：
 # 两份逻辑就是两份事实，改一处漏一处不会报错。
 #
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PACKAGE="$REPO/mac-gateway"
+PACKAGE="$REPO/gateway"
 PROFILE="${DSH_PROFILE:-web}"
 DSH_CMD="${DSH_CMD:-npx --yes @deepseek-ai/dsh@alpha}"
 
@@ -45,7 +45,7 @@ say ""
 say "启动："
 say "    npx @deepseek-ai/dsh@alpha $PROFILE"
 say ""
-say "看到 [mac-gateway] listening on http://0.0.0.0:3081 之后，"
+say "看到 [dsh-mobile-gateway] listening on http://0.0.0.0:3081 之后，"
 say "手机连同一个 Wi-Fi 打开："
 say "    http://$LAN_IP:3081"
 say ""
