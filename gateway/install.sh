@@ -81,6 +81,24 @@ if (after !== before) fs.writeFileSync(path, after);
 ' "$PATCH"
 fi
 
+# ── 清掉旧包名的依赖 ────────────────────────────────────────────────────────
+# 它 `link:` 到已经不存在的目录。留着的话 pnpm 会在下一步报「路径不存在」，
+# 而报错看不出真正的原因是「包改名了」。
+PROFILE_MANIFEST="$DSH_HOME/profiles/$PROFILE/package.json"
+if [ -f "$PROFILE_MANIFEST" ]; then
+  node -e '
+const fs = require("fs");
+const [path] = process.argv.slice(1);
+const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+const deps = manifest.dependencies ?? {};
+const stale = Object.keys(deps).filter((name) => name.endsWith("mac-gateway"));
+if (stale.length === 0) process.exit(0);
+for (const name of stale) delete deps[name];
+fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+console.log("   removed: " + stale.join(", "));
+' "$PROFILE_MANIFEST"
+fi
+
 # ── 安装 ────────────────────────────────────────────────────────────────────
 # 用绝对路径：dsh 会把相对路径先按**调用时的当前目录**锚定，
 # 而这里要装的确定是 $PACKAGE，不该随调用者所在目录变化。
