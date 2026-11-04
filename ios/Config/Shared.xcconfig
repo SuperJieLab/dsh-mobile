@@ -1,0 +1,17 @@
+// 共享的构建配置。**每个人不一样的两项**放在 Local.xcconfig（不进 git）里。
+//
+// 为什么需要它：bundle id 与开发团队是「谁 clone 谁不一样」的东西，直接写进 pbxproj
+// 就等于「谁 clone 谁去 Xcode 里改设置」—— 而改漏一处，报错是签名相关的，看不出
+// 真正的原因是「这两项本来就该由你填」。
+//
+// 不建 Local.xcconfig 也能构建：下面两行是占位值，于是「没配过」表现为
+// 「bundle id 是 com.example.dshmobile」，而不是构建失败但说不清原因。
+
+// 占位。要装到自己手机上，必须在 Local.xcconfig 里改成你自己的（不能和别人重名）。
+APP_BUNDLE_ID = com.example.dshmobile
+
+// 留空 = 自动签名要求你在 Xcode 里选一个团队。填了就按填的走。
+DEVELOPMENT_TEAM =
+
+// 可选引入：文件不存在也不报错。存在的值覆盖上面两行。
+#include? "Local.xcconfig"

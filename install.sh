@@ -32,7 +32,20 @@ die() { printf '❌ %s\n' "$*" >&2; exit 1; }
 # dsh plugin 只是 pnpm 的一层壳：它把参数原样转发给 pnpm 执行，
 # 所以 pnpm 必须在 PATH 上，dsh 自己不带安装器。
 command -v pnpm >/dev/null 2>&1 || die "需要 pnpm —— 装一个：brew install pnpm"
-command -v node >/dev/null 2>&1 || die "需要 node（^22.19.0 或 >=24.0.0）"
+command -v node >/dev/null 2>&1 || die "需要 node —— 版本要求见 mac-gateway/package.json 的 engines"
+
+# 版本下限从 package.json 的 `engines.node` 读出来显示，规则写在这一处 ——
+# 两处各写一份的话，改了一处、报错信息就会指着一个已经不成立的版本。
+node -e '
+const fs = require("fs");
+const { engines } = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const [major, minor] = process.versions.node.split(".").map(Number);
+const ok = (major === 22 && minor >= 19) || major >= 24;
+if (!ok) {
+  console.error(`❌ node ${process.versions.node} 太旧 —— 需要 ${engines?.node ?? "(未声明)"}`);
+  process.exit(1);
+}
+' "$PACKAGE/package.json" || exit 1
 
 # ── --revoke：撤销全部已配对设备（M4）───────────────────────────────────────
 # 凭证文件与插件读的是同一路径；清空成 {version:1} 而不是删文件 ——

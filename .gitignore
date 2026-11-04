@@ -42,6 +42,9 @@ xcuserdata/
 ios/.*.txt
 
 # CI 闸门的日志（scripts/ci.sh 的产物）
+# 每台机器的 bundle id 与开发团队 —— 自己的值不进仓库（模板见 ios/Config/Shared.xcconfig）
+ios/Config/Local.xcconfig
+
 ci-out/
 
 # 运行时的凭据与配置（绝不该进仓库）
