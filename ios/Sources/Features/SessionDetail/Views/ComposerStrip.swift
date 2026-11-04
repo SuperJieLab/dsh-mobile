@@ -15,55 +15,61 @@ struct ComposerStrip: View {
     let onTapNetwork: () -> Void
     let onTapUsage: () -> Void
 
-    /// 固定 32pt。四格都在这条线内，谁的内容长了就截断，不改高度。
-    static let height: CGFloat = 32
+    /// 固定 54pt（两行）。分两行是因为四个格横排装不下 —— 模型名按显示名算要 197pt，
+    /// 而一行只剩 167pt。两行之后每行都宽松，谁都不用截断。
+    static let height: CGFloat = 54
 
     /// 网络格定宽（按最长的「连接中…」算）。不定宽的话，「直连」与「重连中…」差十来个点，
     /// 每次断连 / 恢复模型格都会横移一次。
     private static let networkWidth: CGFloat = 64
-    /// 权限格定宽 —— 按最长的「工作区内修改」六个字算。档位名长短差得多，
+    /// 权限格定宽 —— 按最长的「工作区内修改」六个字加一个图标算。档位名长短差得多，
     /// 不定宽会让模型格随档位横移。
-    private static let permissionWidth: CGFloat = 72
+    private static let permissionWidth: CGFloat = 84
     /// 占用格定宽 —— 同理，`15%` 与 `--` 宽度不同，固定的右边界才不会让文字跳。
     private static let usageWidth: CGFloat = 40
 
     var body: some View {
-        HStack(spacing: 8) {
-            Button(action: onTapNetwork) {
-                Label(model.network.text, systemImage: model.network.systemImage)
-                    .font(.caption2)
-                    .foregroundStyle(Self.tint(model.network.tone))
+        VStack(spacing: 6) {
+            // 上行：连到哪、用什么模型。
+            HStack(spacing: 8) {
+                Button(action: onTapNetwork) {
+                    Label(model.network.text, systemImage: model.network.systemImage)
+                        .font(.caption2)
+                        .foregroundStyle(Self.tint(model.network.tone))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .frame(width: Self.networkWidth, alignment: .leading)
+
+                ModelPickerView(label: model.modelLabel, onTap: onTapModel)
                     .lineLimit(1)
-            }
-            .buttonStyle(.plain)
-            .frame(width: Self.networkWidth, alignment: .leading)
+                    .layoutPriority(1)
 
-            // 模型格吃剩余宽度：四格里只有它是不可压缩的自由文本。
-            // 它紧跟网络格而不是被两侧 Spacer 夹在中间 —— 夹着会让它居中，而居中在
-            // 左侧留一段空白，看起来像「这一格没内容」。
-            ModelPickerView(label: model.modelLabel, onTap: onTapModel)
-                .lineLimit(1)
-                .layoutPriority(1)
-
-            Spacer(minLength: 8)
-
-            // 没有权限服务的装配里这一格根本不出现（`permissionName == nil`）——
-            // 留一个空位等于告诉用户「这里本来有东西」。
-            if let permissionName = model.permissionName {
-                PermissionCell(label: permissionName,
-                               choices: permissionChoices,
-                               onSelect: onSelectPermission)
-                    .frame(width: Self.permissionWidth)
+                Spacer(minLength: 8)
             }
 
-            Button(action: onTapUsage) {
-                Text(model.usageText)
-                    .font(.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(model.usageIsEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
+            // 下行：这一轮按什么规矩跑、花了多少。
+            HStack(spacing: 8) {
+                // 没有权限服务的装配里这一格根本不出现（`permissionName == nil`）——
+                // 留一个空位等于告诉用户「这里本来有东西」。
+                if let permissionName = model.permissionName {
+                    PermissionCell(label: permissionName,
+                                   choices: permissionChoices,
+                                   onSelect: onSelectPermission)
+                        .frame(width: Self.permissionWidth)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(action: onTapUsage) {
+                    Text(model.usageText)
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(model.usageIsEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .frame(width: Self.usageWidth, alignment: .trailing)
             }
-            .buttonStyle(.plain)
-            .frame(width: Self.usageWidth, alignment: .trailing)
         }
         .padding(.horizontal, 4)
         .frame(maxWidth: .infinity)
@@ -104,10 +110,14 @@ private struct PermissionCell: View {
                 }
             }
         } label: {
-            Text(label)
-                .font(.caption2)
-                .lineLimit(1)
-                .foregroundStyle(choices.isEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
+            // 图标让这一格与上行的网络格左边缘对齐 —— 两行都从图标起笔。
+            HStack(spacing: 4) {
+                Image(systemName: "shield")
+                Text(label)
+                    .lineLimit(1)
+            }
+            .font(.caption2)
+            .foregroundStyle(choices.isEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
         }
         .disabled(choices.isEmpty)
     }
@@ -236,4 +246,35 @@ extension ComposerStripModel {
                            tone: .attention)
         }
     }
+}
+
+#Preview("功能条 · 单行") {
+    VStack(spacing: 0) {
+        Spacer()
+        ComposerStrip(model: .preview,
+                      permissionChoices: [],
+                      onSelectPermission: { _ in },
+                      onTapModel: {},
+                      onTapNetwork: {},
+                      onTapUsage: {})
+        // 假的输入框：只为看功能条与它的相对高度。
+        RoundedRectangle(cornerRadius: 20)
+            .fill(.quaternary)
+            .frame(height: 44)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+    }
+}
+
+extension ComposerStripModel {
+    /// 预览用的一组值 —— 模型名取真实的长度（「DeepSeek V4.1 Flash · 高」），
+    /// 短名字测不出挤压。
+    static let preview = ComposerStripModel(
+        network: .init(text: carrierPathText(.direct), systemImage: "wifi", tone: .normal),
+        modelName: "DeepSeek V4.1 Flash",
+        effortName: "高",
+        permissionName: "工作区内修改",
+        usageText: "23%",
+        usageIsEmpty: false
+    )
 }
