@@ -29,10 +29,6 @@ deploy/tls/
 /build/
 
 # Xcode
-# 注意：`ios/Frameworks/` **不在这里**。判据不是「它怎么来的」，是「App 构建时读它还是写它」：
-# TailscaleKit.xcframework 是 xcodebuild 的**输入**（读它，不产生它）—— 虽然它本身也是编出来的
-# （ios/scripts/build-tailscale-kit.sh 从 pinned 的 libtailscale 用 Go 编，一次性预先做好）。
-# 忽略它，CI 上 checkout 完就编不过，而本地因为文件还在所以永远绿。
 ios/build/
 ios/.build/
 ios/.dd/
