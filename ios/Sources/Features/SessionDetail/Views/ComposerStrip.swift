@@ -29,9 +29,9 @@ struct ComposerStrip: View {
     private static let usageWidth: CGFloat = 40
 
     var body: some View {
-        VStack(spacing: 6) {
-            // 上行：连到哪、用什么模型。
-            HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
+            // 左列：两个状态数字，左对齐。
+            VStack(alignment: .leading, spacing: 6) {
                 Button(action: onTapNetwork) {
                     Label(model.network.text, systemImage: model.network.systemImage)
                         .font(.caption2)
@@ -41,26 +41,6 @@ struct ComposerStrip: View {
                 .buttonStyle(.plain)
                 .frame(width: Self.networkWidth, alignment: .leading)
 
-                ModelPickerView(label: model.modelLabel, onTap: onTapModel)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-
-                Spacer(minLength: 8)
-            }
-
-            // 下行：这一轮按什么规矩跑、花了多少。
-            HStack(spacing: 8) {
-                // 没有权限服务的装配里这一格根本不出现（`permissionName == nil`）——
-                // 留一个空位等于告诉用户「这里本来有东西」。
-                if let permissionName = model.permissionName {
-                    PermissionCell(label: permissionName,
-                                   choices: permissionChoices,
-                                   onSelect: onSelectPermission)
-                        .frame(width: Self.permissionWidth)
-                }
-
-                Spacer(minLength: 8)
-
                 Button(action: onTapUsage) {
                     Text(model.usageText)
                         .font(.caption2)
@@ -68,7 +48,24 @@ struct ComposerStrip: View {
                         .foregroundStyle(model.usageIsEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
                 }
                 .buttonStyle(.plain)
-                .frame(width: Self.usageWidth, alignment: .trailing)
+                .frame(width: Self.usageWidth, alignment: .leading)
+            }
+
+            Spacer(minLength: 8)
+
+            // 右列：两段内容，右对齐 —— 与左列的数字分列两侧。
+            VStack(alignment: .trailing, spacing: 6) {
+                ModelPickerView(label: model.modelLabel, onTap: onTapModel)
+                    .lineLimit(1)
+
+                // 没有权限服务的装配里这一格根本不出现（`permissionName == nil`）——
+                // 留一个空位等于告诉用户「这里本来有东西」。
+                if let permissionName = model.permissionName {
+                    PermissionCell(label: permissionName,
+                                   choices: permissionChoices,
+                                   onSelect: onSelectPermission)
+                        .frame(width: Self.permissionWidth, alignment: .trailing)
+                }
             }
         }
         .padding(.horizontal, 4)
