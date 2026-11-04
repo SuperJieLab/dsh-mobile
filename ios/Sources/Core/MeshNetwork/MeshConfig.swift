@@ -45,32 +45,66 @@ struct MeshConfig: Equatable, Codable {
     enum ReadOutcome: Equatable {
         /// 从来没配过：键不存在，干净首启。
         case missing
-        /// 键在，但解不出来（旧格式 / 外部写入 / 迁移失败）。已留痕。
-        case damaged
+    /// 键在，但读不出来：不是 JSON 对象、迁移链缺一步、或版本比当前新。已留痕。
+    /// **不认识的新版本也走这里** —— 按当前形状硬读会读出一个缺字段的配置，
+    /// 那比「读不出来」更坏：它看起来是好的。
+    case damaged
         case ok(MeshConfig)
     }
 
-    private static let defaultsKey = "mesh.config.v1"
+    private static let defaultsKey = "mesh.config"
+
+    /// 建封套之前的键。读到它就说明是老数据，迁完之后由 `save` 清掉。
+    private static let legacyDefaultsKey = "mesh.config.v1"
+
+    /// 载荷版本。**加字段就加一**，并在 {@link migrations} 里补一步。
+    static let payloadVersion = 1
+
+    /// 每一步把**来源版本**的载荷变成下一版。键是来源版本，值是那一步。
+    ///
+    /// 迁移只在**载荷**上工作，封套由 `VersionedPayload.read` / `save` 负责 —— 那是两层，
+    /// 混在一起会让「没有封套的老数据」和「字段变了的新数据」变成同一件事。
+    ///
+    /// `0` 是「建封套之前」：键里存的是裸 JSON，没有 `v`。`read` 认得它（版本记 0），
+    /// 而它的字段与 v1 一个不差，所以这一步是恒等。**它仍然是一次真实的迁移** ——
+    /// 老用户的键确实要经过这里才读得动；只是这次升级只动了封套，没动字段。
+    static let migrations: [Int: (Data) -> Data?] = [
+        0: { $0 },
+    ]
 
     static func read(_ defaults: UserDefaults = .standard) -> ReadOutcome {
-        guard let raw = defaults.string(forKey: defaultsKey) else { return .missing }
-        guard let data = raw.data(using: .utf8),
-              let config = try? JSONDecoder().decode(MeshConfig.self, from: data) else {
-            Log.error(Log.Module.mesh, "mesh config damaged — stored bytes cannot be decoded")
+        // 新键优先。读不到才看旧键 —— 那是升级上来的那一份。
+        guard let raw = defaults.string(forKey: defaultsKey)
+                ?? defaults.string(forKey: legacyDefaultsKey) else { return .missing }
+        guard let stored = VersionedPayload.read(raw) else {
+            Log.error(Log.Module.mesh, "mesh config damaged — stored bytes are not a JSON object")
+            return .damaged
+        }
+        guard let migrated = VersionedPayload.migrate(stored, to: payloadVersion, steps: migrations),
+              let config = try? JSONDecoder().decode(MeshConfig.self, from: migrated) else {
+            // 版本比当前新、或迁移链缺一步 —— 都不能猜。猜出来的配置会让节点连错地方。
+            Log.error(Log.Module.mesh, "mesh config damaged",
+                      ["storedVersion": String(stored.version),
+                       "currentVersion": String(payloadVersion)])
             return .damaged
         }
         return .ok(config)
     }
 
     /// 写入。编不出来就留痕 —— 静默失败会让界面显示新值、节点用旧值。
+    ///
+    /// 顺带清掉旧键：不清的话，「清空配置」之后旧键会再次生效 —— 用户以为清掉了，
+    /// 下次启动配置又回来了。
     func save(_ defaults: UserDefaults = .standard) {
         do {
-            let data = try JSONEncoder().encode(self)
-            guard let text = String(data: data, encoding: .utf8) else {
-                Log.error(Log.Module.mesh, "mesh config not saved — encoding is not UTF-8")
+            let payload = try JSONEncoder().encode(self)
+            guard let boxed = VersionedPayload.envelope(version: Self.payloadVersion, payload: payload),
+                  let text = String(data: boxed, encoding: .utf8) else {
+                Log.error(Log.Module.mesh, "mesh config not saved — could not build the envelope")
                 return
             }
             defaults.set(text, forKey: Self.defaultsKey)
+            defaults.removeObject(forKey: Self.legacyDefaultsKey)
         } catch {
             Log.error(Log.Module.mesh, "mesh config not saved",
                       ["error": error.localizedDescription])

@@ -34,6 +34,51 @@ import {
 /** 无特别指定时凭据文件的所在。 */
 export const DEFAULT_CREDENTIALS_PATH = join(homedir(), '.dsh', 'dsh-mobile', 'credentials.json')
 
+/**
+ * 凭据文件的载荷版本。**加字段就加一**，并在 {@link CREDENTIAL_MIGRATIONS} 里补一步。
+ * 必须与 `StoredCredentials.version` 的字面量一致。
+ */
+export const CREDENTIALS_VERSION = 1
+
+/** 一步迁移：把来源版本的文件变成下一版。迁不动返回 `undefined`。 */
+export type CredentialMigration = (
+  file: Record<string, unknown>,
+) => Record<string, unknown> | undefined
+
+/**
+ * 每一步把**来源版本**的文件变成下一版。键是来源版本。
+ *
+ * 现在是空的 —— 凭据只有一版。空表不是「没有迁移」，是「还没发生过迁移」：
+ * 加 v2 时往这里补一步，老用户就不用重新配对。
+ */
+export const CREDENTIAL_MIGRATIONS: Record<number, CredentialMigration> = {}
+
+/**
+ * 把文件迁到 `target`（默认当前版本）。
+ *
+ * **迁不动就返回 `undefined`**，由调用方按未配对待 —— 不猜。凭据猜错的代价不是
+ * 「显示不对」，是「认证行为诡异」：把一份不认识的格式当 v1 读，读出来的哈希可能是错的。
+ */
+export function migrateCredentials(
+  file: Record<string, unknown>,
+  steps: Record<number, CredentialMigration> = CREDENTIAL_MIGRATIONS,
+  target: number = CREDENTIALS_VERSION,
+): Record<string, unknown> | undefined {
+  let current = file
+  let version = typeof current.version === 'number' ? current.version : 0
+  if (version > target) return undefined
+
+  while (version < target) {
+    const step = steps[version]
+    if (step === undefined) return undefined
+    const next = step(current)
+    if (next === undefined) return undefined
+    current = next
+    version += 1
+  }
+  return current
+}
+
 export class CredentialVault {
   private file: StoredCredentials = emptyCredentials()
   /** 按哈希索引的活跃 access token；原始 token 绝不存于服务端。 */
@@ -53,14 +98,26 @@ export class CredentialVault {
    */
   private stamp: string | undefined
 
+  /**
+   * 读文件时用的迁移链。默认是当前版本那一套；可注入是为了让「接线对不对」能被断言 ——
+   * 迁移表在生产里现在是空的（凭据只有一版），不注入的话循环体永远跑不到，
+   * 「接没接上」这件事没有任何判据看得见。
+   */
+  private readonly migrations: { steps: Record<number, CredentialMigration>; target: number }
+
   constructor(
     path: string = DEFAULT_CREDENTIALS_PATH,
     random: () => number = Math.random,
     now: () => number = Date.now,
+    migrations: { steps: Record<number, CredentialMigration>; target: number } = {
+      steps: CREDENTIAL_MIGRATIONS,
+      target: CREDENTIALS_VERSION,
+    },
   ) {
     this.path = path
     this.random = random
     this.now = now
+    this.migrations = migrations
     this.load()
   }
 
@@ -68,12 +125,11 @@ export class CredentialVault {
   private load(): void {
     try {
       const raw = readFileSync(this.path, 'utf8')
-      const parsed = JSON.parse(raw) as StoredCredentials
-      if (parsed?.version === 1) {
-        this.file = parsed
-      } else {
-        this.file = emptyCredentials()
-      }
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      // 版本先过一遍迁移链：认不出的版本与迁不动的那一步，都按未配对待。
+      // 不直接按当前形状硬读 —— 那会读出一份字段不全的凭据，而它看起来是好的。
+      const migrated = migrateCredentials(parsed, this.migrations.steps, this.migrations.target)
+      this.file = migrated === undefined ? emptyCredentials() : migrated as unknown as StoredCredentials
     } catch {
       // 缺失或损坏：无论哪种都是未配对的保险库 —— 下一次 `pairingCode()`
       // 会签发新码。
