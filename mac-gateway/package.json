@@ -19,7 +19,7 @@
     "test": "npm run typecheck && node --test --test-timeout=30000 'tests/**/*.test.ts'"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/cordis": "4.0.6-alpha.2",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
   }
