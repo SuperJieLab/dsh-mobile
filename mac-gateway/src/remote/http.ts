@@ -17,6 +17,7 @@ import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import { auditEntryOf, isWriteOp, type AuditLog } from '../audit.ts'
+import type { Metrics } from '../metrics.ts'
 import { CredentialVault } from './credentials.ts'
 import type {
   PairRequest, PairResponse, RefreshRequest, RefreshResponse,
@@ -70,6 +71,8 @@ export interface RpcListenerDeps {
   workspacePort: WorkspacePort | undefined
   /** 写操作的审计落点；不给 = 不记（只读装配与判据不需要它）。 */
   auditLog: AuditLog | undefined
+  /** 指标表；不给 = `/metrics` 返回空（判据用最小装配时）。 */
+  metrics?: Metrics
 }
 
 /**
@@ -91,6 +94,15 @@ async function respond(
   deps: RpcListenerDeps,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
+
+  if (path === '/metrics') {
+    // 匿名，与 `/` 同级：能连到这个端口就能读存活探测，而指标里没有凭据 ——
+    // op 名是协议公开的词汇。加鉴权会让「随时 curl 一下」变麻烦，而那正是它存在的理由。
+    // content-type 带 version=0.0.4 是 Prometheus 的文本格式约定。
+    response.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' })
+    response.end(deps.metrics?.render() ?? '')
+    return
+  }
 
   if (path !== '/rpc') {
     // 存活探测，以及任何未知路径的回答。纯传输层：不涉协议消息，
@@ -163,6 +175,14 @@ async function respondInScope(
   }
 
   const answer = await handle(message, { session: deps.sessionPort, write: deps.writePort, model: deps.modelPort, command: deps.commandPort, workspace: deps.workspacePort, permission: deps.permissionPort }, Date.now, deps.limits)
+  // 每个 op 一次计数，成败各一。这里记的是**所有** op —— 审计只记写 op，
+  // 而「哪个读 op 在失败」同样要能回答。
+  if (typeof op === 'string') {
+    deps.metrics?.count('dsh_rpc_requests_total', {
+      op,
+      result: answer.ok ? 'ok' : 'refused',
+    })
+  }
   // 写 op 一条对应一条，记**结果**不记意图。读 op 不记 —— 审计回答「谁改了什么」，
   // 而读不改变任何东西。
   if (typeof op === 'string' && isWriteOp(op)) {

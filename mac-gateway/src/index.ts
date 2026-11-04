@@ -26,6 +26,7 @@ import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
 import { AuditLog, defaultAuditDirectory } from './audit.ts'
+import { Metrics } from './metrics.ts'
 import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, permissionChannelOver, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
@@ -159,7 +160,10 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   log.info('plugin loaded — auth on both channels, write + model channels on, command + permission channels on demand')
 
   ctx.effect(() => {
-    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()) })
+    // 指标表：常驻计数器，读在 `GET /metrics`。与 `perf` 的分工是读的时机 ——
+    // 那个要事先开 debug，这个随时能拉。
+    const metrics = new Metrics()
+    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
 
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
@@ -183,6 +187,8 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       intervalMs: 5_000,
       module: LogModule.main,
       clientCount: () => streamHandler.clientCount(),
+      // 同一份读数也交给指标表：它读的是「最近一次采样」，不另开一份直方图。
+      onSample: (sample) => metrics.updateRuntime(sample),
     })
 
     // 用我们的 logger（底层是 console）而非 ctx.logger：非 TTY 运行中

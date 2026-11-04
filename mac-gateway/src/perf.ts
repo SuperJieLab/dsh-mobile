@@ -112,22 +112,26 @@ export function startResourceSampler(options: {
   module: string
   clientCount: () => number
   emit?: (module: string, record: PerfRecord) => void
+  /**
+   * 每次采样的同时交一份给它。指标表要的是「最近一次读数」而不是逐条记录，
+   * 所以走这条路，不让它自己再开一份直方图 —— 两份各自跑，p99 还会互相不一致。
+   */
+  onSample?: (sample: ResourceSample) => void
 }): () => void {
   const histogram = monitorEventLoopDelay({ resolution: 20 })
   histogram.enable()
   const emit = options.emit ?? perfRecord
   const timer = setInterval(() => {
     const memory = process.memoryUsage()
-    emit(
-      options.module,
-      resourceRecord({
-        loopLagP50: histogram.percentile(50) / 1e6,
-        loopLagP99: histogram.percentile(99) / 1e6,
-        rssMB: Math.round((memory.rss / 1024 / 1024) * 10) / 10,
-        heapMB: Math.round((memory.heapUsed / 1024 / 1024) * 10) / 10,
-        wsClients: options.clientCount(),
-      }),
-    )
+    const sample: ResourceSample = {
+      loopLagP50: histogram.percentile(50) / 1e6,
+      loopLagP99: histogram.percentile(99) / 1e6,
+      rssMB: Math.round((memory.rss / 1024 / 1024) * 10) / 10,
+      heapMB: Math.round((memory.heapUsed / 1024 / 1024) * 10) / 10,
+      wsClients: options.clientCount(),
+    }
+    options.onSample?.(sample)
+    emit(options.module, resourceRecord(sample))
     histogram.reset()
   }, options.intervalMs)
   return () => {
