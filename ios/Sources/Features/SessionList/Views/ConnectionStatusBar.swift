@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 列表底部那条状态带：**只在有事要说时出现**，断连时整条可点。
+/// 列表底部的浮条：**只在有事要说时出现**，断连时整条可点。
 ///
 /// 它取代了两处东西：左上角那个不能点的连接徽章（常态空白，却占着一个按钮位），
 /// 以及页脚那句「N 个会话」（每个组的标题行各自报了数，再说一次是重复）。
@@ -22,34 +22,37 @@ struct ConnectionStatusBar: View {
                 content
             }
         }
-        .font(.caption)
+        .font(.footnote)
         .foregroundStyle(.orange)
         .tint(.orange)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay { Capsule().strokeBorder(.orange.opacity(0.3), lineWidth: 0.5) }
+        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
     }
 
     private var content: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: model.systemImage)
             Text(model.text)
                 .lineLimit(1)
-            Spacer(minLength: 8)
             // 没有动作时右侧什么都不放 —— 一个点了没事发生的词，比没有更糟。
             if model.canRetry {
                 Text("重试")
                     .fontWeight(.medium)
+                    .padding(.leading, 6)
             }
         }
     }
 }
 
-/// 状态带的显示值 —— 纯值，宿主算好，视图只画。
+/// 浮条的显示值 —— 纯值，宿主算好，视图只画。
 ///
-/// 不带档位字段：这条带子只在「值得看一眼」的时候存在，所以它只有一种样子。
+/// 不带档位字段：这条浮条只在「值得看一眼」的时候存在，所以它只有一种样子。
 struct ConnectionStatusBarModel: Equatable {
     let text: String
     let systemImage: String
