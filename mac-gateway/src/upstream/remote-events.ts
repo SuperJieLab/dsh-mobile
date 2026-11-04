@@ -106,7 +106,7 @@ export class ForwardedEvents implements ForwardedSource {
             this.#clientId = frame.clientId
             this.#established += 1
             backoff = RECONNECT_MIN_MS
-            log.info(`$events ready (clientId ${frame.clientId}, generation ${this.#established})`)
+            log.info('$events ready', { client: frame.clientId, generation: this.#established })
             this.#announceGeneration()
             continue
           }
@@ -116,7 +116,7 @@ export class ForwardedEvents implements ForwardedSource {
         log.warn('$events stream ended; reconnecting')
       } catch (error) {
         if (signal.aborted) return
-        log.error(`$events stream failed: ${describeError(error)}; reconnecting`)
+        log.error('$events stream failed; reconnecting', { error: describeError(error) })
       }
       this.#loseSource()
       await new Promise<void>((resolve) => {
@@ -156,7 +156,7 @@ export class ForwardedEvents implements ForwardedSource {
     try {
       hand()
     } catch (error) {
-      log.error(`a $events subscriber threw: ${describeError(error)}`)
+      log.error('a $events subscriber threw', { error: describeError(error) })
     }
   }
 }

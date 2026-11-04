@@ -109,7 +109,7 @@ export class ApprovalRelay implements ApprovalSource {
     if (frame.type === 'cancel') {
       // 上游自己结算了这个问题（别处先答、或它被撤回）—— 这是「卡为什么消失」的唯一线索。
       if (this.#pending.delete(frame.eventId)) {
-        log.info(`approval ${frame.eventId} was cancelled upstream`)
+        log.info('approval was cancelled upstream', { approval: frame.eventId })
         for (const listener of this.#cancelListeners) listener(frame.eventId)
       }
     }
@@ -123,7 +123,9 @@ export class ApprovalRelay implements ApprovalSource {
   #dropHeld(): void {
     const dropped = this.#pending.size
     this.#pending.clear()
-    if (dropped > 0) log.info(`${dropped} held approval(s) dropped with the $events identity`)
+    if (dropped > 0) {
+      log.info('held approvals dropped with the $events identity', { count: dropped })
+    }
   }
 
   /** 为手机暂存一个问题，并通知每条开着的流。 */
@@ -132,12 +134,13 @@ export class ApprovalRelay implements ApprovalSource {
     // 丢掉（等于没收到）或放进某一屏（等于串会话）。后者更坏，所以这里 fail closed。
     const agentId = nonEmptyString(frame.agentId)
     if (agentId === undefined) {
-      log.warn(`approval ${frame.eventId} carries no session (agentId ${JSON.stringify(frame.agentId)}) — dropped`)
+      log.warn('approval carries no session — dropped',
+        { approval: frame.eventId, agent: JSON.stringify(frame.agentId) })
       return
     }
     const request = frame.request
     if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-      log.warn(`approval ${frame.eventId} carries no request object — dropped`)
+      log.warn('approval carries no request object — dropped', { approval: frame.eventId })
       return
     }
     // 请求体的内部字段（`toolName` 之类）**不归中继解释**：解释权在客户端那一侧。
@@ -150,7 +153,8 @@ export class ApprovalRelay implements ApprovalSource {
       request: request as Record<string, unknown>,
     }
     this.#pending.set(frame.eventId, held)
-    log.info(`approval relay holding "${frame.event}" (${held.eventId}) for "${held.agentId}"`)
+    log.info('approval relay holding',
+      { event: frame.event, approval: held.eventId, agent: held.agentId })
     for (const listener of this.#heldListeners) listener(held)
   }
 
@@ -173,7 +177,7 @@ export class ApprovalRelay implements ApprovalSource {
     // 身份不住了 ⇒ 上游无从认出这次应答，答案送不到任何地方。
     const clientId = this.#events.clientId
     if (clientId === undefined || !this.#pending.has(answer.eventId)) {
-      log.info(`answer for ${answer.eventId}: no held question — unknown-approval`)
+      log.info('answer: no held question — unknown-approval', { approval: answer.eventId })
       return 'unknown-approval'
     }
     const reply = await this.#door.dispatchRpc('$events/result', {
@@ -187,11 +191,14 @@ export class ApprovalRelay implements ApprovalSource {
     // 「上游拒了」，而后者的现场是：我们还以为答完，轮次其实卡在原地等应答。
     const refusal = refusalOf(reply)
     if (refusal !== undefined) {
-      log.error(`answer for ${answer.eventId} was refused by the gateway (${refusal}) — the question stays held, the turn is still waiting`)
+      log.error(
+        'answer refused by the gateway — question stays held, the turn is still waiting',
+        { approval: answer.eventId, reason: refusal },
+      )
       return 'undelivered'
     }
     this.#pending.delete(answer.eventId)
-    log.info(`delivered ${answer.decision} for ${answer.eventId}`)
+    log.info('answer delivered', { decision: answer.decision, approval: answer.eventId })
     return 'delivered'
   }
 }
@@ -241,7 +248,8 @@ export async function pumpPrompt(controller: PromptControllerLike, prompt: Sessi
       content: [{ type: 'text', text: prompt.text }],
     }, signal)
     // 写链路的另一半（与 relay 的 delivered 对称）：受理即返回，回答从流里来。
-    log.info(`prompt accepted for "${prompt.sessionId}" (requestId ${prompt.promptId}, ${prompt.text.length} chars)`)
+    log.info('prompt accepted',
+      { session: prompt.sessionId, request: prompt.promptId, chars: prompt.text.length })
     return 'accepted'
   } catch (error) {
     if (isNotFound(error)) return 'unknown-session'

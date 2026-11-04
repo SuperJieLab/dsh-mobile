@@ -153,7 +153,7 @@ async function respondInScope(
   if (!deps.vault.authenticate(request.headers.authorization)) {
     // info 而非 warn：票过期后的这次 401 是续期编排的正常一环，客户端拿到 401 会
     // 静默换票重试；warn 留给 refresh 本身被拒（关系被掐）。
-    log.info(`op "${String(op)}" refused: no live access token`)
+    log.info('op refused: no live access token', { op: String(op) })
     response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
     response.end(`${JSON.stringify(failure('unauthenticated', 'missing or expired access token — pair first, then refresh'))}\n`)
     return
@@ -163,7 +163,7 @@ async function respondInScope(
   // 拒绝在服务端留证据：手机对一次失败的写 op 只显示一行状态，对一次失败的读 op
   // 只在它自己那一屏留个提示 —— 归因要回到网关日志。静默的例外见 {@link SILENT_REFUSALS}。
   if (!answer.ok && typeof op === 'string' && !SILENT_REFUSALS.has(op)) {
-    log.error(`op "${op}" refused: ${JSON.stringify(answer.error)}`)
+    log.error('op refused', { op: String(op), error: JSON.stringify(answer.error) })
   }
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   response.end(`${JSON.stringify(answer)}\n`)
@@ -183,7 +183,7 @@ function logAuthOp(
     if (answer.ok) {
       log.info('pair accepted — device relationship established')
     } else {
-      log.warn(`pair refused: ${answer.error?.message ?? 'unknown'}`)
+      log.warn('pair refused', { error: answer.error?.message ?? 'unknown' })
     }
     return
   }

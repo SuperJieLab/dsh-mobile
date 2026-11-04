@@ -128,7 +128,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     // 仅测试：不走配对码流程直接预配对。
     vault.seedDeviceToken(config.deviceTokenSeed)
   }
-  log.info(`pairing code (valid 10 min, one-shot): ${vault.pairingCode()}`)
+  log.info('pairing code issued (valid 10 min, one-shot)', { code: vault.pairingCode() })
 
   // 写通道：上游 `$events` 流由 `ForwardedEvents` 持有（进程一份身份），中继订阅它
   // 把 `approval-answer` 桥接回去（宿主侧 waterfall 监听器收不到远程应答 —— api-remotes
@@ -189,11 +189,11 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     // 失败不可见比日志不合惯例更糟；TTY 门控未验证
     // （M0 §5.1）。
     server.on('error', (error) => {
-      log.error(`listener error: ${String(error)}`)
+      log.error('listener error', { error: String(error) })
     })
 
     server.listen(port, host, () => {
-      log.info(`listening on http://${host}:${port}`)
+      log.info('listening', { host, port })
     })
 
     return () => {

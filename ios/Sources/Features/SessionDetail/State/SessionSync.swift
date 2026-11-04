@@ -95,7 +95,7 @@ final class SessionSync {
         // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
         // 措辞点明范围：不认识的只是**正文组装**这一层，消息流本身是认识的
         // （`model/selection` 这类还另有消费者）。
-        Log.warn(Log.Module.session, "正文组装跳过不认识的事件类型：\(type)（会话照常显示）")
+        Log.warn(Log.Module.session, "正文组装跳过不认识的事件类型（会话照常显示）", ["type": type])
     }
     /// 占用值的吸收，判定在 `UsageState`。
     private var usageState = UsageState()
@@ -146,7 +146,8 @@ final class SessionSync {
         syncInFlight = true
         defer { syncInFlight = false }
         // 与 `loadOlder` 对照用：debug 级，`DSH_LOG_DEBUG=1` 才出来（这条可能一秒一次）。
-        Log.debug(Log.Module.session, "sync start events=\(mirror.events.count) empty=\(mirror.isEmpty)")
+        Log.debug(Log.Module.session, "sync start",
+                  ["events": String(mirror.events.count), "empty": String(mirror.isEmpty)])
         statusBox.set(.syncing)
 
         var added = 0
@@ -426,7 +427,13 @@ final class SessionSync {
         let verdict = transient.apply(frame: frame)
         if verdict == .broken {
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
-            Log.warn(Log.Module.session, "TransientChannel broken: expected revision=\(String(describing: before.expectedRevisionDescription)) nextChunkIndex=\(before.nextIndexDescription), got type=\(frame["type"]?.string ?? "?") revision=\(String(describing: frame["revision"]?.int)) index=\(String(describing: frame["index"]?.int))")
+            Log.warn(Log.Module.session, "TransientChannel broken", [
+                "expectedRevision": String(describing: before.expectedRevisionDescription),
+                "nextChunk": String(before.nextIndexDescription),
+                "type": frame["type"]?.string ?? "?",
+                "revision": String(describing: frame["revision"]?.int),
+                "index": String(describing: frame["index"]?.int),
+            ])
             following.retry()
             return
         }

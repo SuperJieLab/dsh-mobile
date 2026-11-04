@@ -67,7 +67,8 @@ final class LongConnection: StreamFactory {
     /// 未激活时它是空操作（`connect` 自己守 `active`）—— 换代不该把后台的 App 叫起来连网。
     /// - Parameter reason: 谁在要。与 `reconnectNow` 同样留原因，排障时才分得清哪次重连为哪件事。
     func replaceConnection(reason: String) {
-        Log.info(Log.Module.session, "replace connection (\(reason)) — tunnel product replaced")
+        Log.info(Log.Module.session, "replace connection, tunnel product replaced",
+                 ["reason": reason])
         transport.connect()
     }
 

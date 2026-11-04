@@ -82,5 +82,5 @@ func removeWorkspace(_ client: RpcClient, workspaceId: String) async throws {
         WorkspaceDeleteRequest(workspaceId: workspaceId)) as WorkspaceDeleteResponse
     // 成功只有一条路（回包的 `ok` 由信封校验保证），但它是**破坏性动作**的收尾：
     // 用户说「我删了但组还在」时，得能证明这一发真的到了网关并成功了。
-    Log.info(Log.Module.workspace, "workspace-delete \(workspaceId) — accepted")
+    Log.info(Log.Module.workspace, "workspace-delete accepted", ["workspace": workspaceId])
 }

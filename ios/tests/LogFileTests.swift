@@ -92,4 +92,25 @@ final class LogFileTests: XCTestCase {
 
         XCTAssertFalse(file.tail().contains("after-uninstall"))
     }
+
+    // MARK: - 字段的拼法
+
+    /// 按 key 排序。顺序不固定的话，「这行变了没」每次都要重新看 —— 而日志最常做的
+    /// 比对就是「上一次和这一次哪里不一样」。
+    func testFieldsAreSortedByKey() {
+        let text = Log.formatFields(["z": "1", "a": "2", "m": "3"])
+        XCTAssertEqual(text, " a=2 m=3 z=1")
+    }
+
+    /// 空字典什么都不加 —— 不留一个尾随空格。少了这条，每条无字段的日志都会多一个
+    /// 看不见的尾巴，而 `grep " $"` 会突然命中一片。
+    func testEmptyFieldsAddNothing() {
+        XCTAssertEqual(Log.formatFields([:]), "")
+    }
+
+    /// 含空格的值要加引号，否则 `msg=a b` 读起来像两个字段。
+    func testValuesWithSpacesAreQuoted() {
+        XCTAssertEqual(Log.formatFields(["msg": "a b"]), #" msg="a b""#)
+        XCTAssertEqual(Log.formatFields(["msg": "plain"]), " msg=plain")
+    }
 }

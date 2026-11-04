@@ -72,7 +72,8 @@ struct MeshConfig: Equatable, Codable {
             }
             defaults.set(text, forKey: Self.defaultsKey)
         } catch {
-            Log.error(Log.Module.mesh, "mesh config not saved: \(error.localizedDescription)")
+            Log.error(Log.Module.mesh, "mesh config not saved",
+                      ["error": error.localizedDescription])
         }
     }
 }

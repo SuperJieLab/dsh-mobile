@@ -120,7 +120,8 @@ final class TailnetNode {
     /// **不拒绝「节点正在起」**：用户给的是新地址，那次在跑的接入的结论已经不相关了，
     /// 正确处置是让老的作废（`beginSupersede()`），不是让用户等它跑完。
     func submitKey(_ key: String, config: MeshConfig) async {
-        Log.info(Log.Module.mesh, "submitKey: \(Self.keyHint(key)) (\(key.count) chars)")
+        Log.info(Log.Module.mesh, "submitKey",
+                 ["key": Self.keyHint(key), "chars": String(key.count)])
         guard !key.isEmpty else {
             // 空提交不进状态机注册流程 —— 也**不**打断在跑的那一次：没有新地址要换。
             transition(.registrationFailed(.badKey))
@@ -140,7 +141,7 @@ final class TailnetNode {
     /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
     func retry(config: MeshConfig) async {
         let key = TailnetKeyStore.load()
-        Log.info(Log.Module.mesh, "retry: key=\(Self.keyHint(key))")
+        Log.info(Log.Module.mesh, "retry", ["key": Self.keyHint(key)])
         guard let key else {
             // 没有 key 就没东西可换：不打断在跑的那次，按既有语义收成 noKey（fail-closed）。
             transition(.retry(keyPresent: false))
@@ -378,7 +379,8 @@ final class TailnetNode {
 
             case .fatal(let failure):
                 guard current == generation else { return }
-                Log.info(Log.Module.mesh, "up: not retrying (\(failure)) — retrying cannot change it")
+                Log.info(Log.Module.mesh, "up: not retrying, it cannot change",
+                         ["failure": String(describing: failure)])
                 finishFailed(failure)
                 return
 
@@ -431,7 +433,7 @@ final class TailnetNode {
             )
         } catch {
             let message = String(describing: error)
-            Log.info(Log.Module.mesh, "up: init threw \(message)")
+            Log.info(Log.Module.mesh, "up: init threw", ["error": message])
             return Self.outcome(forMessage: message)
         }
         // 到这一行没有挂起点（造后端是同步的），所以循环开头那次代际判定仍然成立。
@@ -449,7 +451,7 @@ final class TailnetNode {
             return .retryable(.unreachable)
 
         case .failed(let message):
-            Log.info(Log.Module.mesh, "up: threw \(message)")
+            Log.info(Log.Module.mesh, "up: threw", ["error": message])
             if current == generation { self.node = nil }
             return Self.outcome(forMessage: message)
 
@@ -522,7 +524,11 @@ final class TailnetNode {
     private func transition(_ event: TailnetNodeState.Event) {
         let old = state
         state = TailnetNodeState.handle(event, from: state)
-        Log.info(Log.Module.mesh, "state: \(old) --\(event)--> \(state)")
+        Log.info(Log.Module.mesh, "state changed", [
+            "from": String(describing: old),
+            "event": String(describing: event),
+            "to": String(describing: state),
+        ])
         onNodeChanged?()
     }
 
@@ -562,7 +568,8 @@ final class TailnetNode {
         guard FileManager.default.fileExists(atPath: dir.path) else { return }
         do {
             try FileManager.default.removeItem(at: dir)
-            Log.info(Log.Module.mesh, "node state discarded (\(reason)) — next up starts clean")
+            Log.info(Log.Module.mesh, "node state discarded, next up starts clean",
+                     ["reason": reason])
         } catch {
             // 删不掉就照旧起：坏结果只是「可能连上但通不了」，而这是原本就有的行为。
             Log.warn(Log.Module.mesh,

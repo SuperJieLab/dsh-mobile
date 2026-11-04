@@ -34,7 +34,8 @@ final class RpcClient {
     /// 两半必须一起做：只删凭证不清票会留下「有票没凭证」的窗口，请求照常成功而用户以为关系已解除。
     /// 两半分别住在 `CredentialStore` 与 `TicketKeeper`，只有本类同时持有。
     func discardIdentity(reason: Reason) {
-        Log.warn(Log.Module.gateway, "identity discarded (\(reason.logWord)) — token and ticket cleared")
+        Log.warn(Log.Module.gateway, "identity discarded, token and ticket cleared",
+                 ["reason": reason.logWord])
         credentials.deleteDeviceToken()
         tickets.clear()
     }

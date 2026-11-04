@@ -108,7 +108,7 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
       // 留痕：客户端死亡是常态，但「死于我们自己关掉它」与「客户端自己走了」
       // 是两件事 —— 没有这一行，Mac 侧的日志答不出这次连接怎么结束的
       // （客户端那半边见 `GatewayConnection` 心跳放弃时的 warn）。
-      log.info(`heartbeat: no pong in ${limit + 1} rounds — closing socket`)
+      log.info('heartbeat: no pong, closing socket', { rounds: limit + 1 })
       killed = true
       // 带码关闭：手机侧才知道这次是「我们判它死了」，而不是链路掉了。
       socket.write(encodeClose(1001, 'no pong'))
@@ -176,7 +176,7 @@ export async function handleUpgrade(
   options: StreamOptions,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
-  log.info(`upgrade request for "${path}"`)
+  log.info('upgrade request', { path })
   if (path !== STREAM_PATH) {
     // 不是我们的路径 —— 直接拒绝，不假装会说 WebSocket。
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
@@ -286,13 +286,16 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
     if (finished) return
     finished = true
     const facts = { killed: heartbeat.killed, cleanClose: peerClosedCleanly, errored }
-    log.info(`stream ended — ${endReasonOf(facts)}, after ${Math.round((Date.now() - openedAt) / 1000)}s`)
+    log.info('stream ended', {
+      reason: endReasonOf(facts),
+      seconds: Math.round((Date.now() - openedAt) / 1000),
+    })
     closeAll()
   }
   socket.on('close', finish)
   socket.on('error', (error) => {
     errored = true
-    log.warn(`stream error: ${describeError(error)}`)
+    log.warn('stream error', { error: describeError(error) })
     finish()
   })
 }

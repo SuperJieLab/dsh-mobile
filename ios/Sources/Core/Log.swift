@@ -36,14 +36,49 @@ enum Log {
         fileSink = file?.append
     }
 
-    static func debug(_ module: String, _ message: String) { write("debug", module, message) }
-    static func info(_ module: String, _ message: String) { write("info", module, message) }
-    static func warn(_ module: String, _ message: String) { write("warn", module, message) }
-    static func error(_ module: String, _ message: String) { write("error", module, message) }
+    /// 动态值走这里，正文只写固定短语。
+    ///
+    /// 为什么：正文里插值的行只能正则取，于是「按 op 统计失败率」做不到 ——
+    /// 而那是日志存在的第二个理由。字段化之后同一个 key 在任何模块里都是同一个意思。
+    /// 值只收字符串：日志是给人读的，嵌一个对象进去只会让 grep 变成猜。
+    static func debug(_ module: String, _ message: String, _ fields: [String: String] = [:]) {
+        write("debug", module, message, fields)
+    }
+    static func info(_ module: String, _ message: String, _ fields: [String: String] = [:]) {
+        write("info", module, message, fields)
+    }
+    static func warn(_ module: String, _ message: String, _ fields: [String: String] = [:]) {
+        write("warn", module, message, fields)
+    }
+    static func error(_ module: String, _ message: String, _ fields: [String: String] = [:]) {
+        write("error", module, message, fields)
+    }
 
-    private static func write(_ level: String, _ module: String, _ message: String) {
+    private static func write(
+        _ level: String, _ module: String, _ message: String, _ fields: [String: String]
+    ) {
         if level == "debug" && !debugEnabled { return }
-        writeRaw("\(LogTimestamp.string(from: Date())) [dsh][\(level)][\(module)]\(RpcTrace.lineMarker) \(message)\n")
+        let stamp = LogTimestamp.string(from: Date())
+        let tail = formatFields(fields)
+        writeRaw("\(stamp) [dsh][\(level)][\(module)]\(RpcTrace.lineMarker) \(message)\(tail)\n")
+    }
+
+    /// 把字段拼成 ` key=value key2=value2`，按 key 排序。
+    ///
+    /// 排序不是洁癖：同一行在不同次跑里字段顺序不同的话，「这行变了没」每次都要重新看。
+    /// 含空格或等号的值用引号包起来 —— 否则 `msg=a b` 会让 grep 的人以为有两个字段。
+    static func formatFields(_ fields: [String: String]) -> String {
+        guard !fields.isEmpty else { return "" }
+        let parts = fields.keys.sorted().map { key -> String in
+            let raw = fields[key] ?? ""
+            let needsQuote = raw.contains(" ") || raw.contains("=") || raw.contains("\"")
+            guard needsQuote else { return "\(key)=\(raw)" }
+            let escaped = raw
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\(key)=\"\(escaped)\""
+        }
+        return " " + parts.joined(separator: " ")
     }
 
     private static func writeRaw(_ line: String) {

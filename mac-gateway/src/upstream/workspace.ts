@@ -83,7 +83,8 @@ export async function createWorkspaceIn(
   const { workspace, created } = await controller.create({ path })
   // `created` 是这条链唯一一次出现的「这一次到底建了没有」—— 界面据此说两句不同的话，
   // 日志里没有它就分不清「用户以为建了新的，其实命中了旧的」。
-  log.info(`${created ? 'registered' : 'already registered'} "${path}" → ${workspace.workspaceId}`)
+  log.info(created ? 'workspace registered' : 'workspace already registered',
+    { path, workspace: workspace.workspaceId })
   return { workspaceId: workspace.workspaceId, title: workspace.title, created }
 }
 
@@ -104,15 +105,16 @@ export async function deleteWorkspaceIn(
 ): Promise<void> {
   try {
     await controller.delete({ workspaceId })
-    log.info(`registration removed: ${workspaceId} (directory and sessions kept)`)
+    log.info('registration removed (directory and sessions kept)', { workspace: workspaceId })
   } catch (error) {
     if (isNotFound(error)) {
       // 吞掉是对的（用户的意图已经达成），**静默吞不对**：用户说「我删了但组还在」时，
       // 这一行是唯一能证明「网关处理过、而且当时它已经不在了」的东西。
-      log.info(`registration already gone: ${workspaceId} — treated as success`)
+      log.info('registration already gone — treated as success', { workspace: workspaceId })
       return
     }
-    log.warn(`removing registration ${workspaceId} failed: ${describeError(error)}`)
+    log.warn('removing registration failed',
+      { workspace: workspaceId, error: describeError(error) })
     throw error
   }
 }

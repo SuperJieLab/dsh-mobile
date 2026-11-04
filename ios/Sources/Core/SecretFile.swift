@@ -18,12 +18,13 @@ enum SecretFile {
         do {
             try FileManager.default.createDirectory(at: baseURL(), withIntermediateDirectories: true)
             guard let data = value.data(using: .utf8) else {
-                Log.error(Log.Module.gateway, "SecretFile: \(name) 不是合法 UTF-8，未落盘")
+                Log.error(Log.Module.gateway, "SecretFile: 不是合法 UTF-8，未落盘", ["name": name])
                 return
             }
             try data.write(to: url(name), options: [.atomic, .completeFileProtection])
         } catch {
-            Log.error(Log.Module.gateway, "SecretFile: 写 \(name) 失败：\(error.localizedDescription)")
+            Log.error(Log.Module.gateway, "SecretFile: 写失败",
+                    ["name": name, "error": error.localizedDescription])
         }
     }
 
@@ -31,7 +32,8 @@ enum SecretFile {
         do {
             try FileManager.default.removeItem(at: url(name))
         } catch let error as NSError where error.code != NSFileNoSuchFileError && error.domain == NSCocoaErrorDomain {
-            Log.warn(Log.Module.gateway, "SecretFile: 删 \(name) 失败：\(error.localizedDescription)")
+            Log.warn(Log.Module.gateway, "SecretFile: 删失败",
+                   ["name": name, "error": error.localizedDescription])
         } catch {
             // 文件本来就不在：删除的幂等终态，不算事。
         }

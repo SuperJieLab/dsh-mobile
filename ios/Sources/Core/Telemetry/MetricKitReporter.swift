@@ -50,7 +50,8 @@ final class MetricKitReporter: NSObject, MXMetricManagerSubscriber {
         // 诊断里只有这两类值得单独报一行：崩溃与卡死是「用户会因此离开」的那两种，
         // 其余（CPU 异常、磁盘写入过量）打开 JSON 才看得懂，不适合进日志。
         if crashes > 0 || hangs > 0 {
-            Log.warn(Log.Module.telemetry, "diagnostics: \(crashes) crash(es), \(hangs) hang(s)")
+            Log.warn(Log.Module.telemetry, "diagnostics received",
+                     ["crashes": String(crashes), "hangs": String(hangs)])
         }
     }
 
@@ -64,9 +65,11 @@ final class MetricKitReporter: NSObject, MXMetricManagerSubscriber {
                 try store.save(data, kind: kind, at: Date())
                 saved += 1
             } catch {
-                Log.warn(Log.Module.telemetry, "could not save \(label) payload: \(error)")
+                Log.warn(Log.Module.telemetry, "could not save payload",
+                         ["kind": label, "error": String(describing: error)])
             }
         }
-        Log.info(Log.Module.telemetry, "received \(saved)/\(items.count) \(label) payload(s)")
+        Log.info(Log.Module.telemetry, "payloads received",
+                 ["kind": label, "saved": String(saved), "total": String(items.count)])
     }
 }

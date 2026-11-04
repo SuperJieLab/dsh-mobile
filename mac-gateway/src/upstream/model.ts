@@ -41,7 +41,7 @@ export function modelPortOver(controller: ModelControllerLike): ModelPort {
     ['modelCatalog', []],
   ] as const) {
     const note = signatureNoteOf(controller, member, expected)
-    if (note !== undefined) log.warn(`model adapter: ${note} — calling positionally`)
+    if (note !== undefined) log.warn('model adapter: calling positionally', { note })
   }
 
   return {

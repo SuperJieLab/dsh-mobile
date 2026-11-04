@@ -57,7 +57,7 @@ export function commandPortOver(commands: CommandsLike, agents: LiveAgentsLike):
     ['execute', ['agent', 'line', 'submittedAttachments', 'signal']],
   ] as const) {
     const note = signatureNoteOf(commands, member, expected)
-    if (note !== undefined) log.warn(`command adapter: ${note} — calling positionally`)
+    if (note !== undefined) log.warn('command adapter: calling positionally', { note })
   }
 
   return {
@@ -83,7 +83,8 @@ export function commandPortOver(commands: CommandsLike, agents: LiveAgentsLike):
       if (execution === undefined) {
         return { ok: false, code: 'unknown-command', message: `no such command: ${line}` }
       }
-      log.info(`command accepted for "${sessionId}" (${execution.commandId}): ${line}`)
+      log.info('command accepted',
+        { session: sessionId, command: execution.commandId, line })
       return { ok: true, commandId: execution.commandId }
     },
   }

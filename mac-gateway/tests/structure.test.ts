@@ -1675,3 +1675,26 @@ test('the http transport holds no pairing rules', () => {
   }
 })
 
+test('log bodies carry no interpolation', () => {
+  // 动态值走字段，正文只写固定短语。正文里插值之后只能正则取，于是「按 op 统计失败率」
+  // 「按工作空间看耗时」做不到 —— 而那是日志存在的第二个理由。
+  //
+  // 这条守的是**写法**而不是某一次输出：字段拼错、值转错类型，别的判据会抓；
+  // 而「正文又开始插值」不会让任何行为判据变红，只会让日志慢慢退回不可统计。
+  const pattern = /\blog\.(info|warn|error|debug)\(\s*`/
+  const files = filesUnder(SRC)
+
+  // 活性锚：扫到的文件太少说明路径或遍历坏了，那时 hits 为空只是因为没扫。
+  assert.ok(files.length > 5, `扫到的源码文件只有 ${files.length} 个 —— 先怀疑路径`)
+
+  const hits: string[] = []
+  for (const file of files) {
+    const code = stripComments(readFileSync(file, 'utf8'))
+    code.split('\n').forEach((line, index) => {
+      if (pattern.test(line)) hits.push(`${relative(SRC, file)}:${index + 1}`)
+    })
+  }
+
+  assert.deepEqual(hits, [], `这些日志的正文里还有插值（改成字段）：${hits.join(', ')}`)
+})
+

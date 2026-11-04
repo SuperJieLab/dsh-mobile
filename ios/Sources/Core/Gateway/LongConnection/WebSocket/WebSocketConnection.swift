@@ -107,7 +107,8 @@ final class WebSocketConnection: Channel {
                     return
                 }
                 // 握手没完成或连接已死时 send 会失败 —— 「发了开流内容却收不到帧」最常见的原因。
-                Log.warn(Log.Module.session, "g\(sentGeneration) send failed: \(error)")
+                Log.warn(Log.Module.session, "send failed",
+                         ["generation": String(sentGeneration), "detail": String(describing: error)])
                 self.closeTask()
                 self.scheduleReconnect()
             }
@@ -163,7 +164,7 @@ final class WebSocketConnection: Channel {
         }
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
-        Log.info(Log.Module.session, "reconnect now (\(reason)) — skipping backoff")
+        Log.info(Log.Module.session, "reconnect now, skipping backoff", ["reason": reason])
         connect()
     }
 
@@ -198,7 +199,8 @@ final class WebSocketConnection: Channel {
 
         // 上一代的连接先关掉：否则旧 socket 仍在泄漏，且系统的连接行为会互相干扰。
         if task != nil {
-            Log.debug(Log.Module.session, "g\(current) closing previous task before connecting")
+            Log.debug(Log.Module.session, "closing previous task before connecting",
+                      ["generation": String(current)])
             closeTask()
         }
 
@@ -211,7 +213,8 @@ final class WebSocketConnection: Channel {
 
         // 没有票**不裸连**：这一发必定被 401 拒。交给 `renewThenRetry` 决定下一步。
         guard let access = authorizationProvider?() else {
-            Log.info(Log.Module.session, "connect g\(current) skipped — no access ticket")
+            Log.info(Log.Module.session, "connect skipped, no access ticket",
+                     ["generation": String(current)])
             renewThenRetry()
             return
         }
@@ -224,7 +227,8 @@ final class WebSocketConnection: Channel {
         webSocketTask.maximumMessageSize = Self.maximumMessageSize
         task = webSocketTask
         // 只报代次与地址：流标签是流层的词汇，本层不解释它（流层自己重开时按流记一行）。
-        Log.info(Log.Module.session, "connect g\(current) → \(components.url!)")
+        Log.info(Log.Module.session, "connect",
+                 ["generation": String(current), "url": components.url!.absoluteString])
         webSocketTask.resume()
 
         // 换代次之后谁要发帧、发什么，由订阅方自己决定。
@@ -238,7 +242,8 @@ final class WebSocketConnection: Channel {
     /// 关掉当前任务并使其回调作废（代次在外层管）。
     private func closeTask(from caller: String = #function) {
         if let task {
-            Log.debug(Log.Module.session, "g\(generation) closeTask from \(caller)")
+            Log.debug(Log.Module.session, "closeTask",
+                  ["generation": String(generation), "caller": caller])
             task.cancel(with: .goingAway, reason: nil)
         }
         task = nil
@@ -253,7 +258,8 @@ final class WebSocketConnection: Channel {
                 switch result {
                 case .failure(let error):
                     // 连接死了：清场走退避重连。打印具体原因 —— ATS / 路由器隔离各有错误码。
-                    Log.warn(Log.Module.session, "g\(current) receive failed: \(error)")
+                    Log.warn(Log.Module.session, "receive failed",
+                         ["generation": String(current), "detail": String(describing: error)])
                     self.closeTask()
                     self.scheduleReconnect()
 
@@ -272,7 +278,8 @@ final class WebSocketConnection: Channel {
         heardFromPeer = true
         lastEvidenceAt = Date()
         guard case .string(let text) = message else {
-            Log.debug(Log.Module.session, "g\(current) non-text frame ignored")
+            Log.debug(Log.Module.session, "non-text frame ignored",
+                  ["generation": String(current)])
             return
         }
         let rawData = Data(text.utf8)
@@ -281,7 +288,8 @@ final class WebSocketConnection: Channel {
                      "g\(current) unparsable frame (first 120 chars): \(text.prefix(120))")
             return // 解不了的帧不是消息，忽略
         }
-        Log.debug(Log.Module.session, "g\(current) frame: \(frame.type)")
+        Log.debug(Log.Module.session, "frame",
+                  ["generation": String(current), "type": frame.type])
 
         // 一条可解析的帧 = 这一代真的通了：退避归零、连失清零、阶段就绪。就绪与存活是同一个信号。
         reconnectAttempt = 0
@@ -449,7 +457,8 @@ final class WebSocketConnection: Channel {
             attempt: reconnectAttempt, random: Double.random(in: 0..<1)
         )
 
-        Log.info(Log.Module.session, "reconnect in \(delay)ms (attempt \(reconnectAttempt))")
+        Log.info(Log.Module.session, "reconnect scheduled",
+                 ["delayMs": String(delay), "attempt": String(reconnectAttempt)])
         phase = .waiting(ms: delay)
         let work = DispatchWorkItem { [weak self] in
             self?.connect()

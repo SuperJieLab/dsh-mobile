@@ -233,6 +233,7 @@ func selectPermission(_ client: RpcClient, sessionId: String, preset: String) as
         PermissionSelectRequest(sessionId: sessionId, preset: preset)
     )
     // 与命令通道同一条理由：这是这一屏唯一能放开沙箱限制的动作，发给谁、发什么必须留痕。
-    Log.info(Log.Module.session, "permission-select \(sessionId) → \(preset)")
+    Log.info(Log.Module.session, "permission-select",
+             ["session": sessionId, "preset": preset])
     return response.current
 }

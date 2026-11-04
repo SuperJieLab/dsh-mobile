@@ -65,8 +65,10 @@ export async function workspaceRoot(deps: WorkspaceRootDeps = {}): Promise<strin
     // 用户没点就永远不返回。它与其他失败在报错文本上分不开（都是一个 Error），
     // 只有这里有上下文能说清是「超时」还是「命令本身失败」—— 两者的排查方向相反。
     if (timedOut(error)) {
-      log.warn(`asking the system for Documents timed out after ${LOOKUP_TIMEOUT_MS}ms`
-        + ' — the automation prompt may still be waiting for an answer')
+      log.warn(
+        'asking the system for Documents timed out — the automation prompt may still be waiting',
+        { ms: LOOKUP_TIMEOUT_MS },
+      )
     }
     throw error
   }
@@ -77,7 +79,7 @@ export async function workspaceRoot(deps: WorkspaceRootDeps = {}): Promise<strin
   const root = join(documents, WORKSPACE_ROOT_SEGMENT)
   // 成功也留一句：只有失败日志的话，分不清「没走到这一步」与「走到了但后面错了」。
   // 耗时一并给出 —— 首次要等授权框时，它与平时的毫秒级差得很远。
-  log.info(`root resolved in ${Date.now() - startedAt}ms: ${root}`)
+  log.info('root resolved', { ms: Date.now() - startedAt, root })
   return root
 }
 
@@ -116,7 +118,7 @@ async function makeDirectory(path: string): Promise<void> {
     await mkdir(path, { recursive: true })
   } catch (error) {
     // 带上路径：同一个 op 里前面还有「问系统要根」那一步，只说「建目录失败」对不上是哪一层。
-    log.warn(`mkdir failed for ${path}: ${describeError(error)}`)
+    log.warn('mkdir failed', { path, error: describeError(error) })
     throw error
   }
 }

@@ -355,7 +355,7 @@ export function permissionChannelOver(ctx: HostContext): PermissionPort {
       [exec, 'execute', ['agent', 'line', 'submittedAttachments', 'signal']],
     ] as const) {
       const note = signatureNoteOf(target, member, expected)
-      if (note !== undefined) log.warn(`permission adapter: ${note} — calling positionally`)
+      if (note !== undefined) log.warn('permission adapter: calling positionally', { note })
     }
 
     const sources: PermissionSources = {
@@ -438,7 +438,7 @@ export function gatewayOver(ctx: HostContext): RemoteEventStreamLike & RemoteEve
   if (typeof member !== 'function') {
     // 应答门是中继存在的全部理由：缺失必须在对齐时暴露，
     // 而不是在第一次点击应答时。
-    log.error(`approval relay gateway members: ${members}`)
+    log.error('approval relay gateway members', { members })
     throw new Error('ctx.typertGateway exposes no dispatchRpc — the approval relay cannot answer without it')
   }
   // `typeof x === 'function'` 只收窄到 `Function`（上游声明里它是类方法，形参表不可读）；
@@ -450,7 +450,7 @@ export function gatewayOver(ctx: HostContext): RemoteEventStreamLike & RemoteEve
     | undefined
   const opening = typeof declared?.open === 'function' ? declared.open : raw.openWireStream
   if (typeof opening !== 'function') {
-    log.error(`gateway face members: ${members}`)
+    log.error('gateway face members', { members })
     throw new Error('ctx.typertGateway exposes neither wireStream.open nor openWireStream — the $events source cannot run')
   }
   const opener = opening as (...args: unknown[]) => Promise<AsyncIterable<unknown>>
@@ -503,7 +503,8 @@ function peerFor(ctx: HostContext): PeerScopeLike {
   if (typeof createPeer !== 'function') {
     // 这一段是我们与宿主的接线，缺了它中继整块不可用 —— 在装配时说清，而不是把
     // `undefined` 传进每一代建流（R11 修的正是后者）。
-    log.error(`approval relay peer source: connection=${typeof connection}, createPeer=${typeof createPeer}`)
+    log.error('approval relay peer source',
+      { connection: typeof connection, createPeer: typeof createPeer })
     throw new Error('ctx.connection.createPeer is unavailable — the approval relay cannot open $events without a Peer')
   }
   const peer = (createPeer as (options: unknown) => unknown).call(connection, {
@@ -512,7 +513,7 @@ function peerFor(ctx: HostContext): PeerScopeLike {
   })
   const problem = peerShapeProblem(peer)
   if (problem !== undefined) {
-    log.error(`approval relay peer: createPeer returned a Peer that is ${problem}`)
+    log.error('approval relay peer: createPeer returned an unusable Peer', { problem })
     throw new Error(`ctx.connection.createPeer returned a Peer that is ${problem} — the approval relay cannot speak for it`)
   }
   log.info('approval relay peer: owner/answer via connection.createPeer')

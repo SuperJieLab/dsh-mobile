@@ -116,7 +116,7 @@ export class CredentialVault {
       mkdirSync(dirname(this.path), { recursive: true })
       writeFileSync(this.path, `${JSON.stringify(this.file, null, 2)}\n`, 'utf8')
     } catch (error) {
-      log.error(`could not persist credentials: ${String(error)}`)
+      log.error('could not persist credentials', { error: String(error) })
     }
     // 自己写的那一次不该在下一个请求上被当成「别人改的」。
     this.stamp = this.fingerprint()

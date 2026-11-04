@@ -3176,4 +3176,39 @@ final class LayeringTests: XCTestCase {
     private func containsHan(_ text: String) -> Bool {
         text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
     }
+
+    // MARK: - 断言：日志正文里不许有插值
+
+    /// 动态值走字段，正文只写固定短语。
+    ///
+    /// 正文里插值之后只能正则取，于是「按 op 统计失败率」做不到 —— 而那是日志存在的
+    /// 第二个理由。这条守的是**写法**：字段拼错、值转错类型有别的判据抓，而「正文又
+    /// 开始插值」不会让任何行为判据变红，只会让日志慢慢退回不可统计。
+    func testLogBodiesCarryNoInterpolation() throws {
+        // 第二个参数是正文；`[^,]+` 是模块（`Log.Module.session` 不含逗号）。
+        let pattern = try NSRegularExpression(
+            pattern: #"Log\.(info|warn|error|debug)\([^,]+,\s*"([^"]*)""#
+        )
+        var hits: [String] = []
+        var scanned = 0
+
+        for file in swiftFiles(under: sourcesRoot) {
+            let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
+            for (number, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
+                let range = NSRange(code.startIndex..<code.endIndex, in: code)
+                guard let match = pattern.firstMatch(in: code, range: range),
+                      let bodyRange = Range(match.range(at: 2), in: code)
+                else { continue }
+                scanned += 1
+                if code[bodyRange].contains("\\(") {
+                    hits.append("\(relative):\(number)")
+                }
+            }
+        }
+
+        // 活性锚：一条都没匹配上说明正则或遍历坏了，那时 hits 为空只是因为没扫。
+        XCTAssertGreaterThan(scanned, 30, "只扫到 \(scanned) 条日志调用 —— 先怀疑正则")
+        XCTAssertEqual(hits, [], "这些日志的正文里还有插值（改成字段）：\(hits)")
+    }
 }
+

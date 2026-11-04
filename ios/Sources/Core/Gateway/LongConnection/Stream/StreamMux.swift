@@ -159,7 +159,9 @@ final class StreamMux {
                 guard renumber(stream) else { continue }
             }
             // 每条流各记一行：连接层不再报「这一代挂着谁」，重开了哪些只有这里说得清。
-            Log.info(Log.Module.session, "[\(stream.label)] reopened on g\(channel?.attempt?.generation ?? 0)")
+            Log.info(Log.Module.session, "stream reopened",
+                     ["stream": stream.label,
+                      "generation": String(channel?.attempt?.generation ?? 0)])
             sendOpen(stream)
         }
     }
@@ -216,7 +218,7 @@ final class StreamMux {
 
     private func sendCancel(_ id: StreamId) {
         guard let text = try? MuxCancelFrame(streamId: id).encoded() else {
-            Log.warn(Log.Module.session, "cancel frame encoding failed for stream \(id)")
+            Log.warn(Log.Module.session, "cancel frame encoding failed", ["stream": id])
             return
         }
         channel?.send(text)
@@ -255,7 +257,10 @@ final class StreamMux {
             attempt: stream.retryAttempt, random: Double.random(in: 0..<1)
         )
         stream.retryWorkItem?.cancel()
-        Log.info(Log.Module.session, "stream [\(stream.label)] retry in \(delay)ms (attempt \(stream.retryAttempt))")
+        Log.info(Log.Module.session, "stream retry scheduled",
+                 ["stream": stream.label,
+                  "delayMs": String(delay),
+                  "attempt": String(stream.retryAttempt)])
         let work = DispatchWorkItem { [weak self, weak stream] in
             guard let self, let stream else { return }
             self.retryNow(stream)

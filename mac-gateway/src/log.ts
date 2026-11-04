@@ -27,7 +27,37 @@ export const LogModule = {
   workspace: "workspace",
 } as const;
 
-export type Logger = Record<LogLevel, (message: string) => void>;
+/**
+ * 结构化字段：动态值走这里，正文只写固定短语。
+ *
+ * 为什么要有它：正文里插值的行只能正则取，于是「按 op 统计失败率」「按工作空间看耗时」
+ * 做不到 —— 而那是日志存在的第二个理由。字段化之后同一个 key 在任何模块里都是同一个意思。
+ *
+ * 值只收标量：日志是给人读的，嵌一个对象进去只会让 grep 变成猜。
+ */
+export type LogFields = Record<string, string | number | boolean | undefined>;
+
+export type Logger = Record<LogLevel, (message: string, fields?: LogFields) => void>;
+
+/**
+ * 把字段拼成 ` key=value key2=value2`，按 key 排序。
+ *
+ * 排序不是洁癖：同一行日志在不同次跑里字段顺序不同的话，diff 与「这行变了没」都要重新看。
+ * 含空格或等号的值用 JSON 引号包起来 —— 否则 `msg=a b` 会让 grep 的人以为有两个字段。
+ */
+export function formatLogFields(fields?: LogFields): string {
+  if (fields === undefined) return "";
+  const keys = Object.keys(fields)
+    .filter((key) => fields[key] !== undefined)
+    .sort();
+  if (keys.length === 0) return "";
+  const parts = keys.map((key) => {
+    const raw = String(fields[key]);
+    const needsQuote = /[\s="]/.test(raw);
+    return `${key}=${needsQuote ? JSON.stringify(raw) : raw}`;
+  });
+  return ` ${parts.join(" ")}`;
+}
 
 /**
  * 行去哪。默认 stdout / stderr —— 生产上唯一的去向。
@@ -50,13 +80,13 @@ export function setLogSink(next: typeof sink): typeof sink {
 
 export function createLogger(module: string): Logger {
   const debugEnabled = process.env.DSH_LOG_DEBUG === "1";
-  const emit = (level: LogLevel) => (message: string): void => {
+  const emit = (level: LogLevel) => (message: string, fields?: LogFields): void => {
     if (level === "debug" && !debugEnabled) return;
     const tag = `${logTimestamp(new Date())} [dsh][${level}][${module}]`;
     // 请求标记只在有请求上下文时出现。放在模块标签之后、正文之前：按它 grep 时
     // 两种行都能命中同一条正则。
     const marker = currentRequestId() === undefined ? "" : ` [req=${currentRequestId()}]`;
-    sink(level, module, `${tag}${marker} ${message}`);
+    sink(level, module, `${tag}${marker} ${message}${formatLogFields(fields)}`);
   };
   return { debug: emit("debug"), info: emit("info"), warn: emit("warn"), error: emit("error") };
 }

@@ -147,7 +147,8 @@ export function onClientText(
     if (feed === undefined || approvals === undefined) {
       // 装配错误，不是客户端错误：这条流在这里没有被接上。拒绝要响 —— 静默的表现是
       // 客户端等 45 秒就绪超时，而就绪超时判的是**整条连接**（两条流一起被关）。
-      log.error(`events stream ${frame.streamId} was opened, but this gateway wires no forwarded-event source — refused`)
+      log.error('events stream opened but no forwarded-event source is wired — refused',
+        { stream: frame.streamId })
       streams.delete(frame.streamId)
       send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'internal-error', message: 'this gateway has no forwarded-event source' } })
       return { ok: true }
@@ -222,7 +223,8 @@ function pumpEvents(
   // 把它当成可信基线，而中继此刻根本不知道上游还挂着什么。拒绝之后客户端按可重试处理、
   // 退避重开 —— 那时源通常已经就绪。
   if (!approvals.ready) {
-    log.error(`events stream ${streamId} was opened before the $events source was ready — refused`)
+    log.error('events stream opened before the $events source was ready — refused',
+      { stream: streamId })
     send(socket, {
       type: 'error',
       streamId,
@@ -271,7 +273,7 @@ function pumpEvents(
     },
   })
   announce()
-  log.info(`events stream opened — source ${feed.generation === undefined ? 'has no generation' : `generation ${feed.generation}`}`)
+  log.info('events stream opened', { generation: feed.generation ?? 'none' })
 
   // 订阅排在重放之后：两句之间没有 `await`，源插不进来（单线程 + 同步循环），
   // 于是「重放的这一份」与「之后的增量」既不重也不漏。
@@ -311,7 +313,8 @@ async function pump(
     try {
       return source.occupancyOf(request.sessionId)
     } catch (error) {
-      log.error(`occupancy read failed for "${request.sessionId}": ${describeError(error)}`)
+      log.error('occupancy read failed',
+        { session: request.sessionId, error: describeError(error) })
       return undefined
     }
   }
@@ -325,7 +328,8 @@ async function pump(
     try {
       return source.modelOf(request.sessionId)
     } catch (error) {
-      log.error(`model read failed for "${request.sessionId}": ${describeError(error)}`)
+      log.error('model read failed',
+        { session: request.sessionId, error: describeError(error) })
       return undefined
     }
   }
@@ -400,7 +404,8 @@ async function pump(
           encodeTextFrame(encodeServerFrame({ type: 'item', streamId, payload: openingPayload(start) })).length
         const shrink = fitOpeningToBytes(events, openingCapBytes, frameBytesAt)
         if ('unshrinkable' in shrink) {
-          log.error(`follow opening for "${request.sessionId}" exceeds the ${openingCapBytes}-byte cap even at one turn — refused`)
+          log.error('follow opening exceeds the cap even at one turn — refused',
+            { session: request.sessionId, cap: openingCapBytes })
           // 拒绝路径没有帧可发，但这条记录就是「这个会话为什么打不开」的答案。
           perfRecord(LogModule.ws, gwRecord({
             sessionId: request.sessionId,
@@ -426,9 +431,15 @@ async function pump(
         const fixedBytes = encodeTextFrame(encodeServerFrame({
           type: 'item', streamId, payload: { ...openingPayload(shrink.start), events: [] },
         })).length
-        log.info(`follow opening for "${request.sessionId}": cursor=${cursor}, ${sentCount} events`
-          + (shrink.cutEvents === 0 ? '' : ` (narrowed by ${shrink.cutEvents} events / ${shrink.cutTurns} turns)`)
-          + `, ${openingBytes} bytes (fixed ${fixedBytes} + events ${openingBytes - fixedBytes})`)
+        log.info('follow opening', {
+          session: request.sessionId,
+          cursor: String(cursor),
+          events: sentCount,
+          bytes: openingBytes,
+          fixedBytes,
+          cutEvents: shrink.cutEvents,
+          cutTurns: shrink.cutTurns,
+        })
         sendItem(openingPayload(shrink.start), {
           // 窗口重放也占 t2 段，且通常是整条流里最大的一帧 —— 它的尺寸
           // 是「这一帧为什么超限」唯一的现场证据。
@@ -447,7 +458,8 @@ async function pump(
         // 源承诺无缺口；我们做见证。跳过的 seq 意味着流自己的承诺破了 ——
         // 高声拒绝，绝不渲染一个谁也看不见的洞。
         if (expectedSeq !== undefined && event?.seq !== expectedSeq) {
-          log.error(`follow stream broke continuity: expected seq ${String(expectedSeq)}, got ${String(event?.seq)}`)
+          log.error('follow stream broke continuity',
+            { expected: String(expectedSeq), got: String(event?.seq) })
           send(socket, { type: 'error', streamId, payload: { code: 'internal-error', message: `follow stream skipped seq ${String(expectedSeq)}` } })
           return
         }
@@ -467,7 +479,7 @@ async function pump(
       if (frame.type === 'assistant-stream') {
         transientCount += 1
         if (transientCount === 1 || transientCount % 50 === 0) {
-          log.info(`transient frames forwarded: ${transientCount}`)
+          log.info('transient frames forwarded', { count: transientCount })
         }
         sendItem({ type: 'assistant-stream', frame: frame.frame }) // 原样，无 cursor
         continue

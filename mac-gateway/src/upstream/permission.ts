@@ -86,7 +86,8 @@ export function permissionPortOver(sources: PermissionSources): PermissionPort {
       if (call.kind === 'unparsable') {
         return { ok: false, code: 'unknown-preset', message: `the host did not accept "${line}"` }
       }
-      log.info(`permission preset "${preset}" accepted for "${sessionId}" (${call.commandId})`)
+      log.info('permission preset accepted',
+        { preset, session: sessionId, command: call.commandId })
       // 受理后重读一次：回包里的值是宿主算的，不是把发出去的那份当答案。
       const current = sources.currentOf(sessionId)
       return { ...current === undefined ? { ok: true } : { ok: true, current } }

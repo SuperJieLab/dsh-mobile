@@ -98,7 +98,8 @@ final class EventStream {
         case let .refused(failure):
             // 不进消费方（拒绝讲的是「接下来怎么办」），但**要留痕**：屏幕上看不见，
             // 版本旧与装配漏了只在这行里分得开。
-            Log.warn(Log.Module.gateway, "event stream refused: \(failure.code) \(failure.message)")
+            Log.warn(Log.Module.gateway, "event stream refused",
+                     ["code": failure.code, "detail": failure.message])
             // 重试也不会变的那一类会被流层收起，而 `stream` 还非空 —— 标上，回前台时
             // `attach` 才能真的重建。
             if !EventReading.retryableCodes.contains(failure.code) {
