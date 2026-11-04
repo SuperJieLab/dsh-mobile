@@ -14,11 +14,11 @@ import { dirname, join } from 'node:path'
 /**
  * 写这个网关时**核对过源码**的宿主版本。
  *
- * 不是「运行时最新版」—— 是「我们真的读过它 API 形状的那一版」。两者现在不同：
- * 核对的是 alpha.2，实际在跑的是 alpha.3。**这个差异就该被报出来**：它意味着
- * alpha.3 的 API 没人看过。把常量改成运行时的版本会让警告消失，而那份安心是假的。
+ * 不是「运行时最新版」—— 是「我们真的读过它 API 形状的那一版」。两者不同时，
+ * 这个差异就该被报出来：它意味着新版本的 API 没人看过。把常量改成运行时的版本
+ * 会让警告消失，而那份安心是假的。
  */
-export const BUILT_AGAINST = '0.2.2-alpha.2'
+export const BUILT_AGAINST = '0.2.2-alpha.3'
 
 /** 宿主包的名字。npx 缓存里是带 scope 的那个，也认不带 scope 的。 */
 const HOST_NAMES: Set<string> = new Set(['@deepseek-ai/dsh', 'dsh'])

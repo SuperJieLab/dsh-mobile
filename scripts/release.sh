@@ -140,6 +140,27 @@ PLIST_EOF
   fi
 fi
 
+# ── 网关的版本跟着 tag 走 ────────────────────────────────────────────────────
+# `mac-gateway/package.json` 的 version 一直停在 0.0.1，也不参与任何判断 —— 排查时问
+# 「你那个网关是哪一版」答不出来。跟着 tag 走，「一个 tag = 一套版本」，对得起来。
+#
+# 放在归档**之后**：写它会让工作区变脏，而「工作区干净才归档」正是前面那条前置检查的
+# 意义所在。先出包、再改文件，两件事不互相破坏。
+GATEWAY_MANIFEST="${ROOT}/mac-gateway/package.json"
+if [[ -f "$GATEWAY_MANIFEST" ]]; then
+  GATEWAY_NOTE="$(node -e '
+const fs = require("fs");
+const [path, version] = process.argv.slice(1);
+const data = JSON.parse(fs.readFileSync(path, "utf8"));
+if (data.version === version) { console.log("已是 " + version); process.exit(0); }
+data.version = version;
+fs.writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
+console.log("已写成 " + version + "（记得提交）");
+' "$GATEWAY_MANIFEST" "$VERSION")"
+else
+  GATEWAY_NOTE="（没有 mac-gateway/package.json，跳过）"
+fi
+
 # ── 结论 ────────────────────────────────────────────────────────────────────
 say ""
 say "────────────────────────────────────────────"
@@ -149,6 +170,7 @@ say "归档        ${ARCHIVE#"$ROOT"/}"
 say "dSYM        ${DSYM#"$ROOT"/}  (${DSYM_SIZE})"
 say "UUID        ${BIN_UUID}"
 say "ipa         ${IPA_NOTE}"
+say "网关        ${GATEWAY_NOTE}"
 say "────────────────────────────────────────────"
 say ""
 say "符号化一条崩溃栈："
