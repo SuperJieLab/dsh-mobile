@@ -1,25 +1,25 @@
 # dsh-mobile
 
-在 iPhone 上远程用 dsh —— 手机连到 Mac 上的网关，看会话、发消息、批审批。
+在 iPhone 上远程用 dsh —— 手机连到跑 dsh 的那台机器，看会话、发消息、批审批。
 
 ```
-iPhone App  ──Tailscale 虚拟网──▶  Mac 上的网关  ──▶  dsh
+iPhone App  ──Tailscale 虚拟网──▶  网关  ──▶  dsh
 ```
 
-走 Tailscale 而不是局域网，所以手机和 Mac 不在同一个 Wi-Fi 也能用。
+走 Tailscale 而不是局域网，所以手机和那台机器不在同一个 Wi-Fi 也能用。
 
 ## 你需要
 
 | | |
 |---|---|
-| **Mac** | 跑 dsh 和网关 |
+| **一台常开的机器** | 跑 dsh 和网关。Mac / Linux / Windows 都行（只在 macOS 上实测过） |
 | **iPhone** | iOS 18.1 或更新 |
 | **Tailscale 账号** | 免费额度够用；自建 headscale 也行 |
 | **Xcode 16+** | 把 App 装到手机上（没有 TestFlight，只能自己签） |
 
 ## 装
 
-### 1. Mac 侧
+### 1. 网关那侧
 
 ```bash
 git clone https://github.com/SuperJieLab/dsh-mobile.git
@@ -59,12 +59,12 @@ DEVELOPMENT_TEAM = <你的 Team ID>
 **设置 → 组网** 里填两项：
 
 - **接入密钥**：那串 `tskey-auth-...`
-- **网关地址**：Mac 在 tailnet 里的地址，形如 `http://100.x.y.z:3081`
+- **网关地址**：那台机器在 tailnet 里的地址，形如 `http://100.x.y.z:3081`
   （`tailscale ip -4` 能看到。**不是** `192.168.x.x`）
 
 **② 配对** —— 网关启动日志里有 6 位配对码（10 分钟有效），在 **设置 → 身份 → 配对** 里输入。
 
-配好之后回到列表，就能看到 Mac 上的会话了。
+配好之后回到列表，就能看到那台机器上的会话了。
 
 ## 用
 
@@ -89,7 +89,9 @@ DEVELOPMENT_TEAM = <你的 Team ID>
 - **只能用 Xcode 装** —— 没有 TestFlight，也没有 App Store。
 - **免费 Apple ID 签的包 7 天过期**，到期要重新 Run 一次。付费开发者账号不受此限。
 - **必须有 Tailscale** —— App 不走局域网直连，网关监听在 tailnet 地址上。
-- **一个网关对应一台 Mac**，但多台手机可以同时连，各自单独配对。
+- **一个网关对应一台机器**，但多台手机可以同时连，各自单独配对。
+- **只在 macOS 上验证过**。网关代码里没有平台假设（绑 `0.0.0.0`、路径走 `os.homedir()`），
+  Linux / Windows 理论上可行，但没实测过。
 
 ## 撤销
 
