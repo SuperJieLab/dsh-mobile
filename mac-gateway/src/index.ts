@@ -27,6 +27,7 @@ import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
 import { AuditLog, defaultAuditDirectory } from './audit.ts'
 import { Metrics } from './metrics.ts'
+import { checkHostVersion, hostVersionOf } from './host-version.ts'
 import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, permissionChannelOver, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
@@ -112,6 +113,10 @@ const DEFAULT_PORT = 3081
  * 地址不被编译进去。
  */
 export function apply(ctx: HostContext, config: Config = {}): void {
+  // 第一件事就报宿主版本：它决定「后面那些 API 还是不是那个形状」。
+  // 只警告不阻止 —— 上游发个小版本就起不来，是比「可能漂了」更坏的交换。
+  reportHostVersion()
+
   const host = config.host ?? DEFAULT_HOST
   const port = config.port ?? DEFAULT_PORT
   const sessionPort: SessionPort = createSessionPort(
@@ -212,4 +217,29 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       server.close()
     }
   }, 'mac-gateway.listener')
+}
+
+/**
+ * 报一句宿主版本。**只警告，不阻止** —— 理由见 `host-version.ts` 的模块注释。
+ *
+ * 放在 `apply` 第一行：它决定「后面那些 API 还是不是那个形状」，所以要在任何宿主
+ * API 被调用之前说。晚说的话，报错会先以「某个方法不是函数」的形式出现。
+ */
+function reportHostVersion(): void {
+  const check = checkHostVersion(hostVersionOf())
+  switch (check.kind) {
+    case 'match':
+      log.info('host version matches', { version: check.version })
+      break
+    case 'differs':
+      log.warn(
+        'host version differs from the one this gateway was built against — upstream API may have drifted',
+        { host: check.host, builtAgainst: check.builtAgainst },
+      )
+      break
+    case 'unknown':
+      // 读不到不是错：网关可能被测试装配加载，或入口形状变了。说一句，不吓人。
+      log.info('host version unknown — could not read the host manifest')
+      break
+  }
 }
