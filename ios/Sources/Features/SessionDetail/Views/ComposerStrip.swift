@@ -22,9 +22,9 @@ struct ComposerStrip: View {
     /// 网络格定宽（按最长的「连接中…」算）。不定宽的话，「直连」与「重连中…」差十来个点，
     /// 每次断连 / 恢复模型格都会横移一次。
     private static let networkWidth: CGFloat = 64
-    /// 权限格定宽 —— 按最长的「工作区内修改」六个字加一个图标算。档位名长短差得多，
-    /// 不定宽会让模型格随档位横移。
-    private static let permissionWidth: CGFloat = 84
+    /// 权限格定宽 —— 按最长的「工作区内修改」六个字（footnote）加一个图标算。
+    /// 档位名长短差得多，不定宽会让模型格随档位横移。
+    private static let permissionWidth: CGFloat = 96
     /// 占用格定宽 —— 按「图标 + 15%」算。不定宽的话 `15%` 与 `--` 宽度不同，
     /// 左列的文字会随读数横跳。
     private static let usageWidth: CGFloat = 56
@@ -35,7 +35,7 @@ struct ComposerStrip: View {
             VStack(alignment: .leading, spacing: 6) {
                 Button(action: onTapNetwork) {
                     Label(model.network.text, systemImage: model.network.systemImage)
-                        .font(.caption2)
+                        .font(.footnote)
                         .foregroundStyle(Self.tint(model.network.tone))
                         .lineLimit(1)
                 }
@@ -49,7 +49,7 @@ struct ComposerStrip: View {
                         Text(model.usageText)
                             .monospacedDigit()
                     }
-                    .font(.caption2)
+                    .font(.footnote)
                     .foregroundStyle(model.usageIsEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
                 }
                 .buttonStyle(.plain)
@@ -59,10 +59,9 @@ struct ComposerStrip: View {
             Spacer(minLength: 8)
 
             // 右列：两段内容，右对齐 —— 与左列的数字分列两侧。
+            // 权限在上、模型在下：模型带箭头，托底比压顶稳；而且「用量 / 模型」同排，
+            // 两格都是「这一轮消耗了什么」。
             VStack(alignment: .trailing, spacing: 6) {
-                ModelPickerView(label: model.modelLabel, onTap: onTapModel)
-                    .lineLimit(1)
-
                 // 没有权限服务的装配里这一格根本不出现（`permissionName == nil`）——
                 // 留一个空位等于告诉用户「这里本来有东西」。
                 if let permissionName = model.permissionName {
@@ -71,6 +70,9 @@ struct ComposerStrip: View {
                                    onSelect: onSelectPermission)
                         .frame(width: Self.permissionWidth, alignment: .trailing)
                 }
+
+                ModelPickerView(label: model.modelLabel, onTap: onTapModel)
+                    .lineLimit(1)
             }
         }
         .padding(.horizontal, 4)
@@ -118,7 +120,7 @@ private struct PermissionCell: View {
                 Text(label)
                     .lineLimit(1)
             }
-            .font(.caption2)
+            .font(.footnote)
             .foregroundStyle(choices.isEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
         }
         .disabled(choices.isEmpty)
