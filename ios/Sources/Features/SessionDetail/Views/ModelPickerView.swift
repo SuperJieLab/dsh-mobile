@@ -14,6 +14,8 @@ struct ModelPickerView: View {
             HStack(spacing: 4) {
                 Image(systemName: "cpu")
                 Text(label)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.caption2)
             }

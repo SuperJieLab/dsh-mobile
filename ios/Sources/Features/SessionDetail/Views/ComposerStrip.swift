@@ -38,14 +38,14 @@ struct ComposerStrip: View {
             .buttonStyle(.plain)
             .frame(width: Self.networkWidth, alignment: .leading)
 
-            Spacer(minLength: 0)
-
             // 模型格吃剩余宽度：四格里只有它是不可压缩的自由文本。
+            // 它紧跟网络格而不是被两侧 Spacer 夹在中间 —— 夹着会让它居中，而居中在
+            // 左侧留一段空白，看起来像「这一格没内容」。
             ModelPickerView(label: model.modelLabel, onTap: onTapModel)
                 .lineLimit(1)
                 .layoutPriority(1)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
 
             // 没有权限服务的装配里这一格根本不出现（`permissionName == nil`）——
             // 留一个空位等于告诉用户「这里本来有东西」。
@@ -60,7 +60,7 @@ struct ComposerStrip: View {
                 Text(model.usageText)
                     .font(.caption2)
                     .monospacedDigit()
-                    .foregroundStyle(model.usageIsEmpty ? Color.secondary : Color.primary)
+                    .foregroundStyle(model.usageIsEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
             }
             .buttonStyle(.plain)
             .frame(width: Self.usageWidth, alignment: .trailing)
@@ -107,7 +107,7 @@ private struct PermissionCell: View {
             Text(label)
                 .font(.caption2)
                 .lineLimit(1)
-                .foregroundStyle(choices.isEmpty ? Color.secondary : Color.primary)
+                .foregroundStyle(choices.isEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
         }
         .disabled(choices.isEmpty)
     }
