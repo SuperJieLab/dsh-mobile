@@ -15,4 +15,6 @@ enum Destination: Hashable {
     /// 地址、接入密钥、节点五态。
     case mesh
     case pairing
+    /// 写操作的历史。审计不是日志：这里只列「谁改了什么」，不含过程。
+    case audit
 }

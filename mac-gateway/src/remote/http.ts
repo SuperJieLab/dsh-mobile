@@ -16,11 +16,12 @@ import type { PermissionPort } from '../ports/permission.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
+import { auditEntryOf, isWriteOp, type AuditLog } from '../audit.ts'
 import { CredentialVault } from './credentials.ts'
 import type {
   PairRequest, PairResponse, RefreshRequest, RefreshResponse,
 } from '../wire/auth.ts'
-import { createLogger, LogModule, mintRequestId, runWithRequestId } from '../log.ts'
+import { createLogger, LogModule, currentRequestId, mintRequestId, runWithRequestId } from '../log.ts'
 
 const log = createLogger(LogModule.http)
 
@@ -67,6 +68,8 @@ export interface RpcListenerDeps {
   permissionPort: PermissionPort | undefined
   /** 列表分组的来源；只读装配可以不给，那时应答里没有组清单。 */
   workspacePort: WorkspacePort | undefined
+  /** 写操作的审计落点；不给 = 不记（只读装配与判据不需要它）。 */
+  auditLog: AuditLog | undefined
 }
 
 /**
@@ -160,6 +163,13 @@ async function respondInScope(
   }
 
   const answer = await handle(message, { session: deps.sessionPort, write: deps.writePort, model: deps.modelPort, command: deps.commandPort, workspace: deps.workspacePort, permission: deps.permissionPort }, Date.now, deps.limits)
+  // 写 op 一条对应一条，记**结果**不记意图。读 op 不记 —— 审计回答「谁改了什么」，
+  // 而读不改变任何东西。
+  if (typeof op === 'string' && isWriteOp(op)) {
+    deps.auditLog?.append(
+      auditEntryOf(op, message as Record<string, unknown>, answer, currentRequestId()),
+    )
+  }
   // 拒绝在服务端留证据：手机对一次失败的写 op 只显示一行状态，对一次失败的读 op
   // 只在它自己那一屏留个提示 —— 归因要回到网关日志。静默的例外见 {@link SILENT_REFUSALS}。
   if (!answer.ok && typeof op === 'string' && !SILENT_REFUSALS.has(op)) {

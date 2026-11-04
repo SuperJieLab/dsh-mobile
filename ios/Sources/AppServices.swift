@@ -26,6 +26,8 @@ struct AppServices {
     let logFile: LogFile
     /// 遥测落盘。诊断包读它取最近几份 payload。
     let telemetryStore: TelemetryStore
+    /// 写操作的审计。设置页的「操作历史」读它。
+    let auditLog: AuditLog
 
     init() {
         // 落盘在这里装，是构造期唯一的例外：越早越好，而晚装的每一行都只活在控制台里 ——
@@ -36,10 +38,12 @@ struct AppServices {
         let node = TailnetNode()
         let store = MeshStore(node: node)
         let credentials = CredentialStore.shared
+        let auditLog = AuditLog(directory: AuditLog.defaultDirectory())
         let client = RpcClient(
             session: { [weak store] in store?.route?.session ?? .shared },
             baseURL: { [weak store] in store?.route?.baseURL },
-            credentials: credentials
+            credentials: credentials,
+            audit: auditLog
         )
         // 长连接只拿四个能力、不拿一元客户端本体：票、换票、传输、地址都在这里接一次，
         // 之后它再也不认识 `RpcClient`。四个参数必填 —— 漏接一个编译不过。
@@ -66,6 +70,7 @@ struct AppServices {
         self.telemetry = telemetry
         self.logFile = logFile
         self.telemetryStore = telemetryStore
+        self.auditLog = auditLog
     }
 
     // MARK: - 编排

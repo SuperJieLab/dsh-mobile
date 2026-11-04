@@ -12,6 +12,9 @@ final class RpcClient {
 
     private let credentials: CredentialStore
 
+    /// 写操作的审计落点。`nil` = 不记（判据与只读场景不需要它）。
+    private let audit: AuditLog?
+
     /// 票的生命周期。换票动作在本类 —— 它要线路与协议，票那一层不该认识。
     /// **必须 `lazy`**：构造它要一个读 `self.renewTicket` 的闭包，而那要求所有存储属性已初始化。
     private(set) lazy var tickets = TicketKeeper { [weak self] deviceToken in
@@ -21,11 +24,13 @@ final class RpcClient {
 
     init(session: @escaping () -> URLSession,
          baseURL: @escaping () -> URL?,
-         credentials: CredentialStore? = nil) {
+         credentials: CredentialStore? = nil,
+         audit: AuditLog? = nil) {
         // nil 默认值是为了避开跨 actor 的默认表达式求值。
         self.baseURLProvider = baseURL
         self.http = HttpTransport(session: session, baseURL: baseURL)
         self.credentials = credentials ?? .shared
+        self.audit = audit
     }
 
     // MARK: - 关系结束
@@ -117,8 +122,42 @@ final class RpcClient {
         // 每个 op 一次标记：网关把同一次请求产生的每一行都冠上它，客户端的行也带着 ——
         // 两端因此能按同一个 id 对上。401 换票后的重试沿用同一个 id（那是同一次操作）。
         try await RpcTrace.withNewId { requestId in
-            try await sendOnce(request, requestId: requestId, authenticated: authenticated)
+            do {
+                let response: Response = try await sendOnce(
+                    request, requestId: requestId, authenticated: authenticated
+                )
+                record(request, result: .ok, requestId: requestId)
+                return response
+            } catch {
+                // 失败也记：审计要回答「谁试过改什么」，只记成功的会让「为什么没改成」
+                // 永远只有日志那一份线索。
+                record(request, result: .refused(code: Self.auditCode(of: error)),
+                       requestId: requestId)
+                throw error
+            }
         }
+    }
+
+    /// 记一条审计。**只有写请求会被记** —— 判断靠 `AuditableRequest`，不靠 op 名单。
+    private func record<Request: GatewayRequest>(
+        _ request: Request,
+        result: AuditResult,
+        requestId: String
+    ) {
+        guard let auditable = request as? AuditableRequest else { return }
+        audit?.record(AuditEntry(
+            at: Date(),
+            op: request.op,
+            target: auditable.auditTarget,
+            result: result,
+            requestId: requestId
+        ))
+    }
+
+    /// 失败折成审计里的一个码。协议内的拒绝用自己的码（与网关那侧一致），其余用 case 名 ——
+    /// 它们本来不是同一个词汇表，混成一个会让人去查一个不存在的错误码。
+    private static func auditCode(of error: Error) -> String {
+        (error as? RpcClientError)?.auditCode ?? "unknown"
     }
 
     private func sendOnce<Request: GatewayRequest, Response: GatewayResponse>(

@@ -29,6 +29,26 @@ enum RpcClientError: Error {
     case notActivated
 }
 
+extension RpcClientError {
+
+    /// 审计里的拒绝码。
+    ///
+    /// 协议内的拒绝用**它自己的码**（`unknown-session` 之类），与网关那侧记的是同一个词 ——
+    /// 两端对得上才谈得上「同一个失败」。其余是客户端这一层的处境，用 case 名：
+    /// 它们本来不是同一个词汇表，混成一个会让人去查一个不存在的错误码。
+    var auditCode: String {
+        switch self {
+        case .refused(let failure): return failure.code
+        case .transport: return "transport"
+        case .badStatus(let status): return "bad-status-\(status)"
+        case .malformedResponse: return "malformed-response"
+        case .versionMismatch: return "version-mismatch"
+        case .unauthenticated: return GatewayErrorCode.unauthenticated.rawValue
+        case .notActivated: return "not-activated"
+        }
+    }
+}
+
 /// 回包的信封校验 —— 请求语义：它抛的正是本文件的词汇（版本不符、协议内拒绝），
 /// 与词汇同处；形状目录只声明 `GatewayResponse`，不判成败。
 extension GatewayResponse {

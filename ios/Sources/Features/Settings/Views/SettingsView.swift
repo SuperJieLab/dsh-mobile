@@ -29,10 +29,13 @@ struct SettingsView: View {
                 Button("导出诊断包") {
                     exported = state.prepareDiagnostics().map(ExportedBundle.init(url:))
                 }
+                NavigationLink(value: Destination.audit) {
+                    Text("操作历史")
+                }
             } header: {
                 Text("诊断")
             } footer: {
-                Text("日志、崩溃与性能摘要打成一个文本，可发给别人看。")
+                Text("诊断包带走过程（日志、崩溃、性能），可发给别人看；操作历史只列谁改了什么。")
             }
         }
         .navigationTitle("设置")

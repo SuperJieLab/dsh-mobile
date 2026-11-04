@@ -25,6 +25,7 @@ import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
+import { AuditLog, defaultAuditDirectory } from './audit.ts'
 import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, permissionChannelOver, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
@@ -158,7 +159,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   log.info('plugin loaded — auth on both channels, write + model channels on, command + permission channels on demand')
 
   ctx.effect(() => {
-    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort, permissionPort })
+    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()) })
 
     // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。

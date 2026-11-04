@@ -64,6 +64,8 @@ struct RootScreen: View {
                                           discardIdentity: discardIdentity)
                     case .mesh:
                         MeshSettingsAssembler(store: services.store)
+                    case .audit:
+                        AuditHistoryView(log: services.auditLog)
                     case .pairing:
                         PairingAssembler(submit: submitPairingCode,
                                          hasIdentity: hasIdentity,
