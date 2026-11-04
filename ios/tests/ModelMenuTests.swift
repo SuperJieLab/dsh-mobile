@@ -214,4 +214,29 @@ final class ModelMenuTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - 显示名
+
+    /// 功能条显示目录里的 name，不是 `ModelSelection.model` 那个 id。
+    ///
+    /// 这两个值在真实目录里不同（id 是「DeepSeek Flash」，name 是「DeepSeek V4.1 Flash」），
+    /// 只读 id 会让用户点进选择面时以为换了一个模型。
+    func testDisplayNameComesFromTheCatalogNotTheID() async {
+        let state = ModelCatalogState(fetch: { self.catalog() })
+        await state.reload()
+        XCTAssertEqual(state.displayName(for: "a"), "Model A")
+    }
+
+    /// 目录还没到（首次打开、重拉中）时返回 nil —— 调用方退回 id，而不是显示「未知」。
+    func testDisplayNameIsNilBeforeTheCatalogArrives() {
+        let state = ModelCatalogState(fetch: { self.catalog() })
+        XCTAssertNil(state.displayName(for: "a"))
+    }
+
+    /// 目录里没有这个 id（已换档、上游撤了模型）时也返回 nil。
+    func testDisplayNameIsNilForAnUnknownID() async {
+        let state = ModelCatalogState(fetch: { self.catalog() })
+        await state.reload()
+        XCTAssertNil(state.displayName(for: "zzz"))
+    }
 }

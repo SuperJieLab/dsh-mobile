@@ -98,6 +98,21 @@ extension ModelCatalogState {
         return levelName(effectiveEffortID(for: shown, in: catalog), in: catalog, of: shown)
     }
 
+    /// 按 id 查目录里的显示名；目录还没到（或重拉中）时返回 `nil`，调用方退回 id 本身。
+    ///
+    /// 为什么需要它：`ModelSelection.model` 是**id**（「DeepSeek Flash」），而目录里那一项
+    /// 的 `name` 才是显示名（「DeepSeek V4.1 Flash」）。功能条只读 id 的话，同一个模型在
+    /// 功能条与选择面上是两个名字 —— 用户点进去会以为换了一个模型。
+    func displayName(for modelId: String) -> String? {
+        guard case .ready(let catalog) = outcome, let groups = catalog.groups else { return nil }
+        for group in groups {
+            if let entry = group.models.first(where: { $0.id == modelId }) {
+                return entry.name
+            }
+        }
+        return nil
+    }
+
     /// 当前**实际生效**的那一档的 id —— 等级列表的勾、设置页那一行的值、功能条上的等级名
     /// 三处都从它派生。
     /// 兜底顺序：显示值（且这一档还在目录里）→ 该模型的默认档 → 「不指定」。

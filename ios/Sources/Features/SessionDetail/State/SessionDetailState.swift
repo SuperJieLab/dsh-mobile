@@ -62,7 +62,9 @@ final class SessionDetailState {
             mesh: store.phase,
             carrier: meshPath,
             usage: sync.usage,
-            modelName: modelDisplayName(shown),
+            // 目录里查得到就用显示名（「DeepSeek V4.1 Flash」），查不到退回 id ——
+            // 只读 id 会让功能条与选择面显示两个名字。
+            modelName: shown.flatMap { catalog.displayName(for: $0.model) } ?? modelDisplayName(shown),
             effortName: catalog.effortLabel(for: shown),
             // 档位名由权限域算好（宿主给的自定义名要原样用），这一层只取它的显示字。
             // `nil` 透传下去：没有权限服务的装配里那一格不该出现。
