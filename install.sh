@@ -38,16 +38,13 @@ case "${1:-}" in
 esac
 
 # ── 下一步该做什么 ──────────────────────────────────────────────────────────
-LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
-[ -n "$LAN_IP" ] || LAN_IP="<你的局域网 IP>"
-
 say ""
 say "启动："
 say "    npx @deepseek-ai/dsh@alpha $PROFILE"
 say ""
-say "看到 [dsh-mobile-gateway] listening on http://0.0.0.0:3081 之后，"
-say "手机连同一个 Wi-Fi 打开："
-say "    http://$LAN_IP:3081"
+say "看到 [dsh-mobile-gateway] listening 之后，用手机 App 连："
+say "    设置 → 组网 → 网关地址填 http://<这台机器的 tailnet 地址>:3081"
+say "    （tailscale ip -4 能看到；不是局域网 IP —— App 走 Tailscale，不走同一 Wi-Fi）"
 say ""
 say "首次使用：启动日志里有 6 位配对码（10 分钟有效），在手机 App 里输入完成配对。"
 say "撤销已配对设备：./install.sh --revoke"
