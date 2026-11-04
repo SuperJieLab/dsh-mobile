@@ -25,8 +25,9 @@ struct ComposerStrip: View {
     /// 权限格定宽 —— 按最长的「工作区内修改」六个字加一个图标算。档位名长短差得多，
     /// 不定宽会让模型格随档位横移。
     private static let permissionWidth: CGFloat = 84
-    /// 占用格定宽 —— 同理，`15%` 与 `--` 宽度不同，固定的右边界才不会让文字跳。
-    private static let usageWidth: CGFloat = 40
+    /// 占用格定宽 —— 按「图标 + 15%」算。不定宽的话 `15%` 与 `--` 宽度不同，
+    /// 左列的文字会随读数横跳。
+    private static let usageWidth: CGFloat = 56
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -42,10 +43,14 @@ struct ComposerStrip: View {
                 .frame(width: Self.networkWidth, alignment: .leading)
 
                 Button(action: onTapUsage) {
-                    Text(model.usageText)
-                        .font(.caption2)
-                        .monospacedDigit()
-                        .foregroundStyle(model.usageIsEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
+                    // 图标与另外三格对齐 —— 四格里只有它是纯数字，没有图标会显得掉队。
+                    HStack(spacing: 4) {
+                        Image(systemName: "chart.pie")
+                        Text(model.usageText)
+                            .monospacedDigit()
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(model.usageIsEmpty ? Color.secondary.opacity(0.55) : Color.secondary)
                 }
                 .buttonStyle(.plain)
                 .frame(width: Self.usageWidth, alignment: .leading)
