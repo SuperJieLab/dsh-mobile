@@ -1,5 +1,10 @@
 # HEADSCALE 部署手册（M8 T1）
 
+> **状态（2026-11-04）：暂时不用 —— 当前走官方 Tailscale。**
+> 留档不是因为还会用，是因为这里记着踩过的坑（825 天证书上限、DERP 与控制面共端口、
+> `curl` 不校验证书时长所以不能拿它当判据、`ca.key` 留本地冷备）。将来真要自建时，
+> 这些能省掉一轮重查。**它不在任何自动化路径上**，删掉不影响构建与运行。
+>
 > M8 跨网承载的控制面搭建手册：在一台有公网 IP 的 VPS 上跑 headscale（自建 Tailscale 协调服务器）+ 内置 DERP + STUN。
 > **隐私纪律：本手册与仓库公开，真实值一律不落文件 —— 执行前在终端 `export VPS_IP=<你的VPS公网IP>`，命令全部用 `$VPS_IP` 引用。pre-auth key 只显示一次，直接复制给设备，不经手任何文件。**
 > 版本基线：headscale **v0.29.4**（2026-10-08 查证，配置键已对照该版官方示例核实）。证书由同目录 `gen-certs.sh` 生成（自签 CA + 825 天叶子——825 天是 Apple 信任链的上限，见 §9 排障 ①）。
@@ -26,7 +31,7 @@ sudo ufw allow 8443/tcp && sudo ufw allow 3478/udp
 本机执行（私钥不上 VPS 的那把留本地冷备）：
 
 ```sh
-cd mac-gateway/deploy && VPS_IP=<你的VPS公网IP> ./gen-certs.sh
+cd deploy && VPS_IP=<你的VPS公网IP> ./gen-certs.sh
 # 上传三件（ca.key 不传）：
 scp tls/ca.crt tls/server.crt tls/server.key <user>@$VPS_IP:/tmp/
 ```
@@ -61,7 +66,7 @@ dpkg -i headscale.deb && rm headscale.deb
 **不用在远端编辑器里改任何东西** —— 配置模板已随仓库提供（`config-headscale.yaml`，基于 v0.29.4 官方示例裁剪），本地替换占位符后 scp 覆盖即可：
 
 ```sh
-# 本机执行（mac-gateway/deploy/ 下）：
+# 本机执行（deploy/ 下）：
 sed "s/__VPS_IP__/$VPS_IP/g" config-headscale.yaml > /tmp/headscale-config.yaml
 scp -i <私钥路径> /tmp/headscale-config.yaml <user>@$VPS_IP:/tmp/
 
