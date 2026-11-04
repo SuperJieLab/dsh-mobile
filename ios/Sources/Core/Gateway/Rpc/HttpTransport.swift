@@ -105,6 +105,14 @@ final class HttpTransport {
                          "\(request.op) refused: \(failure.code) — \(failure.message)")
                 throw RpcClientError.refused(failure)
             }
+            // 解不出来**且**报文声明的版本与我们不同 → 真正的原因是版本不一致，不是报文畸形。
+            // 这两种的补救完全不同：一个要升级，一个要查代码。不先探这一眼的话，
+            // 「网关升级了」会被报成「报文畸形」，人就去翻解码器了。
+            if let version = versionProbe(in: payload), version != gatewayProtocolVersion {
+                Log.warn(Log.Module.gateway,
+                         "\(request.op) came back as protocol v\(version), we speak v\(gatewayProtocolVersion)")
+                throw RpcClientError.versionMismatch(version)
+            }
             Log.warn(Log.Module.gateway,
                      "\(request.op) returned a malformed response: \(String(describing: error))")
             throw RpcClientError.malformedResponse(detail: String(describing: error))
@@ -122,4 +130,16 @@ private struct FailureEnvelope: Decodable {
 /// 信封里的 error（没有就 nil）。
 private func envelopeFailure(in payload: Data) -> GatewayFailure? {
     (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
+}
+
+/// 只用来在解码失败时读出信封声明的版本。
+///
+/// `v` 声明成可选：读不出就返回 `nil`，那时确实分不清是畸形还是版本不同，
+/// 按畸形报 —— 不猜。
+private struct VersionProbe: Decodable {
+    let v: Int?
+}
+
+private func versionProbe(in payload: Data) -> Int? {
+    (try? JSONDecoder().decode(VersionProbe.self, from: payload))?.v
 }

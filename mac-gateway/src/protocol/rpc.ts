@@ -103,7 +103,8 @@ export async function handle(
   const { session: port, write, model, command, workspace, permission } = ports
   const envelope = asRecord(message)
   if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
-    return failure('unsupported-version', `expected an object with v: ${PROTOCOL_VERSION}`)
+    // 文案带方向：「版本不一致」本身不可行动，而两个方向要做的补救完全不同。
+    return failure('unsupported-version', versionRefusalOf(envelope?.v))
   }
 
   const op = envelope.op
@@ -557,6 +558,25 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
+}
+
+/**
+ * 版本不匹配的拒绝文案。**带方向**。
+ *
+ * 「两端版本不一致」这句话本身不可行动：客户端看到它不知道该升级自己还是升级网关。
+ * 方向从版本号大小就能读出来 —— 客户端说的比自己小，是客户端旧；比自己的大，是自己旧。
+ *
+ * 客户端那一侧不解析这句话（它拿应答的 `v` 自己判方向，文案在 `FailureText`）；
+ * 这里的句子是给日志与手工 curl 用的，所以用英文，与其余协议 message 一致。
+ */
+function versionRefusalOf(sent: unknown): string {
+  if (typeof sent !== 'number') {
+    return `expected an object with v: ${PROTOCOL_VERSION}`
+  }
+  if (sent < PROTOCOL_VERSION) {
+    return `this gateway speaks protocol v${PROTOCOL_VERSION}, the request said v${sent} — upgrade the client`
+  }
+  return `this gateway speaks protocol v${PROTOCOL_VERSION}, the request said v${sent} — upgrade the gateway`
 }
 
 /**

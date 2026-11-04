@@ -67,7 +67,7 @@ extension RpcClientError: LocalizedError {
             return "网关的响应读不出来：\(detail)"
 
         case .versionMismatch(let v):
-            return "网关回的是协议 v\(v)，本客户端只会说 v\(gatewayProtocolVersion) —— 两端版本不一致。"
+            return Self.explain(versionMismatch: v)
 
         case .refused(let failure):
             return failure.readableDescription
@@ -109,5 +109,17 @@ extension RpcClientError: LocalizedError {
         default:
             return "网络错误 \(urlError.code.rawValue)：\(urlError.localizedDescription)"
         }
+    }
+
+    /// 版本不匹配的文案**带方向**。
+    ///
+    /// 「两端版本不一致」这句话本身不可行动 —— 两个方向要做的事完全不同：装新 App，
+    /// 还是升级 Mac 上的网关。方向从版本号大小就能读出来，没有理由不说。
+    private static func explain(versionMismatch gatewaySays: Int) -> String {
+        let mine = gatewayProtocolVersion
+        if gatewaySays > mine {
+            return "网关说的是协议 v\(gatewaySays)，本客户端只会说 v\(mine) —— 客户端太旧，请升级 App。"
+        }
+        return "网关说的是协议 v\(gatewaySays)，本客户端只会说 v\(mine) —— 网关太旧，请升级 Mac 上的网关。"
     }
 }
