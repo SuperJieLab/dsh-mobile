@@ -164,7 +164,7 @@ run_judges() {
     -project "$ROOT/ios/DshMobile.xcodeproj" \
     -scheme DshMobileJudges \
     -destination 'platform=macOS' \
-    "${extra[@]}" >"$log" 2>&1
+    ${extra[@]+"${extra[@]}"} >"$log" 2>&1
 
   if grep -q '\*\* TEST FAILED \*\*' "$log"; then
     say "❌ 判据：有失败"

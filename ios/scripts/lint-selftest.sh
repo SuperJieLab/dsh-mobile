@@ -21,4 +21,6 @@ if [[ -z "${CI:-}" ]]; then
 fi
 
 cd "$ROOT" || exit 2
-exec xcrun swift "${extra[@]}" "$ROOT/ios/scripts/lint-selftest/main.swift"
+# `"${extra[@]+...}"` 而不是 `"${extra[@]}"`：macOS 自带 bash 3.2 在 `set -u` 下把空数组
+# 当成「未定义」而报 unbound variable —— 那正是「本机绿、CI 红」的形状（本机 CI 未设，数组非空）。
+exec xcrun swift ${extra[@]+"${extra[@]}"} "$ROOT/ios/scripts/lint-selftest/main.swift"
