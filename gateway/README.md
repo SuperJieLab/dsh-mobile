@@ -81,7 +81,9 @@ dsh 的插件安装器接受的 spec 与 `pnpm add` 一致，共四类：
 | `./install.sh` | `link:` 指向本工作区 | 开发时：改代码即生效；工作区移动或删除后该 profile 失效 |
 | `./install.sh --from-release` | latest release 上的 `.tgz` 副本 | 只想用、不想依赖工作区 |
 
-注册表形式要求包可公开发布，git 形式要求仓库根即包根，本包两者都不满足（位于 monorepo 子目录，且 `private: true`）。发布走 tarball：推一个 `gateway-v*` tag 时，`.github/workflows/release-gateway.yml` 会跑测试、`npm pack`、建 release 并上传附件，附件名固定为 `dsh-mobile-gateway-<version>.tgz`，`latest/download/` 那个地址因此不必随版本改。
+注册表形式要求包可公开发布，git 形式要求仓库根即包根，本包两者都不满足（位于 monorepo 子目录，且 `private: true`）。发布走 tarball：推一个 `v*` tag 时，`.github/workflows/release-gateway.yml` 会跑测试、`npm pack`、建 release 并上传附件。附件名固定为 `dsh-mobile-gateway.tgz`（版本由 URL 的 tag 段表达），因此 `latest/download/` 那个地址永远指向最新一份，不必随版本改。
+
+版本号只有 tag 一个来源，且 iOS 与本包共用同一个数：`version` 必须等于 tag 去掉 `v` 之后的部分，不符则工作流在打包前失败。
 
 ## 验证
 

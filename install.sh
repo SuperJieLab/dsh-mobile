@@ -40,7 +40,7 @@ case "${1:-}" in
   --from-release) FROM_RELEASE=1 ;;
   --start) ;;
   "") ;;
-  *) die "不认识的参数：$1（只有 --start、--from-release 与 --revoke）" ;;
+  *) die "不认识的参数：${1}（只有 --start、--from-release 与 --revoke）" ;;
 esac
 
 # 两条安装路径只差「装哪个东西」，装配、迁移与自检都在网关自己那份脚本里。

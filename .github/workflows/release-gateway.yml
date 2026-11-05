@@ -1,11 +1,12 @@
 name: Release gateway
 
-# 发版是一次声明：某个 commit 就是 `gateway-vX.Y.Z`。因此触发条件是**推一个 tag**，
-# 而不是推分支 —— 推分支只跑 CI，不发版。本地打 tag 不 push 也不会触发。
+# 版本号只有 tag 一个来源，且**一个 tag 就是这一套东西的版本** —— iOS 与网关用同一个数，
+# 不再分两个前缀：iOS 没有可分发的产物，单独给网关一套版本号只会多一件事要同步。
+# 触发条件因此是推任意 `v*` tag，推分支只跑 CI。
 # `workflow_dispatch` 留着补发：同一个 tag 重跑时下面的步骤是幂等的。
 on:
   push:
-    tags: ['gateway-v*']
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
@@ -44,14 +45,17 @@ jobs:
         working-directory: gateway
         run: npm ci
 
-      # 版本号只允许有一个来源：tag。两处不一致时发出去的包版本是错的，
-      # 而这个错误只在别人安装时才显形 —— 那时已经晚了。
+      # 版本号只允许有一个来源：tag。两处不一致时发出去的包版本是错的，而这个错误只在
+      # 别人安装时才显形 —— 那时已经晚了。
+      # 顺序因此是「先改 package.json 再打 tag」。`scripts/release.sh` 也会写这一格，但它
+      # 写在归档之后；按这个顺序，那一步只会输出「已是」，不会产生未提交的改动。
       - name: 校验 tag 与 package.json 一致
         working-directory: gateway
         run: |
           version="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "gateway-v$version" ]; then
-            echo "::error::tag 是 $TAG，package.json 是 $version，两者须为 gateway-v$version"
+          tag_version="${TAG#v}"
+          if [ "$tag_version" != "$version" ]; then
+            echo "::error::tag 是 ${TAG}，package.json 是 ${version}；先把 version 改成 ${tag_version} 再打 tag"
             exit 1
           fi
 
@@ -70,11 +74,18 @@ jobs:
         working-directory: gateway
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 由 env 注入而不是在脚本里写 `${{ }}`：那样 shell 会把它当成参数展开，
+          # 而这条脚本要能在本地直接跑一遍验证。
+          REPO: ${{ github.repository }}
         run: |
-          file="dsh-mobile-gateway-$(node -p "require('./package.json').version").tgz"
+          version="$(node -p "require('./package.json').version")"
+          # 附件名不带版本：`latest/download/` 那个地址要永远指向最新那份，而 install.sh
+          # 里写的正是这个名字。具体版本由 URL 的 tag 段表达，不需要再进文件名。
+          asset="dsh-mobile-gateway.tgz"
+          cp "dsh-mobile-gateway-$version.tgz" "$asset"
           notes="$RUNNER_TEMP/notes.md"
           {
-            echo "dsh-mobile-gateway $TAG"
+            echo "dsh-mobile-gateway $version"
             echo
             echo "安装（在仓库根目录执行）："
             echo
@@ -84,8 +95,8 @@ jobs:
             echo "或让 dsh 直接装这个附件："
             echo
             echo '```'
-            echo "dsh plugin --profile web add https://github.com/${{ github.repository }}/releases/download/$TAG/$file"
+            echo "dsh plugin --profile web add https://github.com/${REPO}/releases/download/${TAG}/${asset}"
             echo '```'
           } > "$notes"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes-file "$notes"
-          gh release upload "$TAG" "$file" --clobber
+          gh release upload "$TAG" "$asset" --clobber
