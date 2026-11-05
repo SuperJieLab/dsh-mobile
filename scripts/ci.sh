@@ -4,10 +4,11 @@
 # 而「本地绿了 CI 红」最难查的正是它们哪里不一样。
 #
 # 用法：
-#   ./scripts/ci.sh              三节都跑
+#   ./scripts/ci.sh              四节都跑
 #   ./scripts/ci.sh gateway      只跑网关（秒级，改网关时用）
 #   ./scripts/ci.sh lint         只跑注释与引用的纪律（秒级，改注释时用）
-#   ./scripts/ci.sh ios          只跑 iOS（分钟级）
+#   ./scripts/ci.sh judges       只跑源码级判据（macOS 上跑，十几秒）
+#   ./scripts/ci.sh ios          只跑 iOS 行为测试（分钟级）
 #
 # 环境变量：
 #   DSH_SIM_UDID     指定模拟器。不设时：先找已启动的 iPhone，再找第一台可用的。
@@ -144,6 +145,43 @@ run_lint() {
   check_floor lint "${files:-0}" "${DSH_MIN_LINT:-0}"
 }
 
+# ── 判据 ────────────────────────────────────────────────────────────────────
+# 这批判据读的是仓库里的源码与样本，不碰 App 运行时 —— 所以它们跑在 macOS 上：
+# 手机上根本读不到宿主路径。它们与「行为测试」分成两个 target，就是为了这条区别。
+#
+# 为什么结论要自己判、不看退出码：`xcodebuild test` 在本机打印完不一定退出（项目记忆里的坑），
+# 而 CI 上它退出了、失败却可能只写在日志里。两个方向都不可靠，只认日志里的结论行。
+run_judges() {
+  hr; say "判据 · xcodebuild test（macOS）"; hr
+  local log="$OUT/judges.log"
+
+  local -a extra=()
+  if [[ -z "${CI:-}" ]]; then
+    extra=(OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox')
+  fi
+
+  xcodebuild test \
+    -project "$ROOT/ios/DshMobile.xcodeproj" \
+    -scheme DshMobileJudges \
+    -destination 'platform=macOS' \
+    "${extra[@]}" >"$log" 2>&1
+
+  if grep -q '\*\* TEST FAILED \*\*' "$log"; then
+    say "❌ 判据：有失败"
+    grep -E ': error: ' "$log" | head -20
+    FAILED=1
+    return
+  fi
+  if ! grep -q '\*\* TEST SUCCEEDED \*\*' "$log"; then
+    # 没跑出结论与「跑了且过」是两件事，不能都报成失败原因不明。
+    say "❌ 判据：没跑出结论（日志尾部见下）"
+    tail -20 "$log"
+    FAILED=1
+    return
+  fi
+  say "判据：跑完，全部通过"
+}
+
 # ── 判据条数下限 ────────────────────────────────────────────────────────────
 # 守的是「扫描面静默缩水」：少扫一个目录，判据照样全绿，而你看不出来。
 # 下限只能往上调 —— 调低它等于承认「这次少了几条没关系」。
@@ -276,9 +314,10 @@ run_ios() {
 case "${1:-all}" in
   gateway) run_gateway ;;
   lint)    run_lint ;;
+  judges)  run_judges ;;
   ios)     run_ios ;;
-  all)     run_gateway; run_lint; run_ios ;;
-  *) say "用法：$0 [gateway|lint|ios|all]"; exit 2 ;;
+  all)     run_gateway; run_lint; run_judges; run_ios ;;
+  *) say "用法：$0 [gateway|lint|judges|ios|all]"; exit 2 ;;
 esac
 
 hr

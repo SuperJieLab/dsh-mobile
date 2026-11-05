@@ -8,7 +8,7 @@
 #      只有正例的规则证明不了它不误伤 —— 缺样本由 `scripts/lint-selftest.sh` 判红。
 #   2. 只收能说出形状的。语义重复（同一判断换句话写）识别不了，那部分靠人读。
 #
-# 扫描面：`Sources` 与 `tests`（相对本文件）。规则一律只认注释 token，字符串与标识符不参与 ——
+# 扫描面：`Sources`、`tests`、`judges`（相对本文件）。规则一律只认注释 token，字符串与标识符不参与 ——
 # 这 17 条断言的都只是注释，收窄后同名词出现在代码里不会误伤。
 #
 # 为什么 `only_rules` 只有 `custom_rules` 这一个词、不逐条列规则 id：SwiftLint 的白名单按
@@ -21,6 +21,7 @@
 included:
   - Sources
   - tests
+  - judges
 
 excluded:
   - Vendor

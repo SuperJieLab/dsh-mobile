@@ -1,6 +1,7 @@
+import Foundation
 import XCTest
 
-/// 术语回潮检查 —— 扫 `ios/Sources` 与 `ios/tests`，命中仓库根 `terms.txt` 的反模式即失败。
+/// 术语回潮检查 —— 扫 `ios/` 下三处源码目录，命中仓库根 `terms.txt` 的反模式即失败。
 ///
 /// 词表与网关侧是同一份，结构上不可能漂移。表里还有一组自查样本（`expect-hit` /
 /// `expect-pass`）：加载后先跑一遍，**规则被改坏时这里先红**，不必等仓库真的回潮。
@@ -188,6 +189,7 @@ final class TermsTests: XCTestCase {
 
         let files = swiftFiles(under: repoRoot.appendingPathComponent("ios/Sources"))
             + swiftFiles(under: repoRoot.appendingPathComponent("ios/tests"))
+            + swiftFiles(under: repoRoot.appendingPathComponent("ios/judges"))
         // 扫到 0 个文件时 hits 也是空 —— 那会静默变绿，所以先断言扫到了东西。
         XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个 Swift 文件 —— 路径推算错了？")
 

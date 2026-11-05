@@ -1,8 +1,9 @@
 /**
  * 协议错误码的取值只许出现在枚举定义处 —— 别处一律取 `.rawValue`。
  *
- * 取值的集合是**闭集**：`GatewayErrorCode` 自己就是导出表，所以这条判据遍历 `allCases`，
- * 不去解析源码猜「协议里有哪些码」—— 按语法枚举声明会被写法绕过。
+ * 取值的集合是**闭集**：`GatewayErrorCode` 的 `case … = "…"` 就是导出表，所以从那个文件
+ * 取取值，不在这里再抄一份。写法漂移不会静默：豁免只认 `case x = "y"` 这一种形状，
+ * 换成别的写法时那一行不再是「定义行」，它自己就会被判成重复 —— 红的是这一条，不是漏报。
  *
  * 扫描面与放行：
  * - 扫**整个 `Sources/`**（含 `Wire/`）：取值重写不挑目录，线上形状里也出现过
@@ -19,8 +20,6 @@
 import Foundation
 import XCTest
 
-@testable import DshMobile
-
 final class ErrorCodeLiteralTests: XCTestCase {
 
     /// 一个协议错误码的取值，除了枚举的定义行之外不许在别处再写一遍。
@@ -32,8 +31,9 @@ final class ErrorCodeLiteralTests: XCTestCase {
         XCTAssertTrue(names.contains("Core/Gateway/Wire/GatewayFailure.swift"), "没扫到线上形状")
         XCTAssertTrue(names.contains("Features/Approval/State/ApprovalStore.swift"), "没扫到界面层")
 
-        let codes = GatewayErrorCode.allCases.map { "\"\($0.rawValue)\"" }
-        XCTAssertGreaterThan(codes.count, 5, "枚举交出的取值太少 —— 先怀疑 CaseIterable")
+        let codes = Self.enumRawValues(in: try String(contentsOf: enumFile, encoding: .utf8))
+            .map { "\"\($0)\"" }
+        XCTAssertGreaterThan(codes.count, 5, "枚举交出的取值太少 —— 先怀疑解析")
 
         var scannedLines = 0
         for file in files {
@@ -50,6 +50,30 @@ final class ErrorCodeLiteralTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(scannedLines, 1000, "扫到的代码行太少 —— 先怀疑路径推算")
+    }
+
+    /// 枚举定义所在的文件。路径写死而不是猜：它被挪走时这一条直接红。
+    private var enumFile: URL {
+        sourcesRoot.appendingPathComponent("Core/Gateway/Wire/GatewayFailure.swift")
+    }
+
+    /// 枚举交出的取值：`case internalError = "internal-error"` 里的那一串。
+    ///
+    /// 与「定义行」用同一个形状，所以两端不会各认一套：写法变了，定义行不再被豁免，
+    /// 于是它自己会命中下面那条重复检查。
+    private static func enumRawValues(in text: String) -> [String] {
+        text.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line in
+            guard let match = enumDefinition.firstMatch(
+                in: String(line), range: NSRange(String(line).startIndex..., in: String(line))) else {
+                return nil
+            }
+            let raw = String(line)
+            guard let range = Range(match.range, in: raw) else { return nil }
+            let body = String(raw[range])
+            guard let first = body.firstIndex(of: "\""), let last = body.lastIndex(of: "\""),
+                  first < last else { return nil }
+            return String(body[body.index(after: first)..<last])
+        }
     }
 
     /// 枚举的定义行：`case internalError = "internal-error"`（可带缩进，可带 `@…` 之外的修饰）。

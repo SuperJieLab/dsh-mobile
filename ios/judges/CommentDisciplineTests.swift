@@ -27,7 +27,7 @@ final class CommentDisciplineTests: XCTestCase {
 
     private func swiftFiles() -> [URL] {
         var result: [URL] = []
-        for sub in ["Sources", "tests"] {
+        for sub in ["Sources", "tests", "judges"] {
             let root = iosRoot.appendingPathComponent(sub)
             guard let walker = FileManager.default.enumerator(
                 at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])

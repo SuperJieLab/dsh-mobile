@@ -1,0 +1,174 @@
+/**
+ * 源码层面的几条判据 —— 读的是仓库里的文件，不是被测对象的状态。
+ *
+ * 它们住在判据 target 而不是测试 target：这些断言要的前提是「仓库在这台机器上」，
+ * 而手机上没有这个前提。凡是能写成「某个源文件里不许出现某段文本」的，都归这里。
+ *
+ * 一半是「显示层不许内置业务字面量」：内置了就等于把网关或宿主的清单抄了一份，
+ * 而那两份漂移时没有任何东西会红。另一半是「丢弃要留痕」：一段被丢掉的输入如果不留痕，
+ * 屏幕上的「什么都没发生」与「这条路断了」长得一模一样。
+ */
+import Foundation
+import XCTest
+
+final class SourceLevelTests: XCTestCase {
+
+    private var iosRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // judges/
+            .deletingLastPathComponent() // ios/
+    }
+
+    private var repoRoot: URL {
+        iosRoot.deletingLastPathComponent()
+    }
+
+    private func read(_ url: URL) throws -> String {
+        try String(contentsOf: url, encoding: .utf8)
+    }
+
+    // MARK: - 显示层不许内置档名 / 命令名
+
+    func testMenuSourcesBakeInNoLevelNames() throws {
+        let sources = iosRoot.appendingPathComponent("Sources/Features/SessionDetail")
+        let files = [
+            sources.appendingPathComponent("State/ModelMenu.swift"),
+            sources.appendingPathComponent("Views/ModelPickerView.swift"),
+            sources.appendingPathComponent("Views/ModelSheetView.swift"),
+            // 档名→字这件事最可能被写成映射表的地方，正是显示层 —— 它必须一起扫。
+            sources.appendingPathComponent("Display/CatalogText.swift"),
+        ]
+        // 只认带引号的字面量：注释里提到 low/high 不算内置。
+        let baked = ["\"low\"", "\"high\"", "\"max\""]
+        for file in files {
+            let text = try read(file)
+            for literal in baked {
+                XCTAssertFalse(text.contains(literal), "\(file.lastPathComponent) 内置了档名字面量 \(literal)")
+            }
+        }
+    }
+
+    func testSlashSourcesBakeInNoCommandNames() throws {
+        let sources = iosRoot.appendingPathComponent("Sources/Features/SessionDetail")
+        let files = [
+            sources.appendingPathComponent("State/SlashTrigger.swift"),
+            sources.appendingPathComponent("State/CommandDirectory.swift"),
+            sources.appendingPathComponent("Views/CommandPalette.swift"),
+            sources.appendingPathComponent("Views/CommandRow.swift"),
+        ]
+        let names = ["permission", "compact", "export", "goal", "plan", "feedback"]
+        let baked = names.flatMap { ["\"/\($0)\"", "\"\($0)\""] }
+        for file in files {
+            let text = try read(file)
+            // 逐**代码行**判，跳过注释：注释里点名某个命令正是为了说「别内置它」，
+            // 整段 `contains` 会把那种说明当成内置。
+            for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                guard !code.hasPrefix("//"), !code.hasPrefix("/*"), !code.hasPrefix("*") else { continue }
+                for literal in baked where code.contains(literal) {
+                    XCTFail("\(file.lastPathComponent):\(index + 1) 内置了命令名字面量 \(literal)")
+                }
+            }
+        }
+    }
+
+    // MARK: - 丢弃要留痕
+
+    func testCancelWithoutEventIdLeavesAVisibleTrace() throws {
+        let source = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/Approval/State/ApprovalStore.swift"))
+        XCTAssertTrue(source.contains("dropped a cancel without an eventId"),
+                      "留痕句不在了 —— 无寻址撤回被丢弃时现场只剩这一行")
+    }
+
+    func testDroppedListChangeLeavesAVisibleTrace() throws {
+        let source = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionList/State/SessionListState.swift"))
+        XCTAssertTrue(source.contains("dropped a session-list change this build does not know"),
+                      "留痕句不在了 —— 坏增量被丢弃时现场只剩这一行")
+    }
+
+    // MARK: - 行为测试不许读仓库
+
+    /// `ios/tests/` 跑在设备或模拟器上，那里没有仓库路径。谁在那边按 `#filePath` 推算根，
+    /// 谁就会在真机上一片红 —— 这条把那条边界钉住，不靠人记。
+    func testBehaviorTestsDoNotReadTheRepository() throws {
+        let testsRoot = iosRoot.appendingPathComponent("tests")
+        let files = Self.swiftFiles(under: testsRoot)
+        XCTAssertGreaterThan(files.count, 20, "只扫到 \(files.count) 个测试文件 —— 先怀疑路径推算")
+        for file in files {
+            let text = try read(file)
+            XCTAssertFalse(text.contains("fileURLWithPath: #filePath"),
+                           "\(file.lastPathComponent) 按 #filePath 推算仓库根 —— 手机上读不到，"
+                           + "这类断言属于判据 target")
+        }
+    }
+
+    // MARK: - 网关声明的写 op 都要有可审计的客户端请求
+
+    /// 客户端这一侧由**类型**表达：实现了 `AuditableRequest` 就是一次写操作，不再维护 op 名单。
+    /// 所以这里从源码取两样 —— 哪些请求类型实现了那个协议、以及它们的 `op` 字面量。
+    ///
+    /// 两处活性锚是必须的：取到 0 个时「两边一致」只说明两边都空。
+    func testClientCoversEveryWriteOpTheGatewayDeclares() throws {
+        let declared = try gatewayWriteOps()
+        XCTAssertGreaterThanOrEqual(declared.count, 5,
+                                    "只读到 \(declared.count) 个写 op —— 先怀疑路径或正则")
+
+        let covered = try auditableClientOps()
+        XCTAssertGreaterThanOrEqual(covered.count, 5,
+                                    "只读到 \(covered.count) 个可审计请求 —— 先怀疑解析")
+
+        let missing = declared.subtracting(covered)
+        XCTAssertEqual(missing, [], "这些写 op 客户端没有可审计的请求：\(missing.sorted())")
+    }
+
+    /// 网关的写 op 清单。读的是网关源码 —— 那是唯一真源。
+    private func gatewayWriteOps() throws -> Set<String> {
+        let source = try read(repoRoot.appendingPathComponent("gateway/src/audit.ts"))
+        guard let start = source.range(of: "WRITE_OPS = ["),
+              let end = source.range(of: "] as const", range: start.upperBound..<source.endIndex)
+        else { return [] }
+        let body = String(source[start.upperBound..<end.lowerBound])
+        return Set(Self.literals(in: body, pattern: #"'([a-z][a-z-]+)'"#))
+    }
+
+    /// 客户端可审计的 op：请求类型实现了 `AuditableRequest`，且它的 `op` 是个字面量。
+    private func auditableClientOps() throws -> Set<String> {
+        let messages = try read(iosRoot.appendingPathComponent(
+            "Sources/Core/Gateway/Rpc/Wire/RpcMessages.swift"))
+
+        var opsByType: [String: String] = [:]
+        let structPattern = try NSRegularExpression(
+            pattern: #"struct\s+(\w+)\s*:\s*GatewayRequest\s*\{([\s\S]*?)\n\}"#)
+        let range = NSRange(messages.startIndex..., in: messages)
+        for match in structPattern.matches(in: messages, range: range) {
+            guard let nameRange = Range(match.range(at: 1), in: messages),
+                  let bodyRange = Range(match.range(at: 2), in: messages) else { continue }
+            let body = String(messages[bodyRange])
+            guard let op = Self.literals(in: body, pattern: #"let op = "([^"]+)""#).first else { continue }
+            opsByType[String(messages[nameRange])] = op
+        }
+
+        var auditable = Set<String>()
+        for file in Self.swiftFiles(under: iosRoot.appendingPathComponent("Sources")) {
+            guard let text = try? read(file) else { continue }
+            auditable.formUnion(Self.literals(in: text, pattern: #"extension\s+(\w+)\s*:\s*AuditableRequest"#))
+        }
+        return Set(auditable.compactMap { opsByType[$0] })
+    }
+
+    private static func literals(in text: String, pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range(at: 1), in: text).map { String(text[$0]) }
+        }
+    }
+
+    private static func swiftFiles(under root: URL) -> [URL] {
+        guard let walker = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return [] }
+        return walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+    }
+}

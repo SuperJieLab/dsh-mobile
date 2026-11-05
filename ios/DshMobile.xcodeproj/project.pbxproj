@@ -38,6 +38,7 @@
 		AA00000000000000000000A4 /* DshMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DshMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB00000000000000000000T3 /* DshMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DshMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC00000000000000000000F1 /* Config/Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
+		DD00000000000000000000J2 /* DshMobileJudges.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DshMobileJudges.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +50,11 @@
 		BB00000000000000000000T1 /* tests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = tests;
+			sourceTree = "<group>";
+		};
+		DD00000000000000000000J1 /* judges */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = judges;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -70,6 +76,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DD00000000000000000000J8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -85,6 +98,7 @@
 			children = (
 				AA00000000000000000000A2 /* Sources */,
 				BB00000000000000000000T1 /* tests */,
+				DD00000000000000000000J1 /* judges */,
 				CC00000000000000000000F1 /* Config/Shared.xcconfig */,
 				109B1FEE309C2BA9004C26EE /* Frameworks */,
 				AA00000000000000000000A3 /* Products */,
@@ -96,6 +110,7 @@
 			children = (
 				AA00000000000000000000A4 /* DshMobile.app */,
 				BB00000000000000000000T3 /* DshMobileTests.xctest */,
+				DD00000000000000000000J2 /* DshMobileJudges.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -136,6 +151,7 @@
 				BB00000000000000000000T4 /* Sources */,
 				BB00000000000000000000T5 /* Frameworks */,
 				BB00000000000000000000T6 /* Resources */,
+				DD00000000000000000000JA /* Copy Fixture */,
 			);
 			buildRules = (
 			);
@@ -150,6 +166,28 @@
 			);
 			productName = DshMobileTests;
 			productReference = BB00000000000000000000T3 /* DshMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		DD00000000000000000000J3 /* DshMobileJudges */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DD00000000000000000000J4 /* Build configuration list for PBXNativeTarget "DshMobileJudges" */;
+			buildPhases = (
+				DD00000000000000000000J7 /* Sources */,
+				DD00000000000000000000J8 /* Frameworks */,
+				DD00000000000000000000J9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DD00000000000000000000J1 /* judges */,
+			);
+			name = DshMobileJudges;
+			packageProductDependencies = (
+			);
+			productName = DshMobileJudges;
+			productReference = DD00000000000000000000J2 /* DshMobileJudges.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -168,6 +206,9 @@
 					};
 					BB00000000000000000000T2 = {
 						CreatedOnToolsVersion = 26.6;
+					};
+					DD00000000000000000000J3 = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -191,6 +232,7 @@
 			targets = (
 				AA00000000000000000000A5 /* DshMobile */,
 				BB00000000000000000000T2 /* DshMobileTests */,
+				DD00000000000000000000J3 /* DshMobileJudges */,
 			);
 		};
 /* End PBXProject section */
@@ -204,6 +246,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BB00000000000000000000T6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD00000000000000000000J9 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -232,6 +281,25 @@
 			shellPath = /bin/sh;
 			shellScript = "if command -v swiftlint >/dev/null 2>&1; then\n  cd \"$SRCROOT\" && swiftlint lint --quiet || true\nelse\n  echo \"warning: swiftlint 未安装，本地跳过注释纪律；CI 会跑（brew install swiftlint）\"\nfi\n";
 		};
+		DD00000000000000000000JA /* Copy Fixture */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Fixture";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "mkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\ncp \"$SRCROOT/../contract/mux-frames.json\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -243,6 +311,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BB00000000000000000000T4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD00000000000000000000J7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -461,6 +536,41 @@
 			};
 			name = Release;
 		};
+		DD00000000000000000000J5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = CC00000000000000000000F1 /* Config/Shared.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID).judges";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		DD00000000000000000000J6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = CC00000000000000000000F1 /* Config/Shared.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID).judges";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -487,6 +597,15 @@
 			buildConfigurations = (
 				BB00000000000000000000T8 /* Debug */,
 				BB00000000000000000000T9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DD00000000000000000000J4 /* Build configuration list for PBXNativeTarget "DshMobileJudges" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD00000000000000000000J5 /* Debug */,
+				DD00000000000000000000J6 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
