@@ -107,6 +107,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = AA00000000000000000000AB /* Build configuration list for PBXNativeTarget "DshMobile" */;
 			buildPhases = (
+				CB00000000000000000000B1 /* Lint */,
 				AA00000000000000000000A6 /* Sources */,
 				AA00000000000000000000A7 /* Frameworks */,
 				AA00000000000000000000A8 /* Resources */,
@@ -210,6 +211,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		CB00000000000000000000B1 /* Lint */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = Lint;
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if command -v swiftlint >/dev/null 2>&1; then\n  cd \"$SRCROOT\" && swiftlint lint --quiet || true\nelse\n  echo \"warning: swiftlint 未安装，本地跳过注释纪律；CI 会跑（brew install swiftlint）\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		AA00000000000000000000A6 /* Sources */ = {
