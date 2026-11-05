@@ -1,0 +1,146 @@
+# 源码注释与引用的纪律
+#
+# 为什么在这里：这些规则全是「注释里不许出现 X」，形态就是 lint。放在 XCTest 里跑，
+# 反馈要等整轮测试；放在这里，保存后构建就报。
+#
+# 两条纪律（与迁移前一致）：
+#   1. 每条规则至少一条 expect-hit 与一条 expect-pass，样本在 `scripts/lint-selftest/`。
+#      只有正例的规则证明不了它不误伤 —— 缺样本由 `scripts/lint-selftest.sh` 判红。
+#   2. 只收能说出形状的。语义重复（同一判断换句话写）识别不了，那部分靠人读。
+#
+# 扫描面：`Sources` 与 `tests`（相对本文件）。规则一律只认注释 token，字符串与标识符不参与 ——
+# 这 17 条断言的都只是注释，收窄后同名词出现在代码里不会误伤。
+#
+# 为什么 `only_rules` 只有 `custom_rules` 这一个词、不逐条列规则 id：SwiftLint 的白名单按
+# 「规则族」认，自定义规则必须写 `custom_rules` 才启用。逐条列 id 不生效，而这种失效是静默的
+# —— 0 违规、全绿。`scripts/lint-selftest.sh` 会断言这一行就是那个字面量。
+#
+# 为什么白名单而不是全开：内置规则集有几百条，本仓从未按它写代码，一开就是几千条历史违规，
+# 闸门会立刻失去意义。要加内置规则，逐条评估并一次修完历史违规。
+
+included:
+  - Sources
+  - tests
+
+excluded:
+  - Vendor
+
+only_rules:
+  - custom_rules
+
+custom_rules:
+  # ── 组一：指向开发工作区 ──────────────────────────────────────────────
+  # 这些锚点全在 `dev/`，而它不进 git：仓库读者手里没有那份索引，编号等于空指针。
+  workspace_path:
+    name: 开发工作区的路径
+    regex: 'dev/'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 开发工作区的路径不随仓库发布
+    severity: error
+  workspace_phase:
+    name: 期号
+    regex: '\bR\d{1,2}\b'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 期号只在开发工作区里有索引
+    severity: error
+  workspace_decision:
+    name: 决定编号
+    regex: '决定\s*[A-Z]?\d'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 决定编号同上
+    severity: error
+  workspace_section:
+    name: 节号
+    regex: '§'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 节号会随文档增删静默指错
+    severity: error
+  workspace_clause:
+    name: 需求条款号
+    regex: 'spec\s*\d'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 需求条款号同上
+    severity: error
+  workspace_chain:
+    name: 链路编号
+    regex: '链路\s*[A-C]\b'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 链路编号同上
+    severity: error
+  workspace_amendment:
+    name: 修正编号
+    regex: '修正\s*\d+'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 实施期修正编号同上
+    severity: error
+  workspace_criterion:
+    name: 判据编号
+    regex: '\b[QNG]\d{1,2}\b'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 判据编号同上
+    severity: error
+  workspace_milestone:
+    name: 里程碑编号
+    regex: '\bM\d{1,2}\b'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 里程碑编号同上
+    severity: error
+  workspace_register:
+    name: 登记簿条目号
+    regex: 'ISSUES\s*[A-F]?\d*'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 登记簿条目号同上
+    severity: error
+  workspace_phase_word:
+    name: 期次说法
+    regex: '期\s*[1-9](?!\d)'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 期次说法同上
+    severity: error
+
+  # ── 组二：按位置引上游 ────────────────────────────────────────────────
+  # 上游按 tag 跟、是 alpha：连 patch 级预发布内都会改形状，行号必漂。
+  # 我们依赖的是形状，形状能用符号名与结论说清。
+  upstream_line:
+    name: 按行号引上游
+    regex: '[\w\-/.]+\.(ts|tsx|js|mjs|swift):\d+'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 上游 alpha 的行号会漂
+    severity: error
+
+  # ── 组三：变更史与一次性现场 ──────────────────────────────────────────
+  # 前者描述一个已不存在的对象，实现换掉后它不会失效、只会继续误导；
+  # 后者是举证，读完不增加判断力 —— 它推导出的数值与顺序才要留。
+  history:
+    name: 变更史
+    regex: '此前|原为|原先是|旧版|上一版|搬家|搬走|搬进|搬回|重构前|曾经|已经不一致过|更早的写法'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 注释写现状，不写演进
+    severity: error
+  scene_date:
+    name: 真机日期
+    regex: '真机\s*20\d\d'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 一次性观测的日期不是判据
+    severity: error
+  scene_evidence:
+    name: 举证措辞
+    regex: '真机抓到|真机复验|真机产物|第三次真机|收口审查|实施期修正'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 举证不是判据
+    severity: error
+
+  # ── 组五：注释里的元信息 ──────────────────────────────────────────────
+  # 跑法在全仓是一条命令，不必每个文件写一遍；分层理由若真要保留，写「变化原因是什么」。
+  meta_test_run:
+    name: 测试命令写法
+    regex: 'xcodebuild test|only-testing:'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 测试怎么跑是全仓一条命令，不写进每个文件
+    severity: error
+  meta_defence:
+    name: 防御性理由
+    regex: '为什么住|分家的理由|住在[^。]*的代价'
+    match_kinds: [comment, doccomment, comment.mark]
+    message: 注释写变化原因，不写「为什么没放进另一个目录」
+    severity: error

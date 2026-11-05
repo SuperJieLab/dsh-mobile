@@ -65,6 +65,31 @@ jobs:
           path: ci-out/
           retention-days: 7
 
+  lint:
+    name: lint
+    runs-on: macos-latest
+    # 秒级。它与 iOS 任务分开，是为了让「注释写错」不必等 6 分钟才被说。
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # swiftlint 不在镜像里，装一次约十几秒。装了才跑，而不是让它静默跳过：
+      # 跳过与通过长得一样，正是这套检查最不该有的失效方式。
+      - name: 装 swiftlint
+        run: brew install swiftlint
+
+      - name: 跑 lint
+        run: ./scripts/ci.sh lint
+        env:
+          DSH_MIN_LINT: '185'
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: lint-log
+          path: ci-out/
+          retention-days: 7
+
   ios:
     name: iOS
     # 跟随最新镜像，不固定版本 —— 理由与退路写在下面「记录环境」那一步。

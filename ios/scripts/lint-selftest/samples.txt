@@ -1,0 +1,53 @@
+# 规则的核查样本
+#
+# 用途：`scripts/lint-selftest.sh` 读它，逐条断言「这条规则还认得出它的正例、也没误伤反例」。
+# 规则被改坏（正则退化成永不命中）时这里先红，不必等仓库真的回潮。
+#
+# 格式：`#` 开头为注释；其余每行 `expect-hit;<规则 id>;<一句应当被拦的话>` 或
+# `expect-pass;<规则 id>;<一句应当被放过的话>`。
+#
+# 两条纪律：
+#   1. **每条规则至少一条 expect-hit 与一条 expect-pass**。只有正例的规则证明不了它不误伤。
+#   2. 样本 id 必须在 `ios/.swiftlint.yml` 里有同名规则 —— id 改了而样本没改，脚本判红。
+
+# ── 指向开发工作区 ──────────────────────────────────────────────────────
+expect-hit;workspace_path;契约见 dev/contract/protocol.md
+expect-hit;workspace_phase;分档（R10 期2 决定 1）
+expect-hit;workspace_decision;回前台探活的编排住这里（决定 2、6）
+expect-hit;workspace_section;列表因而零 I/O（§4.1）
+expect-hit;workspace_clause;spec 2.4.3 不允许看起来正常
+expect-hit;workspace_chain;可见形态（链路 C）
+expect-hit;workspace_amendment;这一条（修正 12）说的是悬空审计
+expect-hit;workspace_criterion;七条断言（Q1–Q7）
+expect-hit;workspace_milestone;快照与页面共用（M1）
+expect-hit;workspace_register;代价登记在 ISSUES C26
+expect-hit;workspace_phase_word;期2 用它估两端 offset
+expect-pass;workspace_path;MCP 的 server 与 client 之间走 stdio
+expect-pass;workspace_phase;这台设备的 R 值是 0
+expect-pass;workspace_decision;这里的判定结果是布尔
+expect-pass;workspace_section;单位是 Ω·m
+expect-pass;workspace_clause;special 2 次调用
+expect-pass;workspace_chain;网络链路断了
+expect-pass;workspace_amendment;这一轮修改了 3 个字段
+expect-pass;workspace_criterion;CPU 占用率 20%
+expect-pass;workspace_milestone;10 MiB 的帧
+expect-pass;workspace_register;issue 已关闭
+expect-pass;workspace_phase_word;三个周期之后
+
+# ── 按行号引上游 ────────────────────────────────────────────────────────
+expect-hit;upstream_line;上游形状（catalog.js:20-27）是对象数组
+expect-pass;upstream_line;格式是 catalog.js
+
+# ── 变更史与一次性现场 ──────────────────────────────────────────────────
+expect-hit;history;判定规则与搬家前逐字相同
+expect-pass;history;原因为空表示服务端没给
+expect-hit;scene_date;真机 2026-10-10 二次 launch 会重启 tsnet
+expect-pass;scene_date;真机与模拟器都是 arm64
+expect-hit;scene_evidence;否则会退化成每秒一次的循环（真机抓到过）
+expect-pass;scene_evidence;真的抓到了端口冲突
+
+# ── 注释里的元信息 ──────────────────────────────────────────────────────
+expect-hit;meta_test_run;跑法：xcodebuild test -only-testing:DshMobileTests/LayeringTests
+expect-pass;meta_test_run;测试在 tests/MarkdownParserTests.swift
+expect-hit;meta_defence;为什么住 Core 而不是某屏的 State/
+expect-pass;meta_defence;它的变化原因是载体标准

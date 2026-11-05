@@ -4,13 +4,15 @@
 # 而「本地绿了 CI 红」最难查的正是它们哪里不一样。
 #
 # 用法：
-#   ./scripts/ci.sh              两端都跑
+#   ./scripts/ci.sh              三节都跑
 #   ./scripts/ci.sh gateway      只跑网关（秒级，改网关时用）
+#   ./scripts/ci.sh lint         只跑注释与引用的纪律（秒级，改注释时用）
 #   ./scripts/ci.sh ios          只跑 iOS（分钟级）
 #
 # 环境变量：
 #   DSH_SIM_UDID     指定模拟器。不设时：先找已启动的 iPhone，再找第一台可用的。
 #   DSH_MIN_GATEWAY  网关判据条数下限。低于它视为「扫描面缩水」，红。
+#   DSH_MIN_LINT     lint 扫描的文件数下限。同一用意：少扫了就是没守。
 #   DSH_MIN_IOS      iOS 判据条数下限。同上。
 #   CI               由 CI 自己设。设了就不加本机沙箱补丁（见下）。
 #
@@ -87,6 +89,59 @@ run_gateway() {
     FAILED=1
   fi
   check_floor gateway "$total" "${DSH_MIN_GATEWAY:-0}"
+}
+
+# ── lint ────────────────────────────────────────────────────────────────────
+# 注释与引用的纪律住在 `ios/.swiftlint.yml`：那些规则要的是保存即报，所以不进测试。
+# 这一节只回答两件事：有没有违规；扫描面有没有缩水 —— 少扫了一批文件，规则看起来还是绿。
+#
+# 为什么下限盯的是**文件数**而不是「判据条数」：规则条数写在 yml 里，不随扫描面变；
+# 会悄悄变小的是被扫到的文件数，那正是「路径推算瞎了」的症状。
+run_lint() {
+  hr; say "lint · swiftlint"; hr
+  local log="$OUT/lint.log"
+
+  if ! command -v swiftlint >/dev/null 2>&1; then
+    say "❌ lint：没装 swiftlint —— 这一节不能算通过（装法：brew install swiftlint）"
+    FAILED=1
+    return
+  fi
+
+  # 先验规则自己还活着：规则退化时违规数恒为 0，后面那个「0 违规」就什么都证明不了。
+  # 它必须在这条闸门里跑，否则只是一个人会手动执行的脚本。
+  if ! "$ROOT/ios/scripts/lint-selftest.sh"; then
+    say "❌ lint：规则自测未通过（失配项见上）"
+    FAILED=1
+    return
+  fi
+
+  ( cd "$ROOT/ios" && swiftlint lint --strict ) >"$log" 2>&1
+  local status=$?
+
+  # 尾巴形如 `Found 0 violations, 0 serious in 185 files.`
+  local violations files
+  # `1 violation` 与 `2 violations` 是两种单复数写法，用 `-E` 的 `?` 一次收掉；
+  # 只认复数会让「正好一条违规」落进「没跑出结果」那一支，两种红的处置完全不同。
+  violations=$(sed -nE 's/.*Found ([0-9]+) violations?.*/\1/p' "$log" | tail -1)
+  files=$(sed -nE 's/.* in ([0-9]+) files\.$/\1/p' "$log" | tail -1)
+
+  if [[ -z "${violations:-}" ]]; then
+    say "❌ lint：没跑出结果（退出码 ${status}，日志尾部见下）"
+    tail -20 "$log"
+    FAILED=1
+    return
+  fi
+
+  if [[ "$violations" != "0" ]]; then
+    say "❌ lint：${violations} 条违规（退出码 ${status}）"
+    grep -E ': (error|warning): ' "$log" | head -20
+    FAILED=1
+  else
+    say "lint：0 条违规，扫描 ${files:-?} 个文件"
+  fi
+
+  summary_row lint "${files:-0}" "$violations" "${DSH_MIN_LINT:-0}"
+  check_floor lint "${files:-0}" "${DSH_MIN_LINT:-0}"
 }
 
 # ── 判据条数下限 ────────────────────────────────────────────────────────────
@@ -220,9 +275,10 @@ run_ios() {
 # ── 入口 ────────────────────────────────────────────────────────────────────
 case "${1:-all}" in
   gateway) run_gateway ;;
+  lint)    run_lint ;;
   ios)     run_ios ;;
-  all)     run_gateway; run_ios ;;
-  *) say "用法：$0 [gateway|ios|all]"; exit 2 ;;
+  all)     run_gateway; run_lint; run_ios ;;
+  *) say "用法：$0 [gateway|lint|ios|all]"; exit 2 ;;
 esac
 
 hr
