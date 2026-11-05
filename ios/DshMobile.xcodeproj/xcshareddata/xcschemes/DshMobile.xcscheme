@@ -90,6 +90,15 @@
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
       debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "AA00000000000000000000A5"
+            BuildableName = "DshMobile.app"
+            ReferencedContainer = "container:DshMobile.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
       <BuildableReference
          BuildableIdentifier = "primary"
          BlueprintIdentifier = "AA00000000000000000000A5"
