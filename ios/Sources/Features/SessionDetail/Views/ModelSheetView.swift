@@ -21,12 +21,18 @@ struct ModelSheetView: View {
             content
                 .navigationTitle("模型")
                 .navigationBarTitleDisplayMode(.inline)
+                .navigationDestination(for: ModelSheetPage.self) { page in
+                    switch page {
+                    case .settings:
+                        settings
+                    }
+                }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("关闭", action: onClose)
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        NavigationLink { settings } label: {
+                        NavigationLink(value: ModelSheetPage.settings) {
                             Image(systemName: "gearshape")
                         }
                         .accessibilityLabel("模型设置")
@@ -154,4 +160,12 @@ struct ModelSheetView: View {
             }
         )
     }
+}
+
+/// 这一面自己的两级：模型列表是栈根，设置页由**值**推入。
+///
+/// 不用 `NavigationLink { }`：那种形式的安全前提是「这张栈没有 path 绑定」，也就是这面
+/// 只活在 sheet 里。值推入不依赖宿主的形态，换谁当宿主都是同一条路径。
+private enum ModelSheetPage: Hashable {
+    case settings
 }

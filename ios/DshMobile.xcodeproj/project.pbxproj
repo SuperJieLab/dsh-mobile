@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		109B1FF0309C2BA9004C26EE /* LookinServer in Frameworks */ = {isa = PBXBuildFile; productRef = 109B1FEF309C2BA9004C26EE /* LookinServer */; };
 		10BFAB993078B6AB004F8EA5 /* Frameworks/TailscaleKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000F1 /* Frameworks/TailscaleKit.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		BB00000000000000000000F2 /* Frameworks/TailscaleKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000F1 /* Frameworks/TailscaleKit.xcframework */; };
 /* End PBXBuildFile section */
@@ -61,6 +62,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BB00000000000000000000F2 /* Frameworks/TailscaleKit.xcframework in Frameworks */,
+				109B1FF0309C2BA9004C26EE /* LookinServer in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -74,6 +76,13 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		109B1FEE309C2BA9004C26EE /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		AA00000000000000000000A1 = {
 			isa = PBXGroup;
 			children = (
@@ -81,6 +90,7 @@
 				BB00000000000000000000F1 /* Frameworks/TailscaleKit.xcframework */,
 				BB00000000000000000000T1 /* tests */,
 				CC00000000000000000000F1 /* Config/Shared.xcconfig */,
+				109B1FEE309C2BA9004C26EE /* Frameworks */,
 				AA00000000000000000000A3 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -115,6 +125,7 @@
 			);
 			name = DshMobile;
 			packageProductDependencies = (
+				109B1FEF309C2BA9004C26EE /* LookinServer */,
 			);
 			productName = DshMobile;
 			productReference = AA00000000000000000000A4 /* DshMobile.app */;
@@ -171,6 +182,9 @@
 			);
 			mainGroup = AA00000000000000000000A1;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				10F9E2EB309C1C2B0074413B /* XCRemoteSwiftPackageReference "LookinServer" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA00000000000000000000A3 /* Products */;
 			projectDirPath = "";
@@ -252,6 +266,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 9TK777LH2K;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -309,6 +324,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 9TK777LH2K;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -455,6 +471,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		10F9E2EB309C1C2B0074413B /* XCRemoteSwiftPackageReference "LookinServer" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/QMUI/LookinServer/";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.8;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		109B1FEF309C2BA9004C26EE /* LookinServer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 10F9E2EB309C1C2B0074413B /* XCRemoteSwiftPackageReference "LookinServer" */;
+			productName = LookinServer;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AA00000000000000000000A9 /* Project object */;
 }
