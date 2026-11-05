@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DD00000000000000000000JC /* mux-frames.json in Resources */ = {isa = PBXBuildFile; fileRef = DD00000000000000000000JB /* mux-frames.json */; };
+
 		109B1FF0309C2BA9004C26EE /* LookinServer in Frameworks */ = {isa = PBXBuildFile; productRef = 109B1FEF309C2BA9004C26EE /* LookinServer */; };
 		109B1FF3309C3196004C26EE /* TailscaleKit in Frameworks */ = {isa = PBXBuildFile; productRef = 109B1FF2309C3196004C26EE /* TailscaleKit */; };
 /* End PBXBuildFile section */
@@ -39,6 +41,7 @@
 		BB00000000000000000000T3 /* DshMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DshMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC00000000000000000000F1 /* Config/Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
 		DD00000000000000000000J2 /* DshMobileJudges.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DshMobileJudges.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DD00000000000000000000JB /* mux-frames.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "mux-frames.json"; path = "../contract/mux-frames.json"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -100,6 +103,7 @@
 				BB00000000000000000000T1 /* tests */,
 				DD00000000000000000000J1 /* judges */,
 				CC00000000000000000000F1 /* Config/Shared.xcconfig */,
+				DD00000000000000000000JB /* mux-frames.json */,
 				109B1FEE309C2BA9004C26EE /* Frameworks */,
 				AA00000000000000000000A3 /* Products */,
 			);
@@ -151,7 +155,6 @@
 				BB00000000000000000000T4 /* Sources */,
 				BB00000000000000000000T5 /* Frameworks */,
 				BB00000000000000000000T6 /* Resources */,
-				DD00000000000000000000JA /* Copy Fixture */,
 			);
 			buildRules = (
 			);
@@ -249,6 +252,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DD00000000000000000000JC /* mux-frames.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -280,25 +284,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "if command -v swiftlint >/dev/null 2>&1; then\n  cd \"$SRCROOT\" && swiftlint lint --quiet || true\nelse\n  echo \"warning: swiftlint 未安装，本地跳过注释纪律；CI 会跑（brew install swiftlint）\"\nfi\n";
-		};
-		DD00000000000000000000JA /* Copy Fixture */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Copy Fixture";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "mkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\ncp \"$SRCROOT/../contract/mux-frames.json\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

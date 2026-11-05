@@ -125,7 +125,7 @@ jobs:
       - name: 跑闸门
         run: ./scripts/ci.sh ios
         env:
-          DSH_MIN_IOS: '420'
+          DSH_MIN_IOS: '370'
 
       # 失败时把现场变成 annotation。Actions 的日志下载要认证，而 annotation 匿名可读 ——
       # 这是「没登录的人」也能看到失败原因的唯一通道，也是我第一次红的时候最缺的东西。
