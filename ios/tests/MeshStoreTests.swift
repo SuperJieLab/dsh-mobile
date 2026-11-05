@@ -230,8 +230,8 @@ final class MeshStoreTests: XCTestCase {
 
     /// 回前台的重试用**存下来的那份**配置，不是调用方手里的。
     ///
-    /// 为什么值得一条：`retryStored()` 一旦收参数，编排就有两种传法，而传「手里的那份」
-    /// 正是「旧 session 配上新地址」那类缺陷的入口。接口上少一个参数，这条就不必再靠人记。
+    /// 走 `ensureReachable()` 而不是内部的换代步骤：对外只有这一个恢复入口，换代是它
+    /// 探不通之后的动作 —— 判据落在节点收到的那一份上，「调用方另给一份」已无从发生。
     func testRetryingFromForegroundUsesTheStoredConfig() async {
         let stored = MeshConfig(controlURLString: "https://203.0.113.10:8443",
                                 gatewayURLString: "http://100.64.0.1:3081")
@@ -239,7 +239,12 @@ final class MeshStoreTests: XCTestCase {
         let store = MeshStore(node: node)
         await store.start(config: stored)
 
-        await store.retryStored()
+        // 探活得有一个可探的产物：`route` 只在 running 那一代有，所以先造一次就绪。
+        node.nodeState = .running
+        node.onVerifiedRunning?(URLSession(configuration: .ephemeral))
+        store.reachability = { _, _ in false }
+
+        _ = await store.ensureReachable()
 
         XCTAssertEqual(node.retriedConfigs, [stored], "重试用的是 start 时存下的那份")
     }
