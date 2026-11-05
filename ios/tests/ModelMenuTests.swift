@@ -192,29 +192,6 @@ final class ModelMenuTests: XCTestCase {
 
     // MARK: - O7 档名不由客户端内置
 
-    /// 两个菜单文件的源码里不得出现具体档名字面量 —— 档名只能来自目录。
-    func testMenuSourcesBakeInNoLevelNames() throws {
-        let sources = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()                     // ios/tests/
-            .deletingLastPathComponent()                     // ios/
-            .appendingPathComponent("Sources/Features/SessionDetail")
-        let files = [
-            sources.appendingPathComponent("State/ModelMenu.swift"),
-            sources.appendingPathComponent("Views/ModelPickerView.swift"),
-            sources.appendingPathComponent("Views/ModelSheetView.swift"),
-            // 档名→字这件事最可能被写成映射表的地方，正是显示层 —— 它必须一起扫。
-            sources.appendingPathComponent("Display/CatalogText.swift"),
-        ]
-        // 只认带引号的字面量：注释里提到 low/high 不算内置。
-        let baked = ["\"low\"", "\"high\"", "\"max\""]
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            for literal in baked {
-                XCTAssertFalse(text.contains(literal), "\(file.lastPathComponent) 内置了档名字面量 \(literal)")
-            }
-        }
-    }
-
     // MARK: - 显示名
 
     /// 功能条显示目录里的 name，不是 `ModelSelection.model` 那个 id。

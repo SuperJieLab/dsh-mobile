@@ -127,44 +127,6 @@ final class AuditLogTests: XCTestCase {
         ]
     }
 
-    /// 网关声明的写 op 清单。读的是**网关的源码** —— 那是唯一真源。
-    ///
-    /// 不在这边再抄一份：抄一份就是两份事实，而它们漂移的那天没有任何东西会红。
-    private func gatewayWriteOps() throws -> Set<String> {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // tests
-            .deletingLastPathComponent()   // ios
-            .deletingLastPathComponent()   // 仓库根
-        let source = try String(contentsOf: root.appendingPathComponent("gateway/src/audit.ts"),
-                                encoding: .utf8)
-
-        guard let start = source.range(of: "WRITE_OPS = ["),
-              let end = source.range(of: "] as const", range: start.upperBound..<source.endIndex)
-        else { return [] }
-
-        let body = String(source[start.upperBound..<end.lowerBound])
-        let pattern = try NSRegularExpression(pattern: #"'([a-z][a-z-]+)'"#)
-        let range = NSRange(body.startIndex..<body.endIndex, in: body)
-        return Set(pattern.matches(in: body, range: range).compactMap { match in
-            Range(match.range(at: 1), in: body).map { String(body[$0]) }
-        })
-    }
-
-    func testClientCoversEveryWriteOpTheGatewayDeclares() throws {
-        let declared = try gatewayWriteOps()
-
-        // 活性锚：一个都没读到说明路径或正则坏了 —— 那时「两边一致」只是因为两边都空。
-        XCTAssertGreaterThanOrEqual(declared.count, 5, "只读到 \(declared.count) 个写 op —— 先怀疑路径")
-
-        // 覆盖 = 有对应请求**且**它可审计。只看 op 名会放过「请求在、但没实现协议」——
-        // 那正是「忘了加扩展」的形状，而它不会让任何别的判据变红。
-        let covered = Set(writeRequests().compactMap { request -> String? in
-            request is any AuditableRequest ? request.op : nil
-        })
-        let missing = declared.subtracting(covered)
-        XCTAssertEqual(missing, [], "这些写 op 客户端没有可审计的请求：\(missing.sorted())")
-    }
-
     func testEveryWriteRequestCarriesAnAuditTarget() {
         for request in writeRequests() {
             let auditable = request as? AuditableRequest

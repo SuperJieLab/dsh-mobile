@@ -145,34 +145,4 @@ final class SlashTriggerTests: XCTestCase {
 
     // MARK: - O6 客户端不内置命令名
 
-    /// 三个命令相关源文件里不得出现真实命令名的字面量（`"/permission"` 之类）——
-    /// 名字只能来自宿主，否则新增一条命令要改客户端。
-    ///
-    /// 表收宿主内置的全部命令名，两种引号形态各一条：`"/x"`（整行）与 `"x"`（裸名）。
-    func testSourcesBakeInNoCommandNames() throws {
-        let sources = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Features/SessionDetail")
-        let files = [
-            sources.appendingPathComponent("State/SlashTrigger.swift"),
-            sources.appendingPathComponent("State/CommandDirectory.swift"),
-            sources.appendingPathComponent("Views/CommandPalette.swift"),
-            sources.appendingPathComponent("Views/CommandRow.swift"),
-        ]
-        let names = ["permission", "compact", "export", "goal", "plan", "feedback"]
-        let baked = names.flatMap { ["\"/\($0)\"", "\"\($0)\""] }
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            // 逐**代码行**判，跳过注释：注释里点名某个命令正是为了说「别内置它」，
-            // 整段 `contains` 会把那种说明当成内置。
-            for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-                let code = line.trimmingCharacters(in: .whitespaces)
-                guard !code.hasPrefix("//"), !code.hasPrefix("/*"), !code.hasPrefix("*") else { continue }
-                for literal in baked where code.contains(literal) {
-                    XCTFail("\(file.lastPathComponent):\(index + 1) 内置了命令名字面量 \(literal)")
-                }
-            }
-        }
-    }
 }

@@ -15,16 +15,11 @@ import XCTest
 
 final class MuxFrameFixtureTests: XCTestCase {
 
-    /// 仓库根下的那一份。路径由 `#filePath` 现算 —— 它指向本文件，
-    /// 上三级就是仓库根（`ios/tests/<本文件>`）。
-    private static let fixturePath: String = {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // ios/tests
-            .deletingLastPathComponent()   // ios
-            .deletingLastPathComponent()   // 仓库根
-            .appendingPathComponent("contract/mux-frames.json")
-            .path
-    }()
+    /// 共守样本随测试包一起分发：手机上读不到仓库路径，所以构建阶段把它复制进 bundle。
+    /// 唯一真源仍是仓库里的那一份，复制只是投递方式。
+    private static var fixtureURL: URL? {
+        Bundle(for: MuxFrameFixtureTests.self).url(forResource: "mux-frames", withExtension: "json")
+    }
 
     private struct ClientSample {
         let name: String
@@ -43,9 +38,10 @@ final class MuxFrameFixtureTests: XCTestCase {
     }
 
     private func loadFixture() throws -> (client: [ClientSample], server: [ServerSample]) {
-        let url = URL(fileURLWithPath: Self.fixturePath)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
-                      "找不到共守样本：\(url.path) —— 两端要读同一份，它必须留在仓库里")
+        guard let url = Self.fixtureURL else {
+            XCTFail("测试包里没有 mux-frames.json —— 构建阶段的复制没生效")
+            return ([], [])
+        }
         let data = try Data(contentsOf: url)
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 

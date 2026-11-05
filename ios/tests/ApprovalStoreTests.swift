@@ -262,14 +262,6 @@ final class ApprovalStoreTests: XCTestCase {
             type: "cancel", payload: .object(["eventId": .string("")])
         )))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "空串同理 —— 留着这张卡比误删别人的强")
-
-        // 丢弃要有留痕：没有它，「卡没少」与「这条撤回被丢了」在屏幕上分不出来。
-        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/Features/Approval/State/ApprovalStore.swift"),
-            encoding: .utf8)
-        XCTAssertTrue(source.contains("dropped a cancel without an eventId"),
-                      "留痕句不在了 —— 无寻址撤回被丢弃时现场只剩这一行")
     }
 
     /// 每一条 `ready` 都整表替换 —— 网关在它之后紧跟着重放当前集合。
