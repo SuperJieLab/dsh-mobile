@@ -7,7 +7,7 @@
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
-import { failure, handle, success, type Limits } from '../protocol/rpc.ts'
+import { failure, handle, type Limits } from '../protocol/rpc.ts'
 import { handleAuthOp } from '../protocol/auth-ops.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
@@ -19,9 +19,7 @@ import type { WorkspacePort } from '../ports/workspace.ts'
 import { auditEntryOf, isWriteOp, type AuditLog } from '../audit.ts'
 import type { Metrics } from '../metrics.ts'
 import { CredentialVault } from './credentials.ts'
-import type {
-  PairRequest, PairResponse, RefreshRequest, RefreshResponse,
-} from '../wire/auth.ts'
+import type { PairResponse, RefreshResponse } from '../wire/auth.ts'
 import { createLogger, LogModule, currentRequestId, mintRequestId, runWithRequestId } from '../log.ts'
 
 const log = createLogger(LogModule.http)

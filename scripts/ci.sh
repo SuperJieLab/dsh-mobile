@@ -71,6 +71,20 @@ run_gateway() {
   fail=$(sed -n 's/^# fail \([0-9][0-9]*\)$/\1/p' "$log" | tail -1)
 
   if [[ -z "$total" ]]; then
+    # 闸门有三道（类型 → lint → 用例），任何一道拦住都会让 TAP 尾巴缺席。
+    # 先分辨是哪一道 —— 三者的补救完全不同，混成一句「没跑出结果」等于让人从头查。
+    if grep -qE 'Found [0-9]+ warnings? and [0-9]+ errors?' "$log"; then
+      say "❌ 网关：lint 没过 —— 红的是闸门，不是判据"
+      grep -E '^ *[x!] |Found [0-9]+' "$log" | head -20
+      FAILED=1
+      return
+    fi
+    if grep -qE 'error TS[0-9]+' "$log"; then
+      say "❌ 网关：类型检查没过 —— 红的是闸门，不是判据"
+      grep -E 'error TS[0-9]+' "$log" | head -10
+      FAILED=1
+      return
+    fi
     # 解析不出条数 = 这一轮根本没跑起来（编译失败、依赖缺失）。这跟「跑了但红」
     # 是两件事，不能都报成「测试失败」—— 否则查的人会去翻判据。
     say "❌ 网关：没跑出结果（日志尾部见下）"

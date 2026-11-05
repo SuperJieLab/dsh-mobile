@@ -11,7 +11,7 @@
 
 import { describeError, isNotFound } from '../ports/errors.ts'
 import { createLogger, LogModule } from '../log.ts'
-import type { WorkspacePort, WorkspaceSnapshot } from '../ports/workspace.ts'
+import type { WorkspaceSnapshot } from '../ports/workspace.ts'
 
 const log = createLogger(LogModule.workspace)
 

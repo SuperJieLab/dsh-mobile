@@ -26,7 +26,7 @@ import {
   handshakeResponse,
 } from './frames.ts'
 import { onClientText } from './stream.ts'
-import { send, write } from './egress.ts'
+import { write } from './egress.ts'
 import { createLogger, LogModule, perfRecord } from '../log.ts'
 
 const log = createLogger(LogModule.ws)

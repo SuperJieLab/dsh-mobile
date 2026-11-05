@@ -20,11 +20,13 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && node --test --test-timeout=30000 'tests/**/*.test.ts'"
+    "test": "npm run typecheck && npm run lint && node --test --test-timeout=30000 \"tests/**/*.test.ts\"",
+    "lint": "oxlint --deny-warnings ."
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.6-alpha.2",
     "@types/node": "^26.6.5",
+    "oxlint": "^1.91.0",
     "typescript": "^7.0.2"
   }
 }
