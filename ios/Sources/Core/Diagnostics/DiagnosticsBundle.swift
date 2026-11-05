@@ -13,6 +13,8 @@ struct DiagnosticsBundle {
         let appBuild: String
         let system: String
         let device: String
+        /// 组网现状：阶段、路径、隧道产物在不在。一眼能看，不必从日志尾巴里倒推。
+        let mesh: String
         let logTail: String
         /// 遥测原文：文件名 + 内容。新的在前。
         let telemetry: [(name: String, text: String)]
@@ -29,6 +31,8 @@ struct DiagnosticsBundle {
         out += "App：\(input.appVersion) (\(input.appBuild))\n"
         out += "系统：\(input.system)\n"
         out += "设备：\(input.device)\n"
+
+        out += "\n=== 组网 ===\n\(input.mesh)\n"
 
         out += "\n=== 日志（最近的尾巴）===\n"
         // 日志逐行脱敏：这里才是「导出包里不含凭据」真正生效的地方 ——

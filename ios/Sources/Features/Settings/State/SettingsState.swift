@@ -61,10 +61,17 @@ final class SettingsState {
             appBuild: info?["CFBundleVersion"] as? String ?? "?",
             system: ProcessInfo.processInfo.operatingSystemVersionString,
             device: DiagnosticsBundle.machineModel(),
+            mesh: meshDiagnostics,
             logTail: logFile.tail(),
             telemetry: telemetryFiles()
         )
         return try? DiagnosticsExport.write(DiagnosticsBundle.text(input), at: date)
+    }
+
+    /// 诊断包的组网段：阶段与路径（与设置页那一行同源）+ 隧道产物在不在。
+    /// 产物单列，因为「阶段说已入虚拟网」与「此刻发得出去」不是一回事。
+    private var meshDiagnostics: String {
+        "\(meshSummary)\n\(tunnelProductText(store.route != nil))"
     }
 
     /// 两类遥测各取最近两份。

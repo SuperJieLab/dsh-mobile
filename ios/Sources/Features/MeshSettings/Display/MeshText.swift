@@ -16,6 +16,14 @@ func meshPhaseText(_ phase: MeshPhase) -> String {
     }
 }
 
+/// 隧道产物在不在 —— 诊断包读它。
+///
+/// 单列的理由：阶段说「已入虚拟网」与「此刻发得出去」不是一回事。对外重连只认后者，
+/// 排障时先看这一行比从日志尾巴里倒推快得多。
+func tunnelProductText(_ hasRoute: Bool) -> String {
+    hasRoute ? "隧道产物：有" : "隧道产物：无"
+}
+
 /// 节点五态的一句话 —— 连接详情页读它。
 ///
 /// 与 `meshPhaseText` 是两种事实（网关通不通 / 节点起没起来），所以 `.registering` 不写

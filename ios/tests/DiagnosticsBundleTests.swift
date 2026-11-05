@@ -5,6 +5,7 @@ import XCTest
 final class DiagnosticsBundleTests: XCTestCase {
 
     private func input(log: String = "line-1\nline-2\n",
+                       mesh: String = "就绪 · 中继\n隧道产物：有",
                        telemetry: [(name: String, text: String)] = []) -> DiagnosticsBundle.Input {
         DiagnosticsBundle.Input(
             generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
@@ -12,6 +13,7 @@ final class DiagnosticsBundleTests: XCTestCase {
             appBuild: "276",
             system: "Version 26.5 (Build 23F77)",
             device: "iPhone17,1",
+            mesh: mesh,
             logTail: log,
             telemetry: telemetry
         )
@@ -30,6 +32,21 @@ final class DiagnosticsBundleTests: XCTestCase {
         let text = DiagnosticsBundle.text(input(log: "alpha\nbeta\n"))
         XCTAssertTrue(text.contains("alpha"))
         XCTAssertTrue(text.contains("beta"))
+    }
+
+    /// 组网现状在包里，且排在日志之前 —— 一个包离开设备之后，「当时连没连上」是要先看的，
+    /// 从日志尾巴里倒推既慢又可能被截断。
+    func testMeshStateIsCarriedBeforeTheLog() {
+        let text = DiagnosticsBundle.text(input(mesh: "连接中\n隧道产物：无"))
+        XCTAssertTrue(text.contains("=== 组网 ==="))
+        XCTAssertTrue(text.contains("连接中"))
+        XCTAssertTrue(text.contains("隧道产物：无"))
+
+        guard let meshAt = text.range(of: "=== 组网 ==="),
+              let logAt = text.range(of: "=== 日志") else {
+            return XCTFail("两段标题都要在，否则顺序无从谈起")
+        }
+        XCTAssertLessThan(meshAt.lowerBound, logAt.lowerBound, "组网段应排在日志之前")
     }
 
     /// 没有遥测时写一句明确的「还没有」，而不是留一片空白 ——
