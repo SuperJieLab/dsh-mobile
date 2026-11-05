@@ -109,11 +109,12 @@ final class MeshStoreTests: XCTestCase {
         XCTAssertTrue(node.launchCount == 1,
                       "N2e start 幂等：重复 start 不再拉起节点（tsnet 重启会杀活连接）")
 
-        // —— 回前台探活归属 store——
+        // —— 回前台恢复：唯一入口是 ensureReachable，探活与换代都是它的内部步骤 ——
+        store.reachability = { _, _ in true }
         node.reviveShouldFail = true
-        await store.revive()
+        _ = await store.ensureReachable()
         XCTAssertTrue(store.phase == .failed(.unreachable),
-                      "N3a 回前台探活失败 → 如实落 failed(unreachable)，不自动重试")
+                      "N3a 探活通过但节点读不出 → 如实落 failed(unreachable)")
         // **产物跟着判据失效**：阶段不再是 ready 时，路就不通了 —— 这不是靠谁去清，
         // 是 `route` 在读数上守卫。删掉那道守卫，两条都会红。
         XCTAssertNil(store.route,
@@ -121,9 +122,16 @@ final class MeshStoreTests: XCTestCase {
         node.nodeState = .running
         node.reviveShouldFail = false
         node.carrierPath = .direct
-        await store.revive()
+        _ = await store.ensureReachable()
         XCTAssertTrue(store.phase == .ready && store.meshPath == .direct,
                       "N3b 探活可读 → 阶段保持 ready 且路径已刷新")
+
+        // 路不通时不去重读一条死隧道，而是换一代 —— 判据是真实往返，不是节点自述。
+        store.reachability = { _, _ in false }
+        let retriedBefore = node.retriedConfigs.count
+        _ = await store.ensureReachable()
+        XCTAssertEqual(node.retriedConfigs.count, retriedBefore + 1,
+                       "N3d 探活不通 → 重走一次注册（换代），不是在死路上重连")
 
         // —— 推送通道：节点侧状态变化回灌 store，投影据此重算 ——
         // 视图已不观察节点的 @Published；轮询探到的失败 / 路径切换必须经

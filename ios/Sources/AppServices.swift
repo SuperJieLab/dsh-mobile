@@ -92,18 +92,15 @@ struct AppServices {
         await run(steps)
     }
 
-    /// 回前台：按现状决定探活还是重试（组网）+ 立刻要一次连接 + 重建被终态拒绝的流。
-    /// **选择住这里**，因为只有这个类型同时认识 `store.phase` 与「回到前台」；判定是
-    /// `ForegroundAction.of`。
-    /// `.failed(.unreachable)` 重试而不是只探活：探活对本来就不通的节点没有意义，而「用户回来了」
+    /// 回前台：先让组网自己恢复，能发才去要一次连接。
+    ///
+    /// 只重连不足以恢复：回前台那一刻底层 socket 已死（`Code=57`），此后 288 次重连没有一次
+    /// 成功 —— 重连换的是 TCP，坏的是隧道。换掉整个节点实例那次两秒就恢复。
+    /// 「怎么判断、怎么修」全在 `MeshStore.ensureReachable`，这里只说「回到前台了」。
     func sceneActive() async {
-        switch ForegroundAction.of(phase: store.phase) {
-        case .revive:
-            await store.revive()
-        case .retryStored:
-            _ = await store.retryStored()
+        if await store.ensureReachable() {
+            link.reconnectNow(reason: "foreground")
         }
-        link.reconnectNow(reason: "foreground")
         events.attach(to: link)
     }
 
@@ -157,22 +154,3 @@ struct AppServices {
     }
 }
 
-// MARK: - 回前台的判定
-
-/// 回前台该动哪一步 —— 只由 `MeshPhase` 决定。判定与它的唯一调用点（`sceneActive`）同住：
-/// 只有这个类型同时认识「组网阶段」与「App 回到前台」。
-enum ForegroundAction: Equatable {
-    /// 只探活：节点可能还活着，而重开会把一条正好好的连接杀掉。
-    case revive
-    /// 按存下来的那份配置重走一次注册。
-    case retryStored
-}
-
-extension ForegroundAction {
-
-    /// key 被拒不重试：同样的 key 再问一次答案不会变。
-    static func of(phase: MeshPhase) -> ForegroundAction {
-        if case .failed(.unreachable) = phase { return .retryStored }
-        return .revive
-    }
-}

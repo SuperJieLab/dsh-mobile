@@ -853,11 +853,15 @@ final class LayeringTests: XCTestCase {
             for (line, code) in codeLines(in: text) {
                 scanned += 1
                 // 只认**存值**的声明。取数的闭包（`baseURL: () -> URL?`）不算 ——
-                // 它是「怎么问」，恰恰是接缝该有的形态。
-                let storesURL = code.contains("baseURL: URL")
+                // 它是「怎么问」，恰恰是接缝该有的形态。函数与 init 的参数同样不算：
+                // 它们随调用进出，不构成第二份事实。
+                let isSignature = code.contains("func ") || code.contains("init(")
+                let storesURL = !isSignature
+                    && code.contains("baseURL: URL")
                     && !code.contains("baseURL: () ->")
                     && !code.contains("baseURL: @escaping")
-                let storesSession = code.contains("session: URLSession")
+                let storesSession = !isSignature
+                    && code.contains("session: URLSession")
                     && !code.contains("session: () ->")
                     && !code.contains("session: @escaping")
                 if storesURL || storesSession { stores[relative, default: []].append(line) }
@@ -2779,42 +2783,33 @@ final class LayeringTests: XCTestCase {
                       "进程入口没有启动服务 —— 编排不会发生（视图不求值也必须在跑）")
     }
 
-    /// 回前台那一步：判定归编排，动作归服务。
+    /// 回前台那一步：平台事件归编排，恢复的判定与动作归组网域。
     ///
-    /// 判定依据的一半是「App 回到前台」—— 组网域不认识它。这条守两半：
-    /// - **判定在编排**：`MeshStore` 只有动作、没有 `sceneActive`（留着那个门，判定随时能
-    ///   回流进去，而回流之后没有行为判据会红）；
-    /// - **动作与问法都在**：编排必须调 `store.revive()` / `store.retryStored()`，且经
-    ///   纯函数 `ForegroundAction.of(phase:)` 问一句 —— 少了这一句，`ForegroundActionTests`
-    ///   守的只是一个没人用的函数。
+    /// 守两半：
+    /// - **判据不外泄**：`MeshStore` 没有 `sceneActive`（它认识不了「前台」），对外只有
+    ///   `ensureReachable()` 一个恢复入口 —— 探活、判定、换代都是它的内部步骤。
+    /// - **编排只说「回到前台」**：`AppServices.sceneActive` 调那一个方法，不再自己分派。
+    ///   分派回流到编排，就等于把恢复规则写成两处各一半。
     ///
-    /// ⚠️ 这是**结构**判据：它证明代码在场，证明不了运行时被调。那一跳的行为判据明知缺失
-    /// （`AppServices` 内部 new 出全部服务，要测它得给五件服务各抽一层协议），见方案文档。
-    func testTheForegroundJudgmentLivesInTheOrchestrator() throws {
+    /// ⚠️ 这是**结构**判据：它证明代码在场，证明不了运行时被调。
+    func testTheRecoveryJudgmentLivesInTheMesh() throws {
         let store = codeLines(
             in: try String(contentsOf: sourcesRoot.appendingPathComponent("Core/MeshNetwork/MeshStore.swift"),
                            encoding: .utf8))
         XCTAssertFalse(store.contains { $0.1.contains("func sceneActive") },
                        "MeshStore 还留着 sceneActive —— 它认识不了「前台」，判定只能靠猜")
-        XCTAssertTrue(store.contains { $0.1.contains("func revive() async") },
-                      "store 少了探活（回前台的两条路之一）")
-        XCTAssertTrue(store.contains { $0.1.contains("func retryStored() async") },
-                      "store 少了「按存下的那份重试」（另一条路）")
+        XCTAssertTrue(store.contains { $0.1.contains("func ensureReachable() async") },
+                      "组网域没有单一的恢复入口 —— 编排就得自己拼探活与换代")
 
         let services = codeLines(
             in: try String(contentsOf: sourcesRoot.appendingPathComponent("AppServices.swift"),
                            encoding: .utf8))
-        XCTAssertTrue(services.contains { $0.1.contains("ForegroundAction.of(phase: store.phase)") },
-                      "编排没有问那一句 —— 纯函数成了一纸空文")
-        XCTAssertTrue(services.contains { $0.1.contains("store.revive()") },
-                      "编排没调探活")
-        XCTAssertTrue(services.contains { $0.1.contains("store.retryStored()") },
-                      "编排没调重试 —— `.failed(.unreachable)` 之后回前台就再也不会重试")
-        let passingConfig = services.filter { $0.1.contains("retryStored(") }
-            .filter { $0.1.contains("config") }
-        XCTAssertEqual(passingConfig.map(\.0), [],
-                       "编排给 retryStored 传了配置（第 \(passingConfig.map(\.0)) 行）—— "
-                       + "用哪份配置是 store 的内部知识，传参就有「旧 session 配新地址」的入口")
+        XCTAssertTrue(services.contains { $0.1.contains("store.ensureReachable()") },
+                      "编排没有让组网自己恢复")
+        for leaked in ["store.revive()", "store.retryStored()", "ForegroundAction"] {
+            XCTAssertFalse(services.contains { $0.1.contains(leaked) },
+                           "编排里还有 \(leaked) —— 恢复的步骤该收在组网域内部")
+        }
     }
 
     /// 上游类型只出现在适配器文件里。

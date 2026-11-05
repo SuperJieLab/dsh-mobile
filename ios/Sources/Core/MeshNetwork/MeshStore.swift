@@ -90,6 +90,25 @@ final class MeshStore {
     /// 进程内幂等闸：二次 start 会重启 tsnet、杀掉活连接并清掉路径。
     private var started = false
 
+    /// 一次真实往返。默认走隧道会话打 `GET /`；测试替换它 ——「通 / 不通 / 无从探测」
+    /// 三支都要能构造出来，而真发网络既慢又不确定。它是接线不是状态，不参与观察。
+    @ObservationIgnored
+    var reachability: (URLSession, URL) async -> Bool = MeshStore.liveReachability
+
+    /// 探活超时。路可能绕远端中继，给两秒；再长只是把「不通」判得更晚。
+    private static let probeTimeout: TimeInterval = 2
+
+    /// 真实探活：不带票的 `GET /`。票过期与路不通是两件事，并成一个判断就分不开处置，
+    /// 而补票本身要过这条路 —— 拿票当判据会把两种失败并成一种。
+    private static func liveReachability(_ session: URLSession, _ url: URL) async -> Bool {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = probeTimeout
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse else { return false }
+        return (200..<300).contains(http.statusCode)
+    }
+
     init(node: MeshNodeControlling) {
         self.node = node
         self.nodeState = node.nodeState
@@ -122,17 +141,66 @@ final class MeshStore {
         nodeChanged()
     }
 
+    /// 让到网关的路可用，返回「此刻能不能发」。
+    ///
+    /// 探活一次：不通就换一代重开；通了、或暂无产物无从探测，按阶段收拾一遍。
+    /// 「什么时候该调」由编排转发（它认识前台这个平台事件）；「怎么恢复到可用」全在这里，
+    /// 调用方不需要知道探活、判定、修复是三步。
+    func ensureReachable() async -> Bool {
+        switch await probeReachable() {
+        case false?:
+            Log.warn(Log.Module.mesh, "probe: unreachable — rebuilding tunnel")
+            await retryStored()
+        case true?:
+            Log.info(Log.Module.mesh, "probe: reachable")
+            await settleByPhase()
+        case nil:
+            // 没有产物就无从探测 —— 与「不通」分开记，否则事后读日志会以为探过一次并且失败。
+            Log.info(Log.Module.mesh, "probe: no route, settling by phase")
+            await settleByPhase()
+        }
+        // 结论单列一条：事后要能一眼看出「探过了，但没救回来」，而不是只能看到一次探活。
+        if route != nil {
+            Log.info(Log.Module.mesh, "recovery: ready")
+            return true
+        }
+        Log.info(Log.Module.mesh, "recovery: not ready")
+        return false
+    }
+
+    /// 按阶段选恢复动作。key 被拒不重走注册 —— 那条规则住 `MeshPhase`。
+    private func settleByPhase() async {
+        if phase.shouldRetryRegistration {
+            await retryStored()
+        } else {
+            await revive()
+        }
+    }
+
     /// 探活一次：节点还活着就重读路径，读不出就落 `failed(unreachable)`。
-    /// 只回答「能不能做」；「该不该做」在编排，接入途中不探活由节点自己守。
-    func revive() async {
+    /// 只回答「能不能做」；接入途中不探活由节点自己守。
+    private func revive() async {
         await node.reviveNode()
         nodeChanged()
+    }
+
+    /// 到网关的路此刻通不通。`nil` 是**无从探测**（没就绪、没有产物），不是「不通」——
+    /// 两者处置相反：前者按阶段判定走，后者要重开一代。
+    ///
+    /// 判据是一次真实往返，不读节点自述：控制面的 `Online` 只说注册成功，节点的 `Running`
+    /// 只说后端起来了，回前台那一刻 `-1004` 与 `Running` 同屏出现 —— 自述在正是要判断的
+    /// 时刻会骗人。
+    private func probeReachable() async -> Bool? {
+        // 地址与传输就地读 `route`，不另存一份：两者同生共死，复制出去就会出现「路换了、
+        // 探测还打旧地址」，而那种错只在真机上显形。
+        guard let route else { return nil }
+        return await reachability(route.session, route.baseURL)
     }
 
     /// 按**存下来的那份**配置重走一次注册。
     /// 不带参数是有意的：让编排传参就有两种可能，而「旧 session 配新地址」正是那样来的。
     /// 不回答「接没接」：内部动作，没有第二方等回执。
-    func retryStored() async {
+    private func retryStored() async {
         guard let config else { return }
         await retryMesh(config: config)
     }

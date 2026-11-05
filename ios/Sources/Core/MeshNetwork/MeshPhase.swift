@@ -29,4 +29,13 @@ enum MeshPhase: Equatable {
             return .failed(reason)
         }
     }
+
+    /// 恢复时该重走一次注册吗。
+    ///
+    /// 只有 `.failed(.unreachable)` 是。key 被拒不重试：同样的 key 再问一次答案不会变，
+    /// 而 authkey 有使用次数限制 —— 那两档都是 `.failed`，最容易写反。
+    var shouldRetryRegistration: Bool {
+        if case .failed(.unreachable) = self { return true }
+        return false
+    }
 }
