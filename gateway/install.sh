@@ -131,11 +131,15 @@ console.log("   removed: " + removed.join(", "));
 fi
 
 # ── 安装 ────────────────────────────────────────────────────────────────────
-# 用绝对路径：dsh 会把相对路径先按**调用时的当前目录**锚定，
+# 默认装本目录，用绝对路径：dsh 会把相对路径先按**调用时的当前目录**锚定，
 # 而这里要装的确定是 $PACKAGE，不该随调用者所在目录变化。
-say "→ 把 $PACKAGE 装进 profile「${PROFILE}」"
+#
+# `DSH_GATEWAY_SPEC` 由外层传入时改用那一份：远程模式装的是已下载的 .tgz，
+# 装完是 profile 里的副本（不同于本目录的 `link:`，工作区移动后仍然可用）。
+SPEC="${DSH_GATEWAY_SPEC:-$PACKAGE}"
+say "→ 把 $SPEC 装进 profile「${PROFILE}」"
 # shellcheck disable=SC2086
-$DSH_CMD plugin --profile "$PROFILE" add "$PACKAGE"
+$DSH_CMD plugin --profile "$PROFILE" add "$SPEC"
 
 # ── 自检：数组合树里有几行 dsh-mobile-gateway ──────────────────────────────────────
 # **不数行的话，「进了树两次」是看不出来的** —— 症状是端口被占两次、事件被处理两遍，

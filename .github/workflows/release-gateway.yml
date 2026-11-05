@@ -1,0 +1,91 @@
+name: Release gateway
+
+# 发版是一次声明：某个 commit 就是 `gateway-vX.Y.Z`。因此触发条件是**推一个 tag**，
+# 而不是推分支 —— 推分支只跑 CI，不发版。本地打 tag 不 push 也不会触发。
+# `workflow_dispatch` 留着补发：同一个 tag 重跑时下面的步骤是幂等的。
+on:
+  push:
+    tags: ['gateway-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要重发的 tag（须是已存在的 gateway-v* 标签）
+        required: true
+
+# 建 release 与上传附件要写权限。CI 那个 workflow 是只读的，两者互不影响。
+permissions:
+  contents: write
+
+# 同一个 tag 不并发：半途取消会留下一个没有附件的 release，那比没发更糟。
+concurrency:
+  group: release-gateway-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # 实测网关测试 15 秒上下；上限用来把「挂住」变成明确失败。
+    timeout-minutes: 15
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: gateway/package-lock.json
+
+      - name: 装依赖
+        working-directory: gateway
+        run: npm ci
+
+      # 版本号只允许有一个来源：tag。两处不一致时发出去的包版本是错的，
+      # 而这个错误只在别人安装时才显形 —— 那时已经晚了。
+      - name: 校验 tag 与 package.json 一致
+        working-directory: gateway
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "gateway-v$version" ]; then
+            echo "::error::tag 是 $TAG，package.json 是 $version，两者须为 gateway-v$version"
+            exit 1
+          fi
+
+      # tag 可以指向任何 commit，包括没跑过 CI 的 —— 所以这里再跑一遍。
+      # 判据条数下限不重复设：那是 CI 随时间守「扫描面没缩水」的事，不是这一次的判断。
+      - name: 测试
+        working-directory: gateway
+        run: npm test
+
+      - name: 打包
+        working-directory: gateway
+        run: npm pack
+
+      # 幂等：重跑同一个 tag 时 release 已经存在，只更新附件。
+      - name: 建 release 并上传附件
+        working-directory: gateway
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          file="dsh-mobile-gateway-$(node -p "require('./package.json').version").tgz"
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "dsh-mobile-gateway $TAG"
+            echo
+            echo "安装（在仓库根目录执行）："
+            echo
+            echo '```'
+            echo "./install.sh --from-release"
+            echo '```'
+            echo "或让 dsh 直接装这个附件："
+            echo
+            echo '```'
+            echo "dsh plugin --profile web add https://github.com/${{ github.repository }}/releases/download/$TAG/$file"
+            echo '```'
+          } > "$notes"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes-file "$notes"
+          gh release upload "$TAG" "$file" --clobber

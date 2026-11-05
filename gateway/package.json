@@ -8,6 +8,10 @@
   "description": "Mac-side DSH plugin: exposes DSH session state to the dsh-mobile iPhone client",
   "type": "module",
   "main": "src/index.ts",
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
   "license": "MIT",
   "dsh": {
     "bundle": {
