@@ -55,7 +55,7 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           tag_version="${TAG#v}"
           if [ "$tag_version" != "$version" ]; then
-            echo "::error::tag 是 ${TAG}，package.json 是 ${version}；先把 version 改成 ${tag_version} 再打 tag"
+            echo "::error::tag 是 ${TAG}，package.json 是 ${version}；先在 gateway/ 里跑 npm version ${tag_version} --no-git-tag-version，提交后再打 tag"
             exit 1
           fi
 
