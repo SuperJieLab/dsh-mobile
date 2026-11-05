@@ -81,21 +81,52 @@ if (after !== before) fs.writeFileSync(path, after);
 ' "$PATCH"
 fi
 
-# ── 清掉旧包名的依赖 ────────────────────────────────────────────────────────
-# 它 `link:` 到已经不存在的目录。留着的话 pnpm 会在下一步报「路径不存在」，
-# 而报错看不出真正的原因是「包改名了」。
+# ── 清掉旧包名的三处残留 ────────────────────────────────────────────────────
+# 改名时漏掉任何一处都是一个哑故障，且三处的症状互不相同：
+#   dependencies          `link:` 指向已不存在的目录 ⇒ pnpm 报「路径不存在」
+#   dsh.profile.bundles   启动时逐个解析 ⇒ 每轮打一条 skipping，插件根本没进树
+#   node_modules 里的链接  断在半路 ⇒ 解析不到，症状同上（且 pnpm 不替它清）
+# 只认「以 mac-gateway 结尾」的名字，其余原样留着。
 PROFILE_MANIFEST="$DSH_HOME/profiles/$PROFILE/package.json"
 if [ -f "$PROFILE_MANIFEST" ]; then
   node -e '
 const fs = require("fs");
-const [path] = process.argv.slice(1);
-const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
-const deps = manifest.dependencies ?? {};
-const stale = Object.keys(deps).filter((name) => name.endsWith("mac-gateway"));
-if (stale.length === 0) process.exit(0);
-for (const name of stale) delete deps[name];
-fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
-console.log("   removed: " + stale.join(", "));
+const path = require("path");
+const [manifestPath] = process.argv.slice(1);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const stale = (name) => name.endsWith("mac-gateway");
+const removed = [];
+
+for (const name of Object.keys(manifest.dependencies ?? {}).filter(stale)) {
+  delete manifest.dependencies[name];
+  removed.push(name);
+}
+
+const bundles = manifest.dsh?.profile?.bundles ?? [];
+if (bundles.some(stale)) {
+  manifest.dsh.profile.bundles = bundles.filter((name) => !stale(name));
+  removed.push(...bundles.filter(stale).map((name) => `${name} (bundles)`));
+}
+
+// 只在链接确实断掉时删，有效链接不动。
+const linkDir = path.join(path.dirname(manifestPath), "node_modules");
+if (fs.existsSync(linkDir)) {
+  for (const name of fs.readdirSync(linkDir).filter(stale)) {
+    const entry = path.join(linkDir, name);
+    if (!fs.lstatSync(entry).isSymbolicLink()) continue;
+    try {
+      fs.statSync(entry);
+      continue;
+    } catch {
+      fs.unlinkSync(entry);
+      removed.push(`${name} (node_modules)`);
+    }
+  }
+}
+
+if (removed.length === 0) process.exit(0);
+fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+console.log("   removed: " + removed.join(", "));
 ' "$PROFILE_MANIFEST"
 fi
 
