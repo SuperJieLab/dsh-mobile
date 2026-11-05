@@ -8,8 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		109B1FF0309C2BA9004C26EE /* LookinServer in Frameworks */ = {isa = PBXBuildFile; productRef = 109B1FEF309C2BA9004C26EE /* LookinServer */; };
-		10BFAB993078B6AB004F8EA5 /* Frameworks/TailscaleKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000F1 /* Frameworks/TailscaleKit.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		BB00000000000000000000F2 /* Frameworks/TailscaleKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000F1 /* Frameworks/TailscaleKit.xcframework */; };
+		109B1FF3309C3196004C26EE /* TailscaleKit in Frameworks */ = {isa = PBXBuildFile; productRef = 109B1FF2309C3196004C26EE /* TailscaleKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -29,7 +28,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				10BFAB993078B6AB004F8EA5 /* Frameworks/TailscaleKit.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -38,7 +36,6 @@
 
 /* Begin PBXFileReference section */
 		AA00000000000000000000A4 /* DshMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DshMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		BB00000000000000000000F1 /* Frameworks/TailscaleKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Frameworks/TailscaleKit.xcframework; sourceTree = "<group>"; };
 		BB00000000000000000000T3 /* DshMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DshMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC00000000000000000000F1 /* Config/Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -61,7 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BB00000000000000000000F2 /* Frameworks/TailscaleKit.xcframework in Frameworks */,
+				109B1FF3309C3196004C26EE /* TailscaleKit in Frameworks */,
 				109B1FF0309C2BA9004C26EE /* LookinServer in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -87,7 +84,6 @@
 			isa = PBXGroup;
 			children = (
 				AA00000000000000000000A2 /* Sources */,
-				BB00000000000000000000F1 /* Frameworks/TailscaleKit.xcframework */,
 				BB00000000000000000000T1 /* tests */,
 				CC00000000000000000000F1 /* Config/Shared.xcconfig */,
 				109B1FEE309C2BA9004C26EE /* Frameworks */,
@@ -126,6 +122,7 @@
 			name = DshMobile;
 			packageProductDependencies = (
 				109B1FEF309C2BA9004C26EE /* LookinServer */,
+				109B1FF2309C3196004C26EE /* TailscaleKit */,
 			);
 			productName = DshMobile;
 			productReference = AA00000000000000000000A4 /* DshMobile.app */;
@@ -184,6 +181,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				10F9E2EB309C1C2B0074413B /* XCRemoteSwiftPackageReference "LookinServer" */,
+				109B1FF1309C3196004C26EE /* XCLocalSwiftPackageReference "Vendor/TailscaleKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA00000000000000000000A3 /* Products */;
@@ -472,6 +470,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		109B1FF1309C3196004C26EE /* XCLocalSwiftPackageReference "Vendor/TailscaleKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TailscaleKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		10F9E2EB309C1C2B0074413B /* XCRemoteSwiftPackageReference "LookinServer" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -488,6 +493,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 10F9E2EB309C1C2B0074413B /* XCRemoteSwiftPackageReference "LookinServer" */;
 			productName = LookinServer;
+		};
+		109B1FF2309C3196004C26EE /* TailscaleKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TailscaleKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

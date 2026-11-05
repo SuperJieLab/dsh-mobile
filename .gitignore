@@ -34,6 +34,9 @@ ios/.dd/
 ios/DerivedData/
 ios/.derived/
 xcuserdata/
+# 本地 SPM 包的缓存与 Xcode 元数据（解析包时会在包目录里生成）
+ios/Vendor/*/.build/
+ios/Vendor/*/.swiftpm/
 # xcodebuild 的输出重定向（老版本脚本用 .txt，新脚本用 .log —— 两类都别进仓库）
 ios/.*.txt
 

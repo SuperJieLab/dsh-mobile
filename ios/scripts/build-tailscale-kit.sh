@@ -10,11 +10,11 @@
 # (pub.dev ecosystem precedent; M8 §八). To
 # upgrade: bump GO_VERSION / LIBTAILSCALE_REF, delete the clone, rerun.
 #
-# Usage: ios/scripts/build-tailscale-kit.sh   (outputs to ios/Frameworks/)
+# Usage: ios/scripts/build-tailscale-kit.sh   (outputs to ios/Vendor/TailscaleKit/)
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-OUT_DIR="$REPO_ROOT/ios/Frameworks"
+OUT_DIR="$REPO_ROOT/ios/Vendor/TailscaleKit"
 
 GO_VERSION=1.25.5
 GO_ROOT="$HOME/sdks/go/$GO_VERSION"
