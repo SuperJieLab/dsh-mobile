@@ -1,29 +1,23 @@
 /**
- * 源码注释的常驻判据 —— 注释要能自己说清，不靠仓库外的东西。
+ * 注释里剩下这几条判据 —— 单行正则表达不了的那部分。
  *
- * 三组规则（读 `ios/comment-rules.txt`）+ 两条独立判据：
- * 1. 注释不指向开发工作区（路径、期号、决定号、节号、条款号、判据号、里程碑号）；
- * 2. 注释不按行号引上游 —— 上游是 alpha，行号必漂，我们依赖的是形状；
- * 3. 注释不写变更史与一次性现场 —— 前者描述已不存在的对象，后者是举证不是判据；
- * 4. 同一条判据只在一处展开；注释行不超过 100 显示列。
+ * 单行能判的注释纪律（指向开发工作区的锚点、按行号引上游、变更史、元信息）住在
+ * `ios/.swiftlint.yml`：那些规则要的是保存即报，放进测试永远慢一个量级。
  *
- * 两条形状上的选择，代价都写在这里：
- * - **逐行扫，不剥字符串。** 剥字符串要写一个认模板插值的词法器；写错时是漏报
- *   （网关侧那次的插值被一并删掉，让一段判据长期假绿）。按行粗扫写错只会多报，
- *   多报会有人来看一眼。代价：字符串里合法出现被禁字样会假红，用行内豁免放行。
- * - **模式与样本读 `comment-rules.txt`，不内联。** 模式词表本身含中文，内联会被
- *   这条判据自己扫到。代价：多一份要维护的文件。
+ * 留在这里的三类，都是要看相邻行或要数文件的：
+ * 1. 同一条判断的展开处全仓只许一处 —— 得数文件；
+ * 2. 文件头注释的首段不超过六行 —— 得看相邻行；
+ * 3. 注释行不超过一百显示列 —— 得按中日韩字宽折算，一个字符算两列。
  *
- * 两向都要红：规则改坏（正则退化成永不命中）时样本先红；仓库回潮时 offenders 非空。
- * 只守住前者会漏掉真实的回潮，只守住后者会在扫描器瞎掉时全绿。
- *
+ * 三条都建立在「扫到多少文件」这个前提上，所以另有一条判据只看扫描面本身：路径推算瞎了
+ * 的时候，上面三条会一起变绿。
  */
 import Foundation
 import XCTest
 
 final class CommentDisciplineTests: XCTestCase {
 
-    // MARK: - 读源码与规则
+    // MARK: - 读源码与短语表
 
     private var iosRoot: URL {
         URL(fileURLWithPath: #filePath)
@@ -45,67 +39,27 @@ final class CommentDisciplineTests: XCTestCase {
         return result.sorted { $0.path < $1.path }
     }
 
-    /// 一条规则：`id` + 正则 + 说明，外加自带的样本。
-    private struct Rule {
-        let id: String
-        let pattern: NSRegularExpression
-        let note: String
-        var hits: [String] = []
-        var passes: [String] = []
+    private struct Phrase {
+        let name: String
+        let text: String
     }
 
-    private struct RuleFile {
-        let rules: [Rule]
-        /// 组四：一条判据的点名短语，按「判据名」归组 —— 整组只允许出现一次。
-        let singleExpansions: [(name: String, phrase: String)]
-        let missingSamples: [String]
-    }
-
-    /// 解析 `comment-rules.txt`。格式见该文件头注释。
-    private func readRules() throws -> RuleFile {
-        let path = iosRoot.appendingPathComponent("comment-rules.txt")
+    /// 短语表住在单独的文件里 —— 写进本文件的话，判据会数到自己那一行，于是永远红。
+    private func readPhrases() throws -> [Phrase] {
+        let path = iosRoot.appendingPathComponent("single-expansion-phrases.txt")
         let text = try String(contentsOf: path, encoding: .utf8)
-        var rules: [Rule] = []
-        var byId: [String: Int] = [:]
-        var single: [(name: String, phrase: String)] = []
-        var missing: [String] = []
+        var phrases: [Phrase] = []
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
             let fields = trimmed.components(separatedBy: ";")
-            guard fields.count >= 3 else { continue }
-            let kind = fields[0]
-            let id = fields[1]
-            let body = fields[2]
-            switch kind {
-            case "rule":
-                guard fields.count >= 4 else {
-                    XCTFail("规则 \(id) 缺说明（第四段）")
-                    continue
-                }
-                guard let regex = try? NSRegularExpression(pattern: body) else {
-                    XCTFail("规则 \(id) 的正则编不过：\(body)")
-                    continue
-                }
-                byId[id] = rules.count
-                rules.append(Rule(id: id, pattern: regex, note: fields[3]))
-            case "single":
-                single.append((name: id, phrase: body))
-            case "expect-hit":
-                if let index = byId[id] { rules[index].hits.append(body) } else { missing.append(id) }
-            case "expect-pass":
-                if let index = byId[id] { rules[index].passes.append(body) } else { missing.append(id) }
-            default:
-                XCTFail("规则文件里有不认识的段类型：\(kind)")
-            }
+            guard fields.count >= 3, fields[0] == "single" else { continue }
+            phrases.append(Phrase(name: fields[1], text: fields[2]))
         }
-        return RuleFile(rules: rules, singleExpansions: single, missingSamples: missing)
+        return phrases
     }
 
-    /// 逐行返回，**不区分注释与代码**：按行扫、不剥字符串，见文件头。
-    ///
-    /// 早先只认「含 `//`、`/*`、行首 `*`」的行，结果块注释里不带星号的续行整段漏扫 ——
-    /// 那正是漏报。现在每行都过，代价只是代码行也可能假红。
+    /// 逐行返回，不区分注释与代码：这几条判据都要看没有注释标记的行（首段的分隔靠空注释行）。
     private func scannedLines(in file: URL) -> [(Int, String)] {
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { return [] }
         return text.split(separator: "\n", omittingEmptySubsequences: false)
@@ -113,69 +67,9 @@ final class CommentDisciplineTests: XCTestCase {
             .map { ($0.offset + 1, String($0.element)) }
     }
 
-    /// 豁免：行内的 `comment-ok` 加一个冒号与理由。理由为空即视为无效豁免
-    /// （不带理由就是关掉纪律）。
-    private func exemptionReason(in line: String) -> String? {
-        guard let range = line.range(of: "comment-ok:") else { return nil }
-        return String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-    }
+    // MARK: - 扫描面
 
-    private struct Offender {
-        let file: String
-        let line: Int
-        let excerpt: String
-    }
-
-    private func offenders(of rule: Rule, in files: [URL]) -> [Offender] {
-        var result: [Offender] = []
-        for file in files {
-            for (number, line) in scannedLines(in: file) {
-                if exemptionReason(in: line) != nil { continue }
-                let range = NSRange(line.startIndex..., in: line)
-                guard rule.pattern.firstMatch(in: line, range: range) != nil else { continue }
-                let relative = file.path.replacingOccurrences(of: iosRoot.path + "/", with: "")
-                result.append(Offender(file: relative, line: number,
-                                       excerpt: line.trimmingCharacters(in: .whitespaces).prefix(100)
-                                           .description))
-            }
-        }
-        return result
-    }
-
-    private func report(_ offenders: [Offender], rule: Rule) {
-        guard !offenders.isEmpty else { return }
-        let lines = offenders.map { "\($0.file):\($0.line)  \($0.excerpt)" }.joined(separator: "\n")
-        XCTFail("""
-            \(offenders.count) 处注释违反「\(rule.note)」（规则 \(rule.id)）：
-            \(lines)
-            """)
-    }
-
-    // MARK: - 规则文件自身的活性
-
-    /// 零命中型判据的安全网：样本必须被它守的那条规则抓到。
-    /// 正则退化成永不命中、或样本被删，这里先红 —— 否则全仓会静默变绿。
-    func testEveryRuleCatchesItsOwnSample() throws {
-        let file = try readRules()
-        XCTAssertTrue(file.missingSamples.isEmpty,
-                      "这些样本没有对应的规则：\(file.missingSamples.joined(separator: ", "))")
-        XCTAssertFalse(file.rules.isEmpty, "一条规则都没读到：\(iosRoot.path)/comment-rules.txt")
-        for rule in file.rules {
-            XCTAssertFalse(rule.hits.isEmpty, "规则 \(rule.id) 没有 expect-hit 样本，无法自证活着")
-            for sample in rule.hits {
-                let range = NSRange(sample.startIndex..., in: sample)
-                XCTAssertNotNil(rule.pattern.firstMatch(in: sample, range: range),
-                                "规则 \(rule.id) 抓不到自己的样本：\(sample)")
-            }
-            for sample in rule.passes {
-                let range = NSRange(sample.startIndex..., in: sample)
-                XCTAssertNil(rule.pattern.firstMatch(in: sample, range: range),
-                             "规则 \(rule.id) 误伤了 expect-pass 样本：\(sample)")
-            }
-        }
-    }
-
-    /// 扫描面自己也得活着：路径写错、目录改名时，枚举会返回空而四条判据一起变绿。
+    /// 扫描面自己也得活着：路径写错、目录改名时，枚举会返回空，其余判据一起变绿。
     func testScanSurfaceIsNotEmpty() {
         let files = swiftFiles()
         XCTAssertGreaterThanOrEqual(files.count, 50, "扫到的 .swift 太少，扫描面可能瞎了：\(files.count)")
@@ -183,51 +77,11 @@ final class CommentDisciplineTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(lineCount, 5000, "扫到的行太少：\(lineCount)")
     }
 
-    // MARK: - 三组要求
-
-    private func assertNoOffenders(ruleIds: [String]) throws {
-        let file = try readRules()
-        let files = swiftFiles()
-        for id in ruleIds {
-            guard let rule = file.rules.first(where: { $0.id == id }) else {
-                XCTFail("规则文件里没有 \(id)")
-                continue
-            }
-            report(offenders(of: rule, in: files), rule: rule)
-        }
-    }
-
-    /// 组一：指向开发工作区的锚点。那些文档不随仓库发布，读者点不开。
-    func testCommentsCarryNoWorkspaceAnchors() throws {
-        try assertNoOffenders(ruleIds: [
-            "workspace-path", "workspace-phase", "workspace-decision", "workspace-section",
-            "workspace-clause", "workspace-chain", "workspace-amendment", "workspace-criterion",
-            "workspace-milestone", "workspace-register", "workspace-phase-word",
-        ])
-    }
-
-    /// 组二：按行号引上游。上游是 alpha，连 patch 级预发布内都会改形状。
-    func testCommentsDoNotCiteUpstreamLines() throws {
-        try assertNoOffenders(ruleIds: ["upstream-line"])
-    }
-
-    /// 组三：变更史与一次性现场。前者描述已不存在的对象，后者是举证不是判据。
-    func testCommentsDescribeThePresentOnly() throws {
-        try assertNoOffenders(ruleIds: ["history", "scene-date", "scene-evidence"])
-    }
-
-    /// 组五：不回答「这段为什么这样写」的元信息 —— 测试怎么跑、为什么没放进另一个目录。
-    func testCommentsCarryNoMetaNoise() throws {
-        try assertNoOffenders(ruleIds: ["meta-test-run", "meta-defence"])
-    }
-
     // MARK: - 头注释的分层
 
-    /// 文件头注释的**首段**不超过 6 行。
+    /// 文件头注释的首段不超过六行。
     ///
     /// 首段回答「这个文件管什么」，读者看它决定要不要往下读；推导与陷阱放后面的段。
-    /// 上个版本的几处头注释把 15 条判据清单、命名口径表、op 对照表全塞在首段，
-    /// 结果谁都没读 —— 这里只钉住「先说什么」这一件事。
     func testHeadCommentsLeadWithOneShortParagraph() {
         var offenders: [String] = []
         for file in swiftFiles() {
@@ -269,31 +123,29 @@ final class CommentDisciplineTests: XCTestCase {
         return paragraph
     }
 
-    // MARK: - 同一条判据只展开一处
+    // MARK: - 同一条判断只展开一处
 
-    /// 四组判据各自的展开处 —— 每处只允许一次。
+    /// 短语表里每组的短语，全仓只许出现一次。
     ///
-    /// 短语表住 `comment-rules.txt`：写在判据文件里的话，判据会数到自己那一行，
-    /// 于是这条判据永远红（这正是「模式不能内联」的同一个理由）。
+    /// 数的是「出现过几行」，不是「出现过几次」：同一行里写两遍属于同一处展开。
     func testEachJudgementIsExpandedOnce() throws {
-        let file = try readRules()
-        XCTAssertFalse(file.singleExpansions.isEmpty, "组四的短语表是空的")
+        let phrases = try readPhrases()
+        XCTAssertFalse(phrases.isEmpty, "短语表是空的")
         let files = swiftFiles()
         var counts: [String: [String]] = [:]
-        for entry in file.singleExpansions {
+        for phrase in phrases {
             for swiftFile in files {
                 for (number, line) in scannedLines(in: swiftFile) {
-                    if exemptionReason(in: line) != nil { continue }
-                    guard line.contains(entry.phrase) else { continue }
+                    guard line.contains(phrase.text) else { continue }
                     let relative = swiftFile.path
                         .replacingOccurrences(of: iosRoot.path + "/", with: "")
-                    counts[entry.name, default: []].append("\(relative):\(number)  \(entry.phrase)")
+                    counts[phrase.name, default: []].append("\(relative):\(number)  \(phrase.text)")
                 }
             }
         }
         for (name, found) in counts {
             XCTAssertLessThanOrEqual(found.count, 1, """
-                「\(name)」这条判据展开了 \(found.count) 处，只该有一处：
+                「\(name)」这条判断展开了 \(found.count) 处，只该有一处：
                 \(found.joined(separator: "\n"))
                 """)
         }
@@ -301,16 +153,14 @@ final class CommentDisciplineTests: XCTestCase {
 
     // MARK: - 格式
 
-    /// 行宽不超过 100 显示列（中日韩字符按 2 列）。
+    /// 注释行不超过一百显示列（中日韩字符按两列）。
     ///
-    /// 只查**注释行**：代码行的长度由编译器的换行习惯决定，管它会把 `guard let … else {`
-    /// 这类本来就长的一行算成违规。块注释的续行要带 `*` 才算得进来 —— 不带星号的写法
-    /// 在行宽这一条上是盲区，宁可漏。
+    /// 只查注释行：代码行的长度由编译器的换行习惯决定。块注释的续行要带 `*` 才算得进来 ——
+    /// 不带星号的写法在这条上是盲区，宁可漏。
     func testCommentLinesFitTheWidth() {
         var offenders: [String] = []
         for file in swiftFiles() {
             for (number, line) in scannedLines(in: file) {
-                if exemptionReason(in: line) != nil { continue }
                 let stripped = line.trimmingCharacters(in: .whitespaces)
                 let isComment = stripped.hasPrefix("//") || stripped.hasPrefix("/*")
                     || stripped.hasPrefix("*")
@@ -321,7 +171,7 @@ final class CommentDisciplineTests: XCTestCase {
                 offenders.append("\(relative):\(number)  \(width) 列")
             }
         }
-        XCTAssertTrue(offenders.isEmpty, "这些注释超过了 100 显示列：\n\(offenders.joined(separator: "\n"))")
+        XCTAssertTrue(offenders.isEmpty, "这些注释超过了上限：\n\(offenders.joined(separator: "\n"))")
     }
 
     private static func displayWidth(of character: Character) -> Int {
@@ -333,24 +183,6 @@ final class CommentDisciplineTests: XCTestCase {
             return 2
         default:
             return 1
-        }
-    }
-
-    // MARK: - 豁免
-
-    /// 豁免要看得见，也要说得清：用到的逐条打印，理由为空直接失败。
-    func testExemptionsAreVisibleAndReasoned() {
-        var used: [String] = []
-        for file in swiftFiles() {
-            for (number, line) in scannedLines(in: file) {
-                guard let reason = exemptionReason(in: line) else { continue }
-                let relative = file.path.replacingOccurrences(of: iosRoot.path + "/", with: "")
-                XCTAssertFalse(reason.isEmpty, "\(relative):\(number) 的豁免没写理由 —— 没有理由就是关掉纪律")
-                used.append("\(relative):\(number)  \(reason)")
-            }
-        }
-        if !used.isEmpty {
-            print("豁免清单（\(used.count) 处）：\n" + used.joined(separator: "\n"))
         }
     }
 }
