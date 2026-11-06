@@ -79,6 +79,8 @@ final class TailnetNodeTests: XCTestCase {
 
         func statusJSONCalls() -> Int { statusCalls }
 
+        func upCallCount() -> Int { upCalls }
+
         func up() async throws {
             upCalls += 1
             if holdsUp {
@@ -112,8 +114,16 @@ final class TailnetNodeTests: XCTestCase {
         var localizedDescription: String { message }
     }
 
-    /// 上游的错误归类靠消息文本（`outcome(forMessage:)`）—— 结构化的假错误必须让它
-    /// 在 `String(describing:)` 里带上 `authkey`，否则会落到「可重试」那条，白等两次退避。
+    /// 真机上 key 被控制面拒时，`up()` 抛出来的原文（2026-11-06 日志，只把 key 尾部遮掉）。
+    /// 归类的判据只认这条形状，不认我们以为的形状。
+    private static let upstreamKeyRejection =
+        #"internalError(Optional("tsnet.Up: backend: invalid key: API key kTvPykMAm921CNTRL not valid"))"#
+
+    /// 归类靠的是上游错误的消息文本（`outcome(forMessage:)`），所以假消息**必须原样抄自
+    /// 真机日志**，不能按实现猜一种写法。
+    ///
+    /// 点明这条不是为了洁癖：假消息一旦比真消息「好认」，判据会长期绿着，而端上把
+    /// 「密钥失效」显示成「网络不可达」。假消息比没有判据更坏 —— 它让人以为这件事被守着了。
     private func completeConfig() -> MeshConfig {
         MeshConfig(controlURLString: "https://203.0.113.10:8443",
                    gatewayURLString: "http://100.64.0.1:3081")
@@ -195,8 +205,8 @@ final class TailnetNodeTests: XCTestCase {
         let node = TailnetNode(makeBackend: { _ in backend })
         let config = completeConfig()
 
-        // 出口一：up() 抛出（key 被拒 = 不重试，一次结束）。
-        await backend.configure(holdsUp: false, failure: "invalid authkey")
+        // 出口一：up() 抛出（key 被拒 = 不重试，一次结束）。消息原样抄自真机日志。
+        await backend.configure(holdsUp: false, failure: Self.upstreamKeyRejection)
         await node.submitKey("hskey-auth-bad", config: config)
         XCTAssertFalse(node.isStarting, "抛出之后窗口要收")
         XCTAssertEqual(node.state, .failed(.badKey), "按消息归类成 key 被拒")
@@ -210,6 +220,24 @@ final class TailnetNodeTests: XCTestCase {
         await backend.releaseUp()
         _ = await second.value
         XCTAssertFalse(node.isStarting, "返回之后窗口要收")
+    }
+
+    /// 上游真报的「key 无效」要落在 `badKey`，且**一次就结束**。
+    ///
+    /// 两半都是行为：归类错了，界面上的「密钥无效或过期」永远不出现，用户看到的是
+    /// 「网络不可达」——照着那条提示去查网络，越查越远；重试那半边则是把一次确定的
+    /// 失败拖成三次退避，而再试多少次 key 也不会自己变有效。
+    func testTheKeyRejectionUpstreamReallySendsEndsTheAttemptAtOnce() async {
+        let backend = FakeBackend()
+        let node = TailnetNode(makeBackend: { _ in backend })
+        await backend.configure(holdsUp: false, failure: Self.upstreamKeyRejection)
+
+        await node.submitKey("tskey-auth-example", config: completeConfig())
+
+        XCTAssertEqual(node.state, .failed(.badKey),
+                       "认不出这条消息 → 落到 unreachable，界面引导去查网络")
+        let attempts = await backend.upCallCount()
+        XCTAssertEqual(attempts, 1, "key 被拒不可重试 —— 它不会因为多试两次就变有效")
     }
 
     /// 让路径轮询的首轮跑完 —— 它一启动就立刻读两次状态（后端事实 + 路径）。
