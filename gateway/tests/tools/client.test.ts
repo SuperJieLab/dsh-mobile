@@ -33,9 +33,36 @@ test('H3: 真 WS 打开 + 事件流 → dev 记录齐全且与 gw 记录同 seq 
   process.env.DSH_LOG_DEBUG = '1'
 
   const client = new BenchClient({ port: bench.port, deviceToken: 'bench-device-token', sessionId: 's1' })
+  const devEventCount = (): number =>
+    client.records().filter(record => record.kind === 'event').length
+  const gwEventCount = (): number =>
+    gwRecords.filter(record => record.seg === 'gw' && record.kind === 'event').length
   try {
     await client.start()
     await client.waitForEvents(5, 10_000)
+
+    // 先停源头 → 等两端都静下来 → 才关。
+    //
+    // 不这么做就是竞态：`close()` 是异步的，关闭那一瞬间网关可能又泵出一帧并记下 `gw`，
+    // 而 `dev` 侧来不及记 —— 两边差 1，严格 1:1 的断言随机红（CI 上撞到过：
+    // dev=[3..7] 对 gw=[3..8]）。
+    //
+    // 只「停源头」还不够：停的那一刻仍可能有帧在 上游→网关 的管道里，`gw` 计数还没涨，
+    // 于是「dev 追平 gw」会提前成立、随后 `gw` 又涨一条。所以等的是**静默**：`gw` 连续
+    // 一段时间不再增长，且 `dev` 已追平，才认为这批帧走完了。
+    upstream.stop()
+    const deadline = Date.now() + 2_000
+    let lastGw = -1
+    let stableSince = Date.now()
+    while (Date.now() < deadline) {
+      const gw = gwEventCount()
+      if (gw !== lastGw) {
+        lastGw = gw
+        stableSince = Date.now()
+      }
+      if (devEventCount() >= gw && Date.now() - stableSince >= 50) break
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
   } finally {
     await client.close()
     bench.teardown()
