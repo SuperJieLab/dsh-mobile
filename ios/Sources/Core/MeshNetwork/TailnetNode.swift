@@ -509,10 +509,9 @@ final class TailnetNode {
 
     /// 失败归因：消息里认得出「key 被拒」= 不可重试；其余（连不上、证书没信任）算可重试。
     ///
-    /// 三种写法都来自上游的真话，不是照着实现猜的：`tsnet.Up: backend: invalid key:
-    /// API key … not valid`（控制面拒 key，真机日志原文）、`invalid authkey`（headscale
-    /// 一类）、`auth key … not valid`。只认后两种的年代，真机那条落到「不可达」——
-    /// 界面把「密钥失效」说成「网络不可达」，还白退避三次。
+    /// 三种写法都抄自上游真话：`tsnet.Up: backend: invalid key: API key … not valid`
+    /// （Tailscale 控制面拒 key，真机日志原文）、`invalid authkey`（headscale 一类）、
+    /// `auth key … not valid`。
     ///
     /// 不把匹配放宽到 `not valid`：证书链不对也带这两个词，而那一类确实该算不可达。
     private static func outcome(forMessage message: String) -> UpOutcome {
