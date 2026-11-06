@@ -1,8 +1,8 @@
 # dsh-mobile
 
-把 dsh 的会话带到 iPhone 上。
+把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的会话带到 iPhone 上。
 
-dsh 通常运行在一台常开的机器上。dsh-mobile 让这台机器上的会话、消息与审批可以直接在手机上处理：使用者不必留在机器前，也不必与它处于同一个局域网。
+dsh 是一个开源的 AI 智能体框架，通常运行在一台常开的机器上。dsh-mobile 让这台机器上的会话、消息与审批可以直接在手机上处理：使用者不必留在机器前，也不必与它处于同一个局域网。
 
 两端之间通过 Tailscale 虚拟网络通信。通往开发机的路径因此是稳定的，与所处的 Wi-Fi 无关。
 
