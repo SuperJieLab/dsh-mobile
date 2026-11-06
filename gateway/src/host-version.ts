@@ -8,7 +8,7 @@
  * **只警告，不阻止启动**：上游发一个小版本就起不来，是比「可能漂了」更坏的交换。
  * 而且大部分漂移与我们无关 —— 真正相关的面很窄，让日志说一句就够。
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /**
@@ -30,13 +30,26 @@ const HOST_NAMES: Set<string> = new Set(['@deepseek-ai/dsh', 'dsh'])
  * 唯一稳的线索是 `process.argv[1]`（dsh 的入口）。找不到就返回 `undefined`：
  * **读不到版本不该让网关起不来**。
  *
+ * **入口要先解软链**：npx 执行的是 `node_modules/.bin/dsh`，它软链到
+ * `@deepseek-ai/dsh/lib/bin.js`，而 `argv[1]` 保留软链那一侧的路径。从 `.bin` 向上走
+ * 到不了宿主的 `package.json` —— 那在 `.bin` 的兄弟目录里，不在祖先链上。不解这一步，
+ * 症状就是「读不到」而不是「读错了」，看起来像宿主没装。
+ *
  * @param argv1 - 进程入口；可注入以便判据造一棵假的目录树。
  */
 export function hostVersionOf(argv1: string | undefined = process.argv[1]): string | undefined {
   if (argv1 === undefined || argv1 === '') return undefined
 
-  let directory = dirname(argv1)
-  // 最多上溯 6 层：npx 缓存是 `_npx/<hash>/node_modules/@deepseek-ai/dsh/dist/bin.js`。
+  // 解不开就按原样走：入口可能是个不存在于磁盘的路径（判据会这么造）。
+  let entry = argv1
+  try {
+    entry = realpathSync(argv1)
+  } catch {
+    // 保留原路径。
+  }
+
+  let directory = dirname(entry)
+  // 最多上溯 6 层：npx 缓存是 `_npx/<hash>/node_modules/@deepseek-ai/dsh/lib/bin.js`。
   for (let step = 0; step < 6; step += 1) {
     const manifest = join(directory, 'package.json')
     try {

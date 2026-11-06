@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -75,6 +75,28 @@ test('an unrelated package on the way up is skipped', () => {
       JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-alpha.3' }))
 
     assert.equal(hostVersionOf(join(root, 'node_modules/other/dist/bin.js')), '0.2.2-alpha.3')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('reads through the .bin symlink npx starts the host with', () => {
+  // 真机上读不到就是这个原因：npx 把 `node_modules/.bin/dsh` 软链到
+  // `@deepseek-ai/dsh/lib/bin.js` 再执行，而 `process.argv[1]` 保留的是软链那一侧。
+  // 从 `.bin` 向上走六层永远到不了宿主的 package.json —— 它在 `.bin` 的兄弟目录里，
+  // 不在祖先链上。所以「读不到」不是宿主没装，是入口不是我以为的那个路径。
+  const root = mkdtempSync(join(tmpdir(), 'dsh-host-bin-'))
+  try {
+    const real = join(root, 'node_modules/@deepseek-ai/dsh/lib/bin.js')
+    mkdirSync(dirname(real), { recursive: true })
+    writeFileSync(real, '')
+    writeFileSync(join(root, 'node_modules/@deepseek-ai/dsh/package.json'),
+      JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-alpha.3' }))
+    const link = join(root, 'node_modules/.bin/dsh')
+    mkdirSync(dirname(link), { recursive: true })
+    symlinkSync('../@deepseek-ai/dsh/lib/bin.js', link)
+
+    assert.equal(hostVersionOf(link), '0.2.2-alpha.3')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
