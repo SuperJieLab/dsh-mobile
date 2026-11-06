@@ -242,8 +242,11 @@ extension ComposerStripModel {
             return Network(text: "连接中…",
                            systemImage: "arrow.triangle.2.circlepath",
                            tone: .normal)
-        case .failed(.badKey):
+        case .failed(.badKey), .failed(.needsAuthKey):
+            // 两种都要用户动手（换一把 / 造一把），所以同一句话足够。
             return Network(text: "组网密钥无效", systemImage: "key.slash", tone: .attention)
+        case .failed(.pendingApproval):
+            return Network(text: "等待批准", systemImage: "hourglass", tone: .normal)
         case .failed(.unreachable):
             return Network(text: "组网不可达",
                            systemImage: "wifi.exclamationmark",

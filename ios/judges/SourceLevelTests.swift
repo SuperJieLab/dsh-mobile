@@ -88,6 +88,38 @@ final class SourceLevelTests: XCTestCase {
                       "留痕句不在了 —— 坏增量被丢弃时现场只剩这一行")
     }
 
+    // MARK: - 票不落盘
+
+    /// 产品层不许把接入票写进任何文件 —— 它是登记凭据，换出节点身份之后就没有用途了。
+    ///
+    /// 守的是「被人顺手加回来」：票存一次，下次启动就会拿一把可能早已作废的票去注册，
+    /// 而它的失败会被误认成网络问题。与「日志出口唯一」同源：能被随手加回来的东西得有人看着。
+    func testTheTicketIsNeverWrittenToDisk() throws {
+        let sources = Self.swiftFiles(under: iosRoot.appendingPathComponent("Sources"))
+        XCTAssertGreaterThan(sources.count, 50, "只扫到 \(sources.count) 个源文件 —— 先怀疑路径推算")
+
+        for file in sources {
+            let text = try read(file)
+            XCTAssertFalse(text.contains("TailnetKeyStore"),
+                           "\(file.lastPathComponent) 又出现了票的存储类型 —— 票不落盘")
+            guard file.lastPathComponent != "TailnetNode.swift" else { continue }
+            XCTAssertFalse(text.contains("tailnet-key"),
+                           "\(file.lastPathComponent) 提到了票的文件名 —— 只有迁移时的删除允许")
+        }
+
+        // 唯一允许落在**代码**里的地方：把老版本留下的那份删掉的那一行。
+        // 注释里提它是说明，不算数 —— 所以先滤掉注释行再数。
+        let node = try read(iosRoot.appendingPathComponent("Sources/Core/MeshNetwork/TailnetNode.swift"))
+        let hits = node.split(separator: "\n").filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let isComment = trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*")
+            return !isComment && line.contains("tailnet-key")
+        }
+        XCTAssertEqual(hits.count, 1, "票的文件名只该出现在「删掉老残留」那一行代码里")
+        XCTAssertTrue(hits.first?.contains("legacyTicketFile") == true,
+                      "提到它的那一行必须是为了删除，不是为了写入")
+    }
+
     // MARK: - 行为测试不许读仓库
 
     /// `ios/tests/` 跑在设备或模拟器上，那里没有仓库路径。谁在那边按 `#filePath` 推算根，

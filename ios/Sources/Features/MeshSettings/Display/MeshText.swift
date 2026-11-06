@@ -12,6 +12,8 @@ func meshPhaseText(_ phase: MeshPhase) -> String {
     case .connecting: "连接中…"
     case .ready: "已入虚拟网"
     case .failed(.badKey): "密钥无效"
+    case .failed(.needsAuthKey): "需要重新接入"
+    case .failed(.pendingApproval): "等待批准"
     case .failed(.unreachable): "组网服务不可达"
     }
 }
@@ -30,10 +32,12 @@ func tunnelProductText(_ hasRoute: Bool) -> String {
 /// 「连接中…」；两个函数仍住一处，免得这些词长出第二份。
 func nodeStateText(_ state: TailnetNodeState) -> String {
     switch state {
-    case .noKey: "未配置"
+    case .noIdentity: "未配置"
     case .registering: "注册中"
     case .running: "已入虚拟网"
     case .failed(.badKey): "密钥无效或过期"
+    case .failed(.needsAuthKey): "需要重新接入密钥"
+    case .failed(.pendingApproval): "等待管理员批准设备"
     case .failed(.unreachable): "组网服务不可达"
     }
 }

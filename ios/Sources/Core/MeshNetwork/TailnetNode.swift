@@ -11,16 +11,16 @@ import Foundation
 @Observable
 final class TailnetNode {
 
-    /// key 的可核对形式：头 11 位 + 尾 6 位，够对上 headscale 的 auth id，又不整串刷屏。
-    private static func keyHint(_ key: String?) -> String {
-        guard let key else { return "nil" }
-        guard !key.isEmpty else { return "<empty>" }
-        guard key.count > 20 else { return "<short:\(key.count)>" }
-        return "\(key.prefix(11))…\(key.suffix(6))"
+    /// 票的可核对形式：头 11 位 + 尾 6 位，够对上 headscale 的 auth id，又不整串刷屏。
+    private static func ticketHint(_ ticket: String?) -> String {
+        guard let ticket else { return "nil" }
+        guard !ticket.isEmpty else { return "<empty>" }
+        guard ticket.count > 20 else { return "<short:\(ticket.count)>" }
+        return "\(ticket.prefix(11))…\(ticket.suffix(6))"
     }
 
     /// 状态机当前状态（界面据此渲染；迁移判定全在 `TailnetNodeState.handle`）。
-    private(set) var state: TailnetNodeState = .noKey
+    private(set) var state: TailnetNodeState = .noIdentity
 
     /// 起节点那段（`up()`）还在跑。**与 `state` 是两件事**：状态目录健康时 `launch` 一上来
     /// 就是 `.running`，而真正的接入还要跑最长约 49 秒。设置页与 `revive()` 都据此避让。
@@ -52,52 +52,48 @@ final class TailnetNode {
     private var node: (any TailnetBackend)?
     private var pathPollTask: Task<Void, Never>?
 
-    init(makeBackend: @escaping BackendFactory = TailnetBackends.live) {
+    /// 「本机有没有节点身份」的探测。做成可注入：判据要能造「有身份 / 没身份」两种世界，
+    /// 而不必去动真实的 App 沙盒。
+    private let identityProbe: @MainActor () -> Bool
+
+    init(makeBackend: @escaping BackendFactory = TailnetBackends.live,
+         identityProbe: @escaping @MainActor () -> Bool = { TailnetNode.stateStoreHealthy() }) {
         self.makeBackend = makeBackend
+        self.identityProbe = identityProbe
     }
 
-    // MARK: - 接入 key（沙盒而非 Keychain：沙盒随卸载蒸发）
+    // MARK: - 接入票（只在内存里活一次，从不落盘）
 
-    enum TailnetKeyStore {
-        private static let fileName = "tailnet-key"
+    /// 老版本把票写在沙盒里（`secrets/tailnet-key`）。本版不再存票，启动时删一次就够 ——
+    /// 删一个不存在的文件是幂等的，不需要额外的版本标记。
+    private static let legacyTicketFile = "tailnet-key"
 
-        /// 空串不算 key：空串会被当「有 key」放行注册，注册请求自然不带票。
-        static func load() -> String? {
-            SecretFile.read(fileName).flatMap { $0.isEmpty ? nil : $0 }
-        }
-
-        static func save(_ key: String) {
-            guard !key.isEmpty else { return }
-            SecretFile.write(fileName, key)
-        }
-    }
+    /// 用户刚贴、还没换出节点身份的那把票。
+    ///
+    /// **活到注册成功**：失败要留着，否则「重试」永远点不动（票没了、身份也没有）；
+    /// 成功后立刻清（它已经无用）；进程被杀随之消失 —— 这正是「不落盘」的含义。
+    private var pendingKey: String?
 
     // MARK: - 入口（App 启动 / 设置页动作）
 
-    /// App 启动：读 key 与节点持久状态 → 状态机判定 → 需要则起节点。
+    /// App 启动：读节点持久状态 → 状态机判定 → 需要则起节点。**不带票。**
     func launch(config: MeshConfig) async {
-        let key = TailnetKeyStore.load()
-        let healthy = Self.stateStoreHealthy()
+        // 老版本存过票：删一次。票从不参与启动 —— 它在注册成功那一刻就失去用途了。
+        SecretFile.delete(Self.legacyTicketFile)
+        let identity = identityProbe()
         let sameControlPlane = ControlPlaneRecord.matches(config.controlURL)
         Log.info(Log.Module.mesh,
-                 "launch: key=\(Self.keyHint(key)) stateDirHealthy=\(healthy)"
-                 + " controlPlaneMatches=\(sameControlPlane)"
+                 "launch: identity=\(identity) controlPlaneMatches=\(sameControlPlane)"
                  + " controlURL=\(config.controlURL?.absoluteString ?? "<invalid>")"
                  + " gateway=\(config.gatewayURLString)")
-        transition(.launch(keyPresent: key != nil,
-                           nodeStateHealthy: healthy,
-                           controlPlaneMatches: sameControlPlane))
+        // 换了控制面：目录里那份身份属于上一家，留着只会让新节点「连上但通不了」。
+        // 只在这条路上清 —— 目录读不了（半份本地文件）不清，上游自己会重建。
+        if identity, !sameControlPlane {
+            discardNodeState(from: "control plane changed")
+        }
+        transition(.launch(identityPresent: identity, controlPlaneMatches: sameControlPlane))
 
         switch state {
-        case .registering:
-            // 换了控制面：目录里那份登录身份属于上一家，留着只会让新节点「连上但通不了」。
-            // 只在这条路上清 —— 目录坏了（`healthy == false`）不清，那是半份本地文件，
-            // 上游自己会重建；而这里清的是「另一家的身份」，它对这一家一文不值。
-            if key != nil, !sameControlPlane {
-                discardNodeState(from: "control plane changed")
-            }
-            // 启动编排这一代就是「此刻那一个」：期间若有提交把代号推走，这次 up 会被判出局。
-            await up(key: key, config: config, generation: generation)
         case .running:
             // 幂等：二次 launch 会把旧 socket 全杀掉，socks5 / localapi 随即报 closed，
             // 路径标签也掉。
@@ -108,51 +104,57 @@ final class TailnetNode {
                 startPathPolling()
                 return
             }
-            // 重开也照喂 key：状态目录健康 ≠ 注册完成，残缺状态不喂 key 会让 headscale 落
-            // 交互注册。后端已 Running 时上游自行忽略 key。
-            await up(key: key, config: config, generation: generation)
+            // 不带票起：身份在，让上游用 node key 连。起不起来由 BackendState 说话 ——
+            // 「目录健康」只是一个粗筛，它回答不了「已登录没有」。
+            await up(ticket: pendingKey, config: config, generation: generation)
         default:
             break
         }
     }
 
-    /// 设置页提交接入 key：进沙盒存储 → 注册。
+    /// 设置页提交接入票：只进内存 → 注册 → 成功后丢弃。
     /// **不拒绝「节点正在起」**：用户给的是新地址，那次在跑的接入的结论已经不相关了，
     /// 正确处置是让老的作废（`beginSupersede()`），不是让用户等它跑完。
     func submitKey(_ key: String, config: MeshConfig) async {
         Log.info(Log.Module.mesh, "submitKey",
-                 ["key": Self.keyHint(key), "chars": String(key.count)])
+                 ["ticket": Self.ticketHint(key), "chars": String(key.count)])
         guard !key.isEmpty else {
             // 空提交不进状态机注册流程 —— 也**不**打断在跑的那一次：没有新地址要换。
             transition(.registrationFailed(.badKey))
             return
         }
         let gen = beginSupersede()
-        // 落盘排在等待之前：close 可能耗到上限，这期间用户可能再提交一次，
-        // 后写的那一次才该留在盘上。等完再写就会出现「先点的那次覆盖后点的」。
-        TailnetKeyStore.save(key)
+        // 存内存排在等待之前：close 可能耗到上限，这期间用户可能再提交一次，
+        // 后提交的那一次才该是当下的。等完再存就会出现「先点的那次覆盖后点的」。
+        pendingKey = key
         await closeSupersededNode(of: gen)
         // 等待期间被更新的一代取代：这一次提交的结论归它，这里一个字段都不写。
         guard gen == generation else { return }
         transition(.keySubmitted)
-        await up(key: key, config: config, generation: gen)
+        await up(ticket: key, config: config, generation: gen)
     }
 
-    /// failed 修复后的重试（换 key / 网络恢复）。key 在不在由存储侧判定。
+    /// failed 修复后的重试（换票 / 网络恢复）。
+    ///
+    /// 能不能试由两件事之一决定：**有身份**（用 node key 起），或**手里还留着这一进程的票**。
+    /// 两者都没有就别打断在跑的那次，直接把话说明白 —— 重试一百次也不会成功。
     func retry(config: MeshConfig) async {
-        let key = TailnetKeyStore.load()
-        Log.info(Log.Module.mesh, "retry", ["key": Self.keyHint(key)])
-        guard let key else {
-            // 没有 key 就没东西可换：不打断在跑的那次，按既有语义收成 noKey（fail-closed）。
-            transition(.retry(keyPresent: false))
+        let identity = identityProbe()
+        let ticket = pendingKey
+        Log.info(Log.Module.mesh, "retry", [
+            "identity": String(identity),
+            "ticket": Self.ticketHint(ticket),
+        ])
+        guard identity || ticket != nil else {
+            transition(.retry(identityPresent: false, ticketPresent: false))
             return
         }
         let gen = beginSupersede()
         await closeSupersededNode(of: gen)
         guard gen == generation else { return }
-        transition(.retry(keyPresent: true))
+        transition(.retry(identityPresent: identity, ticketPresent: ticket != nil))
         if case .registering = state {
-            await up(key: key, config: config, generation: gen)
+            await up(ticket: ticket, config: config, generation: gen)
         }
     }
 
@@ -181,13 +183,18 @@ final class TailnetNode {
         return root["BackendState"] as? String
     }
 
-    /// 轮询等后端到 Running：注册落库有滞后，短窗口内多看几次；始终不到 = 没注册上。
-    private static func backendRunning(_ node: any TailnetBackend) async -> Bool {
+    /// 轮询等后端到 Running：注册落库有滞后，短窗口内多看几次。
+    ///
+    /// 返回**最后一次读到的状态**而不是布尔：`NeedsLogin` 与 `NeedsMachineAuth` 都不算 Running，
+    /// 但补救完全不同（一把新票 vs 等人批准）。折成布尔就把这条区别丢了。
+    private static func settleBackendState(_ node: any TailnetBackend) async -> String? {
+        var last: String?
         for _ in 0..<3 {
-            if await backendState(of: node) == "Running" { return true }
+            last = await backendState(of: node)
+            if last == "Running" { return last }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
-        return false
+        return last
     }
 
     // MARK: - 路径展示
@@ -340,14 +347,23 @@ final class TailnetNode {
             used = true
             return true
         }
+
+        /// 已经被别人认领 —— 轮询那条路据此收工，不必跑到超时。
+        var isUsed: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return used
+        }
     }
 
-    /// 起一代节点并等登录完成；环境类失败自动重试。key 空表示本机没存过 key
-    /// （上游对 Running 后端会自行忽略 key）。
+    /// 起一代节点并等登录完成；环境类失败自动重试。
+    ///
+    /// `ticket` 为空 = 用本机的节点身份起（有身份时上游会直接忽略票，所以「不带票」是常态）。
+    /// **只有「保存并接入」那一次会带票**，成功之后它立刻被丢掉。
     ///
     /// **同代才写**：代号由提交方带进来（`beginSupersede()` 的返回值），循环每轮与每个写状态
     /// 的点前都比一次 —— 被取代之后这一代什么都不写，也不清 `isStarting`（那是新一代的窗口）。
-    private func up(key: String?, config: MeshConfig, generation current: Int) async {
+    private func up(ticket: String?, config: MeshConfig, generation current: Int) async {
         isStarting = true
         defer { if current == generation { isStarting = false } }
 
@@ -360,7 +376,7 @@ final class TailnetNode {
                 return
             }
             attempt += 1
-            switch await attemptUp(key: key, config: config, generation: current) {
+            switch await attemptUp(ticket: ticket, config: config, generation: current) {
             case .ready(let session):
                 guard current == generation else { return }
                 gatewaySession = session
@@ -373,6 +389,8 @@ final class TailnetNode {
                 // 记下这一家用的是哪家控制面 —— 下一次启动靠它认出「身份是谁的」。
                 // 排在 transition 之前：就绪一旦宣布，下一次 launch 就可能已经开始了。
                 ControlPlaneRecord.save(config.controlURL)
+                // 票的使命到此结束：身份已经在本地了，留着它只会制造「它还有效吗」这个问题。
+                pendingKey = nil
                 transition(.registrationSucceeded)
                 startPathPolling()
                 return
@@ -409,7 +427,7 @@ final class TailnetNode {
     /// `self.node` 的写入也要过代际判据：`runUp` 最长 15 秒，这期间换代完全可能发生，
     /// 而句柄是**当代**的东西 —— 旧一代超时后把它抹成 nil，今天的活节点就没人关得掉了
     /// （`revive()` 直接返回、路径轮询恒 nil、下一次 `closeSupersededNode` 也够不着它）。
-    private func attemptUp(key: String?, config: MeshConfig,
+    private func attemptUp(ticket: String?, config: MeshConfig,
                            generation current: Int) async -> UpOutcome {
         guard config.isComplete, let controlURL = config.controlURL else {
             // 配置没填全（实际只可能是网关地址缺）：视同不可达（界面提示去设置页补地址）。
@@ -419,7 +437,7 @@ final class TailnetNode {
         }
         Log.info(Log.Module.mesh,
                  "up: start hostname=dsh-iphone controlURL=\(controlURL.absoluteString)"
-                 + " key=\(Self.keyHint(key))")
+                 + " ticket=\(Self.ticketHint(ticket))")
 
         let node: any TailnetBackend
         do {
@@ -427,7 +445,7 @@ final class TailnetNode {
                 TailnetBackendSpec(
                     hostName: "dsh-iphone",
                     stateDir: Self.stateDir.path,
-                    authKey: key,
+                    authKey: ticket,
                     controlURL: controlURL.absoluteString
                 )
             )
@@ -455,13 +473,21 @@ final class TailnetNode {
             if current == generation { self.node = nil }
             return Self.outcome(forMessage: message)
 
-        case .returned:
-            // 闭合信号：up() 返回 ≠ 注册完成（停在 NeedsLogin 时它也返回），
-            // BackendState == Running 才算。
-            let backendNow = await Self.backendState(of: node) ?? "<unreadable>"
+        case .settled(let settledState):
+            // 状态已经定了，不必再等 `up()` 返回（它可能在等一个没人会点的授权链接）。
             Log.info(Log.Module.mesh,
-                     "up: returned, BackendState=\(backendNow) (waiting up to 3s for Running)")
-            if await Self.backendRunning(node) {
+                     "up: backend settled before up() returned", ["state": settledState])
+            try? await node.close()
+            if current == generation { self.node = nil }
+            return Self.failure(forBackendState: settledState, ticket: ticket)
+
+        case .returned:
+            // 闭合信号：up() 返回 ≠ 注册完成（停在 NeedsLogin 时它也返回）。
+            // 判据只看上游报告的状态，不再拿「有没有票」去猜。
+            let backendNow = await Self.settleBackendState(node)
+            Log.info(Log.Module.mesh,
+                     "up: returned, BackendState=\(backendNow ?? "<unreadable>")")
+            if backendNow == "Running" {
                 Log.info(Log.Module.mesh, "up: verified Running")
                 do {
                     // 产物交给调用方收 —— 写入口集中在 `up`，代际判据也就只在那里判一次。
@@ -473,10 +499,12 @@ final class TailnetNode {
                     return .retryable(.unreachable)
                 }
             }
-            // 有 key 却停在 NeedsLogin = key 被拒；没有 key = 环境问题（可以补 key 后再试）。
-            Log.info(Log.Module.mesh,
-                     "up: NOT Running after 3s (key=\(key == nil ? "absent" : "present"))")
-            return key == nil ? .retryable(.unreachable) : .fatal(.badKey)
+            if let backendNow {
+                return Self.failure(forBackendState: backendNow, ticket: ticket)
+            }
+            // 读不出状态：连「起没起来」都问不到，按环境问题处理。
+            Log.info(Log.Module.mesh, "up: NOT Running and state unreadable")
+            return .retryable(.unreachable)
         }
     }
 
@@ -485,25 +513,63 @@ final class TailnetNode {
         case returned
         case failed(String)
         case timedOut
+        /// 上游已经给出终局状态（未登录 / 等批准），不必再等 `up()` 返回。
+        case settled(String)
     }
 
     private static func runUp(_ node: any TailnetBackend) async -> UpStep {
-        await withTaskGroup(of: UpStep.self) { group in
-            group.addTask {
+        // 三件事争一个结论：`up()` 返回、到点、状态先露出终局。
+        // **不能用 `withTaskGroup`**：那个 scope 退出时要等所有子任务结束，而挂住的 `up()`
+        // 不响应取消 —— 于是一个「等到终局就收」的分支反而会被它拖住（与 `close` 同一个坑）。
+        let once = ResumeOnce()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<UpStep, Never>) in
+            Task {
+                let step: UpStep
                 do {
                     try await node.up()
-                    return .returned
+                    step = .returned
                 } catch {
-                    return .failed(String(describing: error))
+                    step = .failed(String(describing: error))
+                }
+                if once.claim() { continuation.resume(returning: step) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(upTimeoutSeconds * 1_000_000_000))
+                if once.claim() { continuation.resume(returning: .timedOut) }
+            }
+            // 未登录时上游会转成交互式登录并**挂住**，等人在浏览器里点。手机上没这条流程，
+            // 干等就是把超时耗尽、最后还归错因；状态一露终局就主动收。
+            Task {
+                let ticks = Int(upTimeoutSeconds * 2)
+                for _ in 0..<ticks {
+                    if once.isUsed { return }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if once.isUsed { return }
+                    if let state = await backendState(of: node),
+                       state == "NeedsLogin" || state == "NeedsMachineAuth" {
+                        if once.claim() { continuation.resume(returning: .settled(state)) }
+                        return
+                    }
                 }
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(upTimeoutSeconds * 1_000_000_000))
-                return .timedOut
-            }
-            let first = await group.next() ?? .timedOut
-            group.cancelAll()
-            return first
+        }
+    }
+
+    /// 上游报的 BackendState → 我们这一侧的失败归因。
+    ///
+    /// 这是「谁该负责」的唯一判断点：未登录要一把新票、等批准要等人、其余才轮到网络。
+    /// `ticket` 只用来分辨「未登录」的两种来源：刚贴的被拒（换一把），
+    /// 还是本机根本没身份（造一把）。
+    private static func failure(forBackendState state: String,
+                               ticket: String?) -> UpOutcome {
+        switch state {
+        case "NeedsLogin":
+            return ticket == nil ? .fatal(.needsAuthKey) : .fatal(.badKey)
+        case "NeedsMachineAuth":
+            return .fatal(.pendingApproval)
+        default:
+            // Starting / Stopped / NoState：都还没到有结论的地步，值得再试。
+            return .retryable(.unreachable)
         }
     }
 

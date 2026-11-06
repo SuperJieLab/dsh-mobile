@@ -19,7 +19,7 @@ enum MeshPhase: Equatable {
     static func resolve(nodeState: TailnetNodeState,
                         hasGatewaySession: Bool) -> MeshPhase {
         switch nodeState {
-        case .noKey:
+        case .noIdentity:
             return .needsSetup
         case .registering:
             return .connecting

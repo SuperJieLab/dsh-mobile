@@ -211,7 +211,7 @@ final class MeshStore {
         guard !started else { return }
         started = true
         storedConfigDamaged = true
-        nodeState = .noKey
+        nodeState = .noIdentity
     }
 
     // MARK: - 组网管理（设置页动作透传；判定在节点层，这里只接顺序）

@@ -59,9 +59,9 @@ final class MeshStoreTests: XCTestCase {
         // 身份轴不并入组网阶段 —— 这件事现在由 `resolve` 的签名表达：签名里没有
         // 身份输入，就不存在「配对与否」这一维组合。
         for session in [true, false] {
-            let noKey = MeshPhase.resolve(
-                nodeState: .noKey, hasGatewaySession: session)
-            XCTAssertTrue(noKey == .needsSetup, "N1a noKey（session=\(session)）")
+            let noIdentity = MeshPhase.resolve(
+                nodeState: .noIdentity, hasGatewaySession: session)
+            XCTAssertTrue(noIdentity == .needsSetup, "N1a 没有身份（session=\(session)）")
 
             let registering = MeshPhase.resolve(
                 nodeState: .registering, hasGatewaySession: session)
@@ -253,7 +253,7 @@ final class MeshStoreTests: XCTestCase {
 // MARK: - 假件（只实现 store 的注入面，不 import TailscaleKit / 不碰网络）
 
 @MainActor private final class FakeNode: MeshNodeControlling, @unchecked Sendable {
-    var nodeState: TailnetNodeState = .noKey
+    var nodeState: TailnetNodeState = .noIdentity
     var carrierPath: CarrierPath?
     var onVerifiedRunning: ((URLSession) -> Void)?
     var onNodeChanged: (() -> Void)?

@@ -19,7 +19,7 @@ struct MeshSettingsView: View {
                 }
 
                 switch store.nodeState {
-                case .noKey:
+                case .noIdentity:
                     Text("填接入密钥就能接入。组网服务留空即用官方 Tailscale；网关地址填 Mac 的虚拟网 IP。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -40,8 +40,16 @@ struct MeshSettingsView: View {
                     }
 
                 case .failed(.badKey):
-                    Text("密钥无效或过期，在组网服务的后台重新生成后重试。")
+                    Text("这把密钥无效或已过期：去后台重新生成一把，贴回上面的输入框再保存。")
                         .foregroundStyle(.red)
+
+                case .failed(.needsAuthKey):
+                    Text("这台设备在本地的节点身份不在了。去组网服务后台生成一把接入密钥，贴到上面再保存。")
+                        .foregroundStyle(.red)
+
+                case .failed(.pendingApproval):
+                    Text("设备已登记，正在等管理员批准。批准后会自动连上，不必换密钥。")
+                        .foregroundStyle(.orange)
 
                 case .failed(.unreachable):
                     Text("组网服务不可达。确认网关地址填对；自建服务还要 iPhone 已信任它的 CA 描述文件。")
@@ -69,7 +77,9 @@ struct MeshSettingsView: View {
                     }
                     .disabled(!setup.canSubmit)
 
-                    if case .failed = store.nodeState {
+                    // 没有身份、手里又没有票时不给这个按钮 —— 重试一百次也不会成功，
+                    // 只会制造「点了没反应」。那条路由上面的文案引导去填票。
+                    if case .failed(let failure) = store.nodeState, failure != .needsAuthKey {
                         Button("重试") {
                             Task { await setup.retryMesh() }
                         }

@@ -28,8 +28,11 @@ final class TailnetNodeTests: XCTestCase {
         private var holdsUp = false
         private var holdsClose = false
         private var failure: String?
+        private var backendState = "Running"
         private var upWaiter: CheckedContinuation<Void, Never>?
         private var closeWaiter: CheckedContinuation<Void, Never>?
+
+        func setBackendState(_ value: String) { backendState = value }
 
         func configure(holdsUp: Bool, failure: String? = nil, holdsClose: Bool = false) {
             self.holdsUp = holdsUp
@@ -101,11 +104,30 @@ final class TailnetNodeTests: XCTestCase {
 
         func statusJSON() async throws -> Data {
             statusCalls += 1
-            return Data(#"{"BackendState":"Running","Peer":{}}"#.utf8)
+            return Data("{\"BackendState\":\"\(backendState)\",\"Peer\":{}}".utf8)
         }
 
         func makeGatewaySession() async throws -> URLSession {
             URLSession(configuration: .ephemeral)
+        }
+    }
+
+    /// 记下每次「构造后端」时上游拿到的入参 ——「冷启动不带票」这条判据只能从这里看。
+    /// 用带锁的类而不是 actor：造后端那一步是同步的，拿不到 await。
+    private final class SpecLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [TailnetBackendSpec] = []
+
+        func add(_ spec: TailnetBackendSpec) {
+            lock.lock()
+            items.append(spec)
+            lock.unlock()
+        }
+
+        var authKeys: [String?] {
+            lock.lock()
+            defer { lock.unlock() }
+            return items.map(\.authKey)
         }
     }
 
@@ -129,20 +151,15 @@ final class TailnetNodeTests: XCTestCase {
                    gatewayURLString: "http://100.64.0.1:3081")
     }
 
-    /// 落盘的那一格不是断言对象：`submitKey` 会写它，用完恢复原值，别把模拟器上配好的 key 覆盖掉。
-    private var savedKey: String?
-
+    /// 老版本把票写在这个文件里。本版从不写它，所以用例唯一的副作用就是它存在与否 ——
+    /// 前后各删一次，别让上一条用例的状态串进来。
     override func setUp() {
         super.setUp()
-        savedKey = TailnetNode.TailnetKeyStore.load()
+        SecretFile.delete("tailnet-key")
     }
 
     override func tearDown() {
-        if let savedKey {
-            TailnetNode.TailnetKeyStore.save(savedKey)
-        } else {
-            SecretFile.delete("tailnet-key")
-        }
+        SecretFile.delete("tailnet-key")
         super.tearDown()
     }
 
@@ -240,15 +257,99 @@ final class TailnetNodeTests: XCTestCase {
         XCTAssertEqual(attempts, 1, "key 被拒不可重试 —— 它不会因为多试两次就变有效")
     }
 
+    // MARK: - 票只用于首次登记
+
+    /// 冷启动：有身份时造后端**不带票**。上游对已注册节点的票是忽略的，所以带不带都「能连」——
+    /// 这条守的是我们没有把票当运行时凭据用。
+    func testColdStartUsesTheNodeIdentityNotTheTicket() async {
+        let backend = FakeBackend()
+        let log = SpecLog()
+        let node = TailnetNode(makeBackend: { spec in log.add(spec); return backend },
+                               identityProbe: { true })
+
+        await node.launch(config: completeConfig())
+
+        XCTAssertEqual(node.state, .running, "有身份且起得来 → running")
+        XCTAssertEqual(log.authKeys.count, 1, "只造了一次后端")
+        XCTAssertNil(log.authKeys[0], "冷启动不递票 —— 靠的是本机身份")
+    }
+
+    /// 没有身份：连后端都不造。造了也是白等一个没人会点的授权链接。
+    func testWithoutIdentityNothingIsStarted() async {
+        let backend = FakeBackend()
+        let log = SpecLog()
+        let node = TailnetNode(makeBackend: { spec in log.add(spec); return backend },
+                               identityProbe: { false })
+
+        await node.launch(config: completeConfig())
+
+        XCTAssertEqual(node.state, .noIdentity)
+        XCTAssertTrue(log.authKeys.isEmpty, "没身份就不该造后端")
+    }
+
+    /// 票不落盘：注册成功后磁盘上不该留下它。
+    func testTheTicketIsNotPersisted() async {
+        let backend = FakeBackend()
+        let node = TailnetNode(makeBackend: { _ in backend }, identityProbe: { false })
+
+        await node.submitKey("tskey-auth-example-ticket-long-enough", config: completeConfig())
+
+        XCTAssertEqual(node.state, .running)
+        XCTAssertNil(SecretFile.read("tailnet-key"), "票不落盘：注册成功后磁盘上不该有它")
+    }
+
+    /// 上游说「未登录」时，手里有没有票决定归因：没票 = 去造一把，有票 = 这把不认。
+    func testNeedsLoginIsSplitByWhetherWeHoldATicket() async {
+        let noTicket = FakeBackend()
+        await noTicket.setBackendState("NeedsLogin")
+        let nodeA = TailnetNode(makeBackend: { _ in noTicket }, identityProbe: { true })
+        await nodeA.launch(config: completeConfig())
+        XCTAssertEqual(nodeA.state, .failed(.needsAuthKey), "没票 + 未登录 → 去造票，不是网络问题")
+
+        let withTicket = FakeBackend()
+        await withTicket.setBackendState("NeedsLogin")
+        let nodeB = TailnetNode(makeBackend: { _ in withTicket }, identityProbe: { false })
+        await nodeB.submitKey("tskey-auth-example-ticket-long-enough", config: completeConfig())
+        XCTAssertEqual(nodeB.state, .failed(.badKey), "带着票还是未登录 → 这张票不认")
+    }
+
+    /// 等管理员批准是独立的一态：不换票、不重试。
+    func testPendingApprovalIsItsOwnFailure() async {
+        let backend = FakeBackend()
+        await backend.setBackendState("NeedsMachineAuth")
+        let node = TailnetNode(makeBackend: { _ in backend }, identityProbe: { true })
+
+        await node.launch(config: completeConfig())
+
+        XCTAssertEqual(node.state, .failed(.pendingApproval))
+        let attempts = await backend.upCallCount()
+        XCTAssertEqual(attempts, 1, "等批准只能等，重试不会让它变快")
+    }
+
+    /// 未登录时上游会挂住等交互式登录。状态一露出终局就要收，别干等满 15 秒。
+    func testAnUnattendedLoginDoesNotWaitForTheTimeout() async {
+        let backend = FakeBackend()
+        await backend.setBackendState("NeedsLogin")
+        await backend.configure(holdsUp: true)
+        let node = TailnetNode(makeBackend: { _ in backend }, identityProbe: { true })
+
+        let started = Date()
+        await node.launch(config: completeConfig())
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(node.state, .failed(.needsAuthKey))
+        XCTAssertLessThan(elapsed, 5, "看到 NeedsLogin 就该收，不该等满超时")
+    }
+
     /// 让路径轮询的首轮跑完 —— 它一启动就立刻读两次状态（后端事实 + 路径）。
     ///
-    /// 按次数等，不按时间等：一次成功接入里 `statusJSON` 的确定性次数是 4
-    /// （`up()` 里两次：先看 BackendState、再确认 Running；轮询首轮两次：后端事实 + 路径）。
+    /// 按次数等，不按时间等：一次成功接入里 `statusJSON` 的确定性次数是 3
+    /// （`up()` 里一次：确认 Running；轮询首轮两次：后端事实 + 路径）。
     /// 不等它，基线会在断言期间平移，负控就变成假红。
     private func waitForPathPollingFirstRound(_ backend: FakeBackend) async {
         for _ in 0..<200 {
             let calls = await backend.statusJSONCalls()
-            if calls >= 4 { return }
+            if calls >= 3 { return }
             await Task.yield()
         }
     }
@@ -350,7 +451,7 @@ final class TailnetNodeTests: XCTestCase {
     /// 这条判据的形状是「事件序列」，不是「谁被调过」：只有序列能分辨那一次白连。
     func testTheProductIsHandedOutBeforeReadyIsAnnounced() async {
         let backend = FakeBackend()
-        let node = TailnetNode(makeBackend: { _ in backend })
+        let node = TailnetNode(makeBackend: { _ in backend }, identityProbe: { true })
         let store = MeshStore(node: node)
         let config = completeConfig()
         var order: [String] = []
@@ -358,8 +459,7 @@ final class TailnetNodeTests: XCTestCase {
         // 只收「就绪」这一种阶段：中途的 connecting 不在本判据的观察范围内。
         store.onPhaseChanged = { _, new in if case .ready = new { order.append("phase:ready") } }
 
-        // `launch` 要先有 key 才会真的去起节点（没有 key 就停在 noKey，`up()` 都不会跑）。
-        TailnetNode.TailnetKeyStore.save("hskey-auth-first")
+        // `launch` 看的是「本机有没有节点身份」，票不参与（见 `identityProbe` 的默认值）。
         await store.start(config: config)
         XCTAssertEqual(order, ["phase:ready"],
                        "首次就绪只报阶段 —— 报成换代等于让接收方去拆一条还不存在的连接")
@@ -386,7 +486,9 @@ final class TailnetNodeTests: XCTestCase {
         let base = FakeBackend()            // 已入网的那个节点：换代时它的 close 挂住
         let first = FakeBackend()           // 第一次提交（会被取代）
         let second = FakeBackend()          // 第二次提交（该赢）
+        let log = SpecLog()
         let node = TailnetNode(makeBackend: { spec in
+            log.add(spec)
             switch spec.authKey {
             case "hskey-auth-base": return base
             case "hskey-auth-first": return first
@@ -415,8 +517,8 @@ final class TailnetNodeTests: XCTestCase {
         XCTAssertEqual(handedOut.count, 1,
                        "只有最后一次提交该交产物 —— 交两次说明两代共用了同一个代号")
         XCTAssertEqual(node.state, .running, "终局来自后那一代")
-        XCTAssertEqual(TailnetNode.TailnetKeyStore.load(), "hskey-auth-second",
-                       "盘上该是后点的那次 —— 先点的那次等完 close 再写就会把它覆盖掉")
+        XCTAssertEqual(log.authKeys.last ?? nil, "hskey-auth-second",
+                       "当代手里该是后点的那把票 —— 先点的那次等完 close 再写就会把它覆盖掉")
     }
 
     /// `close()` 自己不返回时，新一代仍要能开始 —— 否则「打断」只是把等待换了个位置。
