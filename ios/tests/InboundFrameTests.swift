@@ -6,7 +6,7 @@
  * 判读层再把它归成 `.ignored`。
  *
  * 顺序也是契约：同一帧同时满足两条判据时，取表里靠前的那一条。改了顺序不会编译失败，
- * 只会让某一类帧悄悄换支 —— 所以第 8 条把它钉住。
+ * 只会让某一类帧悄悄换支 —— 所以 `testKindWinsOverEventShape` 把它钉住。
  */
 import Foundation
 import XCTest
@@ -141,8 +141,41 @@ final class InboundFrameTests: XCTestCase {
         }
     }
 
-    // MARK: - 顺序契约
+    /// 未定稿帧缺内层 `frame` 是常态（上游没带未定稿内容），给 `.null` 而不是判成坏帧 ——
+    /// 判成坏帧会让「正在生成」那一段的清除时机整个变掉。
+    func testTransientWithoutInnerFrameFallsBackToNull() throws {
+        let frame = try decode(#"{"type":"item","streamId":"s-1","payload":{"type":"assistant-stream"}}"#)
 
+        guard case .item(.transient(let inner)) = frame.payload else {
+            return XCTFail("缺 frame 仍该归 transient，实际：\(String(describing: frame.payload))")
+        }
+        XCTAssertEqual(inner, .null)
+    }
+
+    /// `error` 帧缺 `message` 时 `code` 必须活下来。
+    /// 整包解不出会把 `window-too-large` 从「会话级终态」降成「可重试」，语义正好反了。
+    func testErrorWithoutMessageKeepsItsCode() throws {
+        let frame = try decode(#"{"type":"error","streamId":"s-1","payload":{"code":"window-too-large"}}"#)
+
+        guard case .refused(let failure) = frame.payload else {
+            return XCTFail("缺 message 仍该归 refused，实际：\(String(describing: frame.payload))")
+        }
+        XCTAssertEqual(failure.code, "window-too-large")
+        XCTAssertEqual(failure.message, "")
+    }
+
+    /// 三字段都在但类型不对：要留标记，否则判读层那条「开流超时第一现场」的 warn 没有落点。
+    /// 与「四支都不匹配」分开 —— 那一种是本版不认识的新形状，静默丢弃才对。
+    func testBrokenOpeningShapeIsMarked() throws {
+        let frame = try decode("""
+        {"type":"item","streamId":"s-1","payload":{"sessionId":"s-1","cursor":"oops","events":[]}}
+        """)
+
+        XCTAssertNil(frame.payload, "类型不对就不该成形")
+        XCTAssertTrue(frame.payloadRejected, "「解不出」与「不认识」要分得开")
+    }
+
+    // MARK: - 顺序契约
     /// `kind` 排在 `type`+`seq` 之前。事件流的货物可能同时带这两组 key，
     /// 顺序反了它就会被当成一条会话事件去解，然后失败成 `.ignored` —— 屏幕上永远等不到 `ready`。
     func testKindWinsOverEventShape() throws {

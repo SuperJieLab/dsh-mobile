@@ -29,42 +29,63 @@ final class SourceLevelTests: XCTestCase {
 
     // MARK: - 收帧链路只解一次
 
-    /// 收帧链路上 `JSONDecoder(` 的分布：形状层一处，判读层零处。
+    /// 收帧链路上 `JSONDecoder(` 只出现在形状层，且只有一处。
     ///
-    /// 守的是「同一份线上文本被解析两次」这件事。两半各管一个失败模式：**分布**那一半挡住
-    /// 「判读层又自己解了一次」（它拿到的已经是解好的载荷，再解就是把成本原样加回来，而且
-    /// 在连接层的调用栈里）；**总数**那一半挡住「别处又冒出第三处」。
-    ///
-    /// 清单是收帧链路的封闭集合，不是全仓 —— `SessionDetail/State` 里的本地缓存与文件读写
-    /// 有自己的解码，不属于这条路径。
+    /// 守的是「同一份线上文本被解析两次」。**扫的是目录不是清单** —— 写死一份文件列表时，
+    /// 往后在 `LongConnection/` 下新增一个文件（拆类型、加一层）默认就是绿的，判据形同虚设。
+    /// 目录扫空了也不行（路径改名会让它一个文件都看不到，那等于什么都没测），所以先断言条数。
     func testTheInboundPathDecodesExactlyOnce() throws {
-        let expected: [(String, Int)] = [
-            ("Sources/Core/Gateway/LongConnection/Wire/MuxFrames.swift", 1),
-            ("Sources/Core/Gateway/LongConnection/WebSocket/WebSocketConnection.swift", 0),
-            ("Sources/Core/Gateway/LongConnection/Stream/StreamMux.swift", 0),
-            ("Sources/Features/SessionDetail/State/SessionBehavior.swift", 0),
-            ("Sources/Features/SessionDetail/State/SessionStreamReader.swift", 0),
-            ("Sources/Core/Gateway/Events/EventReader.swift", 0),
-            ("Sources/Core/Gateway/Events/EventStream.swift", 0),
-        ]
+        let root = iosRoot.appendingPathComponent("Sources/Core/Gateway/LongConnection")
+        let files = Self.swiftFiles(under: root)
+        XCTAssertGreaterThan(files.count, 10, "扫到的文件太少，路径可能变了")
 
-        var total = 0
-        for (relative, want) in expected {
-            let text = try read(iosRoot.appendingPathComponent(relative))
-            let got = Self.codeLineCount(of: "JSONDecoder(", in: text)
-            total += got
-            XCTAssertEqual(got, want, "\(relative)：期望 \(want) 处解码，实际 \(got) 处")
+        var hits: [String: Int] = [:]
+        for file in files {
+            let relative = file.path.replacingOccurrences(of: iosRoot.path + "/", with: "")
+            let count = Self.codeLineCount(of: "JSONDecoder(", in: try read(file))
+            if count > 0 { hits[relative] = count }
         }
-        XCTAssertEqual(total, 1, "收帧链路上解码了 \(total) 次 —— 它该只在形状层解一次")
+        XCTAssertEqual(hits, ["Sources/Core/Gateway/LongConnection/Wire/MuxFrames.swift": 1],
+                       "收帧链路上应只在形状层解一次，实际：\(hits)")
+
+        // 判读层：进到这里的已经是解好的值，再解一次就是把成本原样加回来。
+        for relative in ["Sources/Features/SessionDetail/State/SessionBehavior.swift",
+                         "Sources/Features/SessionDetail/State/SessionStreamReader.swift",
+                         "Sources/Core/Gateway/Events/EventReader.swift",
+                         "Sources/Core/Gateway/Events/EventStream.swift"] {
+            let count = Self.codeLineCount(
+                of: "JSONDecoder(", in: try read(iosRoot.appendingPathComponent(relative))
+            )
+            XCTAssertEqual(count, 0, "\(relative)：判读层又自己解了一次字节")
+        }
     }
 
-    /// 数 `needle` 在**代码行**里出现的次数。注释里提到解码不算 —— 这条判据本身就在
-    /// 若干条注释里写着 `JSONDecoder(`，整段 `contains` 会把自己数进去。
+    /// 目录下所有 `.swift`。`enumerator` 不是递归手写，符号链接与深目录都由它处理。
+    private static func swiftFiles(under dir: URL) -> [URL] {
+        guard let walker = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        var files: [URL] = []
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            files.append(url)
+        }
+        return files
+    }
+
+    /// 数 `needle` 在**代码**里出现的次数。
+    ///
+    /// 三件事：跳过整行注释（判据本身就在若干条注释里写着这个符号）；削掉行尾注释
+    /// （`let x = 1 // JSONDecoder(` 不该算实现）；按出现次数计而不是按行计
+    /// （一行写两次只算一次，等于给了个绕过口）。
+    ///
+    /// 已知毛刺：字符串里含 `//` 的行会被提前截断。同一行既有 URL 又有解码调用的概率极低，
+    /// 这里不为它加引号状态机。
     private static func codeLineCount(of needle: String, in text: String) -> Int {
         text.split(separator: "\n", omittingEmptySubsequences: false).reduce(into: 0) { count, line in
-            let code = line.trimmingCharacters(in: .whitespaces)
-            guard !code.hasPrefix("//"), !code.hasPrefix("/*"), !code.hasPrefix("*") else { return }
-            if code.contains(needle) { count += 1 }
+            let head = line.range(of: "//").map { line[..<$0.lowerBound] } ?? line
+            let trimmed = head.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("//"), !trimmed.hasPrefix("/*"), !trimmed.hasPrefix("*") else { return }
+            count += String(head).components(separatedBy: needle).count - 1
         }
     }
 

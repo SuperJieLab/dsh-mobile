@@ -177,6 +177,10 @@ struct InboundFrame: Decodable {
     let streamId: StreamId
     let payload: InboundPayload?
 
+    /// 载荷在、但解不出（与「本来就没有载荷」不是一回事）。判读层据此留痕：
+    /// 解不出打开帧的那一帧正是开流超时的第一现场，而 `.ignored` 不携带原因。
+    let payloadRejected: Bool
+
     /// 线上字节数。只由 `decode(_:)` 补 —— `recordPerf` 用它，缺了会静默变 0。
     private(set) var byteCount: Int = 0
 
@@ -187,6 +191,7 @@ struct InboundFrame: Decodable {
         self.type = type
         self.streamId = streamId
         self.payload = payload
+        self.payloadRejected = false
     }
 
     init(from decoder: Decoder) throws {
@@ -197,13 +202,24 @@ struct InboundFrame: Decodable {
 
         switch type {
         case "item":
-            payload = (try? container.decode(ItemPayload.self, forKey: .payload)).map(InboundPayload.item)
+            do {
+                payload = .item(try container.decode(ItemPayload.self, forKey: .payload))
+                payloadRejected = false
+            } catch {
+                payload = nil
+                payloadRejected = error is ItemPayloadError
+            }
         case "error":
-            payload = (try? container.decode(GatewayFailure.self, forKey: .payload)).map(InboundPayload.refused)
+            let decoded = (try? container.decodeIfPresent(FailurePayload.self, forKey: .payload)) ?? nil
+            payload = .refused(decoded?.failure
+                ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue, message: ""))
+            payloadRejected = false
         case "usage":
             payload = (try? container.decode(UsageFramePayload.self, forKey: .payload)).map(InboundPayload.usage)
+            payloadRejected = false
         default:
             payload = nil
+            payloadRejected = false
         }
     }
 
@@ -220,6 +236,29 @@ enum InboundPayload {
     case item(ItemPayload)
     case refused(GatewayFailure)
     case usage(UsageFramePayload)
+}
+
+/**
+ error 帧的载荷：两个字段都按「缺了就补默认值」解。
+
+ 旧实现是逐字段取（`payload["code"]?.string ?? …`），对载荷形状零要求。直接解
+ `GatewayFailure` 会要求两个字段**同时**可解，于是「缺 `message`」让整包退化成
+ `internal-error + ""` —— 一个 `window-too-large` 就这样从「会话级终态」变成「可重试」。
+ */
+struct FailurePayload: Decodable {
+
+    let failure: GatewayFailure
+
+    private enum CodingKeys: String, CodingKey { case code, message }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        failure = GatewayFailure(
+            code: try container.decodeIfPresent(String.self, forKey: .code)
+                ?? GatewayErrorCode.internalError.rawValue,
+            message: try container.decodeIfPresent(String.self, forKey: .message) ?? ""
+        )
+    }
 }
 
 /**
@@ -249,6 +288,12 @@ struct UsageFramePayload: Decodable {
  **分派顺序是契约**：同一帧同时满足两条判据时取靠前的那条。改顺序不会编译失败，
  只会让某一类帧悄悄换支，所以有一条判据把它钉住。
  */
+enum ItemPayloadError: Error {
+    /// 三个字段都在，但载荷解不成打开帧（类型不对）。
+    /// 与「四支都不匹配」分开：那一种静默丢弃，这一种是开流超时的第一现场，要留痕。
+    case openingShapeBroken
+}
+
 enum ItemPayload: Decodable {
 
     case opening(OpeningFrame.Payload)
@@ -265,7 +310,11 @@ enum ItemPayload: Decodable {
 
         // ① 最具体：三个字段同在才是打开帧。它必须在最前 —— 打开帧的载荷里也有 `type`。
         if container.contains(.sessionId), container.contains(.cursor), container.contains(.events) {
-            self = .opening(try OpeningFrame.Payload(from: decoder))
+            do {
+                self = .opening(try OpeningFrame.Payload(from: decoder))
+            } catch {
+                throw ItemPayloadError.openingShapeBroken
+            }
             return
         }
         // ② 事件流的货物：整份载荷原样保留，消费方要的就是任意形状。

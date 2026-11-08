@@ -56,8 +56,7 @@ struct EventReading {
 }
 
 /**
- * 把一帧线上文本判成 `EventReading` —— 纯函数，不碰 socket、不持状态。
- * | 输入 | 判成 | 判据 |
+ * 把一帧已解好的入站帧判成 `EventReading` —— 纯函数，不碰 socket、不持状态。
  * 吃外壳与已解好的载荷：`kind` 那一支的载荷是任意 JSON（`args` 是上游 `emit` 的参数，
  * 形状随货物变），所以它在这一层仍是 `JSONValue`，不做强类型。
  */
@@ -96,7 +95,7 @@ enum EventReader {
 
         case "error":
             guard case .refused(let failure)? = frame.payload else {
-                // 码读不出：按内部错误兜底，与缺 `code` 时的旧行为一致。
+                // 解不出载荷的 error 帧已在解码层兜成 internal-error，正常走不到这里。
                 return EventReading(content: .refused(GatewayFailure(
                     code: GatewayErrorCode.internalError.rawValue, message: ""
                 )))

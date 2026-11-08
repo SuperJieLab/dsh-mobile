@@ -115,6 +115,9 @@ final class WebSocketConnectionTests: XCTestCase {
         XCTAssertEqual(reset.livenessStep(), .probe(missed: 0), "这一拍收到过东西就归零")
         XCTAssertFalse(reset.heardFromPeer, "证据被这一拍消费掉了")
         XCTAssertEqual(reset.livenessStep(), .probe(missed: 1), "下一拍从零重新计")
+        // 这一条只验同步的那一半（`heardFromPeer` 在 `handleMessage` 里就写好了）；
+        // 收掉它，免得留下一个还在后台解码、没人等的连接。
+        reset.deactivate()
 
         // 两个时刻必须错开：开流超时要先把「只重开这一条」做完，判死窗口才轮到。
         // 同值时两者同刻触发，行为退化成「整条连接重连」—— 而这只差一个数字，编译不会报。
@@ -200,6 +203,32 @@ final class WebSocketConnectionTests: XCTestCase {
         await drain(transport)
 
         XCTAssertEqual(behavior.seen, Array(1...20), "帧序必须与投递一致（单消费者）")
+        transport.deactivate()
+    }
+
+    /// 换代次之后，上一代在途的帧不得落到新代次上。
+    ///
+    /// 这是「解码搬到后台」唯一新增的失败模式：帧在队列里排着，`connect()` 把代次推走，
+    /// 它解完回来时那条连接已经不是它的了。照旧提交会把刚进入 `.connecting` 的新连接翻成
+    /// `.ready`、顺手清掉退避档位 —— 而那时未必还有东西会纠正它。
+    ///
+    /// ⚠️ 用固定等待而不是 `drain`：`drain` 等的是积压归零，而这里要等的正是「那批帧被处理
+    /// 掉并丢掉」。等不够只会漏报，不会误报，方向与安全的那一侧一致。
+    func testFramesFromAnOldGenerationAreDropped() async throws {
+        let (transport, streams) = transportWithStreams()
+        transport.activate()
+        let behavior = Behavior()
+        let stream = try XCTUnwrap(streams.makeStream(behavior))
+
+        let mine = #"{"type":"item","streamId":"\#(stream.id)","payload":{"kind":"ready"}}"#
+        transport.handleMessage(.string(mine), generation: 1)
+        // 帧还在解码头里排着，代次就推走了。
+        transport.connect()
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(behavior.handled, 0, "旧代次的帧不该落到新代次")
+        XCTAssertNotEqual(transport.phase, .ready, "旧帧也不该把新连接翻成就绪")
         transport.deactivate()
     }
 

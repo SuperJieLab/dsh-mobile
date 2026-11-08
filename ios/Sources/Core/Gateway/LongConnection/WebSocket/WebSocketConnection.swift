@@ -1,7 +1,7 @@
 /**
  * 一条 socket：握手、成帧循环、心跳、退避重连、代次、连接阶段。
  *
- * 存活范围是一条 socket；它不认识流 —— 收帧后把外壳与原始字节交给注入的闭包。
+ * 存活范围是一条 socket；它不认识流 —— 收帧后把已解好的帧交给注入的闭包。
  * 判活只用两样证据：收到一条可解析的帧、我们 ping 的 pong 回来了。
  */
 import Foundation
@@ -203,6 +203,8 @@ final class WebSocketConnection: Channel {
         // 不清零 reconnectAttempt：档位必须随失败次数爬升，否则退化成每秒一次。
         generation += 1
         let current = generation
+        // 上一代在队列里还没提交的帧，账跟着一起作废 —— 它们会在提交口被代次判据丢掉。
+        inboundBacklog = 0
         // 心跳判据随代次清零：上一代的连失数算到这一代头上会自锁，此后每代都在第一拍被判死。
         missedPongs = 0
         heardFromPeer = false
@@ -291,6 +293,7 @@ final class WebSocketConnection: Channel {
     /// 对内可见是为了断言这个顺序 —— 它关乎健康连接会不会被自己的心跳判死。
     func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
         // 收到任何一帧都是「对端还活着」的证据，由心跳那一拍消费 —— 系统不暴露字节进度。
+        // 它**不等解码**：一条慢帧若压住心跳的输入，半死连接就会被误判成活的。
         heardFromPeer = true
         lastEvidenceAt = Date()
         guard case .string(let text) = message else {
@@ -298,10 +301,11 @@ final class WebSocketConnection: Channel {
                   ["generation": String(current)])
             return
         }
-        // 证据记账**不等解码**：一条慢帧若压住心跳的输入，半死连接就会被误判成活的。
         if inboundContinuation == nil { startInbound() }
         inboundBacklog += 1
-        inboundContinuation?.yield(PendingFrame(text: text, generation: current))
+        // 代次取**投递这一刻**的值，不取调用方传进来的那份：投递是同步的，两者本该相等，
+        // 但判据要落在「这条连接现在属于谁」上，不落在「谁调的」上。
+        inboundContinuation?.yield(PendingFrame(text: text, generation: generation))
     }
 
     /// 起解码头：一条流、一个消费者，顺序由此保证。
@@ -333,7 +337,14 @@ final class WebSocketConnection: Channel {
     }
 
     /// 提交一帧：解好了才置就绪，再交给接帧的那一侧。
+    ///
+    /// 两道闸门，顺序不能换：先认这一帧还属不属于在役的连接，再认它解出来了没有。
+    /// 缺第一道，换代次或停用之后在途的帧会把新连接直接翻成 `.ready`，同时清掉退避档位 ——
+    /// 而那时 `active` 可能已为假，没有东西会纠正它。
     private func commit(_ frame: InboundFrame?, _ pending: PendingFrame) {
+        // 这一帧属于已经不在役的连接（换代次、停用、退避重连）：丢，且不碰任何状态。
+        // 计数也不动 —— 换代时已把它那一代的账清零，这里再减会吃掉新队列的增量。
+        guard active, pending.generation == generation else { return }
         inboundBacklog = max(0, inboundBacklog - 1)
         guard let frame else {
             Log.warn(Log.Module.session,

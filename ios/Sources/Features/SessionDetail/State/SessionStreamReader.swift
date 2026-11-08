@@ -47,7 +47,7 @@ struct StreamReading {
 }
 
 /**
- * 把一帧线上文本判成 `StreamReading` —— 纯函数，不碰 socket、不持状态。
+ * 把一帧已解好的入站帧判成 `StreamReading` —— 纯函数，不碰 socket、不持状态。
  * 做成静态函数是它唯一能被断言的形式：判读认的是上游的事件形状，错了既不编译失败、也不会有断言红。
  */
 enum SessionStreamReader {
@@ -60,15 +60,17 @@ enum SessionStreamReader {
         switch frame.type {
         case "item":
             guard case .item(let payload)? = frame.payload else {
-                // 形状不认识：丢弃，不重试也不猜。
+                // 载荷在却解不出：那一帧正是开流超时的第一现场，留痕。
+                // 四支都不匹配是另一回事 —— 那是本版不认识的新形状，静默丢弃。
+                if frame.payloadRejected {
+                    Log.warn(Log.Module.session, "opening unparsable (payload shape rejected)")
+                }
                 return StreamReading(content: .ignored)
             }
             switch payload {
             case .opening(let shape):
                 guard let opening = shape.frame() else {
-                    // 三字段都在却成形不了（类型不对）。留痕在这一跳：解不出打开帧的那一帧
-                    // 正是开流超时的第一现场，而 `.ignored` 不携带原因。
-                    Log.warn(Log.Module.session, "opening unparsable (payload shape rejected)")
+                    // 分派之后才发现必填字段缺了。与「解不出」同归，但已由上面那一行留过痕。
                     return StreamReading(content: .ignored)
                 }
                 return StreamReading(content: .opening(opening))
@@ -83,7 +85,8 @@ enum SessionStreamReader {
 
         case "error":
             guard case .refused(let failure)? = frame.payload else {
-                // 码都读不出：按内部错误兜底，与缺 `code` 时的旧行为一致（那种帧不该静默消失）。
+                // 解不出载荷的 error 帧已在解码层兜成 internal-error，正常走不到这里。
+                // 留着是为了「type 说 error、载荷却成了别的」这种不该出现的状态不静默。
                 return StreamReading(content: .refused(GatewayFailure(
                     code: GatewayErrorCode.internalError.rawValue, message: ""
                 )))

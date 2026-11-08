@@ -700,7 +700,7 @@ final class LayeringTests: XCTestCase {
     /// （漏报方向，靠评审）。
     func testWireShapesAreDeclaredOnce() throws {
         let shapes = ["InboundFrame", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest",
-                      "EventsRequest", "OpeningFrame"]
+                      "EventsRequest", "OpeningFrame", "UsageFramePayload", "FailurePayload"]
         var homes: [String: [String]] = [:]
 
         for file in swiftFiles(under: sourcesRoot) {
