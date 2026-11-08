@@ -125,8 +125,8 @@ extension EventStream: StreamBehavior {
         try MuxOpenFrame.events(streamId: id).encoded()
     }
 
-    func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
-        let reading = EventReader.read(envelope: envelope)
+    func handle(_ frame: InboundFrame) -> StreamReply {
+        let reading = EventReader.read(frame)
         handle(reading)
         return StreamReply(establishes: reading.establishes, next: reading.next)
     }

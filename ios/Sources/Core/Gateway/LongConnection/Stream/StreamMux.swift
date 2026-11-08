@@ -124,9 +124,9 @@ final class StreamMux {
 
     /// 一帧到了：按编号归流，交给业务判，照它回的两句话办。
     /// 编号不在表里的帧什么都不做 —— 那是上一条流的尾巴。
-    func receive(_ envelope: MuxServerEnvelope, raw: Data) {
-        guard let stream = byId[envelope.streamId] else { return }
-        apply(stream.behavior.handle(envelope, raw: raw), to: stream)
+    func receive(_ frame: InboundFrame) {
+        guard let stream = byId[frame.streamId] else { return }
+        apply(stream.behavior.handle(frame), to: stream)
     }
 
     private func apply(_ reply: StreamReply, to stream: LogicalStream) {

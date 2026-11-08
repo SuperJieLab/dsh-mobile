@@ -79,8 +79,22 @@ final class WebSocketConnection: Channel {
     /// 已交给 socket 的帧文本（开流与取消两种）；对测试可读。
     private(set) var sentFrames: [String] = []
 
-    /// 收到一帧（外壳 + 原始字节）。接线由外面做，本层不知道谁接。
-    var onFrame: ((MuxServerEnvelope, Data) -> Void)?
+    /// 收到一帧（外壳 + 已解好的载荷）。接线由外面做，本层不知道谁接。
+    var onFrame: ((InboundFrame) -> Void)?
+
+    // MARK: - 解码头
+
+    /// 已投递、尚未提交的帧数。测试据此等队列排空；也是背压唯一可观测的指标。
+    private(set) var inboundBacklog = 0
+
+    /// 投给解码头的一帧原文：生成代次只为日志，不作判据（与收帧回调的 guard 同源）。
+    private struct PendingFrame: Sendable {
+        let text: String
+        let generation: Int
+    }
+
+    private var inboundContinuation: AsyncStream<PendingFrame>.Continuation?
+    private var inboundTask: Task<Void, Never>?
 
     // MARK: - Channel
 
@@ -129,6 +143,7 @@ final class WebSocketConnection: Channel {
     func activate() {
         guard !active else { return }
         active = true
+        startInbound()
         connect()
     }
 
@@ -139,6 +154,7 @@ final class WebSocketConnection: Channel {
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         closeTask()
+        stopInbound()
         generation += 1 // 旧代次的一切回调就此作废
         phase = .idle
     }
@@ -271,7 +287,7 @@ final class WebSocketConnection: Channel {
         }
     }
 
-    /// 一帧到了：先记「对面还活着」的证据，再按编号归流。
+    /// 一帧到了：先记「对面还活着」的证据，再把原文投给解码头。
     /// 对内可见是为了断言这个顺序 —— 它关乎健康连接会不会被自己的心跳判死。
     func handleMessage(_ message: URLSessionWebSocketTask.Message, generation current: Int) {
         // 收到任何一帧都是「对端还活着」的证据，由心跳那一拍消费 —— 系统不暴露字节进度。
@@ -282,14 +298,51 @@ final class WebSocketConnection: Channel {
                   ["generation": String(current)])
             return
         }
-        let rawData = Data(text.utf8)
-        guard let frame = try? JSONDecoder().decode(MuxServerEnvelope.self, from: rawData) else {
+        // 证据记账**不等解码**：一条慢帧若压住心跳的输入，半死连接就会被误判成活的。
+        if inboundContinuation == nil { startInbound() }
+        inboundBacklog += 1
+        inboundContinuation?.yield(PendingFrame(text: text, generation: current))
+    }
+
+    /// 起解码头：一条流、一个消费者，顺序由此保证。
+    ///
+    /// 解码放在这里而不是 `handleMessage` 里，是因为它按帧大小线性增长（一次打开窗口的
+    /// 载荷可以到几百 KB），而 `handleMessage` 跑在主 actor 上 —— 一次解码就顶掉一帧的渲染。
+    private func startInbound() {
+        guard inboundContinuation == nil else { return }
+        let (stream, continuation) = AsyncStream<PendingFrame>.makeStream()
+        inboundContinuation = continuation
+        inboundTask = Task.detached(priority: .userInitiated) { [weak self] in
+            for await pending in stream {
+                // 文本帧的解码在后台完成；`String → Data` 的编码也一起搬过来。
+                let frame = InboundFrame.decode(Data(pending.text.utf8))
+                await self?.commit(frame, pending)
+            }
+        }
+    }
+
+    /// 停解码头：换代次与收尾都要它，否则旧队列会继续往新代次上喂帧。
+    private func stopInbound() {
+        inboundContinuation?.finish()
+        inboundContinuation = nil
+        inboundTask?.cancel()
+        inboundTask = nil
+        // 队列里没提交的帧随消费者一起丢掉，计数必须一起归零 —— 留着它，
+        // 下一个用这条连接的调用方会等一个永远不会发生的提交。
+        inboundBacklog = 0
+    }
+
+    /// 提交一帧：解好了才置就绪，再交给接帧的那一侧。
+    private func commit(_ frame: InboundFrame?, _ pending: PendingFrame) {
+        inboundBacklog = max(0, inboundBacklog - 1)
+        guard let frame else {
             Log.warn(Log.Module.session,
-                     "g\(current) unparsable frame (first 120 chars): \(text.prefix(120))")
+                     "g\(pending.generation) unparsable frame (first 120 chars): "
+                     + "\(pending.text.prefix(120))")
             return // 解不了的帧不是消息，忽略
         }
         Log.debug(Log.Module.session, "frame",
-                  ["generation": String(current), "type": frame.type])
+                  ["generation": String(pending.generation), "type": frame.type])
 
         // 一条可解析的帧 = 这一代真的通了：退避归零、连失清零、阶段就绪。就绪与存活是同一个信号。
         reconnectAttempt = 0
@@ -297,7 +350,7 @@ final class WebSocketConnection: Channel {
         phase = .ready
 
         // 每个帧都有编号（协议如此），整帧交给接帧的那一侧 —— 本层不判编号的含义。
-        onFrame?(frame, rawData)
+        onFrame?(frame)
     }
 
     // MARK: - 心跳与退避

@@ -36,10 +36,22 @@ final class WebSocketConnectionTests: XCTestCase {
         func build(_ id: StreamId) throws -> String {
             #"{"type":"open","streamId":"\#(id)"}"#
         }
-        func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
+        func handle(_ frame: InboundFrame) -> StreamReply {
             handled += 1
             return StreamReply()
         }
+    }
+
+    /// 等解码头把已投递的帧提交完。
+    ///
+    /// 按 `inboundBacklog` 判空，不靠固定 `sleep` —— 猜的时长在慢机器上必错。200 ms 上限：
+    /// 真排不空说明解码头没在跑，那是缺陷而不是慢。
+    private func drain(_ transport: WebSocketConnection) async {
+        for _ in 0..<200 {
+            if transport.inboundBacklog == 0 { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("解码头 200 ms 内没排空：\(transport.inboundBacklog) 帧还压着")
     }
 
     // MARK: - U1：心跳的一个节拍
@@ -132,7 +144,7 @@ final class WebSocketConnectionTests: XCTestCase {
     ///
     /// 「就绪」与「还活着」在本层是同一个信号：判定两者的依据都只能是「收到东西」。
     /// 大消息期间不误杀靠的是窗口够长（U8），不是靠把就绪推后。
-    func testAnyParsableFrameMakesTheConnectionReady() throws {
+    func testAnyParsableFrameMakesTheConnectionReady() async throws {
         let transport = transport()
         transport.activate()
         XCTAssertEqual(transport.phase, .connecting, "刚发起连接是握手中")
@@ -141,10 +153,53 @@ final class WebSocketConnectionTests: XCTestCase {
         // 一帧谁都不要的（编号不在流表里）也算：它证明这一代连接真的通了。
         let stray = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
         transport.handleMessage(.string(stray), generation: 1)
-        XCTAssertEqual(transport.phase, .ready, "收到一帧就是通了")
+        // 证据记账是同步的，就绪要等解码头提交 —— 两者不是同一个时刻，这一条把它钉住。
         XCTAssertTrue(transport.heardFromPeer, "同一帧也是心跳要的证据 —— 两个判据同一个来源")
+        await drain(transport)
+        XCTAssertEqual(transport.phase, .ready, "收到一帧就是通了")
 
         // 收尾：另一条用例也在连同一个端点，留下的退避循环会跨用例写日志、抢断言。
+        transport.deactivate()
+    }
+
+    // MARK: - 顺序
+
+    /// 记下每一帧的 `seq`，用来断言到达顺序。
+    private final class OrderBehavior: StreamBehavior {
+        let label = "order"
+        var seen: [Int] = []
+        func build(_ id: StreamId) throws -> String {
+            #"{"type":"open","streamId":"\#(id)"}"#
+        }
+        func handle(_ frame: InboundFrame) -> StreamReply {
+            if case .item(.connectionItem(let json)) = frame.payload,
+               let seq = json["seq"]?.int {
+                seen.append(seq)
+            }
+            return StreamReply()
+        }
+    }
+
+    /// 连投 20 帧，接帧那一侧收到的顺序必须与投递一致。
+    ///
+    /// 解码头是**单消费者**，这条守住它别被改成「每帧一个任务」—— 那种写法下顺序取决于
+    /// 谁先跑完，而事件流靠 `seq` 排重、靠顺序落状态，乱序不会崩、只会让界面对不上。
+    ///
+    /// ⚠️ 这条的红是概率性的：变异成并发后有时仍然有序。它的价值在「每次都跑一遍」，
+    /// 不在「一次就抓住」。
+    func testFramesArriveInTheOrderTheyWereReceived() async throws {
+        let (transport, streams) = transportWithStreams()
+        let behavior = OrderBehavior()
+        let stream = try XCTUnwrap(streams.makeStream(behavior))
+
+        for seq in 1...20 {
+            let text = "{\"type\":\"item\",\"streamId\":\"\(stream.id)\","
+                + "\"payload\":{\"kind\":\"emit\",\"event\":\"x\",\"seq\":\(seq)}}"
+            transport.handleMessage(.string(text), generation: 1)
+        }
+        await drain(transport)
+
+        XCTAssertEqual(behavior.seen, Array(1...20), "帧序必须与投递一致（单消费者）")
         transport.deactivate()
     }
 
@@ -157,8 +212,8 @@ final class WebSocketConnectionTests: XCTestCase {
         let transport = transport()
         let streams = StreamMux()
         streams.attach(channel: transport)
-        transport.onFrame = { [weak streams] envelope, raw in
-            streams?.receive(envelope, raw: raw)
+        transport.onFrame = { [weak streams] frame in
+            streams?.receive(frame)
         }
         return (transport, streams)
     }
@@ -168,7 +223,7 @@ final class WebSocketConnectionTests: XCTestCase {
     /// 编号在表里就交给那条流，不在就丢弃 —— 「归谁」只由编号决定。
     ///
     /// 守的是「剩下的这一条路还在」：协议里的每个帧都有编号，收货人只有一个。
-    func testFramesReachOnlyTheStreamTheirIdNames() throws {
+    func testFramesReachOnlyTheStreamTheirIdNames() async throws {
         let (transport, streams) = transportWithStreams()
         let behavior = Behavior()
         let other = Behavior()
@@ -177,10 +232,12 @@ final class WebSocketConnectionTests: XCTestCase {
 
         let mine = #"{"type":"item","streamId":"\#(stream.id)","payload":{"kind":"ready"}}"#
         transport.handleMessage(.string(mine), generation: 1)
+        await drain(transport)
         XCTAssertEqual(behavior.handled, 1, "编号在表里：交给那条流")
 
         let stranger = #"{"type":"item","streamId":"not-in-the-table","payload":{"kind":"ready"}}"#
         transport.handleMessage(.string(stranger), generation: 1)
+        await drain(transport)
         XCTAssertEqual(behavior.handled, 1, "编号不在表里：谁都收不到")
         XCTAssertEqual(other.handled, 0, "更不会转给别的流")
         transport.deactivate()
@@ -188,15 +245,17 @@ final class WebSocketConnectionTests: XCTestCase {
 
     // MARK: - U2：坏帧不带走连接
 
-    func testAnUnparsableFrameLeavesTheConnectionAlive() {
+    func testAnUnparsableFrameLeavesTheConnectionAlive() async {
         let transport = transport()
         transport.activate()
         // 先让它通了，再喂一条坏帧。
         let ok = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
         transport.handleMessage(.string(ok), generation: 1)
+        await drain(transport)
         XCTAssertEqual(transport.phase, .ready)
 
         transport.handleMessage(.string("not json at all"), generation: 1)
+        await drain(transport)
 
         XCTAssertEqual(transport.phase, .ready, "解不出的帧不是消息，不该改阶段")
         XCTAssertTrue(transport.sentFrames.isEmpty, "更不该因此发任何帧")
@@ -349,11 +408,12 @@ final class WebSocketConnectionTests: XCTestCase {
     /// 在已连接上开第二条流：阶段不闪回「连接中」。
     ///
     /// 阶段的含义是「这条连接走到哪一步」，与登记了几条流无关。
-    func testOpeningASecondStreamKeepsThePhase() throws {
+    func testOpeningASecondStreamKeepsThePhase() async throws {
         let (transport, streams) = transportWithStreams()
         transport.activate()
         let ok = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
         transport.handleMessage(.string(ok), generation: 1)
+        await drain(transport)
         XCTAssertEqual(transport.phase, .ready)
 
         _ = try XCTUnwrap(streams.makeStream(Behavior()))
@@ -439,11 +499,12 @@ final class WebSocketConnectionTests: XCTestCase {
     }
 
     /// 适配器那一半：`reconnectNow` 在就绪且静默时真的会重连。
-    func testForegroundReconnectWakesASilentReadyConnection() {
+    func testForegroundReconnectWakesASilentReadyConnection() async {
         let silent = transport()
         silent.activate()
         silent.handleMessage(.string(#"{"type":"item","streamId":"nobody","payload":{}}"#),
                              generation: 1)
+        await drain(silent)
         XCTAssertEqual(silent.phase, .ready, "前置：这一代真的通了")
 
         // 刚收到帧：宽限之内，什么都不该发生。

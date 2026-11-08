@@ -33,8 +33,8 @@ final class LongConnection: StreamFactory {
         // 把帧交给流表、转发阶段。漏掉任何一个的症状都不同 —— 漏 attach 则换代次不重开，
         // 漏 onFrame 则界面永远空，漏 onPhaseChanged 则网络格不动。
         streams.attach(channel: transport)
-        transport.onFrame = { [weak streams] envelope, raw in
-            streams?.receive(envelope, raw: raw)
+        transport.onFrame = { [weak streams] frame in
+            streams?.receive(frame)
         }
 
         transport.onPhaseChanged = { [weak self] _, new in self?.phase = new }

@@ -58,14 +58,16 @@ struct EventReading {
 /**
  * 把一帧线上文本判成 `EventReading` —— 纯函数，不碰 socket、不持状态。
  * | 输入 | 判成 | 判据 |
- * 只吃外壳、不要原始字节：载荷里没有 typed 结构要直解（`args` 是任意 JSON）。
+ * 吃外壳与已解好的载荷：`kind` 那一支的载荷是任意 JSON（`args` 是上游 `emit` 的参数，
+ * 形状随货物变），所以它在这一层仍是 `JSONValue`，不做强类型。
  */
 enum EventReader {
 
-    static func read(envelope: MuxServerEnvelope) -> EventReading {
-        switch envelope.type {
+    static func read(_ frame: InboundFrame) -> EventReading {
+        switch frame.type {
         case "item":
-            guard let payload = envelope.payload, let kind = payload["kind"]?.string else {
+            guard case .item(.connectionItem(let payload))? = frame.payload,
+                  let kind = payload["kind"]?.string else {
                 return EventReading(content: .ignored)
             }
             switch kind {
@@ -93,10 +95,12 @@ enum EventReader {
             }
 
         case "error":
-            let failure = GatewayFailure(
-                code: envelope.payload?["code"]?.string ?? GatewayErrorCode.internalError.rawValue,
-                message: envelope.payload?["message"]?.string ?? ""
-            )
+            guard case .refused(let failure)? = frame.payload else {
+                // 码读不出：按内部错误兜底，与缺 `code` 时的旧行为一致。
+                return EventReading(content: .refused(GatewayFailure(
+                    code: GatewayErrorCode.internalError.rawValue, message: ""
+                )))
+            }
             return EventReading(content: .refused(failure))
 
         case "end":

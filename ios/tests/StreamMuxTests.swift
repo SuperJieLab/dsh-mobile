@@ -45,7 +45,7 @@ final class StreamMuxTests: XCTestCase {
         /// 这次造流的 `build` 是否抛错（形状自己坏了那种）。
         var buildFails = false
         /// 每一帧的答复，默认什么都不做。
-        var verdict: (MuxServerEnvelope) -> StreamReply = { _ in StreamReply() }
+        var verdict: (InboundFrame) -> StreamReply = { _ in StreamReply() }
 
         init(label: String = "s1") { self.label = label }
 
@@ -55,9 +55,9 @@ final class StreamMuxTests: XCTestCase {
             return #"{"type":"open","streamId":"\#(id)"}"#
         }
 
-        func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
+        func handle(_ frame: InboundFrame) -> StreamReply {
             handled += 1
-            return verdict(envelope)
+            return verdict(frame)
         }
     }
 
@@ -68,8 +68,8 @@ final class StreamMuxTests: XCTestCase {
         return (mux, channel)
     }
 
-    private func frame(_ id: StreamId) -> MuxServerEnvelope {
-        MuxServerEnvelope(type: "item", streamId: id, payload: nil)
+    private func frame(_ id: StreamId) -> InboundFrame {
+        InboundFrame(type: "item", streamId: id)
     }
 
     // MARK: - S2：两个反应由事件驱动
@@ -86,14 +86,14 @@ final class StreamMuxTests: XCTestCase {
         let firstId = stream.id
 
         // 「表里有没有这一条」按真实路径问：喂一帧给它，看判读器收到没有。
-        mux.receive(frame(stream.id), raw: Data())
+        mux.receive(frame(stream.id))
         XCTAssertEqual(behavior.handled, 1, "正控：先确认表里有一条")
 
         channel.onGenerationChange?()
         XCTAssertNotEqual(stream.id, firstId, "换代次 ⇒ 这条流换号重开")
 
         channel.onStopped?()
-        mux.receive(frame(stream.id), raw: Data())
+        mux.receive(frame(stream.id))
         XCTAssertEqual(behavior.handled, 1, "停用 ⇒ 表已清空，帧不再进判读器")
     }
 
@@ -167,7 +167,7 @@ final class StreamMuxTests: XCTestCase {
         XCTAssertEqual(channel.sent.count, 3, "关第二次什么都不发")
 
         // 另一条流还在：它的帧仍然进判读器。
-        mux.receive(frame(second.id), raw: Data())
+        mux.receive(frame(second.id))
         XCTAssertEqual(secondBehavior.handled, 1, "另一条流照常收帧")
     }
 
@@ -199,7 +199,7 @@ final class StreamMuxTests: XCTestCase {
         let stream = try XCTUnwrap(mux.makeStream(behavior))
         let oldId = stream.id
 
-        mux.receive(frame(oldId), raw: Data())
+        mux.receive(frame(oldId))
 
         XCTAssertNotEqual(stream.id, oldId, "被拒之后当场换号（新号等退避到了再发）")
         XCTAssertEqual(channel.sent.count, 2, "open(旧) + cancel(旧)；新号还没有发出去")
@@ -236,7 +236,7 @@ final class StreamMuxTests: XCTestCase {
         let witnessBehavior = FakeBehavior(label: "witness")
         witnessBehavior.verdict = { _ in StreamReply(establishes: true) }
         let witness = try XCTUnwrap(mux.makeStream(witnessBehavior))
-        mux.receive(frame(witness.id), raw: Data())
+        mux.receive(frame(witness.id))
 
         let firstId = stream.id
         let witnessId = witness.id
@@ -277,7 +277,7 @@ final class StreamMuxTests: XCTestCase {
         let stream = try XCTUnwrap(mux.makeStream(behavior))
         let establishedId = stream.id
 
-        mux.receive(frame(stream.id), raw: Data())
+        mux.receive(frame(stream.id))
 
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(stream.id, establishedId, "已建成的流不该再触发开流超时")
@@ -322,7 +322,7 @@ final class StreamMuxTests: XCTestCase {
         let behavior = FakeBehavior()
         _ = try XCTUnwrap(mux.makeStream(behavior))
 
-        mux.receive(frame("someone-else"), raw: Data())
+        mux.receive(frame("someone-else"))
 
         XCTAssertEqual(behavior.handled, 0, "别的流的帧不进判读器")
     }
@@ -368,11 +368,11 @@ final class StreamMuxTests: XCTestCase {
         let stopped = try XCTUnwrap(mux.makeStream(refusing))
         let alive = try XCTUnwrap(mux.makeStream(survivor))
 
-        mux.receive(frame(stopped.id), raw: Data())
+        mux.receive(frame(stopped.id))
 
         XCTAssertFalse(mux.isWaitingToRetry(stopped), "终态不排退避")
 
-        mux.receive(frame(alive.id), raw: Data())
+        mux.receive(frame(alive.id))
         XCTAssertEqual(survivor.handled, 1, "另一条流照常工作")
     }
 
@@ -385,7 +385,7 @@ final class StreamMuxTests: XCTestCase {
         let stream = try XCTUnwrap(mux.makeStream(behavior))
         let oldId = stream.id
 
-        mux.receive(frame(oldId), raw: Data())
+        mux.receive(frame(oldId))
 
         XCTAssertNotEqual(stream.id, oldId, "收尾是「这条流不在了」，换号重开")
         XCTAssertEqual(channel.sent.count, 3, "open(旧) + cancel(旧) + open(新)")
@@ -401,7 +401,7 @@ final class StreamMuxTests: XCTestCase {
         let behavior = FakeBehavior()
         behavior.verdict = { _ in StreamReply(next: .retry) }
         let stream = try XCTUnwrap(mux.makeStream(behavior))
-        mux.receive(frame(stream.id), raw: Data())
+        mux.receive(frame(stream.id))
         XCTAssertTrue(mux.isWaitingToRetry(stream), "先确认有一拍排着")
         let sentBefore = channel.sent.count
 

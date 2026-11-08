@@ -19,8 +19,8 @@ import XCTest
 final class EventStreamTests: XCTestCase {
 
     private func read(_ text: String) throws -> EventReading {
-        let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: Data(text.utf8))
-        return EventReader.read(envelope: envelope)
+        let frame = try XCTUnwrap(InboundFrame.decode(Data(text.utf8)), "这一帧该解得开：\(text.prefix(80))")
+        return EventReader.read(frame)
     }
 
     /// 可重试码恰好两个 —— 多一个或少一个，都要有人重新判一次「重试会不会变」。
@@ -341,9 +341,8 @@ final class EventStreamTests: XCTestCase {
                        "这条流不绑会话：载荷里只有 op")
 
         func reply(_ frame: String) throws -> StreamReply {
-            let data = Data(frame.utf8)
-            let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: data)
-            return behavior.handle(envelope, raw: data)
+            let inbound = try XCTUnwrap(InboundFrame.decode(Data(frame.utf8)), "这一帧该解得开：\(frame.prefix(80))")
+            return behavior.handle(inbound)
         }
 
         let ready = try reply(#"{"type":"item","streamId":"e1","payload":{"kind":"ready","generation":2}}"#)

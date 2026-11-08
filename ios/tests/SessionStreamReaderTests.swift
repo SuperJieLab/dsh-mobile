@@ -15,9 +15,9 @@ import XCTest
 final class SessionStreamReaderTests: XCTestCase {
 
     private func read(_ text: String, session: String = "s-1") throws -> StreamReading {
-        let data = Data(text.utf8)
-        let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: data)
-        return SessionStreamReader.read(envelope: envelope, raw: data, sessionId: session)
+        let frame = try XCTUnwrap(InboundFrame.decode(Data(text.utf8)),
+                                  "这一帧该解得开：\(text.prefix(80))")
+        return SessionStreamReader.read(frame, sessionId: session)
     }
 
     // MARK: - O1：打开帧（三字段同在）

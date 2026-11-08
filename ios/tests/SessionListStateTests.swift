@@ -249,8 +249,7 @@ final class SessionListStateTests: XCTestCase {
         {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
           "kind":"added","row":{"id":"s1","updatedAt":100,"running":false,"blank":false}}}}
         """.utf8)
-        let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: data)
-        events.handle(EventReader.read(envelope: envelope))
+        events.handle(EventReader.read(try XCTUnwrap(InboundFrame.decode(data))))
 
         XCTAssertEqual(state.sessions.map(\.id), ["s1"], "这一帧该一路走到列表上")
     }
@@ -267,8 +266,8 @@ final class SessionListStateTests: XCTestCase {
             #"{"type":"item","streamId":"e1","payload":{"kind":"session-list"}}"#,
             #"{"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{"kind":"question"}}}"#,
         ] {
-            let envelope = try JSONDecoder().decode(MuxServerEnvelope.self, from: Data(text.utf8))
-            events.handle(EventReader.read(envelope: envelope))
+            let frame = try XCTUnwrap(InboundFrame.decode(Data(text.utf8)), "这一帧该解得开：\(text.prefix(80))")
+            events.handle(EventReader.read(frame))
         }
         XCTAssertTrue(state.sessions.isEmpty, "认不出的增量一条都不该进列表")
     }

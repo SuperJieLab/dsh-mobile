@@ -22,7 +22,7 @@ final class LongConnectionTests: XCTestCase {
         func build(_ id: StreamId) throws -> String {
             #"{"type":"open","streamId":"\#(id)"}"#
         }
-        func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply { StreamReply() }
+        func handle(_ frame: InboundFrame) -> StreamReply { StreamReply() }
     }
 
     /// 装配好的长连接。四个能力都给了真值 —— 只给 nil 会让「漏接」与「没接」同形。

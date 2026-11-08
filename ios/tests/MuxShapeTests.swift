@@ -96,6 +96,15 @@ final class MuxShapeTests: XCTestCase {
         Data(#"{"type":"item","streamId":"s-1","payload":\#(payload)}"#.utf8)
     }
 
+    /// 走产品实际走的那条路：`InboundFrame` 分派到 opening，再成形。
+    ///
+    /// 不直接调解码入口 —— 分派那一跳正是「一帧只解析一次」的落点，判据绕开它就守不住
+    /// 「三字段同在才归 opening」这件事。
+    private func decodeOpening(_ data: Data) -> OpeningFrame? {
+        guard case .item(.opening(let shape))? = InboundFrame.decode(data)?.payload else { return nil }
+        return shape.frame()
+    }
+
     func testOpeningDecodesTheFullSample() throws {
         let data = frame("""
         {"sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,
@@ -105,7 +114,7 @@ final class MuxShapeTests: XCTestCase {
          ]}
         """)
 
-        let opening = try XCTUnwrap(OpeningFrame.decode(data), "正常样本解不出来")
+        let opening = try XCTUnwrap(decodeOpening(data), "正常样本解不出来")
 
         XCTAssertEqual(opening.sessionId, "s-1")
         XCTAssertEqual(opening.pageStart, 2)
@@ -124,7 +133,7 @@ final class MuxShapeTests: XCTestCase {
          ]}
         """)
 
-        let opening = try XCTUnwrap(OpeningFrame.decode(data), "坏事件不该让整帧解不出来")
+        let opening = try XCTUnwrap(decodeOpening(data), "坏事件不该让整帧解不出来")
 
         XCTAssertEqual(opening.events.map(\.seq), [1, 2], "坏事件单条跳过，其余照常")
     }
@@ -142,7 +151,7 @@ final class MuxShapeTests: XCTestCase {
         ]
 
         for item in cases {
-            XCTAssertNil(OpeningFrame.decode(frame(item.payload)),
+            XCTAssertNil(decodeOpening(frame(item.payload)),
                          "缺 \(item.name) 仍被判成 opening —— 路由判据被放宽了")
         }
     }
@@ -156,7 +165,7 @@ final class MuxShapeTests: XCTestCase {
         {"sessionId":"s-1","cursor":4,"debugTrace":{"hop":"relay"},"events":[]}
         """)
 
-        let opening = try XCTUnwrap(OpeningFrame.decode(data), "多一个未知字段就整帧失败")
+        let opening = try XCTUnwrap(decodeOpening(data), "多一个未知字段就整帧失败")
 
         XCTAssertEqual(opening.pageStart, 0, "缺 pageStart 应为 0")
         XCTAssertFalse(opening.hasOlder, "缺 hasOlder 应为 false")
@@ -173,7 +182,7 @@ final class MuxShapeTests: XCTestCase {
         {"sessionId":"s-1","pageStart":3,"cursor":9,"hasOlder":true,
          "events":[{"type":"user/message","seq":7,"time":1700000000000,"data":{}}]}
         """)
-        let opening = try XCTUnwrap(OpeningFrame.decode(data))
+        let opening = try XCTUnwrap(decodeOpening(data))
 
         let page = SessionPage(opening: opening)
 

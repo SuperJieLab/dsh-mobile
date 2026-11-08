@@ -32,15 +32,13 @@ final class SessionBehavior: StreamBehavior {
     /// 一帧到手：判读 → 副作用 → 回一句话。
     /// 到达与应用的边界卡在这一跳的两侧：`devRecv` 是帧到手，`devApply` 是本层处理完。
     /// 状态源已消失时回一个**什么都不做**的答复：流表在一次换代次里可能还持有本对象一瞬。
-    func handle(_ envelope: MuxServerEnvelope, raw: Data) -> StreamReply {
+    func handle(_ frame: InboundFrame) -> StreamReply {
         guard let owner else { return StreamReply() }
-        let reading = SessionStreamReader.read(
-            envelope: envelope, raw: raw, sessionId: sessionId
-        )
+        let reading = SessionStreamReader.read(frame, sessionId: sessionId)
         let recv = PerfRecord.nowMs()
         owner.apply(reading)
         let apply = PerfRecord.nowMs()
-        owner.recordPerf(reading, bytes: raw.count, recv: recv, apply: apply)
+        owner.recordPerf(reading, bytes: frame.byteCount, recv: recv, apply: apply)
         return StreamReply(establishes: reading.establishes, next: reading.next)
     }
 }

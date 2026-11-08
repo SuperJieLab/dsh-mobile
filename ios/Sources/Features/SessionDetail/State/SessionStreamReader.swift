@@ -53,56 +53,54 @@ struct StreamReading {
 enum SessionStreamReader {
 
     /// - Parameters:
-    ///   - raw: 帧原始字节 —— typed 载荷从它直解一次，不经 `JSONValue` 往返。
+    ///   - frame: 已解好的入站帧。这里不碰字节 —— 原始文本被解析两次的
+    ///     第二个落点就在这里。
     ///   - sessionId: 本流的会话。占用帧要核它：帧串流时会画出别人的占用。
-    static func read(envelope: MuxServerEnvelope, raw: Data, sessionId: String) -> StreamReading {
-        switch envelope.type {
+    static func read(_ frame: InboundFrame, sessionId: String) -> StreamReading {
+        switch frame.type {
         case "item":
-            guard let payload = envelope.payload else { return StreamReading(content: .ignored) }
-            if payload["sessionId"] != nil && payload["cursor"] != nil && payload["events"] != nil {
-                guard let opening = OpeningFrame.decode(raw) else {
-                    // 留痕在这一跳：
-                    // 解不出打开帧的那一帧正是开流超时的第一现场，而 `.ignored` 不携带原因。
-                    Log.warn(Log.Module.session,
-                             "opening unparsable (first 120 chars): \(String(decoding: raw.prefix(120), as: UTF8.self))")
+            guard case .item(let payload)? = frame.payload else {
+                // 形状不认识：丢弃，不重试也不猜。
+                return StreamReading(content: .ignored)
+            }
+            switch payload {
+            case .opening(let shape):
+                guard let opening = shape.frame() else {
+                    // 三字段都在却成形不了（类型不对）。留痕在这一跳：解不出打开帧的那一帧
+                    // 正是开流超时的第一现场，而 `.ignored` 不携带原因。
+                    Log.warn(Log.Module.session, "opening unparsable (payload shape rejected)")
                     return StreamReading(content: .ignored)
                 }
                 return StreamReading(content: .opening(opening))
-            }
-            if payload["type"]?.string == "assistant-stream" {
-                return StreamReading(content: .transient(payload["frame"] ?? .null))
-            }
-            if payload["type"] != nil && payload["seq"] != nil {
-                let envelope = try? JSONDecoder().decode(FrameWithEvent.self, from: raw)
-                guard let event = envelope?.payload?.value else {
-                    return StreamReading(content: .ignored)
-                }
+            case .sessionEvent(let event):
                 return StreamReading(content: .event(event))
+            case .transient(let inner):
+                return StreamReading(content: .transient(inner))
+            case .connectionItem:
+                // 连接级货物不属于会话流：串流来的，丢弃。
+                return StreamReading(content: .ignored)
             }
-            return StreamReading(content: .ignored)
 
         case "error":
-            let failure = GatewayFailure(
-                code: envelope.payload?["code"]?.string ?? GatewayErrorCode.internalError.rawValue,
-                message: envelope.payload?["message"]?.string ?? ""
-            )
+            guard case .refused(let failure)? = frame.payload else {
+                // 码都读不出：按内部错误兜底，与缺 `code` 时的旧行为一致（那种帧不该静默消失）。
+                return StreamReading(content: .refused(GatewayFailure(
+                    code: GatewayErrorCode.internalError.rawValue, message: ""
+                )))
+            }
             return StreamReading(content: .refused(failure))
 
         case "end":
             return StreamReading(content: .ended)
 
         case "usage":
-            guard let payload = envelope.payload,
-                  payload["sessionId"]?.string == sessionId else {
+            guard case .usage(let payload)? = frame.payload,
+                  payload.sessionId == sessionId else {
                 // 这里不留痕：外部读数串流是常态（每条 `usage` 帧只属于一个会话，而广播
                 // 让每条连接都收到别人那一份），记日志只会把真正要看的那几行淹掉。
                 return StreamReading(content: .ignored)
             }
-            let envelope = try? JSONDecoder().decode(FrameWithUsage.self, from: raw)
-            guard let snapshot = envelope?.payload?.value else {
-                return StreamReading(content: .ignored)
-            }
-            return StreamReading(content: .usage(snapshot))
+            return StreamReading(content: .usage(payload.snapshot))
 
         default:
             return StreamReading(content: .ignored)

@@ -109,12 +109,11 @@ final class MuxFrameFixtureTests: XCTestCase {
         let fixture = try loadFixture()
         XCTAssertFalse(fixture.server.isEmpty, "样本为空时下面的循环什么都不测")
 
-        let decoder = JSONDecoder()
         for sample in fixture.server {
             let data = try XCTUnwrap(sample.text.data(using: .utf8))
-            let envelope = try decoder.decode(MuxServerEnvelope.self, from: data)
-            XCTAssertEqual(envelope.type, sample.type, "\(sample.name): 信封的 type")
-            XCTAssertEqual(envelope.streamId, sample.streamId, "\(sample.name): 编号")
+            let frame = try XCTUnwrap(InboundFrame.decode(data), "\(sample.name): 这一帧该解得开")
+            XCTAssertEqual(frame.type, sample.type, "\(sample.name): 信封的 type")
+            XCTAssertEqual(frame.streamId, sample.streamId, "\(sample.name): 编号")
         }
     }
 }

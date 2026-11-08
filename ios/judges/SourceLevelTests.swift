@@ -27,6 +27,47 @@ final class SourceLevelTests: XCTestCase {
         try String(contentsOf: url, encoding: .utf8)
     }
 
+    // MARK: - 收帧链路只解一次
+
+    /// 收帧链路上 `JSONDecoder(` 的分布：形状层一处，判读层零处。
+    ///
+    /// 守的是「同一份线上文本被解析两次」这件事。两半各管一个失败模式：**分布**那一半挡住
+    /// 「判读层又自己解了一次」（它拿到的已经是解好的载荷，再解就是把成本原样加回来，而且
+    /// 在连接层的调用栈里）；**总数**那一半挡住「别处又冒出第三处」。
+    ///
+    /// 清单是收帧链路的封闭集合，不是全仓 —— `SessionDetail/State` 里的本地缓存与文件读写
+    /// 有自己的解码，不属于这条路径。
+    func testTheInboundPathDecodesExactlyOnce() throws {
+        let expected: [(String, Int)] = [
+            ("Sources/Core/Gateway/LongConnection/Wire/MuxFrames.swift", 1),
+            ("Sources/Core/Gateway/LongConnection/WebSocket/WebSocketConnection.swift", 0),
+            ("Sources/Core/Gateway/LongConnection/Stream/StreamMux.swift", 0),
+            ("Sources/Features/SessionDetail/State/SessionBehavior.swift", 0),
+            ("Sources/Features/SessionDetail/State/SessionStreamReader.swift", 0),
+            ("Sources/Core/Gateway/Events/EventReader.swift", 0),
+            ("Sources/Core/Gateway/Events/EventStream.swift", 0),
+        ]
+
+        var total = 0
+        for (relative, want) in expected {
+            let text = try read(iosRoot.appendingPathComponent(relative))
+            let got = Self.codeLineCount(of: "JSONDecoder(", in: text)
+            total += got
+            XCTAssertEqual(got, want, "\(relative)：期望 \(want) 处解码，实际 \(got) 处")
+        }
+        XCTAssertEqual(total, 1, "收帧链路上解码了 \(total) 次 —— 它该只在形状层解一次")
+    }
+
+    /// 数 `needle` 在**代码行**里出现的次数。注释里提到解码不算 —— 这条判据本身就在
+    /// 若干条注释里写着 `JSONDecoder(`，整段 `contains` 会把自己数进去。
+    private static func codeLineCount(of needle: String, in text: String) -> Int {
+        text.split(separator: "\n", omittingEmptySubsequences: false).reduce(into: 0) { count, line in
+            let code = line.trimmingCharacters(in: .whitespaces)
+            guard !code.hasPrefix("//"), !code.hasPrefix("/*"), !code.hasPrefix("*") else { return }
+            if code.contains(needle) { count += 1 }
+        }
+    }
+
     // MARK: - 显示层不许内置档名 / 命令名
 
     func testMenuSourcesBakeInNoLevelNames() throws {

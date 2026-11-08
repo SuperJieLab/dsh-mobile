@@ -7,10 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		DD00000000000000000000JC /* mux-frames.json in Resources */ = {isa = PBXBuildFile; fileRef = DD00000000000000000000JB /* mux-frames.json */; };
-
 		109B1FF0309C2BA9004C26EE /* LookinServer in Frameworks */ = {isa = PBXBuildFile; productRef = 109B1FEF309C2BA9004C26EE /* LookinServer */; };
 		109B1FF3309C3196004C26EE /* TailscaleKit in Frameworks */ = {isa = PBXBuildFile; productRef = 109B1FF2309C3196004C26EE /* TailscaleKit */; };
+		DD00000000000000000000JC /* mux-frames.json in Resources */ = {isa = PBXBuildFile; fileRef = DD00000000000000000000JB /* mux-frames.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
