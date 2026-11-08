@@ -60,18 +60,6 @@ final class SourceLevelTests: XCTestCase {
         }
     }
 
-    /// 目录下所有 `.swift`。`enumerator` 不是递归手写，符号链接与深目录都由它处理。
-    private static func swiftFiles(under dir: URL) -> [URL] {
-        guard let walker = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else {
-            return []
-        }
-        var files: [URL] = []
-        for case let url as URL in walker where url.pathExtension == "swift" {
-            files.append(url)
-        }
-        return files
-    }
-
     /// 数 `needle` 在**代码**里出现的次数。
     ///
     /// 三件事：跳过整行注释（判据本身就在若干条注释里写着这个符号）；削掉行尾注释
