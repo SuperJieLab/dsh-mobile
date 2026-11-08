@@ -344,7 +344,11 @@ final class WebSocketConnection: Channel {
     private func commit(_ frame: InboundFrame?, _ pending: PendingFrame) {
         // 这一帧属于已经不在役的连接（换代次、停用、退避重连）：丢，且不碰任何状态。
         // 计数也不动 —— 换代时已把它那一代的账清零，这里再减会吃掉新队列的增量。
-        guard active, pending.generation == generation else { return }
+        //
+        // 判据只认代次，不再看 `active`：`deactivate()` 与每次重连都推过代次，代次不等已经
+        // 覆盖了「这条连接不要了」这件事；再加一道 `active` 会把「还没 activate 就先收到帧」
+        // 这种情况一并判死，而那是测试与将来「先建传输后激活」都可能走的路径。
+        guard pending.generation == generation else { return }
         inboundBacklog = max(0, inboundBacklog - 1)
         guard let frame else {
             Log.warn(Log.Module.session,
