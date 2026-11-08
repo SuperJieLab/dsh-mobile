@@ -147,22 +147,23 @@ final class WebSocketConnectionTests: XCTestCase {
     ///
     /// 「就绪」与「还活着」在本层是同一个信号：判定两者的依据都只能是「收到东西」。
     /// 大消息期间不误杀靠的是窗口够长（U8），不是靠把就绪推后。
-    func testAnyParsableFrameMakesTheConnectionReady() async throws {
-        let transport = transport()
-        transport.activate()
-        XCTAssertEqual(transport.phase, .connecting, "刚发起连接是握手中")
-        XCTAssertFalse(transport.heardFromPeer, "还没收到过任何东西")
+    func testAnyParsableFrameMakesTheConnectionReady() async {
+        // 阶段那一半：`connect()` 同步置 `.connecting`，这里只做不需要等的断言。
+        let connecting = transport()
+        connecting.activate()
+        XCTAssertEqual(connecting.phase, .connecting, "刚发起连接是握手中")
+        XCTAssertFalse(connecting.heardFromPeer, "还没收到过任何东西")
+        connecting.deactivate()
 
-        // 一帧谁都不要的（编号不在流表里）也算：它证明这一代连接真的通了。
+        // 就绪那一半另起一个实例，不 `activate()`：端点连不上，握手失败会把阶段推到
+        // `.waiting`，与「收到帧」抢同一个时间窗 —— 那样断言就成了赌时序。
+        let ready = transport()
         let stray = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
-        transport.handleMessage(.string(stray), generation: 1)
-        // 证据记账是同步的，就绪要等解码头提交 —— 两者不是同一个时刻，这一条把它钉住。
-        XCTAssertTrue(transport.heardFromPeer, "同一帧也是心跳要的证据 —— 两个判据同一个来源")
-        await drain(transport)
-        XCTAssertEqual(transport.phase, .ready, "收到一帧就是通了")
-
-        // 收尾：另一条用例也在连同一个端点，留下的退避循环会跨用例写日志、抢断言。
-        transport.deactivate()
+        ready.handleMessage(.string(stray), generation: 0)
+        XCTAssertTrue(ready.heardFromPeer, "同一帧也是心跳要的证据 —— 两个判据同一个来源")
+        await drain(ready)
+        XCTAssertEqual(ready.phase, .ready, "收到一帧就是通了")
+        ready.deactivate()
     }
 
     // MARK: - 顺序
@@ -276,14 +277,14 @@ final class WebSocketConnectionTests: XCTestCase {
 
     func testAnUnparsableFrameLeavesTheConnectionAlive() async {
         let transport = transport()
-        transport.activate()
-        // 先让它通了，再喂一条坏帧。
+        // 不 `activate()`：这一条只问「坏帧改不改阶段」。端点连不上，握手失败会把阶段推到
+        // `.waiting` —— 那与坏帧无关，却和它在同一个时间窗里，两者必须分开才能断言。
         let ok = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
-        transport.handleMessage(.string(ok), generation: 1)
+        transport.handleMessage(.string(ok), generation: 0)
         await drain(transport)
         XCTAssertEqual(transport.phase, .ready)
 
-        transport.handleMessage(.string("not json at all"), generation: 1)
+        transport.handleMessage(.string("not json at all"), generation: 0)
         await drain(transport)
 
         XCTAssertEqual(transport.phase, .ready, "解不出的帧不是消息，不该改阶段")
