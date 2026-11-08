@@ -42,7 +42,8 @@ final class MetricKitReporter: NSObject, MXMetricManagerSubscriber {
         receive(payloads.map { $0.jsonRepresentation() }, kind: .metrics, label: "metric")
     }
 
-    /// 崩溃、卡死、CPU 异常等诊断。24 小时延迟，且要用户打开「共享分析」才收得到。
+    /// 崩溃、卡死、CPU 异常等诊断。事件发生即可投递，实际到达在 App 下次启动 —— 回调只在
+    /// 本进程里跑。不依赖用户的共享开关，只要求真机。
     func didReceive(_ payloads: [MXDiagnosticPayload]) {
         let crashes = payloads.reduce(0) { $0 + ($1.crashDiagnostics?.count ?? 0) }
         let hangs = payloads.reduce(0) { $0 + ($1.hangDiagnostics?.count ?? 0) }
