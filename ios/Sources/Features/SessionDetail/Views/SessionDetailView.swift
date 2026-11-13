@@ -164,7 +164,7 @@ struct SessionDetailView: View {
                 isUserDrivingScroll = phase != .idle
             }
             // 跟随底部之二：位置判定。
-            // 只做两件事 —— 回到 底部就恢复跟随；离开 底部且**确是用户在拖**才停止跟随。
+            // 只做两件事 —— 回到 底部就恢复跟随；离开 底部且**确是用户在拖**才不再跟随。
             // 程序性变化（文本长高、键盘升降、换基线）不算「用户想读历史」：否则一次大跳就会
             // 把跟随关掉，之后再也不会自己接上。
             .onScrollGeometryChange(for: Bool.self) { geometry in
