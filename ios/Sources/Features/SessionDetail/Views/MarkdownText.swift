@@ -4,7 +4,9 @@ import SwiftUI
 /// 换成成熟库时换的是 `MarkdownParser` 那一层，这里一行都不用动。
 /// **流式**：源文逐 chunk 增长时走 `parse(_:extending:)`（冻结块搬运、只重解析尾部）。
 /// ⚠️ **`@State(initialValue:)` 只挡住「赋值」，挡不住「求值」**：它的参数每次视图重建都
-/// 求一次值，所以解析结果要有这一层缓存兜着。
+/// 求一次值。所以**构造时不能解析**：流式那一路只放一个单位元
+/// `MarkdownParseResult.identity`，首帧解析交给 `onChange(initial: true)` 在视图出现后补；
+/// 已完成的消息才在构造时取缓存（命中是 O(1)，也只发生一次）。
 enum MarkdownParseCache {
 
     private static let limit = 64
@@ -44,23 +46,36 @@ struct MarkdownText: View {
 
     @State private var parse: MarkdownParseResult
 
-    /// - Parameter caching: 已完成的消息传 `true`（同一段源文只解析一次）；
-    ///   流式内容传 `false` —— 它每个 chunk 换一份源文，缓存只会写一堆用不上的中间态。
+    /// - Parameter caching: 已完成的消息传 `true`（同一段源文只解析一次，命中是 O(1)）；
+    ///   流式内容传 `false` —— 它每个 chunk 换一份源文，缓存只会写一堆用不上的中间态，
+    ///   更要紧的是构造时解析会被丢弃（见类型注释），因此这里只落一个单位元当种子。
     init(source: String, caching: Bool = true) {
         self.source = source
         _parse = State(initialValue: caching
             ? MarkdownParseCache.result(for: source)
-            : MarkdownParser.parse(source))
+            : .identity)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(parse.blocks) { block in
-                BlockView(block: block)
+            if parse.blocks.isEmpty {
+                // 首帧：流式给的单位元里还没有块。整段先按纯文本顶上 ——
+                // 未闭合的标记本来也只显示成字面量，这一帧与下一帧的段落块看不出差别，
+                // 但能让新插入的那一行立刻有高度，不至于先空一帧再蹦出内容。
+                if !source.isEmpty {
+                    Text(source)
+                }
+            } else {
+                ForEach(parse.blocks) { block in
+                    BlockView(block: block)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onChange(of: source) { _, grown in
+        .onChange(of: source, initial: true) { _, grown in
+            // `initial` 补上首帧：构造时不再解析，第一次回调就是「视图出现」那一刻。
+            // 相等守卫让已完成的消息（缓存已给结果）直接跳过。
+            guard grown != parse.source else { return }
             parse = MarkdownParser.parse(grown, extending: parse)
         }
     }

@@ -54,6 +54,13 @@ struct MarkdownParseResult: Equatable {
     let frozenCount: Int
     /// 这次从哪个字符偏移开始扫：全量恒为 0，增量等于冻结边界之后第一块的起点。
     let reparsedFrom: Int
+
+    /// 「还没有解析过任何东西」这个单位元。
+    ///
+    /// 喂给 `parse(_:extending:)` 会自然退化成全量解析：`hasPrefix("")` 恒真、
+    /// `resume` 取 `source.count` 即 0、`frozen` 为空 → 从第 0 行扫起。
+    /// 所以调用方**不需要**维护「这是不是第一次」—— 首次与后续走同一条路径。
+    static let identity = MarkdownParseResult(source: "", blocks: [], frozenCount: 0, reparsedFrom: 0)
 }
 
 // MARK: - 解析器

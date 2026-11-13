@@ -175,6 +175,10 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertTrue(MarkdownParser.parse(source, extending: whole).blocks == whole.blocks, "M3j 重放结果不变")
 
         XCTAssertTrue(MarkdownParser.parse("", extending: MarkdownParser.parse("")).blocks == [], "M3k 空源文续接")
+
+        // M3l：单位元当种子 —— 首次与后续走同一条路径，调用方不必维护「是不是第一次」。
+        XCTAssertTrue(MarkdownParseResult.identity == MarkdownParser.parse(""), "M3l 单位元即空源文的解析结果")
+        XCTAssertTrue(MarkdownParser.parse(source, extending: .identity).blocks == whole.blocks, "M3l 喂单位元等价于全量解析")
     }
 
     // MARK: - 未闭合围栏
