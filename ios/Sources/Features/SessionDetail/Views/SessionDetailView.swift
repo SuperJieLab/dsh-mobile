@@ -7,6 +7,11 @@ struct SessionDetailView: View {
 
     /// 是否已经做过「首次定位到最新」。之后的内容变化（往回翻的前插）不再抢视口。
     @State private var didInitialScroll = false
+    /// 是否贴着底部。流式文本每帧都在长高，只有它为真时才跟着往下走；
+    /// 用户一旦上滑离开底沿就置 false，否则会把正在读历史的人拽回去。
+    @State private var isFollowingBottom = true
+    /// 这一拍是不是用户的手在带着列表走。只有它和「离开底部」同时成立，才算「用户想读历史」。
+    @State private var isUserDrivingScroll = false
     /// 本屏四个展开面。共用一个 `.sheet(item:)` 的理由见 `body` 里那段注释。
     @State private var activeSheet: DetailSheet?
     /// 等着确认的那一档。危险档位（完全权限 / 自动审查）先落在这里，确认后才发请求。
@@ -153,6 +158,40 @@ struct SessionDetailView: View {
             } action: { wasNear, isNear in
                 guard isNear, !wasNear, detail.sync.hasOlder, !detail.sync.isPagingOlder else { return }
                 Task { await detail.sync.loadOlder() }
+            }
+            // 跟随底部之一：谁在带着列表走。程序性滚动（我们自己的 scrollTo）不算。
+            .onScrollPhaseChange { _, phase in
+                isUserDrivingScroll = phase != .idle
+            }
+            // 跟随底部之二：位置判定。
+            // 只做两件事 —— 回到 底部就恢复跟随；离开 底部且**确是用户在拖**才停止跟随。
+            // 程序性变化（文本长高、键盘升降、换基线）不算「用户想读历史」：否则一次大跳就会
+            // 把跟随关掉，之后再也不会自己接上。
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                // 用「离底距离」而不是「可见矩形下沿」—— 键盘弹出时容器变矮、底 inset 同步变大，
+                // 两者在下面这个式子里互相抵消，才不会误判成「已经上滑」。
+                let maxOffset = geometry.contentSize.height
+                    + geometry.contentInsets.bottom
+                    - geometry.containerSize.height
+                return geometry.contentOffset.y >= maxOffset - Self.bottomFollowThreshold
+            } action: { _, atBottom in
+                if atBottom {
+                    isFollowingBottom = true
+                } else if isUserDrivingScroll {
+                    isFollowingBottom = false
+                }
+            }
+            // 跟随底部之三：内容变高时跟上。
+            // 挂在 `contentSize` 上而不是 `onChange(of: transientText)`：文本刚变的那一刻新行还没
+            // 布局，`scrollTo` 会落到**旧的**底部 —— 一帧差一行，越跟越丢。
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                // 只认「变高」：变矮（清场、换基线）不追；也避免滚动本身把这条再次触发。
+                guard isFollowingBottom, new > old else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
             }
             .onAppear {
                 // 与上面同一个目标：列表最末尾那行锚点。**无动画** —— 生效时等于原地不动，
@@ -386,6 +425,9 @@ struct SessionDetailView: View {
 
     /// 距顶多近就自动往回翻。取约四分之一屏 —— 太灵敏会在惯性里连着触发好几次。
     private static let topTriggerDistance: CGFloat = 240
+
+    /// 距底多近仍算「贴着底部」。留一点余量：手指精度与行高误差不该让跟随状态抖成 false。
+    private static let bottomFollowThreshold: CGFloat = 60
 
     /// 告知那一行的图标与颜色 —— 逐 case 列举，`ResyncNotice.Kind` 加取值时编译失败。
     private func look(of notice: ResyncNotice) -> (icon: String, tint: Color) {
