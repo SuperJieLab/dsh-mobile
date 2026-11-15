@@ -49,6 +49,19 @@ struct SessionEvent: Decodable, Equatable {
     let seq: Int
     let time: Double
     let data: JSONValue
+    /// 某个事件在「模型可见面」上的动作：追加还是替换。**顶层字段，不在 `data` 里**。
+    /// 缺省 = 追加（绝大多数事件都是）。压缩点用它标 `replace`，客户端据此不把它当正文。
+    let surfaceOp: JSONValue?
+
+    /// 显式写出 `init`：`let` 的可选属性在合成 init 里**没有默认值**，
+    /// 不加这一条，所有 `SessionEvent(type:seq:time:data:)` 的老调用点都会编不过。
+    init(type: String, seq: Int, time: Double, data: JSONValue, surfaceOp: JSONValue? = nil) {
+        self.type = type
+        self.seq = seq
+        self.time = time
+        self.data = data
+        self.surfaceOp = surfaceOp
+    }
 }
 
 
