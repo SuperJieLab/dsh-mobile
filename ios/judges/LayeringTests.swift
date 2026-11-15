@@ -902,10 +902,10 @@ final class LayeringTests: XCTestCase {
 
         // 消息条数要能从组装结果数出来。
         let assembler = sourcesRoot.appendingPathComponent(
-            "Features/SessionDetail/State/TranscriptAssembler.swift")
+            "Features/SessionDetail/State/Conversation/ChatNode.swift")
         let aLines = codeLines(in: try String(contentsOf: assembler, encoding: .utf8))
         XCTAssertTrue(aLines.contains { $0.1.contains("case message(") },
-                      "TranscriptNode 里没有 message 形态 —— 数不出来了")
+                      "节点形态里没有 message —— 数不出来了")
     }
 
     /// 一个类型不许同时被视图与流层消费。
@@ -1783,11 +1783,7 @@ final class LayeringTests: XCTestCase {
     ///
     /// 键是文件名，值是一句话理由 + 重开条件。白名单本身被下一条断言守着 ——
     /// 否则它会静默扩大豁免面（文件改名后旧条目失效、新文件悄悄多一个豁免）。
-    private static let stateStringExceptions: [String: String] = [
-        "TranscriptAssembler.swift": "过程行摘要（「3 次工具调用」「已思考」）随组装结果同处："
-            + "它由同一批事件的计数拼出，不在别的屏复用，也没有独立的变化速率。"
-            + "重开条件：下一次动过程行显示时，把它移到 `Display/`。",
-    ]
+    private static let stateStringExceptions: [String: String] = [:]
 
     /// 白名单里的每一条都还真的需要 —— 文件没了、或里面已经没有中文字面量，就必须删掉这条。
     func testStateStringExceptionsAreStillReal() throws {
