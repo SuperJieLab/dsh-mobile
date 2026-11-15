@@ -6,13 +6,13 @@ import SwiftUI
 /// （组装器已划成独立节点），故收起后读起来是「你说什么 → 它做了什么 → 它答什么」。
 struct TurnProcessRow: View {
 
-    let process: NodeProcess
+    let segment: ProcessSegment
 
     @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if process.hasHeader, let summary = process.summary {
+            if segment.hasHeader, let summary = ProcessText.summary(segment.entries) {
                 header(summary)
                 if expanded { entries }
             } else {
@@ -45,13 +45,13 @@ struct TurnProcessRow: View {
         VStack(alignment: .leading, spacing: 8) {
             // 身份取事件 seq（`ProcessEntry.id`），不取偏移 —— 往回翻插行会让偏移挪位、
             // 展开行自己收回去。
-            ForEach(process.entries) { entry in
+            ForEach(segment.entries) { entry in
                 switch entry {
-                case .thinking(_, let text, _):
+                case .thinking(_, _, _, let text, _):
                     ThinkingRow(text: text)
                 case .tool(let row):
                     ToolRowView(row: row)
-                case .text(_, let text, _):
+                case .text(_, _, _, let text, _):
                     // 一轮中间的助手文本（不是最终答案的那部分）—— 它也是「说过的话」，按正文
                     // 排版、不缩成一行摘要。与最终答案同为 markdown 源文，故走同一套解析与渲染。
                     MarkdownText(source: text)

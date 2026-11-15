@@ -103,34 +103,27 @@ struct SessionDetailView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // 一张列表走到底：草稿与定稿是同一行的两个状态，不再另开一条平行分支。
                 ForEach(detail.sync.nodes) { node in
-                    switch node {
+                    switch node.data {
                     case .message(let message):
-                        MessageBubble(message: message)
+                        MessageBubble(message: DisplayMessage(
+                            seq: Int(node.anchorSeq), role: .user, text: message.text, time: message.time
+                        ))
+                    case .assistant(let assistant):
+                        MessageBubble(message: DisplayMessage(
+                            seq: Int(node.anchorSeq), role: .assistant,
+                            text: assistant.text, time: assistant.time
+                        ))
                     case .process(let process):
                         // 一轮的过程：它不是「消息」，所以不套气泡 —— 视觉上要与对话区分开。
-                        TurnProcessRow(process: process)
+                        TurnProcessRow(segment: process.segment)
                             .listRowSeparator(.hidden)
                     case .command(let run):
                         // 命令也不是消息：一次动作，一行说清按了什么、结果如何。
                         CommandRow(run: run)
                             .listRowSeparator(.hidden)
                     }
-                }
-
-                // 流式输出不在镜像里 —— 未定稿内容没有 seq，不属于「已读到的位置」。
-                // 源文变化时 `MarkdownText` 只重解析尾部。
-                if !detail.sync.transientText.isEmpty {
-                    Text("DSH 正在输入…")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    MarkdownText(source: detail.sync.transientText, caching: false)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color(uiColor: .secondarySystemBackground), in: .rect(cornerRadius: 14))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .listRowSeparator(.hidden)
                 }
 
                 Section {
@@ -182,7 +175,7 @@ struct SessionDetailView: View {
                 }
             }
             // 跟随底部之三：内容变高时跟上。
-            // 挂在 `contentSize` 上而不是 `onChange(of: transientText)`：文本刚变的那一刻新行还没
+            // 挂在 `contentSize` 上而不是 `onChange(of: nodes)`：文本刚变的那一刻新行还没
             // 布局，`scrollTo` 会落到**旧的**底部 —— 一帧差一行，越跟越丢。
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
                 // 只认「变高」：变矮（清场、换基线）不追；也避免滚动本身把这条再次触发。

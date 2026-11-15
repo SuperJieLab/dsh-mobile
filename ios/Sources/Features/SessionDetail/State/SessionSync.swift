@@ -14,14 +14,20 @@ import Foundation
 @Observable
 final class SessionSync {
 
-    /// 屏幕上要画的东西 —— 消息**与过程**；由组装器从同一批事件算出。
-    private(set) var nodes: [TranscriptNode] = []
+    /// 屏幕上要画的东西。`snapshot` 里还留着 hidden 的节点（内容被清空但身份还在），
+    /// 视图只取 `visible` —— 那一半才是「不闪」的另一半。
+    private(set) var snapshot: ChatSnapshot = .empty
+
+    /// 视图读的那一列。
+    var nodes: [ChatNode] { snapshot.visible }
 
     /// 消息条数 —— 从已组装的节点数，不另存一份（两个出处必然不同步）。
     var messageCount: Int {
         nodes.reduce(0) { count, node in
-            if case .message = node { return count + 1 }
-            return count
+            switch node.data {
+            case .message, .assistant: return count + 1
+            case .process, .command: return count
+            }
         }
     }
     /// 视图里的事件条数（消息只是其中一部分）。
@@ -30,8 +36,6 @@ final class SessionSync {
     private(set) var hasOlder = false
     /// 「对不上」的告知 —— 底部固定面的数据源；判定在 `ResyncNoticeState`。
     private(set) var notice: ResyncNotice?
-    /// 正在生成的回复（流式输出）；没有进行中的 attempt 就是空串。
-    private(set) var transientText = ""
     /// 正在往回翻页 —— 与状态行分开：界面要的是「顶部在等」。
     private(set) var isPagingOlder = false
     /// 上下文占用；`nil` 时格子显示 `--` 而不消失（消失会让模型格横移）。
@@ -90,12 +94,30 @@ final class SessionSync {
     private let connectionPhase: () -> ConnectionPhase
     private var transient = TransientChannel()
 
-    /// 事件 → 显示节点。它跨刷新保留 —— 状态与去重理由见 `TranscriptAssembler`。
-    private var assembler = TranscriptAssembler { type in
-        // 上游加了新的事件类型 —— 会话照常显示，这里留一条痕。
-        // 措辞点明范围：不认识的只是**正文组装**这一层，消息流本身是认识的
-        // （`model/selection` 这类还另有消费者）。
-        Log.warn(Log.Module.session, "正文组装跳过不认识的事件类型（会话照常显示）", ["type": type])
+    /// 事件 → 节点。引擎跨刷新保留：身份表在里面，重建它就等于把所有节点的身份重来一遍。
+    private var conversation = SessionSync.makeAssembler()
+    /// 节点 → 屏幕上那一列（排序在这里，不在引擎里）。
+    private var builder = ChatSnapshotBuilder()
+    /// 已到但**还没有被点名**的定稿事件 —— 也在里面装「放弃的那一轮的定稿」。
+    /// 两者都不喂给引擎：定稿要等 `end` 帧认领，放弃的那一轮本来就不该出现在屏幕上。
+    private var held: [Int: SessionEvent] = [:]
+
+    private static func makeAssembler() -> ConversationAssembler {
+        ConversationAssembler(
+            definitions: [
+                AnyNodeDefinition(AssistantStepDefinition()),
+                AnyNodeDefinition(MessageDefinition()),
+                AnyNodeDefinition(ProcessDefinition()),
+                AnyNodeDefinition(CommandDefinition()),
+            ],
+            // 不变量被破坏时视图会少行或错位，而 `assertionFailure` 在 Release 里没有声音。
+            onAnomaly: { code, fields in
+                // 正文固定短语、码走字段：这样 grep `code=non-monotonic-match` 就能捞出来，
+                // 也不必把中文句子写进 State：用户可见的句子归 Display/。
+                Log.warn(Log.Module.session, "conversation invariant broken",
+                         fields.merging(["code": code]) { current, _ in current })
+            }
+        )
     }
     /// 占用值的吸收，判定在 `UsageState`。
     private var usageState = UsageState()
@@ -103,6 +125,8 @@ final class SessionSync {
     private var refreshGate = RefreshGate()
     /// flush 是否已有一次调度在途（防重复调度）。
     private var flushScheduled = false
+    /// 草稿的物化是否已有一次调度在途。
+    private var snapshotScheduled = false
     /// 合并窗口 = 一个渲染帧量级。未定稿内容逐帧到达无感知；事件文本晚一帧出现。
     private static let flushWindowNanos: UInt64 = 16_000_000
 
@@ -162,7 +186,7 @@ final class SessionSync {
                 break
             case .resetRequired:
                 // 窗口本身对不上，没有比它更早的状态可退。
-                mirror.reset()
+                resetMirror()
                 recovered = true
             case .refused(let code):
                 statusBox.set(.failed(step: .opening, cause: .refusal(code: code)))
@@ -196,7 +220,7 @@ final class SessionSync {
                     return
                 }
                 recovered = true
-                mirror.reset()
+                resetMirror()
                 // 编排自己执行的重置：保留无法收敛，一律重置并如实记「已重置」。
                 noteReset(reason)
                 statusBox.set(.done(added: added, recovered: true))
@@ -251,7 +275,7 @@ final class SessionSync {
             case .resetRequired(let reason):
                 // 更早的历史接不上不影响当前视图的真实性：`.gap` 保留（清空等于
                 // 用「你多点一下」换掉已读到的全部内容），只有位置被否定才清空重来。
-                if reason.invalidatesLocalContent { mirror.reset() }
+                if reason.invalidatesLocalContent { resetMirror() }
                 observeNotice(verdict)
                 refreshView()
                 return
@@ -340,13 +364,17 @@ final class SessionSync {
         let wasEmpty = mirror.isEmpty
         let verdict = mirror.realign(with: SessionPage(opening: opening))
 
-        // 未定稿基线：opening 里带了进行中的 attempt 就恢复流式输出，没有就清场。
-        if let baseline = opening.assistantStream {
-            transient.apply(baseline: parseBaseline(baseline))
-        } else {
-            transient = TransientChannel()
+        // 一条新流开始：上一代扣着没点名的定稿一律作废 —— 它们要么会作为普通持久事件重来，
+        // 要么属于已经结束的那一轮。留着只会让 feedEngine 永久跳过它们（静默少一行）。
+        if !held.isEmpty {
+            Log.warn(Log.Module.session, "新的一条流开始，上一代未认领的定稿作废",
+                     ["count": String(held.count)])
+            held.removeAll()
         }
-        transientText = transient.text
+        // 旧草稿先退役：它的 attempt 已经结束或换了人，留着会与新基线拼成两段重复文本。
+        if let previous = transient.liveAttemptId {
+            conversation.settleAssistant(attemptId: previous, settlement: nil)
+        }
 
         // 模型基线：opening 的 `model` 是进会话那一刻权威的「下一轮用什么」；不在 = 不知道。
         models.absorb(baseline: opening.model)
@@ -356,15 +384,39 @@ final class SessionSync {
         // 而上游投影里其实有值。水位判据仍在 `UsageState` 里 —— 重连时更旧的那份会被拒。
         if let occupancy = opening.occupancy { applyUsage(occupancy) }
 
+        // 先把持久窗口喂给引擎，再放基线事件 —— 顺序不能反：
+        // 基线进的是「空引擎」，而紧接着的 refreshView 会用持久窗口重建整段，把基线抹掉。
+        refreshView()
+
+        // 未定稿基线：opening 带进行中的 attempt 就恢复草稿槽位（基线内容变成事件交给引擎），
+        // 没有就清场。基线是服务端此刻的权威，本地那份一律丢掉。
+        if let baseline = opening.assistantStream {
+            for event in transient.apply(baseline: baseline, cursor: max(0, mirror.cursor - 1)) {
+                conversation.append(event)
+            }
+            refreshSnapshot()
+        } else {
+            transient = TransientChannel()
+        }
+
         // 状态行只在首次建立窗口时更新：重连是传输层事件。
         if wasEmpty {
             statusBox.set(.done(added: addedCount(verdict), recovered: false))
         } else if case .resetRequired(let reason) = verdict {
             // 分档判在 `ResetReason.invalidatesLocalContent`，这里只执行。
-            if reason.invalidatesLocalContent { mirror.reset() }
+            if reason.invalidatesLocalContent {
+                resetMirror()
+                // 清空之后必须刷一次：否则屏幕留着上一段窗口的内容，而引擎已经没有它了。
+                refreshView()
+                // 镜像与引擎都空了，而这条流不会再送旧窗口。重开流，让服务端送一份新 opening ——
+                // 不走 `sync()`：它在 `loadOlder` 在途时会被单飞闸直接挡回，屏幕就停在空态。
+                //
+                // 必须留到帧处理返回之后再做：在 `applyOpening` 里同步重开，外层随后仍拿**旧帧**的
+                // `establishes` 去结算新代次，会把新开流的超时守卫当场关掉。
+                Task { @MainActor [weak self] in self?.following.retry() }
+            }
             observeNotice(verdict)
         }
-        refreshView()
     }
 
     /// 一条判定带来的净增条数 —— 只有 `merged` 携带这个数，其余（追平 / 重置 / 拒绝 / 失败）
@@ -404,7 +456,12 @@ final class SessionSync {
         models.absorb(event: event)
         // 权限那一格只关心「当前值可能变了」那三类；哪些算，判定在权限域自己手里。
         onLiveEventType?(event.type)
-        // 事件帧只标脏，批到点一次全量重算（opening / HTTP 同步路径不经闸）。
+        // 定稿事件先扣着：attempt 还开着时它可能是「比草稿先到」的那一份，
+        // 等 `end` 帧点名再放进来（点名认领，不比较文本）。
+        if Self.needsNaming(event), transient.isLive, !Self.isReset(verdict) {
+            held[event.seq] = event
+        }
+        // 事件帧只标脏，批到点一次重算（opening / HTTP 同步路径不经闸）。
         if refreshGate.eventArrived() == .openWindow { scheduleFlush() }
     }
 
@@ -424,8 +481,9 @@ final class SessionSync {
         // 未定稿帧也算「数据到了」：长输出期间可能只有它在流。
         lastFrameAt = Date()
         let before = transient
-        let verdict = transient.apply(frame: frame)
-        if verdict == .broken {
+        // 小数序号要落在「最后一条持久事件之后」，所以把当前游标交给通道。
+        switch transient.apply(frame: frame, cursor: max(0, mirror.cursor - 1)) {
+        case .broken:
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
             Log.warn(Log.Module.session, "TransientChannel broken", [
                 "expectedRevision": String(describing: before.expectedRevisionDescription),
@@ -435,9 +493,71 @@ final class SessionSync {
                 "index": String(describing: frame["index"]?.int),
             ])
             following.retry()
-            return
+
+        case .consumed(let events):
+            // 每条 draft 的更新都物化一次会把「每帧 O(n)」放大成「每个 chunk O(n)」。
+            // 节奏由定义给：`animationFrame` 合到一帧，其余立刻。
+            var publication = Publication.none
+            for event in events {
+                publication = Publication.maximum(publication, conversation.append(event))
+            }
+            switch publication {
+            case .none: break
+            case .animationFrame: scheduleSnapshot()
+            case .immediate: refreshSnapshot()
+            }
+
+        case .ended(let settlement):
+            settle(settlement)
         }
-        transientText = transient.text
+    }
+
+    /// 收笔点名：把扣着的那条定稿喂进去，同时撤掉这一轮的草稿行。
+    ///
+    /// 认领不到（`seq` 为 `nil`，或被放弃）就只撤草稿 —— 不拿一条「看起来像」的事件顶上。
+    private func settle(_ settlement: TransientChannel.Settlement) {
+        let named = settlement.seq.flatMap { held[$0] }
+        if let seq = settlement.seq { held.removeValue(forKey: seq) }
+
+        if let seq = settlement.seq {
+            if let named, named.type == settlement.eventType {
+                Log.debug(Log.Module.session, "定稿点名成功",
+                          ["attempt": settlement.attemptId, "seq": String(seq)])
+            } else if named == nil, !conversation.contains(order: Double(seq)) {
+                // 认领不到：草稿撤了，正式内容却没接上 —— 表现是这一轮少了一段。
+                Log.warn(Log.Module.session, "定稿点名落空：草稿已撤，正式内容没接上",
+                         ["attempt": settlement.attemptId, "seq": String(seq),
+                          "held": String(held.count), "type": settlement.eventType ?? ""])
+            } else {
+                Log.warn(Log.Module.session, "定稿点名的类型对不上",
+                         ["attempt": settlement.attemptId, "seq": String(seq),
+                          "type": settlement.eventType ?? "", "heldType": named?.type ?? ""])
+            }
+        } else {
+            // 放弃的那一轮不会再来点名：扣着的定稿全部作废，否则它们会被永久跳过（静默少一行）。
+            if !held.isEmpty {
+                Log.warn(Log.Module.session, "被放弃的一轮留下了未认领的定稿，已作废",
+                         ["attempt": settlement.attemptId, "count": String(held.count)])
+                held.removeAll()
+            }
+            Log.info(Log.Module.session, "本轮被放弃：草稿已撤", ["attempt": settlement.attemptId])
+        }
+
+        conversation.settleAssistant(attemptId: settlement.attemptId,
+                                     settlement: named.map(AssemblyEvent.init))
+        refreshSnapshot()
+    }
+
+    private static func isReset(_ verdict: Verdict) -> Bool {
+        if case .resetRequired = verdict { return true }
+        return false
+    }
+
+    /// 这个事件要不要等 `end` 帧点名：只有「这一轮还没收笔」时的定稿事件才需要。
+    /// 替换型（压缩点）不是草稿的定稿，照常直接进。
+    private static func needsNaming(_ event: SessionEvent) -> Bool {
+        guard event.type == "assistant/message" || event.type == "assistant/attempt" else { return false }
+        return event.surfaceOp?["op"]?.string != "replace"
     }
 
     private func handleStreamRefusal(_ failure: GatewayFailure) {
@@ -452,18 +572,6 @@ final class SessionSync {
         lastFrameAt = Date()
         guard usageState.apply(snapshot) == .accepted else { return }
         usage = usageState.usage
-    }
-
-    /// opening 的未定稿基线 → 通道的输入。只认我们声明的字段，其余忽略。
-    private func parseBaseline(_ json: JSONValue) -> TransientBaseline {
-        let active = json["activeAttempt"]
-        return TransientBaseline(
-            revision: json["revision"]?.int ?? 0,
-            active: active == nil ? nil : TransientBaseline.Active(
-                nextIndex: active?["nextIndex"]?.int ?? 0,
-                stream: active?["stream"]?.array ?? []
-            )
-        )
     }
 
     // MARK: - 一次请求
@@ -509,10 +617,77 @@ final class SessionSync {
         return false
     }
 
-    /// 每次都从整段事件重算，不做增量 —— 增量写错一处就静默少一行。
     private func refreshView() {
-        nodes = assembler.assemble(mirror.events)
+        feedEngine()
+        refreshSnapshot()
         eventCount = mirror.events.count
         hasOlder = mirror.hasOlder
+    }
+
+    /// 镜像清空时引擎必须跟着清 —— 否则它保留的是上一段窗口的身份，
+    /// 新窗口的事件会被判成「前插」而接到旧内容上。
+    private func resetMirror() {
+        // 屏幕会「整列重挂」的那个入口。记一条，否则现象只有用户看得见。
+        Log.info(Log.Module.session, "镜像重置：引擎随之清空",
+                 ["events": String(mirror.events.count), "hasOlder": String(mirror.hasOlder)])
+        mirror.reset()
+        conversation = SessionSync.makeAssembler()
+        builder = ChatSnapshotBuilder()
+        held.removeAll()
+        transient = TransientChannel()
+    }
+
+    /// 草稿更新的同帧合并：一个渲染帧内多次变化只物化一次。
+    private func scheduleSnapshot() {
+        guard !snapshotScheduled else { return }
+        snapshotScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.flushWindowNanos)
+            guard let self else { return }
+            self.snapshotScheduled = false
+            self.refreshSnapshot()
+        }
+    }
+
+    private func refreshSnapshot() {
+        builder.replace(conversation.nodes())
+        snapshot = builder.snapshot
+    }
+
+    /// 把镜像窗口里的新事件喂给引擎：往回长就前插，往前走就追加，接不上就整段重建。
+    ///
+    /// 「接不上」在重置与乱序补齐时出现 —— 那时身份重来才是对的语义，硬接会把两段不同的
+    /// 窗口拼成一个。
+    private func feedEngine() {
+        let durable = mirror.events.filter { held[$0.seq] == nil }
+        let fresh = durable.filter { !conversation.contains(order: Double($0.seq)) }
+        guard !fresh.isEmpty else { return }
+        guard let bounds = conversation.bounds else {
+            // 引擎里只有草稿（冷进入先放了基线、持久事件还没到）：追加进去，不要整段重建 ——
+            // 重建会把草稿连同它的格子一起清掉，屏幕上从空重新长。
+            guard !conversation.isEmpty else {
+                conversation.replaceWindow(durable.map(AssemblyEvent.init))
+                return
+            }
+            for event in fresh { conversation.append(AssemblyEvent(event)) }
+            return
+        }
+        let orders = fresh.map { Double($0.seq) }
+        if orders.allSatisfy({ $0 < bounds.min }) {
+            conversation.prepend(fresh.map(AssemblyEvent.init))
+            Log.debug(Log.Module.session, "引擎前插", ["count": String(fresh.count),
+                                                    "from": String(orders.min() ?? 0)])
+        } else if orders.allSatisfy({ $0 > bounds.max }) {
+            for event in fresh { conversation.append(AssemblyEvent(event)) }
+            Log.debug(Log.Module.session, "引擎追加", ["count": String(fresh.count),
+                                                    "from": String(orders.min() ?? 0)])
+        } else {
+            // 两段窗口接不上：身份全部重来（界面上是「整列重挂」）。这不是错误，但必须留下痕迹。
+            Log.info(Log.Module.session, "窗口接不上，整段重建",
+                     ["fresh": String(fresh.count), "events": String(durable.count),
+                      "knownMin": String(bounds.min), "knownMax": String(bounds.max),
+                      "freshMin": String(orders.min() ?? 0), "freshMax": String(orders.max() ?? 0)])
+            conversation.replaceWindow(durable.map(AssemblyEvent.init))
+        }
     }
 }
