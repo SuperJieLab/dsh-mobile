@@ -27,7 +27,7 @@ final class StartupPlanTests: XCTestCase {
 
         XCTAssertTrue(steps.contains(.attachApprovals), "审批是 App 级的，与身份无关")
         XCTAssertFalse(steps.contains(.activateLink), "没配对该先配对，不连")
-        XCTAssertFalse(steps.contains(.attachEventStream), "没有连接时登记流没有意义")
+        XCTAssertFalse(steps.contains(.attachStreams), "没有连接时登记流没有意义")
     }
 
     /// 顺序就是依赖链：组网 → 连接 → 流 → 消费方。
@@ -35,7 +35,7 @@ final class StartupPlanTests: XCTestCase {
     /// 四段的理由各不相同，所以四段都要断言：
     /// - **组网在最前**：它是底座。没有地址，后面三步都等不到任何数据，
     ///   执行方因此会等它出结论（见 `AppServices.start` 的注释）—— 顺序与「等」是同一件事。
-    /// - **activate 早于 attach**：`attachEventStream` 开流会经 `ensureConnected` 读 `active`。
+    /// - **activate 早于 attach**：`attachStreams` 开流会经 `ensureConnected` 读 `active`。
     ///   顺序反了不会「永远建不起来」（`StreamMux.reopenAll` 换代次时会把没开过的也开出去），
     ///   但那条流要晚一代才出现在线上，而这一代可能白等一轮退避。
     /// - **审批在最后**：它消费的是「流开出来之后」的东西，排在依赖链尾端才与真实关系一致。
@@ -46,7 +46,7 @@ final class StartupPlanTests: XCTestCase {
         XCTAssertEqual(steps.last, .attachApprovals, "审批是消费方，排最后：\(steps)")
 
         guard let activate = steps.firstIndex(of: .activateLink),
-              let attach = steps.firstIndex(of: .attachEventStream) else {
+              let attach = steps.firstIndex(of: .attachStreams) else {
             XCTFail("两个动作都在：\(steps)")
             return
         }
@@ -78,6 +78,6 @@ final class StartupPlanTests: XCTestCase {
     ///
     /// 重起组网的症状最重：`launchMesh` 会重启 tsnet，把活着的连接与路径展示一起清掉。
     func testIdentityBecameAvailableOnlyCarriesTheConnectionSteps() {
-        XCTAssertEqual(StartupPlan.identityBecameAvailable, [.activateLink, .attachEventStream])
+        XCTAssertEqual(StartupPlan.identityBecameAvailable, [.activateLink, .attachStreams])
     }
 }

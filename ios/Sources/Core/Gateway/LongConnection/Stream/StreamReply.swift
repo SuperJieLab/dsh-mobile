@@ -2,7 +2,8 @@ import Foundation
 
 /**
  * 订阅方对一帧的答复：这条流接下来怎么办，以及它是否从此刻建成。
- * 两个值都由订阅方算（见 `StreamReading`），流表只照着做 —— 于是它不需要认识帧类型的取值、
+ * 两个值都由订阅方算（见各自流的 reading），流表只照着做 —— 于是它不需要认识帧类型的取值、
+ * 也不需要知道哪种拒绝值得再试。
  */
 struct StreamReply: Equatable {
 
@@ -30,4 +31,17 @@ enum StreamNext: Equatable {
     case retry
     /// 终态：再开也是同一个结果，收起这一条流。**连接不动**，别的流照旧。
     case stop
+}
+
+extension StreamNext {
+
+    /// 重试之后结果**可能不同**的拒绝码。依据只有一句：再开一条同样的流，上游的答复会不会变。
+    /// `source-unavailable` 与 `internal-error` 会变；`unknown-op`、`unauthorized` 不会。
+    ///
+    /// 定义在这里而不是各流一份：它是「要不要再试」的判据，与流的名字无关；两条流各写一遍
+    /// 之后，改一处漏一处不会有任何症状（表现只是某条流该重试的没重试）。
+    static let retryableFailureCodes: Set<String> = [
+        GatewayErrorCode.sourceUnavailable.rawValue,
+        GatewayErrorCode.internalError.rawValue,
+    ]
 }

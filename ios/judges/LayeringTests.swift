@@ -1235,6 +1235,7 @@ final class LayeringTests: XCTestCase {
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
             ("following", "Features/SessionDetail/State/SessionBehavior.swift"),
+            ("approvals", "Features/Approval/State/Stream/ApprovalStream.swift"),
             ("sessionList", "Core/Gateway/Events/EventStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
@@ -1382,17 +1383,19 @@ final class LayeringTests: XCTestCase {
                       "构造入口不是 fileprivate —— 业务侧能造出一个不在表里的流")
     }
 
-    /// 两条业务流都只经**同一个造流口**接上流层：会话详情与连接级事件流平级。
+    /// 三条业务流都只经**同一个造流口**接上流层：会话详情与两条连接级流平级。
     ///
     /// 这一条守的是「平级」这个承诺的形状：任何一条被特殊对待（自己拼开流文本、
-    /// 自己持有传输层、走另一条入口），两者就不再同构，而用户看不出区别。
-    func testBothBusinessStreamsUseTheSameFactory() throws {
+    /// 自己持有传输层、走另一条入口），它们就不再同构，而用户看不出区别。
+    func testEveryBusinessStreamUsesTheSameFactory() throws {
         let session = sourcesRoot
             .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
+        let approvals = sourcesRoot
+            .appendingPathComponent("Features/Approval/State/Stream/ApprovalStream.swift")
         let events = sourcesRoot
             .appendingPathComponent("Core/Gateway/Events/EventStream.swift")
 
-        for (name, url) in [("会话详情", session), ("事件流", events)] {
+        for (name, url) in [("会话详情", session), ("审批流", approvals), ("列表流", events)] {
             let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
             XCTAssertTrue(lines.contains { $0.1.contains("any StreamFactory") },
                           "\(name) 没有接在 StreamFactory 上 —— 两条流不再同构")
@@ -1509,13 +1512,19 @@ final class LayeringTests: XCTestCase {
     /// 末尾那条守的是「认不出时留痕要带名字」：不带 `\(kind)` 的那行 warn 现场只剩
     /// 「丢了一条东西」，而版本错配时最要紧的正是**丢的是哪一种**。
     func testTheApprovalCargoesAreRead() throws {
-        let file = sourcesRoot.appendingPathComponent("Core/Gateway/Events/EventReader.swift")
+        let file = sourcesRoot
+            .appendingPathComponent("Features/Approval/State/Stream/ApprovalStreamReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
-        for kind in ["waterfall", "cancel", "emit"] {
+        for kind in ["waterfall", "cancel"] {
             let hits = text.components(separatedBy: "\"\(kind)\"").count - 1
             XCTAssertEqual(hits, 1, "判读器里 \"\(kind)\" 该恰好出现一次，实际 \(hits) 次")
         }
-        XCTAssertTrue(text.contains("does not know: \\(kind)"),
+        // 别的流的货物名不该出现在这里：出现在判读器里就说明这条流又开始认别人的货了。
+        for foreign in ["session-list", "emit"] {
+            XCTAssertFalse(text.contains("\"\(foreign)\""),
+                           "审批流的判读器里出现了 \"\(foreign)\" —— 它归另一条流")
+        }
+        XCTAssertTrue(text.contains("does not carry: \\(kind)"),
                       "认不出的 kind 没被写进日志 —— 版本错配时现场分不出丢的是什么")
     }
 
@@ -2084,7 +2093,8 @@ final class LayeringTests: XCTestCase {
             ("CredentialStore.shared", "身份真值（单例）"),
             ("RpcClient(", "请求门面"),
             ("LongConnection(", "长连接"),
-            ("EventStream(", "连接级事件流"),
+            ("EventStream(", "列表流（过渡期）"),
+            ("ApprovalStream(", "审批流"),
             ("ApprovalStore(", "待答表"),
         ]
         var found: [String: [String]] = [:]

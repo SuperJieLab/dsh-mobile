@@ -31,20 +31,25 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
     }
 }
 
-/// 待答表要的订阅面：三种事件、两个入口。
-/// 收窄不是为了少方法，而是让闸能红 —— `EventStream` 的注册表是 private、类型是具体类，替不进去。
+/// 待答表要的订阅面：三种信号、三个入口。
+///
+/// **收窄到三个具名方法而不是一个 `onCargo(type:)`**：`"waterfall"` / `"cancel"` 这两个
+/// 线上名字只该出现在 `ApprovalStreamReader` 里。写在协议上之后，审批域不再认识 kind 字符串，
+/// 拼错一个名字会编译失败，而不是静默地永远收不到。
+///
+/// 三个口都给退订 token：多读者必须能退订，而「消费者都是 App 级」是当下的处境，
+/// 不是这个口该有的形状。本域的消费者确实与进程同寿（`attach` 里丢弃 token），所以它现在不退。
 @MainActor
-/// 审批域从事件流上要的两件事。**两个口都给退订 token**：多读者必须能退订，
-/// 而「消费者都是 App 级」是当下的处境，不是这个口该有的形状。
-/// 本域的消费者确实与进程同寿（`attach` 里丢弃 token），所以它现在不退。
 protocol ApprovalEventSink {
     @discardableResult
-    func onCargo(_ type: String, _ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    @discardableResult
+    func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
     @discardableResult
     func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void
 }
 
-extension EventStream: ApprovalEventSink {}
+extension ApprovalStream: ApprovalEventSink {}
 
 @MainActor
 @Observable
@@ -70,7 +75,7 @@ final class ApprovalStore {
     private let answerer: any ApprovalAnswering
 
     /// 已经挂过听众没有。**不是给视图看的状态**，是一次性闸的存放处。
-    /// 闸是永久的：全仓只有一个 `EventStream` 实例，换实例的场景不存在；真出现时再加 detach。
+    /// 闸是永久的：全仓只有一个 `ApprovalStream` 实例，换实例的场景不存在；真出现时再加 detach。
     @ObservationIgnored private var attached = false
 
     init(answerer: any ApprovalAnswering) {
@@ -97,10 +102,10 @@ final class ApprovalStore {
     func attach(sink: any ApprovalEventSink) {
         guard !attached else { return }
         attached = true
-        sink.onCargo("waterfall") { [weak self] payload in self?.receive(payload) }
+        sink.onWaterfall { [weak self] payload in self?.receive(payload) }
         // 撤回的解释在这里：`eventId` 是唯一的寻址信息。没有它删不掉任何东西 —— 留着这张卡
         // 比误删别人的强。
-        sink.onCargo("cancel") { [weak self] payload in
+        sink.onCancel { [weak self] payload in
             guard let eventId = payload["eventId"]?.string, !eventId.isEmpty else {
                 Log.warn(Log.Module.session, "dropped a cancel without an eventId")
                 return
