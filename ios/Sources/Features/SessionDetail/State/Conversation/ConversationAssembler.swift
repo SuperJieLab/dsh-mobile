@@ -6,7 +6,7 @@
  * ② `start` 只认窗口里最早的那条，之后所有命中（含迟到的第二条 start）都走 `update`；
  * ③ 已经物化过的节点不许撤回 —— 要暂时离开可见流只能转 `hidden`。
  *
- * 三条路径按事件怎么进来分：`replaceWindow`（打开 / 重连 / 缺口修复）、`append`（实时新增）、
+ * 三条路径按事件怎么进来分：`rebuild`（打开 / 重连 / 缺口修复）、`append`（实时新增）、
  * `prepend`（往回翻一页）。第三条不许重建既有格子，这是「翻页不重挂」的全部内容。
  */
 import Foundation
@@ -53,7 +53,7 @@ struct ConversationAssembler {
     // MARK: - 三条路径
 
     /// 重建整段窗口。打开、重连、缺口修复走这条 —— 身份全部重来，这是「重置」的语义。
-    mutating func replaceWindow(_ events: [AssemblyEvent]) {
+    mutating func rebuild(_ events: [AssemblyEvent]) {
         contexts.removeAll()
         inputs.removeAll()
         let sorted = events.sorted { $0.order < $1.order }

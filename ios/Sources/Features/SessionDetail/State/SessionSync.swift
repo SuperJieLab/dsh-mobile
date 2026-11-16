@@ -666,7 +666,7 @@ final class SessionSync {
             // 引擎里只有草稿（冷进入先放了基线、持久事件还没到）：追加进去，不要整段重建 ——
             // 重建会把草稿连同它的格子一起清掉，屏幕上从空重新长。
             guard !conversation.isEmpty else {
-                conversation.replaceWindow(durable.map(AssemblyEvent.init))
+                conversation.rebuild(durable.map(AssemblyEvent.init))
                 return
             }
             for event in fresh { conversation.append(AssemblyEvent(event)) }
@@ -687,7 +687,7 @@ final class SessionSync {
                      ["fresh": String(fresh.count), "events": String(durable.count),
                       "knownMin": String(bounds.min), "knownMax": String(bounds.max),
                       "freshMin": String(orders.min() ?? 0), "freshMax": String(orders.max() ?? 0)])
-            conversation.replaceWindow(durable.map(AssemblyEvent.init))
+            conversation.rebuild(durable.map(AssemblyEvent.init))
         }
     }
 }

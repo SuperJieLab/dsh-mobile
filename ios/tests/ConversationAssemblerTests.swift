@@ -80,7 +80,7 @@ final class ConversationAssemblerTests: XCTestCase {
         var appended = assembler()
         for item in events { appended.append(item) }
         var replaced = assembler()
-        replaced.replaceWindow(events)
+        replaced.rebuild(events)
 
         XCTAssertFalse(replaced.nodes().isEmpty, "样本一条节点都没出 —— 这条判据在拿两个空集合互比")
         XCTAssertEqual(appended.nodes().map(\.key).sorted(), replaced.nodes().map(\.key).sorted())
@@ -92,11 +92,11 @@ final class ConversationAssemblerTests: XCTestCase {
     func testPrependKeepsExistingNodes() {
         let events = sampleEvents()
         var full = assembler()
-        full.replaceWindow(events)
+        full.rebuild(events)
         let expected = keyed(full.nodes())
 
         var preparer = assembler()
-        preparer.replaceWindow(Array(events.suffix(from: 12)))
+        preparer.rebuild(Array(events.suffix(from: 12)))
         let before = keyed(preparer.nodes())
         preparer.prepend(Array(events.prefix(12)))
 
@@ -132,7 +132,7 @@ final class ConversationAssemblerTests: XCTestCase {
             event(4, "tool/call", #"{"turn":1,"step":1,"callId":"c1","name":"read","arguments":"{}"}"#),
         ]
         var assembler = assembler()
-        assembler.replaceWindow(events)
+        assembler.rebuild(events)
 
         guard let node = assembler.nodes().first(where: { $0.businessId == "1" }),
               case .process(let data) = node.data else {
@@ -209,7 +209,7 @@ final class ConversationAssemblerTests: XCTestCase {
             event(11, "turn/end", #"{"turn":1,"reason":"done"}"#),
         ]
         var assembler = assembler()
-        assembler.replaceWindow(events)
+        assembler.rebuild(events)
 
         let processes = assembler.nodes().filter { $0.kind == "process" }
         XCTAssertEqual(processes.count, 1, "一轮里出现了多个过程节点")
@@ -248,7 +248,7 @@ final class ConversationAssemblerTests: XCTestCase {
             event(4, "tool/call", #"{"turn":1,"step":1,"callId":"c1","name":"read"}"#),
         ]
         var assembler = assembler()
-        assembler.replaceWindow(events)
+        assembler.rebuild(events)
 
         let nodes = assembler.nodes()
         XCTAssertEqual(Set(nodes.map(\.id)).count, nodes.count, "列表身份有重复")
@@ -265,7 +265,7 @@ final class ConversationAssemblerTests: XCTestCase {
         let only = event(10, "assistant/message",
                          #"{"turn":1,"step":2,"message":{"id":"m9","content":[{"type":"text","text":"只有我"}]}}"#)
         var assembler = assembler()
-        assembler.replaceWindow([only])
+        assembler.rebuild([only])
 
         guard let node = assembler.nodes().first(where: { $0.kind == "assistant-step" }),
               case .assistant(let data) = node.data else { return XCTFail("没有 step/start 时回答整段消失了") }
@@ -278,7 +278,7 @@ final class ConversationAssemblerTests: XCTestCase {
     /// 仍是同一行、名字补上，位置前移到按下的那一刻。
     func testCommandGainsItsRunOnPrepend() {
         var assembler = assembler()
-        assembler.replaceWindow([event(5, "command/done", #"{"commandId":"c1","kind":"success","text":"ok"}"#)])
+        assembler.rebuild([event(5, "command/done", #"{"commandId":"c1","kind":"success","text":"ok"}"#)])
         let before = assembler.nodes().first { $0.kind == "command" }
         XCTAssertEqual(before?.anchorSeq, 5)
 
@@ -363,7 +363,7 @@ final class ConversationAssemblerTests: XCTestCase {
     /// 一步关上时，还在跑的工具行标中断 —— 它不会有结果了。
     func testStepEndInterruptsRunningTool() {
         var assembler = assembler()
-        assembler.replaceWindow([
+        assembler.rebuild([
             event(1, "turn/start", #"{"turn":1}"#),
             event(2, "step/start", #"{"turn":1,"step":1}"#),
             event(3, "tool/call", #"{"turn":1,"step":1,"callId":"c1","name":"read","arguments":"{}"}"#),
@@ -391,7 +391,7 @@ final class ConversationAssemblerTests: XCTestCase {
             event(5, "step/end", #"{"turn":1,"step":1}"#),
         ]
         var assembler = assembler()
-        assembler.replaceWindow(events)
+        assembler.rebuild(events)
 
         let kinds = ordered(assembler).map(\.kind)
         XCTAssertEqual(kinds, ["message", "process", "assistant-step"], "顺序不是 提问 → 过程 → 回复")
@@ -421,7 +421,7 @@ final class ConversationAssemblerTests: XCTestCase {
     /// 只有 `command/done` 在窗口里（往回翻切掉了 `run`）：照样出一行，但名字不编。
     func testCommandWithoutRunStillShows() {
         var assembler = assembler()
-        assembler.replaceWindow(
+        assembler.rebuild(
             [event(1, "command/done", #"{"commandId":"c9","kind":"error","text":"boom"}"#)]
         )
         let commands = assembler.nodes().filter { $0.kind == "command" }
@@ -443,7 +443,7 @@ final class ConversationAssemblerTests: XCTestCase {
             event(5, "step/end", #"{"turn":1,"step":1}"#),
         ]
         var assembler = assembler()
-        assembler.replaceWindow(events)
+        assembler.rebuild(events)
 
         guard let process = assembler.nodes().first(where: { $0.kind == "process" }),
               case .process(let data) = process.data else { return XCTFail("没有过程节点") }
