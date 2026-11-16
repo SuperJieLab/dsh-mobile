@@ -62,11 +62,12 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
   error: { type: 'error', streamId: 's-9', payload: { code: 'unknown-op', message: 'no such op' } },
 }
 
-test('the fixture covers both stream kinds and both server frame kinds', () => {
+test('the fixture covers every stream kind and both server frame kinds', () => {
   // 活性锚：样本少一条时下面的循环会静默少测一格，而「少测一格」在测试报告里
   // 长得跟「全绿」一模一样。
   const ops = new Set(fixture.client.map(sample => sample.op).filter(Boolean))
-  assert.deepEqual([...ops].sort(), ['events', 'follow'], '两种开流请求都要有样本')
+  assert.deepEqual([...ops].sort(), ['approvals', 'follow', 'host-events', 'session-list'],
+    '四条流的开流请求都要有样本')
   const serverTypes = new Set(fixture.server.map(sample => sample.type))
   for (const type of ['item', 'end', 'error']) {
     assert.ok(serverTypes.has(type as ServerSample['type']), `服务端帧缺 ${type} 的样本`)

@@ -71,11 +71,14 @@ test('followRequestOf: op is part of the request; lenient on maxMessages, strict
   assert.equal(followRequestOf('s1'), undefined)
 })
 
-test('openRequestOf: the op names which stream, and only two ops have a stream', () => {
-  // 信封（`parseClientFrame`）只说「几号流」，这里说「这条流要什么」。
+test('openRequestOf: the op names which stream, and only four ops have a stream', () => {
+  // 信封（`parseClientFrame`）只说「几号流」，这里说「这条流要什么」。三种连接级流各有
+  // 自己的 op：它们的开口帧形态不同（带集合 / 只有就绪 / 无基线），一个 op 装不下三种。
   assert.deepEqual(openRequestOf({ op: 'follow', sessionId: 's1' }), { kind: 'follow', sessionId: 's1' })
   assert.deepEqual(openRequestOf({ op: 'follow', sessionId: 's1', maxMessages: 9 }), { kind: 'follow', sessionId: 's1', maxMessages: 9 })
-  assert.deepEqual(openRequestOf({ op: 'events' }), { kind: 'events' })
+  assert.deepEqual(openRequestOf({ op: 'approvals' }), { kind: 'approvals' })
+  assert.deepEqual(openRequestOf({ op: 'session-list' }), { kind: 'session-list' })
+  assert.deepEqual(openRequestOf({ op: 'host-events' }), { kind: 'host-events' })
   // 缺会话名的 follow 不是一条开得起来的流；HTTP 的 op 同理。
   assert.equal(openRequestOf({ op: 'follow' }), undefined)
   assert.equal(openRequestOf({ op: 'snapshot', sessionId: 's1' }), undefined)

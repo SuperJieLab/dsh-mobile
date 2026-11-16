@@ -601,6 +601,59 @@ test('transport does not build protocol envelopes by hand', () => {
     `the scanner must see the real constructors in protocol/rpc.ts — found ${control.length}`)
 })
 
+/**
+ * 取一个函数的形参表：从 `function <name>(` 的下一个 `(` 起，按括号配对收尾。
+ *
+ * 只取形参、不取函数体：泵体里出现 `WorkspacePort` 这样的类型名是正常的（给别的东西
+ * 传参），而「拿到另一条流的端口」只可能发生在形参上。
+ */
+function parameterListOf(text: string, name: string): string | undefined {
+  const start = text.indexOf(`function ${name}(`)
+  if (start === -1) return undefined
+  const open = text.indexOf('(', start)
+  let depth = 0
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === '(') depth += 1
+    else if (text[index] === ')') {
+      depth -= 1
+      if (depth === 0) return text.slice(open, index + 1)
+    }
+  }
+  return undefined
+}
+
+test('each connection-stream pump takes only its own source port', () => {
+  // 拆三条流买的是「一条流的事故不连坐」。若某个泵顺手拿到另一条流的端口，它就能读到
+  // 对方的就绪状态或集合 —— 那层隔离在类型上就不存在了，而这种错不会有任何运行时症状：
+  // 直到某天有人「顺手」用它做了一次跨流判定。
+  //
+  // 判据必须能红：拿一个真存在但被禁的类型作正控（`pumpSessionList` 里的 `WorkspacePort`
+  // 出现在形参上，它本身合规，但同一个词在 `pumpApprovals` 上就违规）。所以下面分两半 ——
+  // 先验「禁的没出现」，再验「该出现的出现了」，后者防扫描器瞎了。
+  const text = readFileSync(join(SRC, 'remote', 'stream.ts'), 'utf8')
+  const forbidden: Array<{ pump: string, types: string[] }> = [
+    { pump: 'pumpApprovals', types: ['WorkspacePort'] },
+    { pump: 'pumpSessionList', types: ['ApprovalSource', 'HeldApproval'] },
+    { pump: 'pumpHostEvents', types: ['ApprovalSource', 'HeldApproval', 'WorkspacePort'] },
+  ]
+  for (const { pump, types } of forbidden) {
+    const params = parameterListOf(text, pump)
+    assert.ok(params !== undefined, `${pump} 没扫到 —— 先怀疑改名或扫描器瞎了`)
+    for (const type of types) {
+      assert.ok(!params.includes(type),
+        `${pump} 的形参里出现了 ${type} —— 这条泵拿到了另一条流的端口`)
+    }
+  }
+
+  // 活性断言：三个泵都扫到，且各自的端口都在形参上。
+  const approvals = parameterListOf(text, 'pumpApprovals')
+  const sessions = parameterListOf(text, 'pumpSessionList')
+  assert.ok(approvals?.includes('ApprovalSource'), 'pumpApprovals 该拿审批端口')
+  assert.ok(sessions?.includes('WorkspacePort'), 'pumpSessionList 该拿工作空间端口')
+  assert.ok(parameterListOf(text, 'pumpHostEvents')?.includes('ForwardedSource'),
+    'pumpHostEvents 该拿转发源')
+})
+
 // ---------------------------------------------------------------------------
 // V3：面向宿主的适配层不认识传输层
 // ---------------------------------------------------------------------------

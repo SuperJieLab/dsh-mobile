@@ -31,22 +31,45 @@ struct FollowRequest: Encodable {
     }
 }
 
-/// 开一条连接级事件流的请求体：`{"op":"events"}`。
+/// 开一条连接级流的请求体：只有 `op` 一格。
 /// **没有会话字段**才是要害：带一个 `sessionId` 不会被网关拒，
 /// 却会让两端对「绑不绑会话」的理解分岔。
-struct EventsRequest: Encodable {
+///
+/// 三种 op 各一个类型而不是一个带参数的：op 名与流名是同一件事的两处写法，参数化之后
+/// 它们会成为两个会漂的字符串，而漂了不会有编译错误 —— 只有一端的开流请求被网关拒。
+struct ApprovalsRequest: Encodable {
 
     private enum CodingKeys: String, CodingKey { case op }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode("events", forKey: .op)
+        try container.encode("approvals", forKey: .op)
+    }
+}
+
+struct SessionListRequest: Encodable {
+
+    private enum CodingKeys: String, CodingKey { case op }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("session-list", forKey: .op)
+    }
+}
+
+struct HostEventsRequest: Encodable {
+
+    private enum CodingKeys: String, CodingKey { case op }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("host-events", forKey: .op)
     }
 }
 
 /// 开流帧：`{type: "open", streamId: <编号>, payload: <载荷>}`。
-/// 构造入口只有两个工厂（`following` / `events`），op 与外壳由形状自己决定。
-/// 载荷声明成私有的两支而不是泛型：op 与载荷一起变，拆成两个自由度就能构造出「op 与载荷
+/// 构造入口只有四个工厂（`following` 与三种连接级流），op 与外壳由形状自己决定。
+/// 载荷声明成私有的四支而不是泛型：op 与载荷一起变，拆成两个自由度就能构造出「op 与载荷
 /// 不配」的帧，而那种帧网关认不出。
 /// 编号由连接层造、文本由状态层拼 —— 两者在 `StreamMux.makeStream(_:)` 的注入处对接。
 struct MuxOpenFrame: Encodable {
@@ -57,15 +80,25 @@ struct MuxOpenFrame: Encodable {
 
     private enum Payload {
         case follow(FollowRequest)
-        case events
+        case approvals
+        case sessionList
+        case hostEvents
     }
 
     static func following(sessionId: String, streamId: StreamId) -> MuxOpenFrame {
         MuxOpenFrame(streamId: streamId, payload: .follow(FollowRequest(sessionId: sessionId)))
     }
 
-    static func events(streamId: StreamId) -> MuxOpenFrame {
-        MuxOpenFrame(streamId: streamId, payload: .events)
+    static func approvals(streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, payload: .approvals)
+    }
+
+    static func sessionList(streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, payload: .sessionList)
+    }
+
+    static func hostEvents(streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, payload: .hostEvents)
     }
 
     private enum CodingKeys: String, CodingKey { case type, streamId, payload }
@@ -77,8 +110,12 @@ struct MuxOpenFrame: Encodable {
         switch payload {
         case let .follow(request):
             try container.encode(request, forKey: .payload)
-        case .events:
-            try container.encode(EventsRequest(), forKey: .payload)
+        case .approvals:
+            try container.encode(ApprovalsRequest(), forKey: .payload)
+        case .sessionList:
+            try container.encode(SessionListRequest(), forKey: .payload)
+        case .hostEvents:
+            try container.encode(HostEventsRequest(), forKey: .payload)
         }
     }
 

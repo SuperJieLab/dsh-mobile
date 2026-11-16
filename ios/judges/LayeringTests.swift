@@ -700,7 +700,8 @@ final class LayeringTests: XCTestCase {
     /// （漏报方向，靠评审）。
     func testWireShapesAreDeclaredOnce() throws {
         let shapes = ["InboundFrame", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest",
-                      "EventsRequest", "OpeningFrame", "UsageFramePayload", "FailurePayload"]
+                      "ApprovalsRequest", "SessionListRequest", "HostEventsRequest",
+                      "OpeningFrame", "UsageFramePayload", "FailurePayload"]
         var homes: [String: [String]] = [:]
 
         for file in swiftFiles(under: sourcesRoot) {
@@ -1234,7 +1235,7 @@ final class LayeringTests: XCTestCase {
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
             ("following", "Features/SessionDetail/State/SessionBehavior.swift"),
-            ("events", "Core/Gateway/Events/EventStream.swift"),
+            ("sessionList", "Core/Gateway/Events/EventStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {

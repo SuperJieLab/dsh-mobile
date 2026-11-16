@@ -711,7 +711,7 @@ test('a real HTTP approval-answer settles a held waterfall frame; the consumed q
   }
 })
 
-test('opening the events stream replays the standing question after ready', { timeout: 10_000 }, async () => {
+test('opening the approvals stream replays the standing question after ready', { timeout: 10_000 }, async () => {
   const port = freshPort(43_300)
   const credentialsPath = tempCredentialsPath()
   const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
@@ -744,7 +744,7 @@ test('opening the events stream replays the standing question after ready', { ti
         items.push(frame.payload)
         if (items.length >= 2) resolve()
       })
-      socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'events' } }))
+      socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'approvals' } }))
       setTimeout(() => reject(new Error(`expected ready + waterfall, got ${JSON.stringify(items)}`)), 5_000)
     })
 
@@ -760,7 +760,7 @@ test('opening the events stream replays the standing question after ready', { ti
   }
 })
 
-test('a request that arrives while the events stream is open reaches it live', { timeout: 10_000 }, async () => {
+test('a request that arrives while the approvals stream is open reaches it live', { timeout: 10_000 }, async () => {
   // 这条与上一条分开：上一条守重放（推送在开流之前），这一条守**实时那一支**的接线。
   // 只守重放的话，`relay.subscribe` 那一行删掉也全绿，而症状是「连着的时候到达的审批
   // 永远不显示，只有重连那一刻才出现」。
@@ -787,7 +787,7 @@ test('a request that arrives while the events stream is open reaches it live', {
       if (frame.payload?.kind === 'ready') { ready = true; return }
       if (frame.payload?.kind === 'waterfall') waterfalls.push(frame.payload)
     })
-    socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'events' } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'approvals' } }))
     for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 20))
     }

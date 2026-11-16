@@ -964,17 +964,17 @@ async function eventsServer() {
   return { feed, server }
 }
 
-test('E2: an events stream opens with ready, then forwards each emit verbatim', { timeout: 10_000 }, async () => {
-  // 这条流的词汇：`ready`（源的状态）、`emit`（源的内容）、`session-list`（列表增量）。
-  // 未出生的事件也要能到达 —— 这就是 P2「收得到」在网关侧的判据。
+test('E2: a session-list stream forwards the four list changes and nothing else', { timeout: 10_000 }, async () => {
+  // 这条流只有一类货物：`api-session/*` 翻成的四支 change。`emit` 与审批的帧在别的流上 ——
+  // 收到的每一帧都必须是列表变化，否则手机端会在列表通道里遇到一个它不认识的 kind。
   const { feed, server } = await eventsServer()
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev1', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'l1', payload: { op: 'session-list' } })
 
     const ready = await receive(socket)
     assert.equal(ready.type, 'item')
-    assert.equal(ready.streamId, 'ev1', '开口帧属于这条流，不是别的')
+    assert.equal(ready.streamId, 'l1', '开口帧属于这条流，不是别的')
     assert.deepEqual(ready.payload, { kind: 'ready' }, '源还没有代次时，ready 不带 generation（缺席，不是 0）')
 
     // 会话列表那四类事件翻成我们的行形状（见 `session-events.test.ts` 的样本）。
@@ -982,7 +982,7 @@ test('E2: an events stream opens with ready, then forwards each emit verbatim', 
       sessionId: 's9', updatedAt: 1_700_000_000_000, running: false, blank: false,
     }])
     const translated = await receive(socket)
-    assert.equal(translated.streamId, 'ev1')
+    assert.equal(translated.streamId, 'l1')
     assert.deepEqual(translated.payload, {
       kind: 'session-list',
       change: {
@@ -991,19 +991,15 @@ test('E2: an events stream opens with ready, then forwards each emit verbatim', 
       },
     }, '四种事件换一种载荷，字段名是我们的')
 
-    // 不在那四类里的：名字与参数原样 —— 下游不再筛一遍。
+    // 不在那四类里的：这条流不该收。`session/projection` 归 `host-events`；审批的
+    // waterfall 归 `approvals`。两者都不出现 —— 用紧随其后的那一条来验证（出现的话它
+    // 会排在这一帧前面）。
     feed.emit('session/projection', ['s9', { title: 'x' }])
-    assert.deepEqual((await receive(socket)).payload,
-      { kind: 'emit', event: 'session/projection', args: ['s9', { title: 'x' }] },
-      '认不出的照旧原样转发')
-
-    // 同一条源上还有审批的帧：它们走自己的 `approval` 广播，不进这条流。
-    // 转发它们会让手机在一条「机器上发生了什么」的流里收到待答问题。
     feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'x1', agentId: 'a1', request: {} })
     feed.emit('api-session/removed', ['s1'])
     assert.deepEqual((await receive(socket)).payload,
       { kind: 'session-list', change: { kind: 'removed', id: 's1' } },
-      '审批帧没有出现在这条流上（出现的话它会排在这一帧前面）')
+      '非列表的两个来源都没有出现在这条流上')
 
     // 这条流不自己结束：源停在原地时它也不该收到 `end`。
     assert.equal(feed.subscribers(), 1, '一条流一个订阅者')
@@ -1016,14 +1012,45 @@ test('E2: an events stream opens with ready, then forwards each emit verbatim', 
   }
 })
 
-test('E2b: cancelling an events stream unsubscribes it and reclaims its id', { timeout: 10_000 }, async () => {
+test('E2d: a host-events stream forwards emit verbatim and never a list change', { timeout: 10_000 }, async () => {
+  // 第三条流本期没有客户端订阅者，但它的货物集合必须**恰好**是「其余的一切」：
+  // 列表那四类若漏到这里，将来接线的人会在命令目录的通道里收到会话行。
+  const { feed, server } = await eventsServer()
+  try {
+    const socket = await connect(server)
+    send(socket, { type: 'open', streamId: 'h1', payload: { op: 'host-events' } })
+    assert.deepEqual((await receive(socket)).payload, { kind: 'ready' })
+
+    feed.emit('session/projection', ['s9', { title: 'x' }])
+    assert.deepEqual((await receive(socket)).payload,
+      { kind: 'emit', event: 'session/projection', args: ['s9', { title: 'x' }] },
+      '名字与参数原样 —— 下游不再筛一遍')
+
+    // 列表那四类不来这条流（同样用紧随其后的一帧验证）。
+    feed.emit('api-session/added', [{
+      sessionId: 's9', updatedAt: 1_700_000_000_000, running: false, blank: false,
+    }])
+    feed.emit('commands/change', [{ name: 'compact' }])
+    assert.deepEqual((await receive(socket)).payload,
+      { kind: 'emit', event: 'commands/change', args: [{ name: 'compact' }] },
+      '列表变化没有出现在转发流上')
+
+    socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
+test('E2b: cancelling a session-list stream unsubscribes it and reclaims its id', { timeout: 10_000 }, async () => {
   // 事件流是唯一**不会自己结束**的流，所以它的收场只有一条路：取消或连接收尾。
   // 那条路上漏一句，症状分别是「每条关掉的流留一个订阅者」（宿主每发一帧就往一个死
   // socket 里写）与「同号再开被判成重复编号而断线」。
   const { feed, server } = await eventsServer()
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev3', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev3', payload: { op: 'session-list' } })
     await receive(socket) // ready
     assert.equal(feed.subscribers(), 1)
 
@@ -1033,7 +1060,7 @@ test('E2b: cancelling an events stream unsubscribes it and reclaims its id', { t
     // 退订之后再发一帧：它不该在 socket 上留下任何东西（留了的话，下面第一帧就不是 ready）。
     feed.emit('api-session/added', ['s-x'])
 
-    send(socket, { type: 'open', streamId: 'ev3', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev3', payload: { op: 'session-list' } })
     const reopened = await receive(socket)
     assert.deepEqual(reopened.payload, { kind: 'ready' },
       '条目已回收：同号再开是新流，且上一份订阅没有再往这条流里写帧')
@@ -1046,7 +1073,7 @@ test('E2b: cancelling an events stream unsubscribes it and reclaims its id', { t
   }
 })
 
-test('E2c: an events stream on a gateway with no wired source is refused on that stream alone', { timeout: 10_000 }, async () => {
+test('E2c: a session-list stream on a gateway with no wired source is refused on that stream alone', { timeout: 10_000 }, async () => {
   // 装配漏了事件源时，「收下这条流但永远不发文」是最坏的结果：客户端等 45 秒就绪超时，
   // 而在期1 那是**连接级**的判死。拒绝要响，且只落在这一条流上。
   const source = fakeSource([snapshotFrame([event(0)], 1)])
@@ -1057,7 +1084,7 @@ test('E2c: an events stream on a gateway with no wired source is refused on that
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 'ev9', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev9', payload: { op: 'session-list' } })
     const refusal = await receive(socket)
     assert.equal(refusal.type, 'error')
     assert.equal(refusal.streamId, 'ev9')
@@ -1115,7 +1142,7 @@ function tickSource(): FollowSource & { tick: (seq: number) => void; aborted: ()
   }
 }
 
-test('E4: a follow stream and an events stream coexist — cancelling one leaves the other flowing', { timeout: 10_000 }, async () => {
+test('E4: a follow stream and a session-list stream coexist — cancelling one leaves the other flowing', { timeout: 10_000 }, async () => {
   // 两条流平级共存是这一期的前提：排队开流会让「详情页开着时事件流建不起来」与
   // 「事件流占着连接时详情页打不开」变成同一个 bug。所以判据要往**两个方向**各打一枪：
   // 取消 b 之后 a 仍能推帧，取消 a 之后 b 仍能收事件。
@@ -1132,7 +1159,7 @@ test('E4: a follow stream and an events stream coexist — cancelling one leaves
     // 的帧 —— 同时开两条流的话，先到的那条会把另一条的开口帧吃掉。
     send(socket, { type: 'open', streamId: 'a', payload: { op: 'follow', sessionId: 's1' } })
     assert.equal((await receiveFor(socket, 'a')).type, 'item', 'a 的打开帧')
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'session-list' } })
     assert.deepEqual((await receiveFor(socket, 'ev')).payload, { kind: 'ready' }, 'ev 的开口帧')
     assert.equal(feed.subscribers(), 1)
 
@@ -1144,13 +1171,13 @@ test('E4: a follow stream and an events stream coexist — cancelling one leaves
     assert.deepEqual(forwarded.payload, event(1), '取消 ev 之后 a 仍能推帧 —— 取消没有带走另一条')
 
     // 方向二：取消会话流，事件流仍能收事件（换号重开一条事件流，编号不复用）。
-    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'session-list' } })
     assert.deepEqual((await receiveFor(socket, 'ev2')).payload, { kind: 'ready' })
     send(socket, { type: 'cancel', streamId: 'a' })
     await until(() => source.aborted() === 1, 'a 的泵收到取消')
-    feed.emit('api-session/added', ['s7'])
+    feed.emit('api-session/removed', ['s7'])
     assert.deepEqual((await receiveFor(socket, 'ev2')).payload,
-      { kind: 'emit', event: 'api-session/added', args: ['s7'] },
+      { kind: 'session-list', change: { kind: 'removed', id: 's7' } },
       '取消 a 之后 ev2 仍能收事件 —— 连接还活着，且 ev2 的订阅没被一起收走')
 
     socket.close()
@@ -1161,7 +1188,7 @@ test('E4: a follow stream and an events stream coexist — cancelling one leaves
   }
 })
 
-test('E4b: a refused events stream does not disturb a running follow stream', { timeout: 10_000 }, async () => {
+test('E4b: a refused session-list stream does not disturb a running follow stream', { timeout: 10_000 }, async () => {
   // 「b 收到 error → a 不受影响」。E2c 验的是「拒绝之后还能再开一条」（事后），这里验的是
   // 「已经在跑的那条继续跑」（当场）—— 后者才是「一条流被拒会不会拽断连接」的直接证据。
   const source = tickSource()
@@ -1176,7 +1203,7 @@ test('E4b: a refused events stream does not disturb a running follow stream', { 
     send(socket, { type: 'open', streamId: 'a', payload: { op: 'follow', sessionId: 's1' } })
     assert.equal((await receiveFor(socket, 'a')).type, 'item')
 
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'session-list' } })
     const refusal = await receiveFor(socket, 'ev')
     assert.equal(refusal.type, 'error')
     assert.equal((refusal.payload as Record<string, unknown>).code, 'internal-error')
@@ -1193,21 +1220,23 @@ test('E4b: a refused events stream does not disturb a running follow stream', { 
   }
 })
 
-test('E5: two events streams on one connection share the source — each gets every event', { timeout: 10_000 }, async () => {
+test('E5: two session-list streams on one connection share the source — each gets every event', { timeout: 10_000 }, async () => {
   // 同一台手机开两条事件流（比如两个界面各订一份）不是协议违规：一份源扇出给每条流，
   // 谁也不抢谁的帧。反过来「后开的那条顶掉前一条」在这里会表现为少一帧。
   const { feed, server } = await eventsServer()
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev1', payload: { op: 'events' } })
-    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev1', payload: { op: 'session-list' } })
+    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'session-list' } })
     await receiveFor(socket, 'ev1')
     await receiveFor(socket, 'ev2')
     assert.equal(feed.subscribers(), 2, '两条流各一份订阅')
 
-    feed.emit('api-session/added', ['s1'])
-    assert.deepEqual((await receiveFor(socket, 'ev1')).payload, { kind: 'emit', event: 'api-session/added', args: ['s1'] })
-    assert.deepEqual((await receiveFor(socket, 'ev2')).payload, { kind: 'emit', event: 'api-session/added', args: ['s1'] },
+    feed.emit('api-session/removed', ['s1'])
+    assert.deepEqual((await receiveFor(socket, 'ev1')).payload,
+      { kind: 'session-list', change: { kind: 'removed', id: 's1' } })
+    assert.deepEqual((await receiveFor(socket, 'ev2')).payload,
+      { kind: 'session-list', change: { kind: 'removed', id: 's1' } },
       '同一条事件被两条流各收一次')
 
     socket.close()
@@ -1218,16 +1247,16 @@ test('E5: two events streams on one connection share the source — each gets ev
   }
 })
 
-test('E5b: a second open(events) under the same id is a protocol violation — the connection closes', { timeout: 10_000 }, async () => {
+test('E5b: a second open(session-list) under the same id is a protocol violation — the connection closes', { timeout: 10_000 }, async () => {
   // U2 只钉了 follow。`duplicate-id` 的判定在 op 分派**之前**，所以新 op 应当自动继承这条
   // 规矩 —— 但「应当」不是判据：把分派写在查表之前就会让这条流悄悄开成第二条。
   const { server } = await eventsServer()
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'dup', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'dup', payload: { op: 'session-list' } })
     await receiveFor(socket, 'dup') // 事件流不会自己结束，条目仍在表里
 
-    send(socket, { type: 'open', streamId: 'dup', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'dup', payload: { op: 'session-list' } })
     const code = await waitForClose(socket)
     assert.equal(code, 1008, `同号重开事件流要带 1008 关；实际 code=${code}`)
   } finally {
@@ -1242,7 +1271,7 @@ test('E3: a new generation is another ready on the same stream, never an end', {
   const { feed, server } = await eventsServer()
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'session-list' } })
     assert.deepEqual((await receive(socket)).payload, { kind: 'ready' }, '开流那一刻源还没有代次')
 
     feed.setGeneration(3)
@@ -1252,10 +1281,11 @@ test('E3: a new generation is another ready on the same stream, never an end', {
     assert.deepEqual((await receive(socket)).payload, { kind: 'ready' },
       '源失效也是 ready（无代次）—— 不是 end，流继续活着')
 
-    // 用一条不在列表四类里的事件：这一条测的是「失效之后流还接得上内容」，
-    // 与载荷怎么翻无关。
-    feed.emit('session/event', ['s1'])
-    assert.deepEqual((await receive(socket)).payload, { kind: 'emit', event: 'session/event', args: ['s1'] },
+    // 这一条测的是「失效之后流还接得上内容」，与载荷怎么翻无关 —— 但这条流只认列表四类，
+    // 所以用一条能翻的（`emit` 那类归 `host-events`，在这条流上不会出现）。
+    feed.emit('api-session/removed', ['s1'])
+    assert.deepEqual((await receive(socket)).payload,
+      { kind: 'session-list', change: { kind: 'removed', id: 's1' } },
       '失效之后这条流仍然接得上下一代的内容')
 
     socket.close()

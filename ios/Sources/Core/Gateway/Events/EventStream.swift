@@ -122,7 +122,7 @@ extension EventStream: StreamBehavior {
     var label: String { "connection-events" }
 
     func build(_ id: StreamId) throws -> String {
-        try MuxOpenFrame.events(streamId: id).encoded()
+        try MuxOpenFrame.sessionList(streamId: id).encoded()
     }
 
     func handle(_ frame: InboundFrame) -> StreamReply {

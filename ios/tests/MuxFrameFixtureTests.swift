@@ -64,10 +64,11 @@ final class MuxFrameFixtureTests: XCTestCase {
     }
 
     /// 样本少一条时下面的循环会静默少测一格，而「少测一格」在测试报告里长得跟「全绿」一样。
-    func testFixtureCoversBothStreamKindsAndBothServerFrameKinds() throws {
+    func testFixtureCoversEveryStreamKindAndBothServerFrameKinds() throws {
         let fixture = try loadFixture()
         let ops = Set(fixture.client.compactMap(\.op))
-        XCTAssertEqual(ops, Set(["events", "follow"]), "两种开流请求都要有样本")
+        XCTAssertEqual(ops, Set(["approvals", "follow", "host-events", "session-list"]),
+                       "四条流的开流请求都要有样本")
         let serverTypes = Set(fixture.server.map(\.type))
         for type in ["item", "end", "error"] {
             XCTAssertTrue(serverTypes.contains(type), "服务端帧缺 \(type) 的样本")
@@ -87,8 +88,12 @@ final class MuxFrameFixtureTests: XCTestCase {
                 case "follow":
                     let sessionId = try XCTUnwrap(sample.sessionId, "\(sample.name): follow 缺会话名")
                     encoded = try MuxOpenFrame.following(sessionId: sessionId, streamId: sample.streamId).encoded()
-                case "events":
-                    encoded = try MuxOpenFrame.events(streamId: sample.streamId).encoded()
+                case "approvals":
+                    encoded = try MuxOpenFrame.approvals(streamId: sample.streamId).encoded()
+                case "session-list":
+                    encoded = try MuxOpenFrame.sessionList(streamId: sample.streamId).encoded()
+                case "host-events":
+                    encoded = try MuxOpenFrame.hostEvents(streamId: sample.streamId).encoded()
                 default:
                     XCTFail("\(sample.name): 样本里的 op 不认识（\(sample.op ?? "nil")）")
                     continue

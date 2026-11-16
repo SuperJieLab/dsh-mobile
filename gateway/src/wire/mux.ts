@@ -182,10 +182,17 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
  * 认不出的 op 因此不是畸形帧 —— 它归得上一条流，只是那条流开不起来（一条带编号的
  * `unknown-op` error，连接与别的流不动）。
  *
- * 两种流的恢复语义不同（一条有窗口与水位，一条不重放），所以它们是两个取值而不是
- * 一个带可选字段的形状：可选字段会把「事件流没有会话」表达成「会话可能缺席」。
+ * **四种流四个取值，不是一个带可选字段的形状**：可选字段会把「这条流没有会话」表达成
+ * 「会话可能缺席」，而三种连接级流的开口帧形态本来就不同（带集合 / 只有就绪 / 无基线）。
+ *
+ * 三种连接级流拆开的原因写在各自的泵上：它们的故障域不同 —— 只有审批那条会「拒绝开流」，
+ * 把它与另外两条绑在一起，等于让最脆的那个决定全体的可用性。
  */
-export type OpenRequest = ({ kind: 'follow' } & FollowRequest) | { kind: 'events' }
+export type OpenRequest =
+  | ({ kind: 'follow' } & FollowRequest)
+  | { kind: 'approvals' }
+  | { kind: 'session-list' }
+  | { kind: 'host-events' }
 
 /**
  * 把 `open` 载荷校验为一条开流请求。
@@ -195,7 +202,12 @@ export type OpenRequest = ({ kind: 'follow' } & FollowRequest) | { kind: 'events
  */
 export function openRequestOf(payload: unknown): OpenRequest | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  if ((payload as Record<string, unknown>).op === 'events') return { kind: 'events' }
+  switch ((payload as Record<string, unknown>).op) {
+    case 'approvals': return { kind: 'approvals' }
+    case 'session-list': return { kind: 'session-list' }
+    case 'host-events': return { kind: 'host-events' }
+    default: break
+  }
   const follow = followRequestOf(payload)
   return follow === undefined ? undefined : { kind: 'follow', ...follow }
 }

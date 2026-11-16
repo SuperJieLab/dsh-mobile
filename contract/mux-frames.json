@@ -16,11 +16,25 @@
       "sessionId": "s-1"
     },
     {
-      "name": "events",
-      "text": "{\"payload\":{\"op\":\"events\"},\"streamId\":\"e-1\",\"type\":\"open\"}",
+      "name": "approvals",
+      "text": "{\"payload\":{\"op\":\"approvals\"},\"streamId\":\"a-1\",\"type\":\"open\"}",
       "type": "open",
-      "streamId": "e-1",
-      "op": "events"
+      "streamId": "a-1",
+      "op": "approvals"
+    },
+    {
+      "name": "session-list",
+      "text": "{\"payload\":{\"op\":\"session-list\"},\"streamId\":\"l-1\",\"type\":\"open\"}",
+      "type": "open",
+      "streamId": "l-1",
+      "op": "session-list"
+    },
+    {
+      "name": "host-events",
+      "text": "{\"payload\":{\"op\":\"host-events\"},\"streamId\":\"h-1\",\"type\":\"open\"}",
+      "type": "open",
+      "streamId": "h-1",
+      "op": "host-events"
     },
     {
       "name": "cancel",

@@ -131,7 +131,7 @@ test('approval: a live request reaches the socket as a stream item', { timeout: 
   try {
     const socket = await connect(h.server)
     // 开口即基线：先一条 ready。此刻集合为空，所以它后面没有 waterfall。
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
     const ready = await receive(socket)
     assert.equal((ready.payload as { kind?: string }).kind, 'ready')
 
@@ -161,7 +161,7 @@ test('approval: a client that opens later gets the question with the opening bas
     await until(() => h.relay.held().length === 1, 'the question is held before the client arrives')
 
     const socket = await connect(h.server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
 
     // ready 之后紧跟当前集合 —— 没有单独的名单帧，「基线与这条流从哪里开始」是同一件事。
     const ready = await receive(socket)
@@ -184,7 +184,7 @@ test('approval: an upstream cancel reaches the socket as stream cargo', { timeou
   const h = await harness()
   try {
     const socket = await connect(h.server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
     await receive(socket) // ready
 
     h.feed.push(approvalRequest('e1', 'session-7'))
@@ -209,7 +209,7 @@ test('A1/B1: the opening replays the whole set in order, and later arrivals foll
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
 
     const ready = await receive(socket)
     assert.equal((ready.payload as { kind?: string }).kind, 'ready',
@@ -239,7 +239,7 @@ test('A1/B1: an empty set gives `ready` and nothing else — there is no ledger 
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
 
     assert.equal(((await receive(socket)).payload as { kind?: string }).kind, 'ready')
 
@@ -263,11 +263,11 @@ test('B3: reopening the stream puts the whole set on the wire again', { timeout:
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev1', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev1', payload: { op: 'approvals' } })
     for (let index = 0; index < 3; index += 1) await receive(socket)
 
     send(socket, { type: 'cancel', streamId: 'ev1' })
-    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'approvals' } })
 
     const frames = [await receive(socket), await receive(socket), await receive(socket)]
     assert.equal((frames[0]!.payload as { kind?: string }).kind, 'ready')
@@ -287,7 +287,7 @@ test('B2: opening before the source is ready is refused — a stale baseline is 
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
 
     const refusal = await receive(socket)
     assert.equal(refusal.type, 'error', 'a stream that can only lie must be refused, not opened')
@@ -297,7 +297,7 @@ test('B2: opening before the source is ready is refused — a stale baseline is 
 
     // 拒绝之后编号被收回：再开同一个编号不该被当成协议违规（那会直接断掉连接）。
     approvals.setReady(true)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'events' } })
+    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
     assert.equal(((await receive(socket)).payload as { kind?: string }).kind, 'ready',
       'the refused stream left nothing behind — the same id opens cleanly')
     socket.close()

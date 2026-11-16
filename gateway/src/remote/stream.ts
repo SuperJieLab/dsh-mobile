@@ -143,17 +143,29 @@ export function onClientText(
   streams.set(frame.streamId, { abort })
   const done = (): void => { streams.delete(frame.streamId) }
 
-  if (request.kind === 'events') {
-    if (feed === undefined || approvals === undefined) {
-      // 装配错误，不是客户端错误：这条流在这里没有被接上。拒绝要响 —— 静默的表现是
-      // 客户端等 45 秒就绪超时，而就绪超时判的是**整条连接**（两条流一起被关）。
-      log.error('events stream opened but no forwarded-event source is wired — refused',
-        { stream: frame.streamId })
-      streams.delete(frame.streamId)
-      send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'internal-error', message: 'this gateway has no forwarded-event source' } })
-      return { ok: true }
-    }
-    pumpEvents(socket, feed, approvals, frame.streamId, abort.signal, done, workspace)
+  // 三种连接级流各开各的泵。装配缺了哪一条要的源，就只拒那一条 —— 拒绝要响：静默的
+  // 表现是客户端等 45 秒就绪超时，而就绪超时判的是**整条连接**（三条流一起被关）。
+  const refuse = (message: string): ClientFrameOutcome => {
+    log.error('a connection stream opened but its source is not wired — refused',
+      { stream: frame.streamId, op: request.kind })
+    streams.delete(frame.streamId)
+    send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'internal-error', message } })
+    return { ok: true }
+  }
+
+  if (request.kind === 'approvals') {
+    if (approvals === undefined) return refuse('this gateway has no approval source')
+    pumpApprovals(socket, feed, approvals, frame.streamId, abort.signal, done)
+    return { ok: true }
+  }
+  if (request.kind === 'session-list') {
+    if (feed === undefined) return refuse('this gateway has no forwarded-event source')
+    pumpSessionList(socket, feed, frame.streamId, abort.signal, done, workspace)
+    return { ok: true }
+  }
+  if (request.kind === 'host-events') {
+    if (feed === undefined) return refuse('this gateway has no forwarded-event source')
+    pumpHostEvents(socket, feed, frame.streamId, abort.signal, done)
     return { ok: true }
   }
 
@@ -191,39 +203,53 @@ function cancelItem(streamId: StreamId, eventId: string): MuxItemFrame {
 }
 
 /**
- * 泵一条事件流：订阅进程里那份源，一条流一个订阅者。
+ * 三种连接级流各自的泵。三条流的故障域不同，所以各开一个泵、各订一次源：
  *
- * **开口即基线**：`ready` 之后立刻把此刻还待答的全部重放一遍，随后才是增量。客户端因此
- * 不需要任何「请给我当前集合」的请求 —— 恢复只有一条路径（重开一次流 = 新一份基线）。
+ *   approvals    只有它会**拒绝开流**（`approvals.ready` 为假时给不出可信集合）。
+ *                把它与另外两条绑在一起，等于让最脆的那个决定全体的可用性。
+ *   session-list 列表增量。每次都从头建立，靠客户端收到 `ready` 后发一次 list-sessions 追上。
+ *   host-events  宿主侧其余通知（命令/模型/权限目录、登录失效）。本期没有客户端订阅者，
+ *                但通道要真的通 —— 帧必须挂在流上，`emit` 才有 `streamId` 可带。
+ *
+ * **开口帧三态**：带集合的就绪（approvals）、只有就绪（session-list / host-events）。
+ * 「就绪不建立存在性」这条对后两条成立：`ready` 只说「服务端开好了这条流、源此刻是哪一代」，
+ * 客户端要的状态自己另读。
+ *
+ * **共用一份源**：`ForwardedSource` 是多订阅者，三条流各订一次、各取自己那一类。归属由
+ * 适配器判定（`sessionListChangeOf`）—— 认识上游事件名的只有它，泵不认。
+ */
+
+/**
+ * 审批流：开口即基线。`ready` 之后立刻把此刻还待答的全部重放一遍，随后才是增量。
+ *
+ * 客户端因此不需要任何「请给我当前集合」的请求 —— 恢复只有一条路径（重开一次流 = 新一份基线）。
  *
  * **开口帧不等源**：订阅那一刻先发一条 `ready`，此后源的每次换代次再发一条。若开口要
- * 等源就绪，一次源的事故会让这条流一直等不到打开帧 —— 而就绪超时判的是**整条连接**，
- * 于是一条流的事故变成所有流反复重开。唯一的例外是**待答集合不可信**（`approvals.ready`
- * 为假）：那时拒绝开流（`source-unavailable`），客户端退避重开。
+ * 等源就绪，一次源的事故会让这条流一直等不到打开帧 —— 而就绪超时判的是**整条连接**。
+ * 唯一的例外是**待答集合不可信**（`approvals.ready` 为假）：那时拒绝开流
+ * （`source-unavailable`），客户端退避重开。
  *
  * 这条流**不会自己结束**：源断了只发一条无代次的 `ready`，因为结束流会让手机立刻重开
  * 一条注定拿不到正文的流，而重开没有退避。唯一的收场是客户端取消或连接收尾。
  *
- * 五种载荷是它的全部词汇：`ready`（源的状态，`generation` 缺席 = 没有活的代次）、
- * `emit`（源的内容，名字与参数原样）、`session-list`（会话列表的一条增量 —— 上游那四类
- * `api-session/*` 在发出之前翻成我们的形状，见 `upstream/session-events.ts`）、
- * `waterfall`（一条待答调用）、`cancel`（一条撤回）。
+ * 两种载荷是它的全部词汇：`ready`（源的状态，`generation` 缺席 = 没有活的代次）与
+ * `waterfall` / `cancel`（一条待答调用与它的撤回）。
  */
-
-function pumpEvents(
+function pumpApprovals(
   socket: Duplex,
-  feed: ForwardedSource,
+  feed: ForwardedSource | undefined,
   approvals: ApprovalSource,
   streamId: StreamId,
   signal: AbortSignal,
   done: () => void,
-  workspace: WorkspacePort | undefined,
 ): void {
-  // 源这一代没活着就不给集合。一份「看起来有、其实不知道」的集合比拒绝更坏：客户端会
+  // 源这一代没活着就不给集合。给一份「看起来有、其实不知道」的集合比拒绝更坏：客户端会
   // 把它当成可信基线，而中继此刻根本不知道上游还挂着什么。拒绝之后客户端按可重试处理、
   // 退避重开 —— 那时源通常已经就绪。
+  //
+  // 这条拒绝**只落在审批流上**：列表与转发两条流不受影响，这是本期唯一新增的行为。
   if (!approvals.ready) {
-    log.error('events stream opened before the $events source was ready — refused',
+    log.error('approvals stream opened before the $events source was ready — refused',
       { stream: streamId })
     send(socket, {
       type: 'error',
@@ -235,7 +261,7 @@ function pumpEvents(
   }
 
   const announce = (): void => {
-    const generation = feed.generation
+    const generation = feed?.generation
     send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
     // 每一条 `ready` 后面紧跟一份当前集合。`ready` 的语义是「从这一刻起你看到的都是新的」，
     // 客户端据此把表重建一次 —— 它不需要一条单独的「清空」帧：没有集契约的帧就没有
@@ -247,43 +273,103 @@ function pumpEvents(
       send(socket, waterfallItem(streamId, held))
     }
   }
+  // 只订代次、不订内容：这条流的实时内容来自 `approvals.onHeld`，不是源的帧。
+  const unsubscribe = feed?.subscribe({ generation: () => { announce() }, frame: () => {} })
   // 先订阅、再发开口帧：两句之间没有 `await`，源不可能插进来一帧 —— 于是「第一条 item
-  // 一定是 ready」与「订阅之后一帧都不漏」同时成立。反过来（先发后订阅）会丢掉夹在
-  // 中间的那一帧，而这条流不重放，丢了就是永久丢。
-  const unsubscribe = feed.subscribe({
-    generation: () => { announce() },
-    frame: (frame) => {
-      if (frame.type !== 'emit') return
-      // 会话列表的四类事件在**这里**翻成我们的行形状，其余的按原样转发。
-      // 翻译放在网关而不是手机：客户端若也解一遍上游形状，同一事实就有三个声明
-      // （列表路径、这里、客户端），而只有前两个归我们管。
-      //
-      // 归属每次现取一次注册表快照，不缓存：缓存要引入失效时机，而这里错一次就是
-      // 一行挂错组。代价是**每一条 emit 帧**都要遍历一次（不只是 `api-session/added`
-      // 那一种 —— 在调用点分清事件类型，就得让这一层认识上游的事件名，而认识它们的
-      // 只有适配器）。量级是「工作空间数 × 成员数」，与事件频率比可以忽略。
-      const change = sessionListChangeOf(frame.event, frame.args, workspace?.snapshot().owners)
-      send(socket, {
-        type: 'item',
-        streamId,
-        payload: change === undefined
-          ? { kind: 'emit', event: frame.event, args: frame.args }
-          : { kind: 'session-list', change },
-      })
-    },
-  })
+  // 一定是 ready」与「订阅之后一帧都不漏」同时成立。
   announce()
-  log.info('events stream opened', { generation: feed.generation ?? 'none' })
+  log.info('approvals stream opened', { generation: feed?.generation ?? 'none' })
 
-  // 订阅排在重放之后：两句之间没有 `await`，源插不进来（单线程 + 同步循环），
-  // 于是「重放的这一份」与「之后的增量」既不重也不漏。
   const offHeld = approvals.onHeld((held) => { send(socket, waterfallItem(streamId, held)) })
   const offCancelled = approvals.onCancelled((eventId) => { send(socket, cancelItem(streamId, eventId)) })
 
   signal.addEventListener('abort', () => {
-    unsubscribe()
+    unsubscribe?.()
     offHeld()
     offCancelled()
+    done()
+  }, { once: true })
+}
+
+/**
+ * 列表流：只推增量，开口帧只说明「就绪」与「此刻是哪一代」。
+ *
+ * **没有基线帧，这是刻意的**：列表的恢复走客户端重读（收到 `ready` 发一次 `list-sessions`），
+ * 与上游 Web UI 的 `refreshList()` 同一条路。在这里推一份全量要在流上多定义一种帧，
+ * 而它换来的只是省一次 HTTP。
+ */
+function pumpSessionList(
+  socket: Duplex,
+  feed: ForwardedSource,
+  streamId: StreamId,
+  signal: AbortSignal,
+  done: () => void,
+  workspace: WorkspacePort | undefined,
+): void {
+  const announce = (): void => {
+    const generation = feed.generation
+    send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
+  }
+  const unsubscribe = feed.subscribe({
+    generation: () => { announce() },
+    frame: (frame) => {
+      if (frame.type !== 'emit') return
+      // 归属每次现取一次注册表快照，不缓存：缓存要引入失效时机，而这里错一次就是
+      // 一行挂错组。代价是**每一条 emit 帧**都要遍历一次 —— 量级是「工作空间数 ×
+      // 成员数」，与事件频率比可以忽略。
+      //
+      // 判定放在适配器（`sessionListChangeOf`）而不是在这里：认识上游事件名的只有它。
+      // 翻不成列表行的那一类不归这条流（见 `pumpHostEvents`）。
+      const change = sessionListChangeOf(frame.event, frame.args, workspace?.snapshot().owners)
+      if (change === undefined) return
+      send(socket, { type: 'item', streamId, payload: { kind: 'session-list', change } })
+    },
+  })
+  announce()
+  log.info('session-list stream opened', { generation: feed.generation ?? 'none' })
+
+  signal.addEventListener('abort', () => {
+    unsubscribe()
+    done()
+  }, { once: true })
+}
+
+/**
+ * 宿主通知流：上游 `emit` 的原样转发，只排除属于列表的那几类。
+ *
+ * **本期没有客户端订阅者**（`ISSUES` C66）。它存在是因为帧必须挂在流上：`emit` 若有
+ * 转发的必要，就必然有一条流可挂。删除这条流等于把 `commands/change`、模型目录、
+ * 登录失效四条路一起删掉。
+ *
+ * 「是不是列表那几类」仍由适配器答：这里调 `sessionListChangeOf` 只是为了排除，不看它
+ * 的返回值内容。代价写清 —— 一条载荷畸形、翻不成列表行的 `api-session/*` 事件会落到
+ * 这条流上（多转一帧没人读的内容，不会串到列表那条）。
+ */
+function pumpHostEvents(
+  socket: Duplex,
+  feed: ForwardedSource,
+  streamId: StreamId,
+  signal: AbortSignal,
+  done: () => void,
+): void {
+  const announce = (): void => {
+    const generation = feed.generation
+    send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
+  }
+  const unsubscribe = feed.subscribe({
+    generation: () => { announce() },
+    frame: (frame) => {
+      if (frame.type !== 'emit') return
+      if (sessionListChangeOf(frame.event, frame.args) !== undefined) return
+      // 名字与参数原样转发：这一层不解释上游事件的内容。
+      send(socket, { type: 'item', streamId, payload: { kind: 'emit', event: frame.event, args: frame.args } })
+    },
+  })
+  announce()
+  log.info('host-events stream opened', { generation: feed.generation ?? 'none' })
+
+  signal.addEventListener('abort', () => {
+    unsubscribe()
     done()
   }, { once: true })
 }
