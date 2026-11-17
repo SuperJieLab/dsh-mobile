@@ -45,7 +45,7 @@ struct SessionListReading {
         case .ended:
             return .reopen
         case let .refused(failure):
-            return StreamNext.retryableFailureCodes.contains(failure.code) ? .retry : .stop
+            return failure.isRetryable ? .retry : .stop
         case .ready, .change, .ignored:
             return .keep
         }

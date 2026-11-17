@@ -82,7 +82,7 @@ final class ApprovalStream {
                      ["code": failure.code, "detail": failure.message])
             // 重试也不会变的那一类会被流层收起，而 `stream` 还非空 —— 标上，回前台时
             // `attach` 才能真的重建。
-            if !StreamNext.retryableFailureCodes.contains(failure.code) {
+            if !failure.isRetryable {
                 markDetached()
             }
         case .ended, .ignored:

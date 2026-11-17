@@ -255,30 +255,41 @@ final class LayeringTests: XCTestCase {
     /// 注册口只认「名字 + 载荷 + 代次」：方法名与参数里出现会话列表增量、待答调用、撤回
     /// 这一族词，就是「加一种业务货物要改通信域」的开始，「无产品行为」的承诺随之失守。
     ///
-    /// 判据落在**注册口的声明行**（`func on…`）上：名字不许命中业务词表，参数不许是业务
-    /// 形状。词表手维护 —— 新增业务词汇时加一行。
-    /// 正控：通用货物口 `onCargo` 必须真的被扫到 —— 扫描失效时词表零命中会被读成合规。
+    /// 判据落在**注册口的声明行**（`func on…`）上：名字不许命中业务词表。词表手维护 ——
+    /// 新增业务词汇时加一行。
     ///
-    /// 盲区：只认声明行；用变量间接注册的写法靠评审。
+    /// 拆流之后通信域里**一个 `on*` 注册口都不该有**：听众表只提供通用的 `add` / `fire`，
+    /// 带业务语义的订阅面（`onWaterfall` / `onChange`）全在各自的 Feature 里。所以这条判据
+    /// 同时断言两件事 —— 词表零命中，且 `on*` 声明为零（后者是拆流之后新增的事实，
+    /// 把「不在 Core」从「碰巧没有」变成「写了就红」）。
+    ///
+    /// 正控：扫描器必须看得见方法声明（`func ` 行数过下限），否则零命中会被读成合规。
+    ///
+    /// 盲区：只认声明行；用变量间接传递的写法靠评审。
     private static let businessSubscriptionWords = [
         "SessionList", "Approval", "Waterfall", "Cancel",
     ]
 
     func testCoreHasNoBusinessSubscriptions() throws {
         let root = sourcesRoot.appendingPathComponent("Core/Gateway")
-        var genericHits = 0
+        var declarations = 0
+        var subscriptions: [String] = []
         var hits: [String] = []
         for file in swiftFiles(under: root) {
             let text = try String(contentsOf: file, encoding: .utf8)
             for (line, code) in codeLines(in: text) {
+                guard code.contains("func ") else { continue }
+                declarations += 1
                 guard code.contains("func on") else { continue }
-                if code.contains("func onCargo(") { genericHits += 1 }
+                subscriptions.append("Core/Gateway/\(file.lastPathComponent):\(line)")
                 for word in Self.businessSubscriptionWords where code.contains(word) {
                     hits.append("Core/Gateway/\(file.lastPathComponent):\(line) \(word)")
                 }
             }
         }
-        XCTAssertGreaterThan(genericHits, 0, "onCargo 一处都没扫到 —— 先怀疑扫描面")
+        XCTAssertGreaterThan(declarations, 20, "扫到的声明行太少 —— 路径推算错了？")
+        XCTAssertEqual(subscriptions, [],
+                       "通信域里出现了 `on*` 注册口 —— 听众表只该有通用的 add / fire：\(subscriptions)")
         XCTAssertEqual(hits, [], "Core 的注册口出现了业务概念：\(hits)")
     }
 

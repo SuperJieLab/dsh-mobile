@@ -32,16 +32,3 @@ enum StreamNext: Equatable {
     /// 终态：再开也是同一个结果，收起这一条流。**连接不动**，别的流照旧。
     case stop
 }
-
-extension StreamNext {
-
-    /// 重试之后结果**可能不同**的拒绝码。依据只有一句：再开一条同样的流，上游的答复会不会变。
-    /// `source-unavailable` 与 `internal-error` 会变；`unknown-op`、`unauthorized` 不会。
-    ///
-    /// 定义在这里而不是各流一份：它是「要不要再试」的判据，与流的名字无关；两条流各写一遍
-    /// 之后，改一处漏一处不会有任何症状（表现只是某条流该重试的没重试）。
-    static let retryableFailureCodes: Set<String> = [
-        GatewayErrorCode.sourceUnavailable.rawValue,
-        GatewayErrorCode.internalError.rawValue,
-    ]
-}

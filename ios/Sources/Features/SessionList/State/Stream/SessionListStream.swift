@@ -61,7 +61,7 @@ final class SessionListStream {
         case let .refused(failure):
             Log.warn(Log.Module.gateway, "session-list stream refused",
                      ["code": failure.code, "detail": failure.message])
-            if !StreamNext.retryableFailureCodes.contains(failure.code) {
+            if !failure.isRetryable {
                 markDetached()
             }
         case .ended, .ignored:

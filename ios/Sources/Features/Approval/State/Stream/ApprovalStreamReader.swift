@@ -49,7 +49,7 @@ struct ApprovalReading {
         case let .refused(failure):
             // 按「重试之后结果会不会不同」分，不按错得多严重分：源没就绪、网关内部错都
             // 可能一次就好；「这台网关不认 approvals」重试一万次也一样。
-            return StreamNext.retryableFailureCodes.contains(failure.code) ? .retry : .stop
+            return failure.isRetryable ? .retry : .stop
         case .ready, .waterfall, .cancel, .ignored:
             return .keep
         }

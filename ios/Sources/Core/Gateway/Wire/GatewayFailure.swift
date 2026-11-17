@@ -41,3 +41,20 @@ struct GatewayFailure: Decodable, Equatable {
     let code: String
     let message: String
 }
+
+extension GatewayFailure {
+
+    /// 再开一条同样的流，答复**可能不同**吗。
+    ///
+    /// 依据只有一句：上游这一次的答复会不会变。`source-unavailable`（源这一代还没就绪）
+    /// 与 `internal-error`（网关这一侧的临时故障）会变；`unknown-op`、`unauthorized`
+    /// 再试一万次也一样。
+    ///
+    /// **为什么这一格住在这里而不是流层**：流层只该认编号与答复，认识协议错误码就说明
+    /// 它开始理解业务之外的词汇了。这个判断与 `GatewayErrorCode` 同源，离它最近的地方
+    /// 是错误值自己。
+    var isRetryable: Bool {
+        code == GatewayErrorCode.sourceUnavailable.rawValue
+            || code == GatewayErrorCode.internalError.rawValue
+    }
+}
