@@ -611,7 +611,14 @@ test('transport does not build protocol envelopes by hand', () => {
  * 盲区：它只查名字在不在，查不到「说法对不对」。后者靠读，不靠这条。
  */
 test('the realtime-stream chapter names the three connection streams', () => {
+  // 这一册不进仓库（`.gitignore`），所以 CI 的干净 clone 里没有它 —— 与术语判据对工作区
+  // 文档的处理同形：不在工作区就跳过并告警，而不是让一次 checkout 缺文件把整套判据打红。
+  // 代价写在判据名里：它是一条**只在本地生效**的常驻判据。
   const chapter = resolve(dirname(SRC), '../docs/system/04-realtime-stream.md')
+  if (!existsSync(chapter)) {
+    console.warn('⚠️ docs/ 不在工作区（干净 clone），跳过实时流那一册的流表检查')
+    return
+  }
   const text = readFileSync(chapter, 'utf8')
   for (const op of ['approvals', 'session-list', 'host-events']) {
     assert.ok(text.includes(op), `那一册没提 ${op} —— 文档与代码的流表脱节了`)

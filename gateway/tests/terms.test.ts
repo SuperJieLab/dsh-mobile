@@ -151,7 +151,8 @@ test('术语回潮检查：网关源码、测试、工具与活文档里不出�
   } else {
     console.warn(`⚠️ dev/ 不在工作区（干净 clone），跳过 ${DOCS.length} 份活文档`)
   }
-  const docs = devExists ? DOCS.map((d) => join(ROOT, d)) : []
+  // 逐份判存在：工作区文档与系统文档都不进仓库，而它们的缺失是两件独立的事（本地可能只缺一份）。
+  const docs = devExists ? DOCS.map((d) => join(ROOT, d)).filter((d) => existsSync(d)) : []
 
   const files = [
     ...collectFiles(join(ROOT, 'gateway/src'), '.ts'),
