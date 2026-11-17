@@ -7,7 +7,7 @@ import SwiftUI
 struct SessionListAssembler: View {
     private let client: RpcClient
     /// 订阅要它：列表「跟着别的设备动」全靠这条流。
-    private let events: EventStream
+    private let stream: SessionListStream
     /// 渲染段读它的投影：`phase` 驱动「就绪即首载」，`meshPath` 给底部那条状态带。
     private let store: MeshStore
     /// 新建成功后要进哪一屏。由组合根给（那里握着 `NavigationStack` 的 path）。
@@ -18,11 +18,11 @@ struct SessionListAssembler: View {
     @State private var list: SessionListState?
 
     init(client: RpcClient,
-         events: EventStream,
+         stream: SessionListStream,
          store: MeshStore,
          navigate: @escaping (Destination) -> Void) {
         self.client = client
-        self.events = events
+        self.stream = stream
         self.store = store
         self.navigate = navigate
     }
@@ -45,7 +45,7 @@ struct SessionListAssembler: View {
                 }
             }
             // `attach` 自带闸：`.task` 在详情推入时取消、返回时重跑，重跑这一下是空操作。
-            list?.attach(events: events)
+            list?.attach(stream: stream)
         }
     }
 }

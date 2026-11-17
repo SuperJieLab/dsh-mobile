@@ -16,10 +16,11 @@ struct AppServices {
     let client: RpcClient
     /// 到网关的常驻连接。会话详情只在它上面开关流。
     let link: LongConnection
-    /// 列表那一条连接级流的收端（过渡期仍用它开 `session-list`），与连接同寿。消费方：会话列表。
-    let events: EventStream
+    /// 列表那一条连接级流的收端，与连接同寿。消费方：会话列表。
+    let sessionListStream: SessionListStream
     /// 审批那一条连接级流的收端。消费方只有待答表。
-    /// 与 `events` 分开一个实例：两条流各自的代次、各自的听众表，一条坏了不连带另一条。
+    /// 与 `sessionListStream` 分开一个实例：两条流各自的代次、各自的听众表，一条坏了
+    /// 不连带另一条 —— 这正是拆流买的东西。
     let approvalStream: ApprovalStream
     /// 待答审批。不随任何一屏生死：停在会话列表时它照样在收。
     let approvals: ApprovalStore
@@ -59,7 +60,7 @@ struct AppServices {
             session: { [weak store] in store?.route?.session ?? .shared },
             baseURL: { [weak store] in store?.route?.baseURL }
         )
-        let events = EventStream()
+        let sessionListStream = SessionListStream()
         let approvalStream = ApprovalStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
         let telemetryStore = TelemetryStore(directory: TelemetryStore.defaultDirectory())
@@ -69,7 +70,7 @@ struct AppServices {
         self.credentials = credentials
         self.client = client
         self.link = link
-        self.events = events
+        self.sessionListStream = sessionListStream
         self.approvalStream = approvalStream
         self.approvals = approvals
         self.telemetry = telemetry
@@ -106,7 +107,10 @@ struct AppServices {
         if await store.ensureReachable() {
             link.reconnectNow(reason: "foreground")
         }
-        events.attach(to: link)
+        // 两条流都重挂一次：`attach` 自带闸，活着的那条是空操作；被终态拒绝收起的那条
+        // 靠这一下重建 —— 而「回前台」正是它唯一会发生的时机。
+        sessionListStream.attach(to: link)
+        approvalStream.attach(to: link)
     }
 
     /// 服务之间「A 好了 B 该动了」的两根线。只有这个类型同时认识 `store` 与 `link` ——
@@ -115,7 +119,7 @@ struct AppServices {
         // 先落成局部量：捕获列表的 `weak` 那一格只接受标识符；也防环 —— 闭包捕获 `self`
         // 会强持有里面每个 class。
         let link = self.link
-        let events = self.events
+        let sessionListStream = self.sessionListStream
         let approvalStream = self.approvalStream
         let credentials = self.credentials
 
@@ -133,11 +137,12 @@ struct AppServices {
         // 身份刚变过 → 按现状补做连接那几步。读的是**当前**身份：撤销时 `hasDeviceToken`
         // 已是 false，
         // 于是什么都不做 —— 连接层会把无票当终态自己收成 `.idle`。
-        credentials.onIdentityChanged = { [weak credentials, weak link, weak events, weak approvalStream] in
+        credentials.onIdentityChanged = {
+            [weak credentials, weak link, weak sessionListStream, weak approvalStream] in
             guard let credentials, credentials.hasDeviceToken,
-                  let link, let events, let approvalStream else { return }
+                  let link, let sessionListStream, let approvalStream else { return }
             link.activate()
-            events.attach(to: link)
+            sessionListStream.attach(to: link)
             approvalStream.attach(to: link)
         }
     }
@@ -151,7 +156,7 @@ struct AppServices {
             case .activateLink:
                 link.activate()
             case .attachStreams:
-                events.attach(to: link)
+                sessionListStream.attach(to: link)
                 approvalStream.attach(to: link)
             case .launchMesh(let config):
                 await store.start(config: config)

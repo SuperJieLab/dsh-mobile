@@ -6,6 +6,21 @@
  */
 import Foundation
 
+/// 列表从那条流上要的两件事：一条增量、一次报到。
+///
+/// **收窄成协议而不是吃具体类**：`SessionListState` 不该认识「流怎么开、帧怎么判」。
+/// 收窄之后它的测试可以把这两个口替掉 —— 拆流之前那一层的注释写着「具体类替不进去，
+/// 所以只能靠数注册次数」，那条限制随着拆流一起消失了。
+@MainActor
+protocol SessionListEventSink {
+    @discardableResult
+    func onChange(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    @discardableResult
+    func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void
+}
+
+extension SessionListStream: SessionListEventSink {}
+
 @MainActor
 @Observable
 final class SessionListState {
@@ -105,15 +120,15 @@ final class SessionListState {
     }
 
 
-    /// 听事件流。这条流不重放，所以「两次报到之间的事件」可能已经丢了 —— 报到这里是它在
-    /// 客户端唯一可观察的形式。幂等：视图重复出现时不该注册第二个听众。
-    func attach(events: EventStream) {
+    /// 听那条流。这条流不重放，所以「两次报到之间的事件」可能已经丢了 —— 报到是它在
+    /// 客户端唯一可观察的形式，也是重读列表的唯一时机。幂等：视图重复出现时不该注册第二个听众。
+    func attach(stream: any SessionListEventSink) {
         guard !attached else { return }
         attached = true
         // 两件都接：逐条的增量（改一行），与每一次报到（重拉基线）。少接一条的症状是
         // 「列表不自己动」或「断线之后再也不对齐」—— 都不编译失败。
         // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。
-        events.onCargo("session-list") { [weak self] payload in
+        stream.onChange { [weak self] payload in
             guard let change = payload["change"].flatMap(SessionListChange.decode) else {
                 Log.warn(Log.Module.session,
                          "dropped a session-list change this build does not know")
@@ -121,8 +136,10 @@ final class SessionListState {
             }
             self?.apply(change)
         }
-        events.onGeneration { [weak self] _ in
-            Task { await self?.reload() }
+        stream.onGeneration { [weak self] _ in
+            // 报到与「动作成功后刷新」是同一关：撞在途时只等那一次，会把在途发出时刻的
+            // 快照当成最新，而这条流不补发，下一次报到不知要等多久。
+            Task { await self?.reloadAfterAction() }
         }
     }
 
@@ -276,7 +293,10 @@ extension SessionListState {
     /// 在途那次的 body 从拿到值之后到收尾之间没有 `await`，因此一轮让步通常就够 ——
     /// 上限只是防它永远不让位。
     ///
-    /// 它服务两个动作：建工作空间、删工作空间。
+    /// 它服务三个场景：建工作空间、删工作空间、流的报到（重连或首次开流）。
+    ///
+    /// 第三个别名不像「动作」：报到不是用户做的事。但它对重读的要求完全相同 ——
+    /// 「这一发真的发出去了吗」。
     private func reloadAfterAction() async {
         for _ in 0..<3 {
             if await reload() { return }

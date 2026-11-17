@@ -186,7 +186,7 @@ final class ApprovalStoreTests: XCTestCase {
 
     /// 只数注册次数的订阅面替身。
     ///
-    /// 为什么需要它：`EventStream` 的注册表是 private、类型又是具体类，替不进去 ⇒ 数不到
+    /// 为什么需要它：订阅面是窄协议，但真实现（`ApprovalStream`）的听众表是 private ⇒ 数不到
     /// 「注册了几次」，而这条契约正是「注册几次」。不数卡片：`ApprovalTable.absorb` 按
     /// `eventId` 覆盖，卡片数恒定，断言它会永远绿。
     @MainActor
@@ -212,7 +212,7 @@ final class ApprovalStoreTests: XCTestCase {
     /// 挂第二次是空操作 —— 入口不唯一，而注册本身不幂等。
     ///
     /// 症状今天**看不见**（重复的听众被按 `eventId` 覆盖吸收了），所以只能数注册次数。
-    /// 换实例重挂也不生效（闸只认「挂过」）：全仓只有一个 `EventStream`，这条限制写进了
+    /// 换实例重挂也不生效（闸只认「挂过」）：全仓只有一个 `ApprovalStream`，这条限制写进了
     /// `attach` 的注释。
     func testAttachingTwiceRegistersTheListenersOnce() {
         let sink = SpySink()

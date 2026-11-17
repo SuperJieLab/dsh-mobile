@@ -233,23 +233,23 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(state.sessions.map(\.id), ["a"], "重放不该把 blank 行加回来")
     }
 
-    // MARK: - 装配：一帧从事件流走到列表
+    // MARK: - 装配：一帧从流走到列表
 
-    /// 一整跳：事件流上收到一帧列表增量，列表就变了。
+    /// 一整跳：流上收到一帧列表增量，列表就变了。
     ///
     /// 这一条守的是**接线**，不是任何一端的行为 —— 判读器认识它、`apply` 也会改行，
     /// 但没人把两者接起来时，前两组判据全绿而列表一动不动。两端各守一半、中间那一跳
     /// 没人守，是这个仓库反复踩到的一种缺口。
-    func testAFrameOnTheEventStreamReachesTheList() throws {
+    func testAFrameOnTheStreamReachesTheList() throws {
         let state = make(FakeFetch())
-        let events = EventStream()
-        state.attach(events: events)
+        let stream = SessionListStream()
+        state.attach(stream: stream)
 
         let data = Data("""
         {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
           "kind":"added","row":{"id":"s1","updatedAt":100,"running":false,"blank":false}}}}
         """.utf8)
-        events.handle(EventReader.read(try XCTUnwrap(InboundFrame.decode(data))))
+        _ = stream.handle(try XCTUnwrap(InboundFrame.decode(data)))
 
         XCTAssertEqual(state.sessions.map(\.id), ["s1"], "这一帧该一路走到列表上")
     }
@@ -259,15 +259,15 @@ final class SessionListStateTests: XCTestCase {
     /// 丢弃口径归消费方 —— 「认不出怎么办」是读法的一部分：列表的口径是跳过这一条继续。
     func testMalformedListChangeIsDroppedAtTheConsumer() throws {
         let state = make(FakeFetch())
-        let events = EventStream()
-        state.attach(events: events)
+        let stream = SessionListStream()
+        state.attach(stream: stream)
 
         for text in [
             #"{"type":"item","streamId":"e1","payload":{"kind":"session-list"}}"#,
             #"{"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{"kind":"question"}}}"#,
         ] {
             let frame = try XCTUnwrap(InboundFrame.decode(Data(text.utf8)), "这一帧该解得开：\(text.prefix(80))")
-            events.handle(EventReader.read(frame))
+            _ = stream.handle(frame)
         }
         XCTAssertTrue(state.sessions.isEmpty, "认不出的增量一条都不该进列表")
     }
@@ -345,26 +345,53 @@ final class SessionListStateTests: XCTestCase {
 
     // MARK: - L7 换代次重拉
 
-    /// 事件流每报到一次（含重连拿到相同代次），就重拉一次 —— 这条流不重放，
+    /// 这条流每报到一次（含重连拿到相同代次），就重拉一次 —— 它不重放，
     /// 「两次报到之间的事件可能丢了」在客户端唯一可观察的形式就是它。
     func testEveryGenerationReportPullAgain() async throws {
         let fetch = FakeFetch()
         fetch.holds = false
         let state = make(fetch)
-        let events = EventStream()
-        state.attach(events: events)
+        let stream = SessionListStream()
+        state.attach(stream: stream)
 
-        events.handle(EventReading(content: .ready(generation: 3)))
+        stream.handle(SessionListReading(content: .ready(generation: 3)))
         await settle()
         XCTAssertEqual(fetch.calls, 1, "第一次 ready")
 
-        events.handle(EventReading(content: .ready(generation: 3)))
+        stream.handle(SessionListReading(content: .ready(generation: 3)))
         await settle()
         XCTAssertEqual(fetch.calls, 2, "重连拿到相同代次也是新的开始")
 
-        events.handle(EventReading(content: .ready(generation: nil)))
+        stream.handle(SessionListReading(content: .ready(generation: nil)))
         await settle()
         XCTAssertEqual(fetch.calls, 3, "源失效也要重拉：那些事件再也补不回来")
+    }
+
+    /// 报到撞上在途那一次：**再发一次**，而不是只等它。
+    ///
+    /// 只等的话，落在界面上的就是「在途那次发出的时刻」的快照，而它可能早于断线前后
+    /// 发生的事 —— 而这条流不补发，等下一次报到不知要多久。这与「动作成功后刷新」是同一关
+    /// （`reloadAfterAction` 就是为那件事写的）。
+    func testAGenerationReportedWhileAReloadIsInFlightPullsAgain() async throws {
+        let fetch = FakeFetch()
+        fetch.holds = true          // 第一次取数挂住，模拟「在途那一次还没落地」
+        let state = make(fetch)
+        let stream = SessionListStream()
+        state.attach(stream: stream)
+
+        stream.handle(SessionListReading(content: .ready(generation: 1)))
+        await settle()
+        XCTAssertEqual(fetch.calls, 1, "第一次报到发出去了")
+
+        // 在途期间又来一次报到：这一次**不能**只等上面那一次。
+        stream.handle(SessionListReading(content: .ready(generation: 2)))
+        await settle()
+        XCTAssertEqual(fetch.calls, 1, "撞在途时不会并发发出第二次 —— 单飞仍然成立")
+
+        fetch.release()             // 放行第一次
+        await settle()
+
+        XCTAssertEqual(fetch.calls, 2, "在途收尾之后必须再读一次，否则列表停在重连前的快照上")
     }
 
     // MARK: - 新建会话

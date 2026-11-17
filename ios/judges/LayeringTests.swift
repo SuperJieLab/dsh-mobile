@@ -44,17 +44,38 @@ final class LayeringTests: XCTestCase {
         sourcesRoot.appendingPathComponent("SharedUI")
     }
 
-    /// 线上形状不许认识的实现层：一元调用、长连接（WS + 流）、事件流收端。
+    /// 线上形状不许认识的实现层：一元调用、长连接（WS + 流）。
     /// 纯判定不在此列 —— 它住消费方。
     ///
-    /// ⚠️ 这四个目录名是**字面量**：改名时这里不会编译失败，
-    /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。改名后必须回扫这一处。
+    /// ⚠️ 这三个目录名是**字面量**：改名时这里不会编译失败，
+    /// 而扫不到的目录只回空数组 ⇒ 判据静默缩水、仍然全绿。
+    /// 所以另有一条 `testEveryGatewayImplementationDirectoryExists` 断它们真的存在。
     private var gatewayImplementationDirectories: [URL] {
-        ["LongConnection", "Identity", "Rpc", "Events"]
+        ["LongConnection", "Identity", "Rpc"]
             .map { sourcesRoot.appendingPathComponent("Core/Gateway/\($0)") }
     }
 
     /// 界面目录 = `Features/` 的直接子目录。
+    /// 名单里每一项都必须真的存在。
+    ///
+    /// 这条是「改名回扫」的根：上面那份名单是字面量，扫不到的目录只回空数组 ⇒ 分层判据
+    /// 静默缩水、仍然全绿。这件事踩过两次 —— 一次是改了目录名而名单没跟上，一次是删掉
+    /// 一个目录却留着一个扫空的路径。断言存在性之后，任何改名都会红，不靠人记得回扫。
+    ///
+    /// 活性锚：`Core/Gateway/Wire` 不在名单里但一定存在 —— 用它反推 `sourcesRoot` 没算错，
+    /// 否则「全部不存在」会被误当成「名单该清空」。
+    func testEveryGatewayImplementationDirectoryExists() {
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: sourcesRoot.appendingPathComponent("Core/Gateway/Wire").path),
+            "sourcesRoot 算错了 —— 下面每条都会以「目录不存在」红，先怀疑路径推断")
+        let missing = gatewayImplementationDirectories
+            .filter { !FileManager.default.fileExists(atPath: $0.path) }
+            .map { $0.lastPathComponent }
+        XCTAssertEqual(missing, [], "实现层目录不存在 —— 名单该跟着改名，而不是留一个扫空的路径")
+        XCTAssertGreaterThanOrEqual(gatewayImplementationDirectories.count, 3,
+                                    "名单少到只剩一两个 —— 先怀疑被删空")
+    }
+
     private func interfaceDirectories() throws -> [URL] {
         try FileManager.default
             .contentsOfDirectory(at: featuresRoot,
@@ -1236,7 +1257,7 @@ final class LayeringTests: XCTestCase {
         let declared: [(op: String, file: String)] = [
             ("following", "Features/SessionDetail/State/SessionBehavior.swift"),
             ("approvals", "Features/Approval/State/Stream/ApprovalStream.swift"),
-            ("sessionList", "Core/Gateway/Events/EventStream.swift"),
+            ("sessionList", "Features/SessionList/State/Stream/SessionListStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {
@@ -1392,10 +1413,10 @@ final class LayeringTests: XCTestCase {
             .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
         let approvals = sourcesRoot
             .appendingPathComponent("Features/Approval/State/Stream/ApprovalStream.swift")
-        let events = sourcesRoot
-            .appendingPathComponent("Core/Gateway/Events/EventStream.swift")
+        let list = sourcesRoot
+            .appendingPathComponent("Features/SessionList/State/Stream/SessionListStream.swift")
 
-        for (name, url) in [("会话详情", session), ("审批流", approvals), ("列表流", events)] {
+        for (name, url) in [("会话详情", session), ("审批流", approvals), ("列表流", list)] {
             let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
             XCTAssertTrue(lines.contains { $0.1.contains("any StreamFactory") },
                           "\(name) 没有接在 StreamFactory 上 —— 两条流不再同构")
@@ -1409,7 +1430,7 @@ final class LayeringTests: XCTestCase {
     /// 与 `testBothBusinessStreamsUseTheSameFactory` 是同一件事的两半：那一半守「怎么开」，
     /// 这一半守「不能动什么」。
     func testBusinessSidesHoldNoTransport() throws {
-        let roots = ["Features", "Core/Gateway/Events"]
+        let roots = ["Features"]
         var scanned = 0
         for root in roots {
             let files = swiftFiles(under: sourcesRoot.appendingPathComponent(root))
@@ -1454,6 +1475,9 @@ final class LayeringTests: XCTestCase {
             // 层界与命名那一期作废的名字：作用域词与「宿主」都不再说它是什么。
             "GatewayHost", "GatewayConnection", "ConnectionEventStream",
             "ConnectionEventReader", "ConnectionEventReading", "StreamPort",
+            // 一条流装三种货物那一代的名字：拆完之后流的名字与 op 名一一对应，
+            // 这三个词不该再出现（`SessionListStream` 不含 `EventStream`，不会误伤）。
+            "EventStream", "EventReader", "EventReading",
             // 逐字段搬运窗口那一期：`Window` 与那三个字段一起没了，剩下两条墓碑判据
             // 并进这张名单。带括号是为了不误伤 `livenessWindow` / `flushWindowNanos`。
             "Window(", "activate(session:",
@@ -2078,8 +2102,8 @@ final class LayeringTests: XCTestCase {
 
     /// 对象图里的每件服务**全仓各一个实例**，且都建在 `AppServices.swift`。
     ///
-    /// 多一个实例的症状全是静默的：两个 `TailnetNode` 各起一份 Go 运行时；两个 `EventStream`
-    /// 各收一半事件；两张待答表各说各话。而**少一个**（有人就地 `EventStream()`）同样是
+    /// 多一个实例的症状全是静默的：两个 `TailnetNode` 各起一份 Go 运行时；两条列表流
+    /// 各自只收到一半事件；两张待答表各说各话。而**少一个**（有人就地 `SessionListStream()`）同样是
     /// 静默的 —— 新造的那个没人喂事件，屏上表现为「永远不更新」。
     ///
     /// 表驱动而不是逐条写：加一件服务只加一行，漏加会以「扫到的服务太少」暴露
@@ -2093,7 +2117,7 @@ final class LayeringTests: XCTestCase {
             ("CredentialStore.shared", "身份真值（单例）"),
             ("RpcClient(", "请求门面"),
             ("LongConnection(", "长连接"),
-            ("EventStream(", "列表流（过渡期）"),
+            ("SessionListStream(", "列表流"),
             ("ApprovalStream(", "审批流"),
             ("ApprovalStore(", "待答表"),
         ]
@@ -2216,7 +2240,7 @@ final class LayeringTests: XCTestCase {
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
-        let banned = ["RpcClient", "LongConnection", "EventStream"]
+        let banned = ["RpcClient", "LongConnection", "SessionListStream", "ApprovalStream"]
         var scanned = 0
         for path in files {
             let url = sourcesRoot.appendingPathComponent(path)
@@ -2842,9 +2866,9 @@ final class LayeringTests: XCTestCase {
         XCTAssertGreaterThan(scanned, 20, "一个文件都没扫到 —— 路径错了，这条判据在空转")
     }
 
-    /// 审批听众的「只挂一次」落在 `ApprovalStore`，不在 `EventStream` 的注册面上。
+    /// 审批听众的「只挂一次」落在 `ApprovalStore`，不在听众表的注册面上。
     ///
-    /// 落在注册面上就要改它的语义，而它是「同名追加」—— 全部订阅方都会跟着变。
+    /// 落在注册面上就要改它的语义，而它是「无条件追加」—— 两条流上全部订阅方都会跟着变。
     /// ⚠️ 这条查的是「闸在哪」，查不到「它真的挡住了第二次」—— 后者由
     /// `ApprovalStoreTests.testAttachingTwiceRegistersTheListenersOnce` 守。
     func testTheAttachOnceGateLivesInTheApprovalStore() throws {
@@ -2854,14 +2878,14 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(approval.contains { $0.1.contains("guard !attached else { return }") },
                       "一次性闸没了 —— 第二次挂载会再注册一遍")
 
-        let stream = codeLines(
-            in: try String(contentsOf: sourcesRoot.appendingPathComponent("Core/Gateway/Events/EventStream.swift"),
-                           encoding: .utf8))
-        guard let start = stream.firstIndex(where: { $0.1.contains("func onCargo(_ type: String") }) else {
-            XCTFail("EventStream 里找不到 onCargo —— 扫错文件了")
+        let table = codeLines(
+            in: try String(contentsOf: sourcesRoot.appendingPathComponent(
+                "Core/Gateway/LongConnection/Stream/ListenerTable.swift"), encoding: .utf8))
+        guard let start = table.firstIndex(where: { $0.1.contains("func add(_ call:") }) else {
+            XCTFail("ListenerTable 里找不到 add —— 扫错文件了")
             return
         }
-        let body = stream[start...].prefix(5).map(\.1).joined(separator: "\n")
+        let body = table[start...].prefix(8).map(\.1).joined(separator: "\n")
         // 钉「无条件追加一个带 token 的听众」这个形状，不钉元素的具体类型：
         // 加退订 token 改的是元素，不是「有没有闸」。
         XCTAssertTrue(body.contains("append(Entry(token:"),
@@ -3025,20 +3049,20 @@ final class LayeringTests: XCTestCase {
         return out
     }
 
-    /// 列表状态真的被接上了事件流，而视图只剩「触发重拉」。
+    /// 列表状态真的被接上了那条流，而视图只剩「触发重拉」。
     ///
     /// 这一行是整条链路的入口，而它没有任何行为判据能碰到（视图不在测试覆盖里）：
     /// 删掉它，两端的判据全绿而列表永远不动。结构判据是唯一守得住它的形式。
     ///
     /// 锚落在**列表的装配段**：它造这个 state，也就由它接。渲染视图的字段里没有
-    /// `EventStream`，所以锚不在视图 —— 那一半（服务不进渲染视图的
+    /// `SessionListStream`，所以锚不在视图 —— 那一半（服务不进渲染视图的
     /// 字段）由 `testRenderViewsHoldNoServices` 守，两条各守一半。
-    func testTheListStateIsSubscribedToTheEventStream() throws {
+    func testTheListStateIsSubscribedToTheStream() throws {
         let assembler = sourcesRoot.appendingPathComponent(
             "Features/SessionList/Views/SessionListAssembler.swift")
         let assemblerLines = codeLines(in: try String(contentsOf: assembler, encoding: .utf8))
-        XCTAssertTrue(assemblerLines.contains { $0.1.contains("list?.attach(events: events)") },
-                      "装配段没有把事件流交给列表状态 —— 事件到不了列表")
+        XCTAssertTrue(assemblerLines.contains { $0.1.contains("list?.attach(stream: stream)") },
+                      "装配段没有把那条流交给列表状态 —— 事件到不了列表")
 
         let list = sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift")
         let listLines = codeLines(in: try String(contentsOf: list, encoding: .utf8))
