@@ -191,6 +191,11 @@ final class SessionListState {
             //
             // 分类只看错误的类型，**不去推算「现在缺什么」**：`FailureText` 已经把两种前置
             // 说成了两句不同的话（组网未就绪 / 还没有配对），端上再猜一遍就会有两个说法。
+            //
+            // 留痕与失败面各管一件事：界面上的红条讲「现在怎样」，日志讲「哪一次为什么没成」——
+            // 用户报「列表不动」时，只有日志能回答是没发出去、还是发了但失败了。
+            Log.warn(Log.Module.session, "session list fetch failed",
+                     ["reason": error.localizedDescription])
             record(failure: error)
         }
         return true
@@ -302,6 +307,9 @@ extension SessionListState {
             if await reload() { return }
             await Task.yield()
         }
+        // 三轮都没让位：这一次刷新放弃。它不是「什么都没发生」—— 在途那一次的结果早于
+        // 刚发生的事，界面会停在旧快照上。这条日志是这句话唯一的可查痕迹。
+        Log.warn(Log.Module.session, "list refresh skipped — a read stayed in flight for every attempt")
     }
 
     /// 打开输入面板时清掉上一次的结果与拒绝理由 —— 否则「已经有了」会一直挂在那儿。

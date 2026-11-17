@@ -278,7 +278,10 @@ function pumpApprovals(
   // 先订阅、再发开口帧：两句之间没有 `await`，源不可能插进来一帧 —— 于是「第一条 item
   // 一定是 ready」与「订阅之后一帧都不漏」同时成立。
   announce()
-  log.info('approvals stream opened', { generation: feed?.generation ?? 'none' })
+  // 只记编号：源此刻是哪一代由上游的 `$events ready` 那一条负责（带 `client` 与
+  // `generation`）。两处各打一遍的话，同一个 `generation` 在这里指源代次、在流层指
+  // 连接代次 —— 同名不同义，而字段名本该是共用词汇表。
+  log.info('approvals stream opened', { stream: streamId })
 
   const offHeld = approvals.onHeld((held) => { send(socket, waterfallItem(streamId, held)) })
   const offCancelled = approvals.onCancelled((eventId) => { send(socket, cancelItem(streamId, eventId)) })
@@ -326,7 +329,7 @@ function pumpSessionList(
     },
   })
   announce()
-  log.info('session-list stream opened', { generation: feed.generation ?? 'none' })
+  log.info('session-list stream opened', { stream: streamId })
 
   signal.addEventListener('abort', () => {
     unsubscribe()
@@ -366,7 +369,7 @@ function pumpHostEvents(
     },
   })
   announce()
-  log.info('host-events stream opened', { generation: feed.generation ?? 'none' })
+  log.info('host-events stream opened', { stream: streamId })
 
   signal.addEventListener('abort', () => {
     unsubscribe()
