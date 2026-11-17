@@ -222,14 +222,23 @@ test('U4: each source frame reaches exactly one stream', { timeout: 10_000 }, as
     }])
     feed.emit('llm/models-updated', [['deepseek-chat']])
 
+    // 断言里带上 `event` 名：只看 `kind` 的话，「`pumpHostEvents` 漏了排除列表那几类」
+    // 这个 bug 长得就像合规 —— 反正三条流各收到一帧，前三条里总有一条 `h1:emit`。
+    // 真覆盖是「哪一条 emit」。
     const seen = [
       await receive(socket),
       await receive(socket),
       await receive(socket),
-    ].map(frame => `${String(frame.streamId)}:${String((frame.payload as Record<string, unknown>).kind)}`)
+    ].map((frame) => {
+      const payload = frame.payload as Record<string, unknown>
+      // 只有 `emit` 那一类带"转发的是哪个事件"；`waterfall` 的 `event` 是上游事件名，
+      // 不是这里的判别项。
+      const event = payload.kind === 'emit' ? `:${String(payload.event)}` : ''
+      return `${String(frame.streamId)}:${String(payload.kind)}${event}`
+    })
 
-    assert.deepEqual(seen.sort(), ['a1:waterfall', 'h1:emit', 'l1:session-list'],
-      `三帧各归各流；实际 ${seen.join(', ')}`)
+    assert.deepEqual(seen.sort(), ['a1:waterfall', 'h1:emit:llm/models-updated', 'l1:session-list'],
+      `三帧各归各流，且转发流只拿到非列表那一类；实际 ${seen.join(', ')}`)
 
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))

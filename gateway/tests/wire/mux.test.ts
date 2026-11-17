@@ -44,7 +44,7 @@ test('parseClientFrame: a bad payload is still a frame — the envelope is all t
     JSON.stringify({ type: 'open', streamId: 's1' }),                       // open without payload
     JSON.stringify({ type: 'open', streamId: 's1', payload: {} }),          // no sessionId
     JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'nosuch' } }),
-    JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'events' } }),
+    JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'approvals' } }),
   ]
   for (const text of attributable) {
     const frame = parseClientFrame(text)

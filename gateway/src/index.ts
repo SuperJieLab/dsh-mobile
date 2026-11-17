@@ -176,7 +176,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       // 打开帧的字节上界与 HTTP 路径的上限同源（同一个 `limits`）—— 两端各自
       // 记一个数才是口径不一致的来源。
       openingCapBytes: limits.maxOpeningBytes,
-      // `{op:'events'}` 的流订阅这份源：身份是网关进程的，流是这条连接的。
+      // `session-list` 与 `host-events` 两条流订阅这份源：身份是网关进程的，流是这条连接的。
       events: forwardedEvents,
       // 列表增量行的归属来源。与一元的列表路径同一份端口 —— 两处的归属必须同一判据，
       // 否则同一条会话会在列表里和增量里落在两个组。

@@ -79,7 +79,7 @@ export interface MuxApprovalHeld {
 }
 
 /**
- * 一条待答调用 —— `{op:'events'}` 流的一种货物。
+ * 一条待答调用 —— `{op:'approvals'}` 流的一种货物。
  *
  * 四个字段与上游 waterfall 帧逐字相同：这一层不解释载荷，只搬。`agentId` 就是会话身份，
  * 客户端按它入栏 —— 与它在上游的含义一致（`Agent.id` 即 `SessionId`）。

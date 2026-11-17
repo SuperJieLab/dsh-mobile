@@ -239,7 +239,7 @@ test('relay: only approval/request waterfalls are announced — the request body
 test('relay: the source dying drops held questions, and the next generation starts clean', async () => {
   // 身份换代 = 宿主会把仍在等待的问题重投一遍。沿用旧集合就是重放已消费的应答，
   // 所以中继必须在「源没了」那一刻把待答表丢掉 —— 这是它跟源一起动的那一半。
-  // 客户端那张表的清空由每一条 `ready` 触发（`pumpEvents`），不在这里。
+  // 客户端那张表的清空由每一条 `ready` 触发（`pumpApprovals`），不在这里。
   const { feed, relay, events, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1'))

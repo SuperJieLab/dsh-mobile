@@ -135,17 +135,17 @@ export const DEFAULT_OPENING_BYTES = DEFAULT_LIMITS.maxOpeningBytes
 /** 流适配器的可调项。 */
 export interface StreamOptions {
   /**
-   * 进程里那份转发事件源（`{op:'events'}` 的流订阅它）。
+   * 进程里那份转发事件源（`{op:'session-list'}` 与 `{op:'host-events'}` 两条流订阅它）。
    *
    * 缺席**不是**降级路径：装配忘了接它时，事件流要拿到一条显式的拒绝，而不是一条
    * 永远等不到正文的流。只在「这台网关不提供事件流」的测试里才该缺席。
    */
   events?: ForwardedSource
   /**
-   * 审批的当前集合与变化 —— 与 `events` 成对出现：事件流是它唯一的投递通道。
+   * 审批的当前集合与变化 —— `{op:'approvals'}` 流订阅它。
    *
    * 与 `events` 分开声明是因为它们回答两件事：`events` 说"有没有源"，它说"待答项
-   * 现在是什么"。缺了它，`{op:'events'}` 同样要被拒绝（装配错误）。
+   * 现在是什么"。缺了它，只有审批那条流被拒绝（装配错误）—— 另外两条不经过它。
    */
   approvals?: ApprovalSource
   /**
