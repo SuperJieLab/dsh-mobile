@@ -14,12 +14,12 @@ import Foundation
 @MainActor
 protocol SessionListEventSink {
     @discardableResult
-    func onChange(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    func onChange(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void
     @discardableResult
-    func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void
+    func onReady(_ handler: @escaping () -> Void) -> () -> Void
 }
 
-extension SessionListStream: SessionListEventSink {}
+extension EventsStream: SessionListEventSink {}
 
 @MainActor
 @Observable
@@ -128,15 +128,15 @@ final class SessionListState {
         // 两件都接：逐条的增量（改一行），与每一次报到（重拉基线）。少接一条的症状是
         // 「列表不自己动」或「断线之后再也不对齐」—— 都不编译失败。
         // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。
-        stream.onChange { [weak self] payload in
-            guard let change = payload["change"].flatMap(SessionListChange.decode) else {
+        stream.onChange { [weak self] event, args in
+            guard let change = SessionListEvents.changeOf(event: event, args: args) else {
                 Log.warn(Log.Module.session,
-                         "dropped a session-list change this build does not know")
+                         "dropped a session event this build does not know: \(event)")
                 return
             }
             self?.apply(change)
         }
-        stream.onGeneration { [weak self] _ in
+        stream.onReady { [weak self] in
             // 报到与「动作成功后刷新」是同一关：撞在途时只等那一次，会把在途发出时刻的
             // 快照当成最新，而这条流不补发，下一次报到不知要等多久。
             Task { await self?.reloadAfterAction() }

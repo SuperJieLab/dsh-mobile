@@ -58,6 +58,14 @@ final class SessionListStateTests: XCTestCase {
     /// 「被调到就失败」的桩，用到了再显式传。
     private struct WriteNotExpected: Error {}
 
+
+    /// 一条 `ready` 帧 —— 现在不带代次，每一次都是「从现在起都是新的」。
+    private func readyFrame() throws -> InboundFrame {
+        try XCTUnwrap(InboundFrame.decode(Data(
+            #"{"type":"item","streamId":"e1","value":{"type":"ready","clientId":"c1"}}"#.utf8
+        )))
+    }
+
     private func make(
         _ fetch: FakeFetch,
         create: @escaping (String?) async throws -> String = { _ in throw WriteNotExpected() },
@@ -242,12 +250,12 @@ final class SessionListStateTests: XCTestCase {
     /// 没人守，是这个仓库反复踩到的一种缺口。
     func testAFrameOnTheStreamReachesTheList() throws {
         let state = make(FakeFetch())
-        let stream = SessionListStream()
+        let stream = EventsStream()
         state.attach(stream: stream)
 
         let data = Data("""
-        {"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{
-          "kind":"added","row":{"id":"s1","updatedAt":100,"running":false,"blank":false}}}}
+        {"type":"item","streamId":"e1","value":{"type":"emit","event":"api-session/added",
+          "args":[{"sessionId":"s1","updatedAt":100,"running":false,"blank":false}]}}
         """.utf8)
         _ = stream.handle(try XCTUnwrap(InboundFrame.decode(data)))
 
@@ -259,12 +267,14 @@ final class SessionListStateTests: XCTestCase {
     /// 丢弃口径归消费方 —— 「认不出怎么办」是读法的一部分：列表的口径是跳过这一条继续。
     func testMalformedListChangeIsDroppedAtTheConsumer() throws {
         let state = make(FakeFetch())
-        let stream = SessionListStream()
+        let stream = EventsStream()
         state.attach(stream: stream)
 
         for text in [
-            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list"}}"#,
-            #"{"type":"item","streamId":"e1","payload":{"kind":"session-list","change":{"kind":"question"}}}"#,
+            // 不是事件的 `emit`：`args` 不是数组。
+            #"{"type":"item","streamId":"e1","value":{"type":"emit","event":"api-session/added","args":"nope"}}"#,
+            // 事件认不出：名字不在四类里。
+            #"{"type":"item","streamId":"e1","value":{"type":"emit","event":"api-session/question","args":[]}}"#,
         ] {
             let frame = try XCTUnwrap(InboundFrame.decode(Data(text.utf8)), "这一帧该解得开：\(text.prefix(80))")
             _ = stream.handle(frame)
@@ -351,20 +361,20 @@ final class SessionListStateTests: XCTestCase {
         let fetch = FakeFetch()
         fetch.holds = false
         let state = make(fetch)
-        let stream = SessionListStream()
+        let stream = EventsStream()
         state.attach(stream: stream)
 
-        stream.handle(SessionListReading(content: .ready(generation: 3)))
+        stream.handle(try readyFrame())
         await settle()
         XCTAssertEqual(fetch.calls, 1, "第一次 ready")
 
-        stream.handle(SessionListReading(content: .ready(generation: 3)))
+        stream.handle(try readyFrame())
         await settle()
-        XCTAssertEqual(fetch.calls, 2, "重连拿到相同代次也是新的开始")
+        XCTAssertEqual(fetch.calls, 2, "重连再来一次 ready 也是新的开始")
 
-        stream.handle(SessionListReading(content: .ready(generation: nil)))
+        stream.handle(try readyFrame())
         await settle()
-        XCTAssertEqual(fetch.calls, 3, "源失效也要重拉：那些事件再也补不回来")
+        XCTAssertEqual(fetch.calls, 3, "源换代同样重拉：那些事件再也补不回来")
     }
 
     /// 报到撞上在途那一次：**再发一次**，而不是只等它。
@@ -376,15 +386,15 @@ final class SessionListStateTests: XCTestCase {
         let fetch = FakeFetch()
         fetch.holds = true          // 第一次取数挂住，模拟「在途那一次还没落地」
         let state = make(fetch)
-        let stream = SessionListStream()
+        let stream = EventsStream()
         state.attach(stream: stream)
 
-        stream.handle(SessionListReading(content: .ready(generation: 1)))
+        stream.handle(try readyFrame())
         await settle()
         XCTAssertEqual(fetch.calls, 1, "第一次报到发出去了")
 
         // 在途期间又来一次报到：这一次**不能**只等上面那一次。
-        stream.handle(SessionListReading(content: .ready(generation: 2)))
+        stream.handle(try readyFrame())
         await settle()
         XCTAssertEqual(fetch.calls, 1, "撞在途时不会并发发出第二次 —— 单飞仍然成立")
 

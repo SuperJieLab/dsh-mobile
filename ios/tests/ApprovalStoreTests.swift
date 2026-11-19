@@ -40,6 +40,22 @@ final class ApprovalStoreTests: XCTestCase {
     /// 一条待答调用的载荷 —— 上游 waterfall 的四个字段原样，网关只搬不改。
     ///
     /// `callId` 与 `eventId` 可以不同值 —— 那是「按错字段建键」唯一能被看见的形状。
+
+    /// 一条 `waterfall` 货物帧。
+    private func waterfallFrame() throws -> InboundFrame {
+        try frame(#"{"type":"waterfall","event":"approval/request","eventId":"e1","agentId":"s1","request":{"toolName":"bash"}}"#)
+    }
+
+    /// 一条 `ready` 货物帧 —— 现在不带代次。
+    private func readyFrame() throws -> InboundFrame {
+        try frame(#"{"type":"ready","clientId":"c1"}"#)
+    }
+
+    /// 把一段货物 JSON 包成 `value` 里的 item 帧。
+    private func frame(_ valueJSON: String) throws -> InboundFrame {
+        try XCTUnwrap(InboundFrame.decode(Data(#"{"type":"item","streamId":"e1","value":\#(valueJSON)}"#.utf8)))
+    }
+
     private func waterfall(
         session: String = "s1", eventId: String = "e1", toolName: String = "bash",
         reason: String? = nil, callId: String? = nil
@@ -186,7 +202,7 @@ final class ApprovalStoreTests: XCTestCase {
 
     /// 只数注册次数的订阅面替身。
     ///
-    /// 为什么需要它：订阅面是窄协议，但真实现（`ApprovalStream`）的听众表是 private ⇒ 数不到
+    /// 为什么需要它：订阅面是窄协议，但真实现（`EventsStream`）的听众表是 private ⇒ 数不到
     /// 「注册了几次」，而这条契约正是「注册几次」。不数卡片：`ApprovalTable.absorb` 按
     /// `eventId` 覆盖，卡片数恒定，断言它会永远绿。
     @MainActor
@@ -212,7 +228,7 @@ final class ApprovalStoreTests: XCTestCase {
     /// 挂第二次是空操作 —— 入口不唯一，而注册本身不幂等。
     ///
     /// 症状今天**看不见**（重复的听众被按 `eventId` 覆盖吸收了），所以只能数注册次数。
-    /// 换实例重挂也不生效（闸只认「挂过」）：全仓只有一个 `ApprovalStream`，这条限制写进了
+    /// 换实例重挂也不生效（闸只认「挂过」）：全仓只有一个 `EventsStream`，这条限制写进了
     /// `attach` 的注释。
     func testAttachingTwiceRegistersTheListenersOnce() {
         let sink = SpySink()
@@ -229,20 +245,20 @@ final class ApprovalStoreTests: XCTestCase {
     /// 三处接线一次断完：待答调用进表、撤回带走它、源失效清空。
     ///
     /// 三处各自能单独坏（而且坏了都不编译失败），所以各一条断言。
-    func testAttachWiresTheApprovalPathAndSourceLoss() {
-        let events = ApprovalStream()
+    func testAttachWiresTheApprovalPathAndSourceLoss() throws {
+        let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(sink: events)
 
-        events.handle(ApprovalReading(content: .waterfall(waterfall())))
+        events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").count, 1, "货物从流里进来就成了一条")
 
-        events.handle(ApprovalReading(content: .cancel(.object(["eventId": .string("e1")]))))
+        events.handle(try frame(#"{"type":"cancel","eventId":"e1"}"#))
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "撤回那条货物把卡带走")
 
-        events.handle(ApprovalReading(content: .waterfall(waterfall())))
+        events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").count, 1)
-        events.handle(ApprovalReading(content: .ready(generation: nil)))
+        events.handle(try readyFrame())
         XCTAssertTrue(store.pending(in: "s1").isEmpty,
                       "源失效清空：网关的上游没了，手里这些一条也答不了")
     }
@@ -251,17 +267,17 @@ final class ApprovalStoreTests: XCTestCase {
     ///
     /// 寻址校验归消费方 —— 「认不出怎么办」是读法的一部分：审批的口径是留卡比误删强。
     func testACancelWithoutAnEventIdKeepsTheCard() throws {
-        let events = ApprovalStream()
+        let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(sink: events)
 
-        events.handle(ApprovalReading(content: .waterfall(waterfall())))
+        events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").count, 1)
 
-        events.handle(ApprovalReading(content: .cancel(.object([:]))))
+        events.handle(try frame(#"{"type":"cancel"}"#))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "没带 eventId 的撤回删不掉任何东西")
 
-        events.handle(ApprovalReading(content: .cancel(.object(["eventId": .string("")]))))
+        events.handle(try frame(#"{"type":"cancel","eventId":""}"#))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "空串同理 —— 留着这张卡比误删别人的强")
     }
 
@@ -269,8 +285,8 @@ final class ApprovalStoreTests: XCTestCase {
     ///
     /// 这条守的是「表没有跨代状态」：不做这一步，重连之后宿主已经不持有的卡会一直留着
     /// （重放只会覆盖仍存活的那些）。
-    func testEveryReadyRebuildsTheTableFromTheReplay() {
-        let events = ApprovalStream()
+    func testEveryReadyRebuildsTheTableFromTheReplay() throws {
+        let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
         store.attach(sink: events)
 
@@ -278,10 +294,10 @@ final class ApprovalStoreTests: XCTestCase {
         XCTAssertEqual(store.pending(in: "s1").count, 1, "断线之前收到的那一条还在")
 
         // 重连：先 ready（清表），再重放当前集合。
-        events.handle(ApprovalReading(content: .ready(generation: 7)))
+        events.handle(try readyFrame())
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "ready 是重建的界线")
 
-        events.handle(ApprovalReading(content: .waterfall(waterfall())))
+        events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").map(\.eventId), ["e1"], "重放重建")
     }
 

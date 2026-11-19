@@ -204,11 +204,11 @@ final class MuxShapeTests: XCTestCase {
     /// 跟「全绿」一样。
     func testConnectionStreamOpenFramesAreTheDeclaredBytes() throws {
         let cases: [(frame: MuxOpenFrame, text: String)] = [
-            (MuxOpenFrame.approvals(streamId: "a1"),
+            (MuxOpenFrame.events(streamId: "a1"),
              #"{"payload":{"op":"approvals"},"streamId":"a1","type":"open"}"#),
-            (MuxOpenFrame.sessionList(streamId: "l1"),
+            (MuxOpenFrame.events(streamId: "l1"),
              #"{"payload":{"op":"session-list"},"streamId":"l1","type":"open"}"#),
-            (MuxOpenFrame.hostEvents(streamId: "h1"),
+            (MuxOpenFrame.events(streamId: "h1"),
              #"{"payload":{"op":"host-events"},"streamId":"h1","type":"open"}"#),
         ]
         for (frame, text) in cases {
@@ -223,9 +223,9 @@ final class MuxShapeTests: XCTestCase {
     /// `muxText(of:)`，哪一天有人在某条路上绕开它自己拼 JSON，这一条先红。
     func testConnectionStreamOpenFrameEncodingIsStableAcrossRuns() throws {
         for make in [
-            { MuxOpenFrame.approvals(streamId: "a1") },
-            { MuxOpenFrame.sessionList(streamId: "l1") },
-            { MuxOpenFrame.hostEvents(streamId: "h1") },
+            { MuxOpenFrame.events(streamId: "a1") },
+            { MuxOpenFrame.events(streamId: "l1") },
+            { MuxOpenFrame.events(streamId: "h1") },
         ] {
             let texts = try (1...5).map { _ in try make().encoded() }
             XCTAssertEqual(Set(texts).count, 1,

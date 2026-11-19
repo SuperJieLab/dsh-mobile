@@ -21,109 +21,59 @@ typealias StreamId = String
 /// 网关另有可选 `maxMessages`，客户端从不发它（取服务端默认值）。
 struct FollowRequest: Encodable {
     let sessionId: String
-
-    private enum CodingKeys: String, CodingKey { case op, sessionId }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode("follow", forKey: .op)
-        try container.encode(sessionId, forKey: .sessionId)
-    }
 }
 
-/// 开一条连接级流的请求体：只有 `op` 一格。
-/// **没有会话字段**才是要害：带一个 `sessionId` 不会被网关拒，
-/// 却会让两端对「绑不绑会话」的理解分岔。
+/// 开流帧：`{type:"open", streamId, endpoint, payload:{args}}`。
 ///
-/// 三种 op 各一个类型而不是一个带参数的：op 名与流名是同一件事的两处写法，参数化之后
-/// 它们会成为两个会漂的字符串，而漂了不会有编译错误 —— 只有一端的开流请求被网关拒。
-struct ApprovalsRequest: Encodable {
-
-    private enum CodingKeys: String, CodingKey { case op }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode("approvals", forKey: .op)
-    }
-}
-
-struct SessionListRequest: Encodable {
-
-    private enum CodingKeys: String, CodingKey { case op }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode("session-list", forKey: .op)
-    }
-}
-
-struct HostEventsRequest: Encodable {
-
-    private enum CodingKeys: String, CodingKey { case op }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode("host-events", forKey: .op)
-    }
-}
-
-/// 开流帧：`{type: "open", streamId: <编号>, payload: <载荷>}`。
-/// 构造入口只有四个工厂（`following` 与三种连接级流），op 与外壳由形状自己决定。
-/// 载荷声明成私有的四支而不是泛型：op 与载荷一起变，拆成两个自由度就能构造出「op 与载荷
-/// 不配」的帧，而那种帧网关认不出。
-/// 编号由连接层造、文本由状态层拼 —— 两者在 `StreamMux.makeStream(_:)` 的注入处对接。
+/// 端点名与上游逐字一致，且**与请求形状绑在一起**：`session/follow` 带会话名，另两条
+/// 没有入参（`args` 是空对象）。三个工厂而不是一个带参数的 —— 端点名与请求形状是同一件
+/// 事的两处写法，参数化之后它们会成为两个会漂的字符串，而漂了不会有编译错误。
 struct MuxOpenFrame: Encodable {
 
     let streamId: StreamId
+    private let endpoint: String
+    private let request: Request?
 
-    private let payload: Payload
-
-    private enum Payload {
+    private enum Request {
         case follow(FollowRequest)
-        case approvals
-        case sessionList
-        case hostEvents
     }
 
     static func following(sessionId: String, streamId: StreamId) -> MuxOpenFrame {
-        MuxOpenFrame(streamId: streamId, payload: .follow(FollowRequest(sessionId: sessionId)))
+        MuxOpenFrame(streamId: streamId, endpoint: "session/follow", request: .follow(FollowRequest(sessionId: sessionId)))
     }
 
-    static func approvals(streamId: StreamId) -> MuxOpenFrame {
-        MuxOpenFrame(streamId: streamId, payload: .approvals)
+    static func events(streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, endpoint: "$events", request: nil)
     }
 
-    static func sessionList(streamId: StreamId) -> MuxOpenFrame {
-        MuxOpenFrame(streamId: streamId, payload: .sessionList)
+    static func control(streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, endpoint: "session/control", request: nil)
     }
 
-    static func hostEvents(streamId: StreamId) -> MuxOpenFrame {
-        MuxOpenFrame(streamId: streamId, payload: .hostEvents)
-    }
-
-    private enum CodingKeys: String, CodingKey { case type, streamId, payload }
+    private enum CodingKeys: String, CodingKey { case type, streamId, endpoint, payload }
+    private enum PayloadKeys: String, CodingKey { case args }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("open", forKey: .type)
         try container.encode(streamId, forKey: .streamId)
-        switch payload {
-        case let .follow(request):
-            try container.encode(request, forKey: .payload)
-        case .approvals:
-            try container.encode(ApprovalsRequest(), forKey: .payload)
-        case .sessionList:
-            try container.encode(SessionListRequest(), forKey: .payload)
-        case .hostEvents:
-            try container.encode(HostEventsRequest(), forKey: .payload)
+        try container.encode(endpoint, forKey: .endpoint)
+        var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .payload)
+        switch request {
+        case let .follow(follow)?:
+            try payload.encode(follow, forKey: .args)
+        case nil:
+            try payload.encode(EmptyArguments(), forKey: .args)
         }
     }
 
-    /// 编成要发出去的那段文本。
     func encoded() throws -> String {
         try muxText(of: self)
     }
 }
+
+/// 无入参端点的 `args` —— 编码成 `{}`，不是 `null` 也不是缺席。
+private struct EmptyArguments: Encodable {}
 
 /// 取消帧：`{type: "cancel", streamId: <本流>}`。关一条流只发这一帧，**不断开连接**。
 /// 它是单向的：发完即算关（等确认只会多一个会卡住的状态）。
@@ -325,54 +275,79 @@ struct UsageFramePayload: Decodable {
  **分派顺序是契约**：同一帧同时满足两条判据时取靠前的那条。改顺序不会编译失败，
  只会让某一类帧悄悄换支，所以有一条判据把它钉住。
  */
+/// `item` 载荷解不出的两种原因 —— 与「不认识」分开：这两种要留痕，那一种静默丢弃。
 enum ItemPayloadError: Error {
     /// 三个字段都在，但载荷解不成打开帧（类型不对）。
-    /// 与「四支都不匹配」分开：那一种静默丢弃，这一种是开流超时的第一现场，要留痕。
     case openingShapeBroken
+    /// 载荷里没有 `type`，连是哪类货物都读不出。
+    case missingType
 }
 
+/// `item` 的货物 —— 按 `value.type` 分派，**只读这一格**。
+///
+/// 与旧实现的差别就是 S6 的全部：旧的四支靠「有没有 `seq`」「有没有 `kind`」去猜，
+/// 同一帧同时满足两条判据时取靠前的，改顺序不编译失败、只会让某类帧悄悄换支。
+/// 现在判别字段由网关写在货物上，客户端只查表。
+///
+/// 不认识的 `type` 落进 `unknown` 而不是抛错：那是新版本的货物，旧客户端该忽略它、
+/// 但不该把整条流判成坏的（S6 的「可见」—— 带原样载荷，留痕时能看出是哪一格）。
 enum ItemPayload: Decodable {
 
-    case opening(OpeningFrame.Payload)
-    case connectionItem(JSONValue)
-    case transient(JSONValue)
-    case sessionEvent(SessionEvent)
+    case follow(FollowValue)
+    case events(EventsValue)
+    case unknown(JSONValue)
 
     private enum CodingKeys: String, CodingKey {
-        case sessionId, cursor, events, kind, type, seq, frame
+        case type, event, frame, clientId, args
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-
-        // ① 最具体：三个字段同在才是打开帧。它必须在最前 —— 打开帧的载荷里也有 `type`。
-        if container.contains(.sessionId), container.contains(.cursor), container.contains(.events) {
-            do {
-                self = .opening(try OpeningFrame.Payload(from: decoder))
-            } catch {
-                throw ItemPayloadError.openingShapeBroken
-            }
-            return
+        guard let type = try container.decodeIfPresent(String.self, forKey: .type) else {
+            throw ItemPayloadError.missingType
         }
-        // ② 事件流的货物：整份载荷原样保留，消费方要的就是任意形状。
-        if container.contains(.kind) {
-            self = .connectionItem(try JSONValue(from: decoder))
-            return
+        switch type {
+        case "snapshot":
+            self = .follow(.opening(try OpeningFrame.Payload(from: decoder)))
+        case "event":
+            self = .follow(.sessionEvent(try container.decode(SessionEvent.self, forKey: .event)))
+        case "assistant-stream":
+            self = .follow(.transient(try container.decodeIfPresent(JSONValue.self, forKey: .frame) ?? .null))
+        case "ready":
+            self = .events(.ready(clientId: try container.decode(String.self, forKey: .clientId)))
+        case "emit":
+            self = .events(.emit(
+                event: try container.decode(String.self, forKey: .event),
+                args: try container.decodeIfPresent(JSONValue.self, forKey: .args) ?? .null
+            ))
+        case "waterfall":
+            self = .events(.waterfall(try JSONValue(from: decoder)))
+        case "cancel":
+            self = .events(.cancel(try JSONValue(from: decoder)))
+        default:
+            self = .unknown(try JSONValue(from: decoder))
         }
-        // ③ 未定稿帧：带 `type` 但没有 `seq`，必须排在事件帧之前。
-        //    内层 `frame` 缺席是正常的（上游没带未定稿内容），给 `.null` 而不是判成坏帧。
-        if try container.decodeIfPresent(String.self, forKey: .type) == "assistant-stream" {
-            self = .transient(try container.decodeIfPresent(JSONValue.self, forKey: .frame) ?? .null)
-            return
-        }
-        // ④ 事件帧：`type` + `seq`。
-        if container.contains(.type), container.contains(.seq) {
-            self = .sessionEvent(try SessionEvent(from: decoder))
-            return
-        }
-        throw DecodingError.dataCorrupted(.init(
-            codingPath: container.codingPath,
-            debugDescription: "item 载荷不属于本版认识的任何一种形状"
-        ))
     }
+}
+
+/// `session/follow` 的三种货物。
+enum FollowValue {
+    /// 打开窗口（含投影基线）。
+    case opening(OpeningFrame.Payload)
+    /// 一条已落地的事件。
+    case sessionEvent(SessionEvent)
+    /// 未定稿帧 —— 一个进行中的 assistant 尝试的增量。
+    case transient(JSONValue)
+}
+
+/// `$events` 的四种货物。
+enum EventsValue {
+    /// 连接级事件源就绪。`clientId` 是这条流在源那里的登记键。
+    case ready(clientId: String)
+    /// 上游事件，名字与参数原样 —— 这一层不解释它。
+    case emit(event: String, args: JSONValue)
+    /// 一条待答调用。
+    case waterfall(JSONValue)
+    /// 撤回一条待答调用。
+    case cancel(JSONValue)
 }

@@ -34,7 +34,7 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 /// 待答表要的订阅面：三种信号、三个入口。
 ///
 /// **收窄到三个具名方法而不是一个 `onCargo(type:)`**：`"waterfall"` / `"cancel"` 这两个
-/// 线上名字只该出现在 `ApprovalStreamReader` 里。写在协议上之后，审批域不再认识 kind 字符串，
+/// 线上名字只该出现在 `EventsStream` 的货物判别里。写在协议上之后，审批域不再认识 kind 字符串，
 /// 拼错一个名字会编译失败，而不是静默地永远收不到。
 ///
 /// 三个口都给退订 token：多读者必须能退订，而「消费者都是 App 级」是当下的处境，
@@ -46,10 +46,10 @@ protocol ApprovalEventSink {
     @discardableResult
     func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
     @discardableResult
-    func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void
+    func onReady(_ handler: @escaping () -> Void) -> () -> Void
 }
 
-extension ApprovalStream: ApprovalEventSink {}
+extension EventsStream: ApprovalEventSink {}
 
 @MainActor
 @Observable
@@ -75,7 +75,7 @@ final class ApprovalStore {
     private let answerer: any ApprovalAnswering
 
     /// 已经挂过听众没有。**不是给视图看的状态**，是一次性闸的存放处。
-    /// 闸是永久的：全仓只有一个 `ApprovalStream` 实例，换实例的场景不存在；真出现时再加 detach。
+    /// 闸是永久的：全仓只有一个 `EventsStream` 实例，换实例的场景不存在；真出现时再加 detach。
     @ObservationIgnored private var attached = false
 
     init(answerer: any ApprovalAnswering) {
@@ -112,7 +112,7 @@ final class ApprovalStore {
             }
             self?.cancel(eventId: eventId)
         }
-        sink.onGeneration { [weak self] _ in self?.clear() }
+        sink.onReady { [weak self] in self?.clear() }
     }
 
     /// 网关推来的一条待答调用。
