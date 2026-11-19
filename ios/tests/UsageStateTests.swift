@@ -2,8 +2,7 @@
  * UsageState 的吸收测试（O1–O2）：纯值类型，不碰网络 / UI / 持久化。
  *
  * 吸收规则照上游
- * 客户端只回答「这条帧该不该覆盖手里那份」：**严格高 seq 胜，相等也丢** ——
- * **严格高 seq 胜，相等也丢**。
+ * 客户端只回答「这条帧该不该覆盖手里那份」：快照按严格高 `asOfSeq`，control 接管后直接覆盖 ——
  */
 import Foundation
 import XCTest
@@ -83,6 +82,16 @@ final class UsageStateTests: XCTestCase {
         XCTAssertEqual(state.usage?.usedTokens, 55)
         state.adopt(nil)
         XCTAssertNil(state.usage, "读数消失也要采纳 —— 界面该隐藏整行，不是停在 55")
+    }
+
+    /// `adopt(nil)` 之后来快照：仍是 `.stale`。接管是单向的 —— control 说「没有读数」也是
+    /// 它的判断，快照不该把旧值补回来。
+    func testSnapshotStaysStaleAfterControlAdoptsNothing() {
+        var state = UsageState()
+        state.adopt(nil)
+        let verdict = state.apply(UsageSnapshot(asOfSeq: 999, usage: UsagePayload(usedTokens: 90, contextWindow: 100)))
+        XCTAssertEqual(verdict, .stale)
+        XCTAssertNil(state.usage)
     }
 
 }

@@ -19,8 +19,12 @@ final class ControlStream {
 
     /// 每个会话的投影表：`sessionId -> {key: value}`。
     private var tables: [String: [String: JSONValue]] = [:]
-    /// 每个会话的水位。
-    private var watermarks: [String: Int] = [:]
+    /// 每个会话**最后一条增量帧**的事件 seq。
+    ///
+    /// 只用来在增量之间排重（同一条流内 `seq` 单调）。**基线不写它** —— 基线的是
+    /// `asOfSeq`（投影切点），与事件 seq 不是同一条轴，写进同一个槽会让第一个增量
+    /// 被错误地挡掉或被错误地放行。
+    private var lastEventSeq: [String: Int] = [:]
 
     private var stream: LogicalStream?
     private var detached = false
@@ -52,19 +56,19 @@ final class ControlStream {
             case .baseline(let blocks):
                 for (sessionId, block) in blocks {
                     tables[sessionId] = block.values.object ?? [:]
-                    watermarks[sessionId] = block.asOfSeq
+                    // 不写水位：`asOfSeq` 与后续增量的 `seq` 不同轴。
                     if let values = block.values.object.map(JSONValue.object) {
                         updateListeners.fire((sessionId, values, block.asOfSeq))
                     }
                 }
                 return StreamReply(establishes: true)
             case .projection(let sessionId, let seq, let changes):
-                // 水位不前进就是重放或乱序：丢掉，别用旧值盖新值。
-                if let current = watermarks[sessionId], seq <= current { return StreamReply() }
+                // 增量之间比 `seq`（同一条流内单调）：不前进就是重放或乱序，丢掉。
+                if let current = lastEventSeq[sessionId], seq <= current { return StreamReply() }
                 var table = tables[sessionId] ?? [:]
                 for change in changes { table[change.key] = change.val }
                 tables[sessionId] = table
-                watermarks[sessionId] = seq
+                lastEventSeq[sessionId] = seq
                 updateListeners.fire((sessionId, .object(table), seq))
                 return StreamReply()
             }

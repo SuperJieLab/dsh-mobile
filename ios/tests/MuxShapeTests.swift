@@ -232,4 +232,16 @@ final class MuxShapeTests: XCTestCase {
                            "同一份输入编出了 \(Set(texts).count) 种字节 —— 键序没有钉住")
         }
     }
+    /// 投影那一格坏了只丢这一格，不能把整条打开帧判成「解不出」——
+    /// 那等于为了一个附加读数丢掉整个窗口。`Payload.projections` 是 `FailableDecodable`。
+    func testABrokenProjectionDoesNotKillTheOpening() throws {
+        let data = frame("""
+        {"sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,"events":[],
+         "projections":{"asOfSeq":"oops"}}
+        """)
+        let opening = try XCTUnwrap(decodeOpening(data), "打开帧本身必须仍然成形")
+        XCTAssertEqual(opening.cursor, 5)
+        XCTAssertNil(opening.projections, "坏的那一格单独丢弃")
+    }
+
 }

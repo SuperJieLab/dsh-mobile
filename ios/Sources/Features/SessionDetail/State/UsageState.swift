@@ -1,8 +1,11 @@
 import Foundation
 
 /// 上下文占用的**吸收** —— 纯值类型（不 import SwiftUI / UIKit）。
-/// 只管一件事：这条帧该不该覆盖手里那份 —— **严格高 seq 才采用**，等于也丢（重放会重复）。
-/// 百分比与紧凑数字的换算不在这里，在 `Display/UsageDisplay.swift`。
+///
+/// 两条来源、两套规则：快照（`apply`）在 control 接管之前按「严格高 `asOfSeq` 才采用」；
+/// control（`adopt`）接管之后**直接覆盖**，快照一律变 `.stale` —— 两者水位不同轴，不可比。
+/// 百分比与紧凑数字的换算不在这里，在 `Display/UsageDisplay.swift`；读数为 `nil` 时界面
+/// 显示 `--`（不是隐藏整行）。
 struct UsageState: Equatable {
 
     /// 一条帧的处置结果。
