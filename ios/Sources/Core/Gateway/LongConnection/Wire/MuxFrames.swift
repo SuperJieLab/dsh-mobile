@@ -116,7 +116,9 @@ struct OpeningFrame {
     let events: [SessionEvent]
     let assistantStream: JSONValue?
     let model: ModelSelection?
-    let occupancy: UsageSnapshot?
+    /// 打开时读到的投影基线 —— 与 `session/control` 的 `baseline` 同源。
+    /// 客户端以 control 为权威，这里的值只在 control 到达之前当初值用。
+    let projections: ProjectionBlock?
 
     /// 载荷的线上形状。三个字段（sessionId / cursor / events）同在才成形，其余都可缺。
     struct Payload: Decodable {
@@ -127,7 +129,7 @@ struct OpeningFrame {
         let events: [FailableDecodable<SessionEvent>]?
         let assistantStream: JSONValue?
         let model: FailableDecodable<ModelSelection>?
-        let occupancy: FailableDecodable<UsageSnapshot>?
+        let projections: ProjectionBlock?
 
         /// 缺一个必填字段就不是打开帧 —— 交给别的分类，不猜默认值。
         func frame() -> OpeningFrame? {
@@ -140,7 +142,7 @@ struct OpeningFrame {
                 events: events.compactMap(\.value),
                 assistantStream: assistantStream,
                 model: model?.value,
-                occupancy: occupancy?.value
+                projections: projections
             )
         }
     }
@@ -338,22 +340,25 @@ enum EventsValue {
 }
 
 
+/// 一个会话的投影切取：`{asOfSeq, values}`。
+///
+/// 两条出口共用这一个类型 —— `session/control` 的 `baseline` 与 `follow` 快照的
+/// `projections`。同形就一份，两份会漂。
+struct ProjectionBlock: Decodable {
+    let asOfSeq: Int
+    let values: JSONValue
+}
+
 /// `session/control` 的货物 —— 与上游 `SessionControlFrame` 同形。
 ///
 /// **一条流装全部会话的投影**：`baseline` 给出每个会话的一次切取，之后的 `projection`
 /// 用 `sessionId` 指明是谁变了，`seq` 是引发变化的那个事件。
 enum ControlValue: Decodable {
 
-    /// 打开时的一次全量：`{[sessionId]: {asOfSeq, values}}`。
+    /// 打开时的一次全量：`{[sessionId]: ProjectionBlock}`。
     case baseline([String: ProjectionBlock])
     /// 一条增量：`changes` 里每项是 `{key, val}` —— 字段名是 `val`。
     case projection(sessionId: String, seq: Int, changes: [Change])
-
-    /// 一个会话的投影切取。
-    struct ProjectionBlock: Decodable {
-        let asOfSeq: Int
-        let values: JSONValue
-    }
 
     /// 一个变了格的键与新值。
     struct Change: Decodable {

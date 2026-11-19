@@ -71,26 +71,6 @@ final class SessionStreamReaderTests: XCTestCase {
         XCTAssertEqual(frame["index"]?.int, 2)
     }
 
-    // MARK: - O4：占用读数（核会话归属）
-
-    /// 帧串流时不能画别人的占用 —— 会话对不上就丢弃，而不是画出来。
-    func testUsageOnlyCountsForItsOwnSession() throws {
-        let own = try read("""
-        {"type":"usage","streamId":"s-1","payload":{"sessionId":"s-1","asOfSeq":5}}
-        """)
-        guard case .usage(let snapshot) = own.content else {
-            return XCTFail("本流的占用读数该判成 usage，实际：\(own.content)")
-        }
-        XCTAssertEqual(snapshot.asOfSeq, 5)
-
-        let other = try read("""
-        {"type":"usage","streamId":"s-1","payload":{"sessionId":"s-2","asOfSeq":5}}
-        """)
-        guard case .ignored = other.content else {
-            return XCTFail("别的会话的占用读数必须丢弃，实际：\(other.content)")
-        }
-    }
-
     // MARK: - O5：拒绝帧
 
     /// 码与原文都要带出来：码决定「值不值得重连」，原文是用户能看懂的那句。
@@ -147,7 +127,6 @@ final class SessionStreamReaderTests: XCTestCase {
         let samples: [(name: String, text: String, establishes: Bool)] = [
             ("打开帧", #"{"type":"item","streamId":"s-1","value":{"type":"snapshot","sessionId":"s-1","cursor":1,"events":[]}}"#, true),
             ("事件帧", #"{"type":"item","streamId":"s-1","value":{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{}}}}"#, false),
-            ("占用帧", #"{"type":"usage","streamId":"s-1","payload":{"sessionId":"s-1","asOfSeq":1}}"#, false),
             ("收尾帧", #"{"type":"end","streamId":"s-1"}"#, false),
             ("拒绝帧", #"{"type":"error","streamId":"s-1","error":{"code":"internal-error","message":"","details":{}}}"#, false),
         ]

@@ -110,17 +110,6 @@ final class InboundFrameTests: XCTestCase {
         XCTAssertEqual(failure.message, "窗口太大")
     }
 
-    func testUsageFrameCarriesTheSnapshot() throws {
-        let frame = try decode(#"{"type":"usage","streamId":"s-1","payload":{"sessionId":"s-1","asOfSeq":5}}"#)
-
-        guard case .usage(let payload) = frame.payload else {
-            return XCTFail("usage 帧该归 usage，实际：\(String(describing: frame.payload))")
-        }
-        // 会话归属跟着快照一起出来：判读层靠它决定画不画（帧串流时会收到别人的占用）。
-        XCTAssertEqual(payload.sessionId, "s-1")
-        XCTAssertEqual(payload.snapshot.asOfSeq, 5)
-    }
-
     // MARK: - 认不出的载荷
 
     /// 四条「认不出」：缺三个字段、空对象、只有 type 没有 seq、未知 type。

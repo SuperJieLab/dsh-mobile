@@ -53,17 +53,31 @@ final class SessionSyncTests: XCTestCase {
             events: [],
             assistantStream: nil,
             model: nil,
-            occupancy: UsageSnapshot(asOfSeq: 10, usage: opening)
+            projections: ProjectionBlock(asOfSeq: 10, values: .object([
+                "contextPressure": .object([
+                    "projectedTokens": .number(50),
+                    "contextWindow": .number(100),
+                ]),
+            ]))
         ))))
         XCTAssertEqual(sync.usage, opening)
 
-        let newer = UsagePayload(usedTokens: 60, contextWindow: 100)
-        sync.apply(StreamReading(content: .usage(UsageSnapshot(asOfSeq: 20, usage: newer))))
-        XCTAssertEqual(sync.usage, newer, "水位推进了就该采用")
+        // 水位推进了就该采用；没推进的（乱序或重放）要丢 —— 与 `UsageState` 同一条规则。
+        sync.applyOpeningProjections(ProjectionBlock(asOfSeq: 20, values: .object([
+            "contextPressure": .object([
+                "projectedTokens": .number(60),
+                "contextWindow": .number(100),
+            ]),
+        ])))
+        XCTAssertEqual(sync.usage?.usedTokens, 60, "水位推进了就该采用")
 
-        let stale = UsagePayload(usedTokens: 90, contextWindow: 100)
-        sync.apply(StreamReading(content: .usage(UsageSnapshot(asOfSeq: 5, usage: stale))))
-        XCTAssertEqual(sync.usage, newer, "水位没推进的帧要丢 —— 乱序与重放不该让百分比跳回去")
+        sync.applyOpeningProjections(ProjectionBlock(asOfSeq: 5, values: .object([
+            "contextPressure": .object([
+                "projectedTokens": .number(90),
+                "contextWindow": .number(100),
+            ]),
+        ])))
+        XCTAssertEqual(sync.usage?.usedTokens, 60, "水位没推进的要丢 —— 乱序与重放不该让百分比跳回去")
     }
 
     /// 会话同步要两个真实依赖：连接（只用来取阶段）与一元客户端。

@@ -363,6 +363,7 @@ final class SessionSync {
         switch reading.content {
         case .opening(let opening):
             applyOpening(opening)
+            applyOpeningProjections(opening.projections)
         case .event(let event):
             applyLiveEvent(event)
         case .transient(let frame):
@@ -588,6 +589,15 @@ final class SessionSync {
     }
 
     /// 一份占用读数；被丢弃的帧不动视图，乱序与重放不会让百分比跳动。
+    /// 打开帧的投影基线：**control 到达之前**的初值。
+    ///
+    /// 两条出口同源，所以这里不需要另算规则 —— 只是把同一份值先放上屏。
+    /// 之后 control 的 `projection` 会按水位覆盖它（`UsageState` 只认严格更高的水位）。
+    func applyOpeningProjections(_ block: ProjectionBlock?) {
+        guard let block else { return }
+        applyUsage(UsageView.snapshotOf(block.values, asOfSeq: block.asOfSeq))
+    }
+
     private func applyUsage(_ snapshot: UsageSnapshot) {
         // 「收到」与「采纳」是两件事：被丢弃的帧也证明链路活着，故置位在判之前。
         lastFrameAt = Date()
