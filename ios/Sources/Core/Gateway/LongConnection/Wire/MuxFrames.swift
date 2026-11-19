@@ -197,8 +197,12 @@ struct InboundFrame: Decodable {
                 payload = .item(try container.decode(ItemPayload.self, forKey: .value))
                 payloadRejected = false
             } catch {
+                // 走到这里只有两种可能：`value` 这一格不在（旧形状 `payload` 就是这种），
+                // 或者它在但解不出。**两种都要留痕** —— 前者是「对端还在说旧协议」，
+                // 后者是「这一帧坏了」，静默丢弃会让它们都变成「什么都没发生」。
+                // 与「不认识」的分界不在这里：不认识的 `type` 走 `.unknown`，不抛错。
                 payload = nil
-                payloadRejected = error is ItemPayloadError
+                payloadRejected = true
             }
         case "error":
             let decoded = (try? container.decodeIfPresent(FailurePayload.self, forKey: .error)) ?? nil

@@ -3,7 +3,7 @@
  *
  * 网关是宿主 `$events` 流的一个远程客户端：开流、重连退避、客户端身份与代次都归
  * 这里，与「谁在消费这些事件」无关。今天有两类消费方：手机侧的两条连接级泵
- * （`remote/stream.ts` 的 `pumpSessionList` / `pumpHostEvents`）与审批中继（`approval/request`
+ * （`remote/stream.ts` 的 `pumpEvents`）与审批中继（`approval/request`
  * 的 waterfall，见 `write.ts`）；加一个
  * 消费方只是多一次 {@link ForwardedEvents.subscribe}，不必多开一条身份。
  *

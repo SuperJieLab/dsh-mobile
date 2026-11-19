@@ -178,4 +178,14 @@ final class InboundFrameTests: XCTestCase {
         }
         XCTAssertEqual(clientId, "c-1", "type 是唯一判别字段，别的键不参与分派")
     }
+    /// 判据 4：旧形状 `{payload:…}` 必须判读失败**并留痕**。
+    ///
+    /// 静默丢弃是这条判据要防的那件事：它会让「对端还在说旧协议」表现得和「这一帧坏了」
+    /// 一样 —— 什么都不发生。`payloadRejected` 是那条痕迹的开关。
+    func testLegacyPayloadShapeIsRejectedAndMarked() throws {
+        let frame = try decode(#"{"type":"item","streamId":"s-1","payload":{"sessionId":"s-1","cursor":1,"events":[]}}"#)
+        XCTAssertNil(frame.payload, "旧形状不许被当成一种新货物")
+        XCTAssertTrue(frame.payloadRejected, "解不出要留痕 —— 否则旧协议在日志里看不见")
+    }
+
 }

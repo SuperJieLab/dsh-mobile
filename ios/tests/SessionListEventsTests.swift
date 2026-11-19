@@ -1,0 +1,65 @@
+/**
+ * 判据 9：`api-session/*` → 列表变化。
+ *
+ * 翻译从网关搬到客户端（`upstream/session-events.ts` → `SessionListEvents`），
+ * 搬的是一次**行为迁移** —— 两边的错法不同（一边多一条、一边少一条），
+ * 只有逐类对齐才守得住。
+ */
+import XCTest
+@testable import DshMobile
+
+final class SessionListEventsTests: XCTestCase {
+
+    private func args(_ items: [JSONValue]) -> JSONValue { .array(items) }
+
+    private func host(_ overrides: [String: JSONValue] = [:]) -> JSONValue {
+        var object: [String: JSONValue] = [
+            "sessionId": .string("s1"),
+            "updatedAt": .number(100),
+            "running": .bool(true),
+            "blank": .bool(false),
+            "projections": .object(["values": .object(["title": .string("标题")])]),
+        ]
+        for (key, value) in overrides { object[key] = value }
+        return .object(object)
+    }
+
+    func testAddedMapsTheWholeRow() {
+        let change = SessionListEvents.changeOf(event: "api-session/added", args: args([host()]))
+        guard case .added(let row)? = change else { return XCTFail("该落成 added，实际：\(String(describing: change))") }
+        XCTAssertEqual(row.id, "s1")
+        XCTAssertEqual(row.title, "标题")
+        XCTAssertEqual(row.updatedAt, 100)
+        XCTAssertTrue(row.running)
+        XCTAssertFalse(row.blank)
+    }
+
+    func testRemovedStatusActivityMapPositionally() {
+        guard case .removed(let id)? = SessionListEvents.changeOf(event: "api-session/removed", args: args([.string("s1")])) else {
+            return XCTFail("removed 该带 id")
+        }
+        XCTAssertEqual(id, "s1")
+
+        guard case .status(let statusId, let running)? = SessionListEvents.changeOf(
+            event: "api-session/status", args: args([.string("s1"), .bool(false)])
+        ) else { return XCTFail("status 该带 id 与 running") }
+        XCTAssertEqual(statusId, "s1")
+        XCTAssertFalse(running)
+
+        guard case .activity(let activityId, let at)? = SessionListEvents.changeOf(
+            event: "api-session/activity", args: args([.string("s1"), .number(42)])
+        ) else { return XCTFail("activity 该带 id 与 updatedAt") }
+        XCTAssertEqual(activityId, "s1")
+        XCTAssertEqual(at, 42)
+    }
+
+    /// 参数畸形一律 `nil` —— 猜一个比丢掉更坏。
+    func testMalformedArgumentsAreRejected() {
+        XCTAssertNil(SessionListEvents.changeOf(event: "api-session/added", args: .string("nope")))
+        XCTAssertNil(SessionListEvents.changeOf(event: "api-session/removed", args: args([])))
+        XCTAssertNil(SessionListEvents.changeOf(event: "api-session/removed", args: args([.string("")])))
+        XCTAssertNil(SessionListEvents.changeOf(event: "api-session/status", args: args([.string("s1")])), "缺 running")
+        XCTAssertNil(SessionListEvents.changeOf(event: "api-session/activity", args: args([.string("s1"), .string("x")])))
+        XCTAssertNil(SessionListEvents.changeOf(event: "api-session/unknown", args: args([.string("s1")])))
+    }
+}

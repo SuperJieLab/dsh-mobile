@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { encodeServerFrame, openRequestOf, parseClientFrame } from '../../src/wire/mux.ts'
+import { readFileSync } from 'node:fs'
 
 test('parseClientFrame: round-trips the client frame shapes', () => {
   const open = parseClientFrame(JSON.stringify({
@@ -115,4 +116,30 @@ test('MuxServerFrame: 第三格改名后，旧的字段名被类型拒绝', () =
   encodeServerFrame({ type: 'item', streamId: 's1', payload: {} })
   // @ts-expect-error error 帧的第三格叫 error
   encodeServerFrame({ type: 'error', streamId: 's1', payload: { code: 'x', message: 'y' } })
+})
+
+// ---------------------------------------------------------------------------
+// 判据 5 / 6：错误形状与服务端帧的三种种类
+// ---------------------------------------------------------------------------
+
+test('error 帧的对象恰好三键 —— code / message / details，没有第四格', () => {
+  // 多一格会让两会端对「哪个格是正文」的理解分岔，少一格则客户端读不到原文。
+  // 用 `Object.keys` 而不是断言某个字段：前者能抓到「悄悄多了一个 details 的兄弟」。
+  const text = encodeServerFrame({
+    type: 'error',
+    streamId: 's-9',
+    error: { code: 'unknown-op', message: 'no such op', details: {} },
+  })
+  const frame = JSON.parse(text) as { error: Record<string, unknown> }
+  assert.deepEqual(Object.keys(frame.error).sort(), ['code', 'details', 'message'])
+})
+
+test('服务端帧只有 item / error / end 三种 —— 共享样本里不出现 usage', () => {
+  // 帧种类是契约：多一种就得多一条判据、多一处消费者；`usage` 那一种本期退役，
+  // 它的读数改走投影通道（`session/control`）。样本是两端共守的那份，从它查最实。
+  const fixture = JSON.parse(readFileSync(new URL('../../../contract/mux-frames.json', import.meta.url), 'utf8')) as {
+    server: { type: string }[]
+  }
+  const types = new Set(fixture.server.map(sample => sample.type))
+  assert.deepEqual([...types].sort(), ['end', 'error', 'item'], '服务端帧的种类多出或少掉了一种')
 })
