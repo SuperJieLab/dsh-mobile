@@ -137,12 +137,17 @@ export function streamSourceOver(ctx: HostContext): FollowSource {
     },
     // 模型基线随开流走：与 snapshot 路径同一处读取 —— 开流是存活会话走的路径。
     modelOf: (sessionId) => modelBaselineOf(ctx, sessionId),
-    // control 流的全量切取：不传 keys 即整份投影，客户端据此建表。
-    projectionsOf: (sessionId) => {
-      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
-      if (session === undefined) return undefined
+    // control 流的基线：全部会话，与上游 `SessionControlController.baseline()` 同形。
+    controlBaseline: () => {
       const read = ctx.sessionProjections as unknown as ProjectionsLike
-      return read.snapshot(session)
+      const sessions = ctx.sessions as unknown as SessionsLike
+      const blocks: Record<string, { asOfSeq: number; values: Readonly<Record<string, unknown>> }> = {}
+      for (const session of sessions.list()) {
+        const snapshot = read.snapshot(session)
+        if (snapshot === undefined) continue
+        blocks[session.id] = { asOfSeq: snapshot.asOfSeq, values: snapshot.values }
+      }
+      return blocks
     },
   }
 }
@@ -155,6 +160,8 @@ interface CorpusLike {
 /** 本模块用到的 `ctx.sessions` 部分。 */
 interface SessionsLike {
   get(id: string): unknown
+  /** 全部已注册会话 —— control 的 Host-wide 基线用。 */
+  list(): readonly { id: string }[]
 }
 
 /** 本模块用到的 `ctx.sessionProjections` 部分。 */

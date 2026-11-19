@@ -50,13 +50,15 @@ export interface FollowSource {
   occupancyOf(sessionId: string): UsageSnapshot | undefined
 
   /**
-   * 会话投影的一次全量切取 —— control 流用它建表、再按它算增量。
+   * **全部会话**的投影切取 —— control 流用它建表，再按会话算增量。
    *
-   * 与 `occupancyOf` 的关系：后者只取两格换算成读数（供 HTTP 快照那一类出口），
-   * 前者给整份 `{asOfSeq, values}`。同一个切取点，不同的投影键集合。
-   * 缺席（宿主没接、或会话不在这里）是诚实的：control 泵据此回一条 error，不猜。
+   * 与上游 `SessionControlController.baseline()` 同形（`ctx.sessions.list()` 逐个
+   * `snapshot(session)`）。不是「按会话查」：control 是 Host-wide 的一条流，
+   * 客户端自己挑它关心的那个会话。
+   *
+   * 缺席（宿主没接）是诚实的：control 泵据此回一条 error，不猜。
    */
-  projectionsOf?(sessionId: string): ProjectionBaseline | undefined
+  controlBaseline?(): Readonly<Record<string, ProjectionBaseline>>
 
   /**
    * 会话的模型基线：下一轮将用的那个选择，未知时 undefined（缺席不是「默认值」）。

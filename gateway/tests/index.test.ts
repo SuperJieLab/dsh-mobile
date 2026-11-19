@@ -874,7 +874,10 @@ function fakeFollowHost(opening: {
   let reads = 0
   return {
     services: {
-      sessions: { get: (id: string) => (id === 's1' ? { id: 's1' } : undefined) },
+      sessions: {
+        get: (id: string) => (id === 's1' ? { id: 's1' } : undefined),
+        list: () => [{ id: 's1' }],
+      },
       sessionProjections: {
         cachedSnapshot: () => undefined,
         snapshot: () => {
@@ -957,12 +960,14 @@ test('U6: control 流给 baseline，触发事件后推一条 projection', { time
     const { socket, frames, waitFor } = await openStream(port, access)
 
     // 控制流先开：打开时给一份全量（客户端据此建表）。
-    socket.send(JSON.stringify({ type: 'open', streamId: 'c1', endpoint: 'session/control', payload: { args: { sessionId: 's1' } } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 'c1', endpoint: 'session/control', payload: { args: {} } }))
     await waitFor(f => f.some(frame => frame.streamId === 'c1' && frame.type === 'item'), 'the control baseline')
     const baseline = frames.find(frame => frame.streamId === 'c1' && frame.type === 'item')!.value as Record<string, unknown>
     assert.equal(baseline['type'], 'baseline', '第一帧是全量')
-    assert.equal(baseline['asOfSeq'], 3, '水位取自投影，不是窗口的 cursor')
-    assert.deepEqual((baseline['values'] as Record<string, unknown>)['contextPressure'],
+    // Host-wide：`value.projections` 是 `{[sessionId]: {asOfSeq, values}}`，与上游同形。
+    const blocks = (baseline['value'] as { projections: Record<string, { asOfSeq: number; values: Record<string, unknown> }> }).projections
+    assert.equal(blocks['s1']?.asOfSeq, 3, '水位取自投影，不是窗口的 cursor')
+    assert.deepEqual(blocks['s1']?.values['contextPressure'],
       { projectedTokens: 52_300, contextWindow: 128_000 }, '整份投影原样带出')
 
     // 触发源：一条 follow 流，它的事件是「投影可能变了」的信号。
@@ -981,10 +986,11 @@ test('U6: control 流给 baseline，触发事件后推一条 projection', { time
 
     const patch = frames.find(frame =>
       frame.streamId === 'c1' && (frame.value as { type?: string } | undefined)?.type === 'projection')!.value as Record<string, unknown>
-    assert.equal(patch['asOfSeq'], 5)
+    assert.equal(patch['sessionId'], 's1', '增量指明是谁变了')
+    assert.equal(patch['seq'], 4, '引发变化的那个事件的 seq')
     assert.deepEqual(patch['changes'], [
-      { key: 'contextPressure', value: { projectedTokens: 61_000, contextWindow: 128_000 } },
-    ], '只带变了的格 —— 整表重发就不叫增量了')
+      { key: 'contextPressure', val: { projectedTokens: 61_000, contextWindow: 128_000 } },
+    ], '只带变了的格，字段名是 val —— 与上游逐字相同')
 
     // 没有新事件就不该再有帧：投影没动，读也不必发。
     const before = frames.filter(frame => frame.streamId === 'c1').length

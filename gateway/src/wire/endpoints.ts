@@ -20,8 +20,8 @@ export type EndpointKind = 'follow' | 'events' | 'control'
 
 /** 解析结果：认下来了（带泵种类与请求），或两种拒绝之一。 */
 export type EndpointResolution =
-  | { readonly ok: true; readonly kind: 'follow' | 'control'; readonly request: FollowRequest }
-  | { readonly ok: true; readonly kind: 'events'; readonly request: undefined }
+  | { readonly ok: true; readonly kind: 'follow'; readonly request: FollowRequest }
+  | { readonly ok: true; readonly kind: 'events' | 'control'; readonly request: undefined }
   | { readonly ok: false; readonly code: 'unknown-endpoint' | 'invalid-args' }
 
 /**
@@ -53,13 +53,9 @@ export function resolveEndpoint(endpoint: unknown, args: unknown): EndpointResol
     const request = followArgsOf(args)
     return request === undefined ? { ok: false, code: 'invalid-args' } : { ok: true, kind: 'follow', request }
   }
-  if (endpoint === ENDPOINTS.control) {
-    const request = followArgsOf(args)
-    return request === undefined ? { ok: false, code: 'invalid-args' } : { ok: true, kind: 'control', request }
-  }
-  if (endpoint === ENDPOINTS.events) {
+  if (endpoint === ENDPOINTS.control || endpoint === ENDPOINTS.events) {
     if (!isEmptyArgs(args)) return { ok: false, code: 'invalid-args' }
-    return { ok: true, kind: 'events', request: undefined }
+    return { ok: true, kind: endpoint === ENDPOINTS.events ? 'events' : 'control', request: undefined }
   }
   return { ok: false, code: 'unknown-endpoint' }
 }

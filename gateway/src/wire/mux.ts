@@ -117,16 +117,24 @@ export type EventsValue =
   | MuxApprovalCancel
 
 /**
- * `$control` 的货物 —— 投影的一次切取，与上游 `RemoteProjectionState` /
- * `RemoteProjectionPatch` 同形。
+ * `session/control` 的货物 —— 与上游 `SessionControlFrame` 同形。
  *
- * `baseline` 是打开时的一次全量（客户端据此建表），`projection` 是一条增量
- * （`changes` 里每个键替换掉表里的同名格）。两种都带 `asOfSeq`：它是**投影**的水位，
- * 客户端按它比新旧 —— 乱序到达时旧值不许覆盖新值。
+ * **一条流装全部会话的投影**（上游是 Host-wide 的），不是单会话：`baseline` 给出每个
+ * 会话的一次切取，之后的 `projection` 用 `sessionId` 指明是谁变了。
+ * `changes` 里每项是 `{key, val}` —— 字段名是 `val`，不是 `value`，与上游逐字相同。
  */
 export type ControlValue =
-  | { type: 'baseline'; asOfSeq: number; values: Readonly<Record<string, unknown>> }
-  | { type: 'projection'; asOfSeq: number; changes: readonly { key: string; value: unknown }[] }
+  | {
+    type: 'baseline'
+    value: { projections: Readonly<Record<string, { asOfSeq: number; values: Readonly<Record<string, unknown>> }>> }
+  }
+  | {
+    type: 'projection'
+    sessionId: string
+    /** 引发这次变化的那个事件的 seq —— 客户端据此排重与排序。 */
+    seq: number
+    changes: readonly { key: string; val: unknown }[]
+  }
 
 export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame
 
@@ -200,7 +208,7 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
 export type OpenRequest =
   | ({ kind: 'follow' } & FollowRequest)
   | { kind: 'events' }
-  | ({ kind: 'control' } & FollowRequest)
+  | { kind: 'control' }
 
 /** 端点表给出的两种拒绝 —— 调用方据此回一条带编号的 `error`，**不关连接**。 */
 export type OpenRequestRefusal = { readonly error: 'unknown-endpoint' | 'invalid-args' }
@@ -214,11 +222,9 @@ export type OpenRequestRefusal = { readonly error: 'unknown-endpoint' | 'invalid
 export function openRequestOf(frame: MuxOpenFrame): OpenRequest | OpenRequestRefusal {
   const resolution = resolveEndpoint(frame.endpoint, argsOf(frame.payload))
   if (!resolution.ok) return { error: resolution.code }
-  switch (resolution.kind) {
-    case 'events': return { kind: 'events' }
-    case 'follow': return { kind: 'follow', ...resolution.request }
-    case 'control': return { kind: 'control', ...resolution.request }
-  }
+  return resolution.kind === 'follow'
+    ? { kind: 'follow', ...resolution.request }
+    : { kind: resolution.kind }
 }
 
 /** `payload.args` —— 端点方法的入参容器；载荷不是对象或没有 `args` 时视为缺席。 */

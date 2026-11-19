@@ -143,7 +143,7 @@ export function onClientText(
     return { ok: true }
   }
   if (request.kind === 'control') {
-    pumpControl(socket, source, request.sessionId, frame.streamId, abort.signal, done)
+    pumpControl(socket, source, frame.streamId, abort.signal, done)
     return { ok: true }
   }
 
@@ -195,19 +195,20 @@ function excerptOf(text: string): string {
  * 自己的契约。
  */
 /**
- * 「这个会话的投影可能变了」的听众，按会话分组。
+ * 「某个会话的投影可能变了」的听众，按会话分组。
  *
- * 投影在网关这边是**拉**的：宿主只给 `snapshot(session)`，没有订阅口。而真正让投影
- * 变化的只有事件（`usageIsTrigger` 那张表），所以 follow 泵遇到那类事件时叫一声，
- * 同会话的 control 泵据此重读。这样控制流不需要定时器，也不会在空闲时白读。
+ * 投影在网关这边是**拉**的：宿主只给 `snapshot(session)`，没有上游那个
+ * `sessionProjections.onEventChanged` 订阅口。而真正让投影变化的只有事件
+ * （`usageIsTrigger` 那张表），所以 follow 泵遇到那类事件时叫一声，control 泵据此重读。
+ * 这样控制流不需要定时器，也不会在空闲时白读。
  *
  * 生命周期跟着 control 泵的 abort 走（`off()` 里连同空集合一起删），漏删的症状是
  * 「占用量停更」—— 与本期要消灭的那个老症状同形，所以注销写成一条路径。
  */
-const projectionListeners = new Map<string, Set<() => void>>()
+const projectionListeners = new Map<string, Set<(seq: number) => void>>()
 
-function onProjectionChanged(sessionId: string, listener: () => void): () => void {
-  const set = projectionListeners.get(sessionId) ?? new Set<() => void>()
+function onProjectionChanged(sessionId: string, listener: (seq: number) => void): () => void {
+  const set = projectionListeners.get(sessionId) ?? new Set<(seq: number) => void>()
   set.add(listener)
   projectionListeners.set(sessionId, set)
   return () => {
@@ -216,48 +217,42 @@ function onProjectionChanged(sessionId: string, listener: () => void): () => voi
   }
 }
 
-function notifyProjection(sessionId: string): void {
-  for (const listener of projectionListeners.get(sessionId) ?? []) listener()
-}
-
-/** 一次全量切取 → `baseline` 货物。 */
-function controlBaselineOf(baseline: ProjectionBaseline): ControlValue {
-  return { type: 'baseline', asOfSeq: baseline.asOfSeq, values: baseline.values }
+function notifyProjection(sessionId: string, seq: number): void {
+  for (const listener of projectionListeners.get(sessionId) ?? []) listener(seq)
 }
 
 /**
- * 两份投影的差 → `changes`。比的是 JSON 等值：投影值本来就是 JSON，
- * 逐键比可以让客户端只替换变了的格，而不是整表重发。
+ * 两份投影的差 → `changes`。字段名是 `val`，与上游逐字相同 ——
+ * 改这一格会让客户端整条控制流解不出。
  */
 function controlChangesOf(
   previous: Readonly<Record<string, unknown>>,
   next: Readonly<Record<string, unknown>>,
-): { key: string; value: unknown }[] {
+): { key: string; val: unknown }[] {
   const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
-  const changes: { key: string; value: unknown }[] = []
+  const changes: { key: string; val: unknown }[] = []
   for (const key of keys) {
-    if (JSON.stringify(previous[key]) !== JSON.stringify(next[key])) changes.push({ key, value: next[key] })
+    if (JSON.stringify(previous[key]) !== JSON.stringify(next[key])) changes.push({ key, val: next[key] })
   }
   return changes
 }
 
 /**
- * `session/control`：一条会话的投影。
+ * `session/control`：**Host-wide** 的投影。打开时给全部会话的基线，之后按会话推增量。
  *
- * 打开时给一份 `baseline`（客户端据此建表），之后只在**投影可能变了**的时候重读
- * （见 `notifyProjection`）。`asOfSeq` 不前进就不发 —— 那是「同样的内容又读了一次」，
- * 客户端会当重放丢掉，发了只是浪费带宽。
+ * 与上游 `SessionControlController` 同形：`baseline.value.projections` 是
+ * `{[sessionId]: {asOfSeq, values}}`，增量帧带 `sessionId` 与触发它的 `seq`。
+ * 差别只在触发源 —— 上游订阅 `onEventChanged`，我们从 follow 的事件转叫（见上）。
  */
 function pumpControl(
   socket: Duplex,
   source: FollowSource,
-  sessionId: string,
   streamId: StreamId,
   signal: AbortSignal,
   done: () => void,
 ): void {
-  const admit = source.projectionsOf
-  if (admit === undefined) {
+  const readAll = source.controlBaseline
+  if (readAll === undefined) {
     log.error('control stream opened but the projection face is not wired — refused', { stream: streamId })
     send(socket, {
       type: 'error',
@@ -270,30 +265,43 @@ function pumpControl(
 
   // 读失败视作「无话可说」：投影是事件之外的附加物，抛错的读记日志后跳过，
   // 绝不变成会让手机丢掉这条流的 error 帧。
-  const read = (): ProjectionBaseline | undefined => {
+  const read = (): Readonly<Record<string, ProjectionBaseline>> | undefined => {
     try {
-      return admit(sessionId)
+      return readAll()
     } catch (error) {
-      log.error('projection read failed', { session: sessionId, error: describeError(error) })
+      log.error('projection baseline read failed', { error: describeError(error) })
       return undefined
     }
   }
 
   let last = read()
-  if (last !== undefined) send(socket, { type: 'item', streamId, value: controlBaselineOf(last) })
+  if (last !== undefined) {
+    send(socket, { type: 'item', streamId, value: { type: 'baseline', value: { projections: last } } satisfies ControlValue })
+  }
 
-  const off = onProjectionChanged(sessionId, () => {
-    const next = read()
-    if (next === undefined) return
-    if (last !== undefined && next.asOfSeq <= last.asOfSeq) return
-    const changes = controlChangesOf(last?.values ?? {}, next.values)
-    last = next
-    if (changes.length === 0) return
-    send(socket, { type: 'item', streamId, value: { type: 'projection', asOfSeq: next.asOfSeq, changes } })
-  })
+  // 每个会话一个听众：一次通知只重读**它**那一份，不整表重扫。
+  const offs: (() => void)[] = []
+  const sessionIds = new Set(Object.keys(last ?? {}))
+  for (const sessionId of sessionIds) {
+    offs.push(onProjectionChanged(sessionId, (seq) => {
+      const next = read()
+      const current = next?.[sessionId]
+      if (current === undefined) return
+      const previous = last?.[sessionId]
+      if (previous !== undefined && current.asOfSeq <= previous.asOfSeq) return
+      const changes = controlChangesOf(previous?.values ?? {}, current.values)
+      last = next
+      if (changes.length === 0) return
+      send(socket, {
+        type: 'item',
+        streamId,
+        value: { type: 'projection', sessionId, seq, changes } satisfies ControlValue,
+      })
+    }))
+  }
 
   signal.addEventListener('abort', () => {
-    off()
+    for (const off of offs) off()
     done()
   }, { once: true })
 }
@@ -536,7 +544,7 @@ async function pumpFollow(
         // 这类事件可能挪动了投影 —— 叫醒同会话的 control 流去重读。控制流自己开着
         // 才有听众，没开时这里是一次空遍历。
         if (typeof event?.type === 'string' && usageIsTrigger({ type: event.type })) {
-          notifyProjection(request.sessionId)
+          notifyProjection(request.sessionId, typeof event.seq === 'number' ? event.seq : 0)
         }
         continue
       }

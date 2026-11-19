@@ -24,7 +24,7 @@ test('resolveEndpoint: 三个名字各自落到自己的泵', () => {
     resolveEndpoint('session/follow', { sessionId: 's-1', maxMessages: 20 }),
     { ok: true, kind: 'follow', request: { sessionId: 's-1', maxMessages: 20 } },
   )
-  assert.deepEqual(resolveEndpoint('session/control', { sessionId: 's-1' }), { ok: true, kind: 'control', request: { sessionId: 's-1' } })
+  assert.deepEqual(resolveEndpoint('session/control', {}), { ok: true, kind: 'control', request: undefined })
   assert.deepEqual(resolveEndpoint('$events', {}), { ok: true, kind: 'events', request: undefined })
 })
 
@@ -41,8 +41,7 @@ test('resolveEndpoint: 名字对、参数不对是 invalid-args', () => {
     ['session/follow', { sessionId: 1 }],
     ['session/follow', { sessionId: 's-1', maxMessages: 0 }],
     ['session/follow', { sessionId: 's-1', maxMessages: 1.5 }],
-    ['session/control', {}],
-    ['session/control', { sessionId: '' }],
+    ['session/control', { sessionId: 's-1' }],
     ['$events', { anything: true }],
     ['$events', []],
     ['$events', null],
