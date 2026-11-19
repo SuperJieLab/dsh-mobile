@@ -19,6 +19,9 @@ struct AppServices {
     /// 连接级流的收端（`$events`），与连接同寿。消费方：会话列表与待答表。
     /// **一个实例**：上游只有一条这样的流，四种货物在它内部按类型分发。
     let eventsStream: EventsStream
+    /// 投影流的收端（`session/control`），与连接同寿。消费方：当前打开的那个会话的占用量。
+    /// 与 `eventsStream` 分开是上游的形状决定的（两条独立端点），不是本地的拆分。
+    let controlStream: ControlStream
     /// 待答审批。不随任何一屏生死：停在会话列表时它照样在收。
     let approvals: ApprovalStore
     /// 端上遥测的订阅者。造好但不注册 —— 注册发生在 `start()` 里，与其余启动动作同处。
@@ -58,6 +61,7 @@ struct AppServices {
             baseURL: { [weak store] in store?.route?.baseURL }
         )
         let eventsStream = EventsStream()
+        let controlStream = ControlStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
         let telemetryStore = TelemetryStore(directory: TelemetryStore.defaultDirectory())
         let telemetry = MetricKitReporter(store: telemetryStore)
@@ -67,6 +71,7 @@ struct AppServices {
         self.client = client
         self.link = link
         self.eventsStream = eventsStream
+        self.controlStream = controlStream
         self.approvals = approvals
         self.telemetry = telemetry
         self.logFile = logFile
@@ -105,6 +110,7 @@ struct AppServices {
         // 两条流都重挂一次：`attach` 自带闸，活着的那条是空操作；被终态拒绝收起的那条
         // 靠这一下重建 —— 而「回前台」正是它唯一会发生的时机。
         eventsStream.attach(to: link)
+        controlStream.attach(to: link)
     }
 
     /// 服务之间「A 好了 B 该动了」的两根线。只有这个类型同时认识 `store` 与 `link` ——
@@ -114,6 +120,7 @@ struct AppServices {
         // 会强持有里面每个 class。
         let link = self.link
         let eventsStream = self.eventsStream
+        let controlStream = self.controlStream
         let credentials = self.credentials
 
         // 组网刚就绪 → 叫醒连接。那边不排定时器（等外部条件不该烧退避档位），只能靠这一声叫。
@@ -131,11 +138,12 @@ struct AppServices {
         // 已是 false，
         // 于是什么都不做 —— 连接层会把无票当终态自己收成 `.idle`。
         credentials.onIdentityChanged = {
-            [weak credentials, weak link, weak eventsStream] in
+            [weak credentials, weak link, weak eventsStream, weak controlStream] in
             guard let credentials, credentials.hasDeviceToken,
-                  let link, let eventsStream else { return }
+                  let link, let eventsStream, let controlStream else { return }
             link.activate()
             eventsStream.attach(to: link)
+            controlStream.attach(to: link)
         }
     }
 
@@ -149,6 +157,7 @@ struct AppServices {
                 link.activate()
             case .attachStreams:
                 eventsStream.attach(to: link)
+                controlStream.attach(to: link)
             case .launchMesh(let config):
                 await store.start(config: config)
             case .reportDamaged:

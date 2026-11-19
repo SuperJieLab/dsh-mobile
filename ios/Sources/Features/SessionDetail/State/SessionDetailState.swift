@@ -29,12 +29,13 @@ final class SessionDetailState {
          title: String?,
          link: LongConnection,
          store: MeshStore,
-         approvals: ApprovalStore) {
+         approvals: ApprovalStore,
+         control: ControlStream? = nil) {
         self.sessionId = sessionId
         self.title = title
         self.store = store
         self.approvals = approvals
-        sync = SessionSync(client: client, sessionId: sessionId, link: link)
+        sync = SessionSync(client: client, sessionId: sessionId, link: link, control: control)
         catalog = ModelCatalogState { try await fetchCatalog(client) }
         commands = CommandDirectory { try await fetchCommands(client, sessionId: sessionId) }
         let permissionState = PermissionState(

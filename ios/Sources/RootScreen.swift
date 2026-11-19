@@ -55,7 +55,8 @@ struct RootScreen: View {
                                                client: services.client,
                                                link: services.link,
                                                store: services.store,
-                                               approvals: services.approvals)
+                                               approvals: services.approvals,
+                                               control: services.controlStream)
                     case .settings:
                         SettingsAssembler(store: services.store,
                                           logFile: services.logFile,

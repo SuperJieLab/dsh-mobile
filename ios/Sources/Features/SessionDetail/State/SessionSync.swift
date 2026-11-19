@@ -83,6 +83,10 @@ final class SessionSync {
     let sessionId: String
     /// 造流口 —— 窄接口，连接级动作在此写不出来。
     private let factory: any StreamFactory
+    /// 连接级投影流的收端（App 级一个实例，这一屏只关心本会话那份）。
+    private let control: ControlStream?
+    /// 投影订阅的退订 token。
+    private var controlSubscription: (() -> Void)?
     /// 内存里的镜像；视图重建即重取窗口。
     private var mirror = SessionMirror()
     private var syncInFlight = false
@@ -130,10 +134,11 @@ final class SessionSync {
     /// 合并窗口 = 一个渲染帧量级。未定稿内容逐帧到达无感知；事件文本晚一帧出现。
     private static let flushWindowNanos: UInt64 = 16_000_000
 
-    init(client: RpcClient, sessionId: String, link: LongConnection) {
+    init(client: RpcClient, sessionId: String, link: LongConnection, control: ControlStream? = nil) {
         self.client = client
         self.sessionId = sessionId
         self.factory = link
+        self.control = control
         self.connectionPhase = { [weak link] in link?.phase ?? .idle }
 
         let statusBox = SessionStatus()
@@ -158,9 +163,27 @@ final class SessionSync {
 
     // MARK: - 流的开关（转给流开关）
 
-    func startFollowing() { following.start() }
+    func startFollowing() {
+        following.start()
+        subscribeControl()
+    }
     func retry() { following.retry() }
-    func stopFollowing() { following.stop() }
+    func stopFollowing() {
+        following.stop()
+        controlSubscription?()
+        controlSubscription = nil
+    }
+
+    /// 订上投影流：只收本会话那一条。退订在 `stopFollowing` —— 离屏不退会让监听表随
+    /// 每次进出增长，而它持有的是弱引用，泄漏不会报错，只会让每次投影都多跑一次空转。
+    private func subscribeControl() {
+        guard controlSubscription == nil, let control else { return }
+        controlSubscription = control.onUpdate { [weak self] sessionId, values, watermark in
+            guard let self, sessionId == self.sessionId else { return }
+            // 水位是事件 seq（见 `ControlStream` 的说明）—— 只用来挡乱序，不与 `asOfSeq` 互比。
+            self.applyUsage(UsageView.snapshotOf(values, asOfSeq: watermark))
+        }
+    }
 
     // MARK: - 读侧编排
 

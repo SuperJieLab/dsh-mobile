@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 会话详情的装配段：造容器、接线（进屏开流、离屏关卡），交给渲染段。
 /// **容器由这一屏自己造**：它要随这一屏生死（离开就丢，回来重取一个窗口），
-/// 依赖在签名上看得见：四个服务 —— 这一屏要什么，读签名就知道，不必跳到组合根。
+/// 依赖在签名上看得见：五个服务 —— 这一屏要什么，读签名就知道，不必跳到组合根。
 struct SessionDetailAssembler: View {
     private let sessionId: String
     private let title: String?
@@ -10,6 +10,7 @@ struct SessionDetailAssembler: View {
     private let link: LongConnection
     private let store: MeshStore
     private let approvals: ApprovalStore
+    private let control: ControlStream?
 
     /// 首帧为 nil：容器在 `.task` 里现造。`@State` 的初值表达式每次视图重建都求值、
     /// 只采用第一个 —— 造在 `init` 里不会错（构造是纯的），但会白造好几次。
@@ -20,13 +21,15 @@ struct SessionDetailAssembler: View {
          client: RpcClient,
          link: LongConnection,
          store: MeshStore,
-         approvals: ApprovalStore) {
+         approvals: ApprovalStore,
+         control: ControlStream? = nil) {
         self.sessionId = sessionId
         self.title = title
         self.client = client
         self.link = link
         self.store = store
         self.approvals = approvals
+        self.control = control
     }
 
     var body: some View {
@@ -49,7 +52,8 @@ struct SessionDetailAssembler: View {
                                             title: title,
                                             link: link,
                                             store: store,
-                                            approvals: approvals)
+                                            approvals: approvals,
+                                            control: control)
             }
             guard let created = detail else { return }
             created.sync.startFollowing()
