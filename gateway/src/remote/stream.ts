@@ -282,6 +282,17 @@ function waterfallValue(held: HeldApproval): MuxApprovalWaterfall {
   return { type: 'waterfall', ...held }
 }
 
+/**
+ * 打开帧的货物：`snapshot` 支。
+ *
+ * 判别字段是**货物种类**，不是业务事件类型 —— 打开帧的载荷里本来没有 `type`，
+ * 加了它，客户端才有一条「读一格就知道是哪类货物」的路（S2）。事件与未定稿帧同理：
+ * 前者包成 `{type:'event', event}`，后者的 `type:'assistant-stream'` 本来就是判别字段。
+ */
+function snapshotValue(opening: FollowOpening): { type: 'snapshot' } & FollowOpening {
+  return { type: 'snapshot', ...opening }
+}
+
 async function pump(
   socket: Duplex,
   source: FollowSource,
@@ -391,7 +402,7 @@ async function pump(
         // 界由字节定、切点由轮定：装不下就按轮边界收窄，连一轮都装不下则拒绝 ——
         // 「断连」与「发半截轮」都不是可接受的降级。
         const frameBytesAt = (start: number): number =>
-          encodeTextFrame(encodeServerFrame({ type: 'item', streamId, value: openingPayload(start) })).length
+          encodeTextFrame(encodeServerFrame({ type: 'item', streamId, value: snapshotValue(openingPayload(start)) })).length
         const shrink = fitOpeningToBytes(events, openingCapBytes, frameBytesAt)
         if ('unshrinkable' in shrink) {
           log.error('follow opening exceeds the cap even at one turn — refused',
@@ -419,7 +430,7 @@ async function pump(
         // 额度 —— 帧超限时，超出的部分可以整个落在这裁不动的一半里。
         const openingBytes = frameBytesAt(shrink.start)
         const fixedBytes = encodeTextFrame(encodeServerFrame({
-          type: 'item', streamId, value: { ...openingPayload(shrink.start), events: [] },
+          type: 'item', streamId, value: snapshotValue({ ...openingPayload(shrink.start), events: [] }),
         })).length
         log.info('follow opening', {
           session: request.sessionId,
@@ -430,7 +441,7 @@ async function pump(
           cutEvents: shrink.cutEvents,
           cutTurns: shrink.cutTurns,
         })
-        sendItem(openingPayload(shrink.start), {
+        sendItem(snapshotValue(openingPayload(shrink.start)), {
           // 窗口重放也占 t2 段，且通常是整条流里最大的一帧 —— 它的尺寸
           // 是「这一帧为什么超限」唯一的现场证据。
           sessionId: request.sessionId,
@@ -454,7 +465,7 @@ async function pump(
           return
         }
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
-        sendItem(event, {
+        sendItem({ type: 'event', event }, {
           sessionId: request.sessionId,
           kind: 'event',
           ...(typeof event?.seq === 'number' ? { seq: event.seq } : {}),

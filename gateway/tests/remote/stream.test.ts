@@ -38,6 +38,7 @@ test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 
     const opening = await receive(socket)
     assert.equal(opening.type, 'item')
     const payload = opening.value as Record<string, unknown>
+    assert.equal(payload.type, 'snapshot', '打开帧的货物种类')
     assert.equal(payload.sessionId, 's1')
     assert.equal(payload.cursor, 3, 'exclusive end of the opening window')
     assert.equal(payload.hasOlder, false)
@@ -45,9 +46,10 @@ test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 
     assert.deepEqual(payload.events, log)
 
     const first = await receive(socket)
-    assert.deepEqual((first.value as Record<string, unknown>), event(3))
+    assert.equal((first.value as { type?: string }).type, 'event', '货物种类是判别字段，不是业务事件类型')
+    assert.deepEqual((first.value as { event?: unknown }).event, event(3))
     const second = await receive(socket)
-    assert.deepEqual((second.value as Record<string, unknown>), event(4))
+    assert.deepEqual((second.value as { event?: unknown }).event, event(4))
 
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30)) // let the close handshake clear the server's heartbeat
@@ -607,7 +609,7 @@ test('one stream failing leaves the other stream on the same connection alive', 
     const opening = await receive(socket)
     assert.equal(opening.type, 'item', 'the second stream still opens after the first one failed')
     const forwarded = await receive(socket)
-    assert.deepEqual((forwarded.value as { seq?: number }).seq, 3, 'and still forwards its events')
+    assert.deepEqual((forwarded.value as { event?: { seq?: number } }).event?.seq, 3, 'and still forwards its events')
 
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))

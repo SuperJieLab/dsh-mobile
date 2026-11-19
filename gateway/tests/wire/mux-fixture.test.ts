@@ -49,7 +49,7 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
   'item-follow-opening': {
     type: 'item',
     streamId: 's-9',
-    value: { sessionId: 's-1', cursor: 3, pageStart: 1, hasOlder: false, events: [] },
+    value: { type: 'snapshot', sessionId: 's-1', cursor: 3, pageStart: 1, hasOlder: false, events: [] },
   },
   'item-events-waterfall': {
     type: 'item',

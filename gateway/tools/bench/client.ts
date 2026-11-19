@@ -220,15 +220,16 @@ export class BenchClient {
       return
     }
 
-    // 事件帧：payload 本体就是事件（与 gw 记录对齐的那一个 seq）。
-    if (payload['type'] !== undefined && payload['seq'] !== undefined) {
+    // 事件帧：`{type:'event', event}` —— 业务事件在 `event` 那一格。
+    const event = payload['type'] === 'event' ? payload['event'] as Record<string, unknown> : undefined
+    if (event !== undefined && event['seq'] !== undefined) {
       const devRecv = perfNow()
-      this.mirror.set(payload['seq'] as number, payload)
+      this.mirror.set(event['seq'] as number, event)
       this.recordsStore.push({
         seg: 'dev',
         t: perfNow(),
         sessionId: this.options.sessionId,
-        seq: payload['seq'] as number,
+        seq: event['seq'] as number,
         kind: 'event',
         gen: this.gen,
         devRecv,
