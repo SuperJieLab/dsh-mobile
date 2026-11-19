@@ -137,6 +137,13 @@ export function streamSourceOver(ctx: HostContext): FollowSource {
     },
     // 模型基线随开流走：与 snapshot 路径同一处读取 —— 开流是存活会话走的路径。
     modelOf: (sessionId) => modelBaselineOf(ctx, sessionId),
+    // control 流的全量切取：不传 keys 即整份投影，客户端据此建表。
+    projectionsOf: (sessionId) => {
+      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
+      if (session === undefined) return undefined
+      const read = ctx.sessionProjections as unknown as ProjectionsLike
+      return read.snapshot(session)
+    },
   }
 }
 

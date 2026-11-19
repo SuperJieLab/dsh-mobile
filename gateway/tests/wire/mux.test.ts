@@ -87,8 +87,8 @@ test('openRequestOf: 端点说这条流要什么，参数在 payload.args 里', 
     { kind: 'events' },
   )
   assert.deepEqual(
-    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/control', payload: { args: {} } }),
-    { kind: 'control' },
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/control', payload: { args: { sessionId: 's1' } } }),
+    { kind: 'control', sessionId: 's1' },
   )
   // 名字不在表里与「名字对、参数不对」是两个失败，都不关连接。
   assert.deepEqual(

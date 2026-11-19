@@ -13,7 +13,6 @@
  */
 
 import type { WireEvent } from './rpc.ts'
-import type { UsageSnapshot } from './usage.ts'
 import type { ModelSelection } from './model.ts'
 import { isPositiveInteger, nonEmptyString } from './fields.ts'
 import { resolveEndpoint, type FollowRequest } from './endpoints.ts'
@@ -118,19 +117,18 @@ export type EventsValue =
   | MuxApprovalCancel
 
 /**
- * 服务端 → 客户端：一条流的占用读数 —— 流作用域，与 `approval` 不同：
- * 占用属于这条流所 follow 的会话。⚠️ 水位是投影的切点，不是窗口的
- * `cursor`，客户端不得拿两者相减。
+ * `$control` 的货物 —— 投影的一次切取，与上游 `RemoteProjectionState` /
+ * `RemoteProjectionPatch` 同形。
+ *
+ * `baseline` 是打开时的一次全量（客户端据此建表），`projection` 是一条增量
+ * （`changes` 里每个键替换掉表里的同名格）。两种都带 `asOfSeq`：它是**投影**的水位，
+ * 客户端按它比新旧 —— 乱序到达时旧值不许覆盖新值。
  */
-export interface MuxUsageFrame {
-  type: 'usage'
-  streamId: StreamId
-  /** 带 `sessionId`，供客户端核对帧是否属于自己打开的那条流。 */
-  payload: { sessionId: string } & UsageSnapshot
-}
+export type ControlValue =
+  | { type: 'baseline'; asOfSeq: number; values: Readonly<Record<string, unknown>> }
+  | { type: 'projection'; asOfSeq: number; changes: readonly { key: string; value: unknown }[] }
 
-/** 服务端能在 mux 连接上发送的一切。 */
-export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame | MuxUsageFrame
+export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame
 
 /**
  * 从线上文本解析一条客户端帧的**信封**：`type` 与非空 `streamId`。
@@ -202,7 +200,7 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
 export type OpenRequest =
   | ({ kind: 'follow' } & FollowRequest)
   | { kind: 'events' }
-  | { kind: 'control' }
+  | ({ kind: 'control' } & FollowRequest)
 
 /** 端点表给出的两种拒绝 —— 调用方据此回一条带编号的 `error`，**不关连接**。 */
 export type OpenRequestRefusal = { readonly error: 'unknown-endpoint' | 'invalid-args' }
@@ -216,9 +214,11 @@ export type OpenRequestRefusal = { readonly error: 'unknown-endpoint' | 'invalid
 export function openRequestOf(frame: MuxOpenFrame): OpenRequest | OpenRequestRefusal {
   const resolution = resolveEndpoint(frame.endpoint, argsOf(frame.payload))
   if (!resolution.ok) return { error: resolution.code }
-  return resolution.kind === 'follow'
-    ? { kind: 'follow', ...resolution.request }
-    : { kind: resolution.kind }
+  switch (resolution.kind) {
+    case 'events': return { kind: 'events' }
+    case 'follow': return { kind: 'follow', ...resolution.request }
+    case 'control': return { kind: 'control', ...resolution.request }
+  }
 }
 
 /** `payload.args` —— 端点方法的入参容器；载荷不是对象或没有 `args` 时视为缺席。 */
@@ -247,14 +247,6 @@ export interface FollowOpening {
    * 所有；契约只承诺源给什么、到达时不变。
    */
   assistantStream?: unknown
-  /**
-   * 组装这条打开时读到的占用；投影无可显示之物时缺省 —— 是陈述，
-   * 不是故障。
-   *
-   * ⚠️ `occupancy.asOfSeq` 是投影的切点，**不是**这条打开的 `cursor`：
-   * 窗口按消息数切，可能落后或超前投影的日志 —— 两个独立水位。
-   */
-  occupancy?: UsageSnapshot
   /**
    * 这条会话下一轮将用的模型；源不知道时缺省 —— 与 `occupancy` 同为陈述，
    * 不是故障。语义是**选择本身**（`{provider, model, …}`），不是宿主的投影视图。

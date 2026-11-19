@@ -941,7 +941,7 @@ function openingOf(frames: Record<string, unknown>[]): Record<string, unknown> |
     .find(payload => payload !== undefined && payload['cursor'] !== undefined)
 }
 
-test('U6: the opening carries an occupancy baseline and a trigger event pushes a frame', { timeout: 15_000 }, async () => {
+test('U6: control 流给 baseline，触发事件后推一条 projection', { timeout: 15_000 }, async () => {
   const port = freshPort(44_600)
   const credentialsPath = tempCredentialsPath()
   const follow = fakeFollowHost({ cursor: 3, records: [{ type: 'event', event: { type: 'user/message', seq: 2 } }], hasMore: false })
@@ -956,40 +956,40 @@ test('U6: the opening carries an occupancy baseline and a trigger event pushes a
     const access = await accessTokenFor(port)
     const { socket, frames, waitFor } = await openStream(port, access)
 
+    // 控制流先开：打开时给一份全量（客户端据此建表）。
+    socket.send(JSON.stringify({ type: 'open', streamId: 'c1', endpoint: 'session/control', payload: { args: { sessionId: 's1' } } }))
+    await waitFor(f => f.some(frame => frame.streamId === 'c1' && frame.type === 'item'), 'the control baseline')
+    const baseline = frames.find(frame => frame.streamId === 'c1' && frame.type === 'item')!.value as Record<string, unknown>
+    assert.equal(baseline['type'], 'baseline', '第一帧是全量')
+    assert.equal(baseline['asOfSeq'], 3, '水位取自投影，不是窗口的 cursor')
+    assert.deepEqual((baseline['values'] as Record<string, unknown>)['contextPressure'],
+      { projectedTokens: 52_300, contextWindow: 128_000 }, '整份投影原样带出')
+
+    // 触发源：一条 follow 流，它的事件是「投影可能变了」的信号。
     socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
-    await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
+    await waitFor(f => f.some(frame => frame.streamId === 's1' && frame.type === 'item'), 'the follow opening')
 
-    // The window and the state travel together, each with its own water mark.
-    const opening = openingOf(frames)!
-    assert.equal(opening['cursor'], 4, 'the exclusive cursor: the window ends at seq 3')
-    assert.deepEqual(opening['occupancy'], {
-      asOfSeq: 3,
-      usage: {
-        usedTokens: 52_300,
-        contextWindow: 128_000,
-        breakdown: { systemTokens: 1_000, toolsTokens: 2_000, messageTokens: 49_300 },
-      },
-    })
-
-    // A settling turn moves the projections; the event and the new reading both arrive.
-    follow.project({ contextPressure: { projectedTokens: 61_000, contextWindow: 128_000 } }, 5)
+    // 只动 contextPressure：breakdown 原样再给一遍，否则它「消失」也会算一条变更 ——
+    // 那是 `project` 的整体替换语义，与本条要守的「只带变了的格」是两件事。
+    follow.project({
+      contextPressure: { projectedTokens: 61_000, contextWindow: 128_000 },
+      contextBreakdown: { systemTokens: 1_000, toolsTokens: 2_000, messageTokens: 49_300 },
+    }, 5)
     follow.emit({ type: 'assistant/message', seq: 4, data: { usage: { inputTokens: 60_000 } } })
-    await waitFor(f => f.some(frame => frame.type === 'usage'), 'the occupancy frame')
+    await waitFor(f => f.some(frame =>
+      frame.streamId === 'c1' && (frame.value as { type?: string } | undefined)?.type === 'projection'), 'the projection patch')
 
-    const usageFrame = frames.find(frame => frame.type === 'usage')!
-    assert.equal(usageFrame['streamId'], 's1')
-    assert.deepEqual(usageFrame['payload'], {
-      sessionId: 's1',
-      asOfSeq: 5,
-      usage: { usedTokens: 61_000, contextWindow: 128_000 },
-    })
+    const patch = frames.find(frame =>
+      frame.streamId === 'c1' && (frame.value as { type?: string } | undefined)?.type === 'projection')!.value as Record<string, unknown>
+    assert.equal(patch['asOfSeq'], 5)
+    assert.deepEqual(patch['changes'], [
+      { key: 'contextPressure', value: { projectedTokens: 61_000, contextWindow: 128_000 } },
+    ], '只带变了的格 —— 整表重发就不叫增量了')
 
-    // Nothing moved this time: the event still travels, the reading does not.
-    follow.emit({ type: 'assistant/message', seq: 5 })
-    await waitFor(f => f.some(frame => frame.type === 'item' && (frame.value as { event?: { seq?: number } }).event?.seq === 5), 'the second event')
+    // 没有新事件就不该再有帧：投影没动，读也不必发。
+    const before = frames.filter(frame => frame.streamId === 'c1').length
     await new Promise(resolve => setTimeout(resolve, 150))
-    assert.equal(frames.filter(frame => frame.type === 'usage').length, 1, 'an unchanged value must not earn a second frame')
-    assert.ok(follow.reads() >= 3, 'the projections were still read — the frame was skipped, not the read')
+    assert.equal(frames.filter(frame => frame.streamId === 'c1').length, before, '没有触发事件就不重发')
 
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))

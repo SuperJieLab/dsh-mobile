@@ -25,10 +25,11 @@
     },
     {
       "name": "control",
-      "text": "{\"endpoint\":\"session/control\",\"payload\":{\"args\":{}},\"streamId\":\"c-1\",\"type\":\"open\"}",
+      "text": "{\"endpoint\":\"session/control\",\"payload\":{\"args\":{\"sessionId\":\"s-1\"}},\"streamId\":\"c-1\",\"type\":\"open\"}",
       "type": "open",
       "streamId": "c-1",
-      "kind": "control"
+      "kind": "control",
+      "sessionId": "s-1"
     },
     {
       "name": "cancel",

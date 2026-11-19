@@ -661,8 +661,8 @@ test('follow 的泵不拿连接级流的端口，连接级泵拿到它该拿的�
   // 不是越界。仍要守的是**另一侧**：follow 的泵不该认识连接级流的任何端口，
   // 否则「一条流的事故不连坐」在类型上就不存在了。
   const text = readFileSync(join(SRC, 'remote', 'stream.ts'), 'utf8')
-  const followParams = parameterListOf(text, 'pump')
-  assert.ok(followParams !== undefined, 'pump 没扫到 —— 先怀疑改名或扫描器瞎了')
+  const followParams = parameterListOf(text, 'pumpFollow')
+  assert.ok(followParams !== undefined, 'pumpFollow 没扫到 —— 先怀疑改名或扫描器瞎了')
   for (const type of ['ForwardedSource', 'ApprovalSource', 'HeldApproval', 'WorkspacePort']) {
     assert.ok(!followParams.includes(type),
       `follow 的泵形参里出现了 ${type} —— 它拿到了连接级流的端口`)

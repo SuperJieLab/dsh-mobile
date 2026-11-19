@@ -938,7 +938,8 @@ test('E1b: a frame that cannot be attributed to any stream closes the connection
   }
 })
 
-test('opening carries occupancy from the frame projections', { timeout: 10_000 }, async () => {
+test('opening 不再带占用 —— 占用量走 control 流', { timeout: 10_000 }, async () => {
+  // S4：快照只说「这一段对话是什么」，不再夹一份会过期的读数。覆盖面变了。
   const frame = snapshotFrame([event(0)], 1, {
     projections: {
       asOfSeq: 295,
@@ -956,10 +957,7 @@ test('opening carries occupancy from the frame projections', { timeout: 10_000 }
     send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
 
     const payload = (await receive(socket)).value as Record<string, unknown>
-    assert.deepEqual(payload.occupancy, {
-      asOfSeq: 295,
-      usage: { usedTokens: 148_807, contextWindow: 1_000_000 },
-    }, '打开帧要带上从投影基线算出的占用，且水位取自投影而不是窗口的 cursor')
+    assert.equal(payload.occupancy, undefined, '打开帧里不该再有占用读数')
 
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
@@ -969,32 +967,3 @@ test('opening carries occupancy from the frame projections', { timeout: 10_000 }
   }
 })
 
-/**
- * 投影里没有可画的东西时**不许编一个 0%**：整份占用缺省，客户端据此隐藏那一行。
- *
- * 这条与上一条成对：只测「有值时要发」时，把「值不成形也发」写成 0 也绿。
- */
-test('opening omits occupancy when the projections carry no reading', { timeout: 10_000 }, async () => {
-  const frame = snapshotFrame([event(0)], 1, {
-    projections: { asOfSeq: 7, values: { contextPressure: { surfaceTokens: 10 } } },
-  })
-  const source = fakeSource([frame])
-  const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
-  server.listen(0)
-  try {
-    await once(server, 'listening')
-    const socket = await connect(server)
-
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
-
-    const payload = (await receive(socket)).value as Record<string, unknown>
-    assert.equal(payload.occupancy, undefined, '分子或分母缺失时不许发一份「0%」')
-
-    socket.close()
-    await new Promise(resolve => setTimeout(resolve, 30))
-  } finally {
-    server.closeAllConnections()
-    server.close()
-  }
-})

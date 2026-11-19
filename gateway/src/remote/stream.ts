@@ -37,18 +37,16 @@ import {
   type MuxApprovalWaterfall,
   type StreamId,
 } from '../wire/mux.ts'
-import { encodeServerFrame } from '../wire/mux.ts'
+import { encodeServerFrame, type ControlValue } from '../wire/mux.ts'
 import { fitOpeningToBytes, upstreamWindow } from '../protocol/window.ts'
-import { usageIsTrigger, usageShouldEmit } from '../protocol/usage.ts'
+import { usageIsTrigger } from '../protocol/usage.ts'
 import { randomUUID } from 'node:crypto'
 import { describeError } from '../ports/errors.ts'
 import type { ApprovalSource, HeldApproval } from '../ports/approval.ts'
 import { streamErrorOf } from '../protocol/error-codes.ts'
 import type { WireEvent } from '../wire/rpc.ts'
-import type { UsageSnapshot } from '../wire/usage.ts'
-import { usageSnapshotOf } from '../upstream/usage.ts'
 import type { ModelSelection } from '../wire/model.ts'
-import type { FollowSource } from '../ports/follow.ts'
+import type { FollowSource, ProjectionBaseline } from '../ports/follow.ts'
 import type { ForwardedSource } from '../ports/events.ts'
 import type { Duplex } from 'node:stream'
 import { encodeTextFrame } from './frames.ts'
@@ -86,21 +84,6 @@ const EXCERPT_LIMIT = 120
  * 再在这条连接上服务，每一条流都不可信。静默忽略更糟：客户端会等到 45 秒就绪超时才走，
  * 而那一帧到底发生了什么，两端日志都没有。
  */
-/**
- * 从打开帧的投影基线算占用。
- *
- * 缺基线或值不成形时返回 `undefined`，由调用方回落到 `occupancyOf`。两条来源共用
- * `usageSnapshotOf` 这一份换算 —— 分开写，同一个百分比迟早有两个算法。
- */
-function occupancyFromBaseline(frame: {
-  projections?: { asOfSeq: number; values: Readonly<Record<string, unknown>> }
-}): UsageSnapshot | undefined {
-  const baseline = frame.projections
-  if (baseline === undefined) return undefined
-  const reading = usageSnapshotOf(baseline.values, baseline.asOfSeq)
-  return reading.usage === undefined ? undefined : reading
-}
-
 export function onClientText(
   socket: Duplex,
   source: FollowSource,
@@ -160,10 +143,11 @@ export function onClientText(
     return { ok: true }
   }
   if (request.kind === 'control') {
-    return refuse('this gateway has no projection source yet')
+    pumpControl(socket, source, request.sessionId, frame.streamId, abort.signal, done)
+    return { ok: true }
   }
 
-  void pump(socket, source, frame.streamId, request, abort.signal, done, openingCapBytes)
+  void pumpFollow(socket, source, frame.streamId, request, abort.signal, done, openingCapBytes)
   return { ok: true }
 }
 
@@ -210,6 +194,110 @@ function excerptOf(text: string): string {
  * 泵一条 follow 流：先打开，再事件，直到源结束、客户端取消、或源破坏
  * 自己的契约。
  */
+/**
+ * 「这个会话的投影可能变了」的听众，按会话分组。
+ *
+ * 投影在网关这边是**拉**的：宿主只给 `snapshot(session)`，没有订阅口。而真正让投影
+ * 变化的只有事件（`usageIsTrigger` 那张表），所以 follow 泵遇到那类事件时叫一声，
+ * 同会话的 control 泵据此重读。这样控制流不需要定时器，也不会在空闲时白读。
+ *
+ * 生命周期跟着 control 泵的 abort 走（`off()` 里连同空集合一起删），漏删的症状是
+ * 「占用量停更」—— 与本期要消灭的那个老症状同形，所以注销写成一条路径。
+ */
+const projectionListeners = new Map<string, Set<() => void>>()
+
+function onProjectionChanged(sessionId: string, listener: () => void): () => void {
+  const set = projectionListeners.get(sessionId) ?? new Set<() => void>()
+  set.add(listener)
+  projectionListeners.set(sessionId, set)
+  return () => {
+    set.delete(listener)
+    if (set.size === 0) projectionListeners.delete(sessionId)
+  }
+}
+
+function notifyProjection(sessionId: string): void {
+  for (const listener of projectionListeners.get(sessionId) ?? []) listener()
+}
+
+/** 一次全量切取 → `baseline` 货物。 */
+function controlBaselineOf(baseline: ProjectionBaseline): ControlValue {
+  return { type: 'baseline', asOfSeq: baseline.asOfSeq, values: baseline.values }
+}
+
+/**
+ * 两份投影的差 → `changes`。比的是 JSON 等值：投影值本来就是 JSON，
+ * 逐键比可以让客户端只替换变了的格，而不是整表重发。
+ */
+function controlChangesOf(
+  previous: Readonly<Record<string, unknown>>,
+  next: Readonly<Record<string, unknown>>,
+): { key: string; value: unknown }[] {
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
+  const changes: { key: string; value: unknown }[] = []
+  for (const key of keys) {
+    if (JSON.stringify(previous[key]) !== JSON.stringify(next[key])) changes.push({ key, value: next[key] })
+  }
+  return changes
+}
+
+/**
+ * `session/control`：一条会话的投影。
+ *
+ * 打开时给一份 `baseline`（客户端据此建表），之后只在**投影可能变了**的时候重读
+ * （见 `notifyProjection`）。`asOfSeq` 不前进就不发 —— 那是「同样的内容又读了一次」，
+ * 客户端会当重放丢掉，发了只是浪费带宽。
+ */
+function pumpControl(
+  socket: Duplex,
+  source: FollowSource,
+  sessionId: string,
+  streamId: StreamId,
+  signal: AbortSignal,
+  done: () => void,
+): void {
+  const admit = source.projectionsOf
+  if (admit === undefined) {
+    log.error('control stream opened but the projection face is not wired — refused', { stream: streamId })
+    send(socket, {
+      type: 'error',
+      streamId,
+      error: { code: 'internal-error', message: 'this gateway has no projection source', details: {} },
+    })
+    done()
+    return
+  }
+
+  // 读失败视作「无话可说」：投影是事件之外的附加物，抛错的读记日志后跳过，
+  // 绝不变成会让手机丢掉这条流的 error 帧。
+  const read = (): ProjectionBaseline | undefined => {
+    try {
+      return admit(sessionId)
+    } catch (error) {
+      log.error('projection read failed', { session: sessionId, error: describeError(error) })
+      return undefined
+    }
+  }
+
+  let last = read()
+  if (last !== undefined) send(socket, { type: 'item', streamId, value: controlBaselineOf(last) })
+
+  const off = onProjectionChanged(sessionId, () => {
+    const next = read()
+    if (next === undefined) return
+    if (last !== undefined && next.asOfSeq <= last.asOfSeq) return
+    const changes = controlChangesOf(last?.values ?? {}, next.values)
+    last = next
+    if (changes.length === 0) return
+    send(socket, { type: 'item', streamId, value: { type: 'projection', asOfSeq: next.asOfSeq, changes } })
+  })
+
+  signal.addEventListener('abort', () => {
+    off()
+    done()
+  }, { once: true })
+}
+
 /**
  * `$events` 流：一条流装四种货物 —— `ready`（带 `clientId`）、`emit`（原样转发）、
  * `waterfall` / `cancel`（来自审批中继）。
@@ -293,7 +381,7 @@ function snapshotValue(opening: FollowOpening): { type: 'snapshot' } & FollowOpe
   return { type: 'snapshot', ...opening }
 }
 
-async function pump(
+async function pumpFollow(
   socket: Duplex,
   source: FollowSource,
   streamId: StreamId,
@@ -304,20 +392,6 @@ async function pump(
 ): Promise<void> {
   const sendItem = (payload: unknown, perf?: PerfContext): void => {
     send(socket, { type: 'item', streamId, value: payload }, perf)
-  }
-
-  /**
-   * 读占用投影，把读失败视作「无话可说」：占用是事件之外的附加物，
-   * 抛错的读记日志后跳过，绝不变成会让手机失去会话的 `error` 帧。
-   */
-  const readUsage = (): UsageSnapshot | undefined => {
-    try {
-      return source.occupancyOf(request.sessionId)
-    } catch (error) {
-      log.error('occupancy read failed',
-        { session: request.sessionId, error: describeError(error) })
-      return undefined
-    }
   }
 
   /**
@@ -333,14 +407,6 @@ async function pump(
         { session: request.sessionId, error: describeError(error) })
       return undefined
     }
-  }
-
-  /** 本流上一条已发送的读数 —— 基线算数，因此不重发。 */  let lastUsage: UsageSnapshot | undefined
-  const pushUsage = (): void => {
-    const reading = readUsage()
-    if (reading === undefined || !usageShouldEmit(lastUsage, reading)) return
-    lastUsage = reading
-    send(socket, { type: 'usage', streamId, payload: { sessionId: request.sessionId, ...reading } })
   }
 
   try {
@@ -373,11 +439,6 @@ async function pump(
         const events = frame.records.map(record => record.event as WireEvent)
         const cursor = frame.cursor + 1 // 参考 cursor 含端；我们排他
         expectedSeq = cursor
-        // 占用基数优先取自**这一帧自带的投影基线**：它与窗口出自同一次观察（同一
-        // `asOfSeq`）。`occupancyOf` 要经 `sessions.get`，那条路要一个已加载的会话
-        // 对象 —— 未激活的历史会话拿不到，整份占用会静默缺省；而投影其实已经送来。
-        const occupancy = occupancyFromBaseline(frame) ?? readUsage()
-        lastUsage = occupancy
         const model = readModel()
 
         // 窗口的组装只写一处：量尺与实际发送共用它 —— 否则「量了什么」
@@ -394,7 +455,6 @@ async function pump(
             hasOlder: start > 0 || frame.hasMore,
             events: kept,
             ...(frame.assistantStream === undefined ? {} : { assistantStream: frame.assistantStream }),
-            ...(occupancy === undefined ? {} : { occupancy }),
             ...(model === undefined ? {} : { model }),
           }
         }
@@ -473,7 +533,11 @@ async function pump(
           gwRecv,
         }) // 原样 —— 协议消息就是事件对象本身
         // 触发事件可能挪动了投影；确实挪动了才说。
-        if (typeof event?.type === 'string' && usageIsTrigger({ type: event.type })) pushUsage()
+        // 这类事件可能挪动了投影 —— 叫醒同会话的 control 流去重读。控制流自己开着
+        // 才有听众，没开时这里是一次空遍历。
+        if (typeof event?.type === 'string' && usageIsTrigger({ type: event.type })) {
+          notifyProjection(request.sessionId)
+        }
         continue
       }
 
