@@ -100,7 +100,7 @@ final class InboundFrameTests: XCTestCase {
 
     func testErrorFrameIsRefused() throws {
         let frame = try decode("""
-        {"type":"error","streamId":"s-1","payload":{"code":"window-too-large","message":"窗口太大"}}
+        {"type":"error","streamId":"s-1","error":{"code":"window-too-large","message":"窗口太大","details":{}}}
         """)
 
         guard case .refused(let failure) = frame.payload else {
@@ -143,9 +143,9 @@ final class InboundFrameTests: XCTestCase {
     /// 未定稿帧缺内层 `frame` 是常态（上游没带未定稿内容），给 `.null` 而不是判成坏帧 ——
     /// 判成坏帧会让「正在生成」那一段的清除时机整个变掉。
     func testTransientWithoutInnerFrameFallsBackToNull() throws {
-        let frame = try decode(#"{"type":"item","streamId":"s-1","payload":{"type":"assistant-stream"}}"#)
+        let frame = try decode(#"{"type":"item","streamId":"s-1","value":{"type":"assistant-stream"}}"#)
 
-        guard case .item(.transient(let inner)) = frame.payload else {
+        guard case .item(.follow(.transient(let inner))) = frame.payload else {
             return XCTFail("缺 frame 仍该归 transient，实际：\(String(describing: frame.payload))")
         }
         XCTAssertEqual(inner, .null)
@@ -154,7 +154,7 @@ final class InboundFrameTests: XCTestCase {
     /// `error` 帧缺 `message` 时 `code` 必须活下来。
     /// 整包解不出会把 `window-too-large` 从「会话级终态」降成「可重试」，语义正好反了。
     func testErrorWithoutMessageKeepsItsCode() throws {
-        let frame = try decode(#"{"type":"error","streamId":"s-1","payload":{"code":"window-too-large"}}"#)
+        let frame = try decode(#"{"type":"error","streamId":"s-1","error":{"code":"window-too-large"}}"#)
 
         guard case .refused(let failure) = frame.payload else {
             return XCTFail("缺 message 仍该归 refused，实际：\(String(describing: frame.payload))")

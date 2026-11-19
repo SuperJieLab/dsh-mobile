@@ -68,18 +68,18 @@ enum SessionStreamReader {
                 return StreamReading(content: .ignored)
             }
             switch payload {
-            case .opening(let shape):
+            case .follow(.opening(let shape)):
                 guard let opening = shape.frame() else {
                     // 分派之后才发现必填字段缺了。与「解不出」同归，但已由上面那一行留过痕。
                     return StreamReading(content: .ignored)
                 }
                 return StreamReading(content: .opening(opening))
-            case .sessionEvent(let event):
+            case .follow(.sessionEvent(let event)):
                 return StreamReading(content: .event(event))
-            case .transient(let inner):
+            case .follow(.transient(let inner)):
                 return StreamReading(content: .transient(inner))
-            case .connectionItem:
-                // 连接级货物不属于会话流：串流来的，丢弃。
+            case .events, .unknown:
+                // 连接级货物与本版不认识的种类：串流来的、或新加的，都丢弃不猜。
                 return StreamReading(content: .ignored)
             }
 

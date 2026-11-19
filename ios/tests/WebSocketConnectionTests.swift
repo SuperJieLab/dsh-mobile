@@ -110,7 +110,7 @@ final class WebSocketConnectionTests: XCTestCase {
         // 证据被这一拍消费掉：收到一帧之后归零，且那一帧不能顺延算到下一拍。
         let reset = transport()
         XCTAssertEqual(reset.livenessStep(), .probe(missed: 1))
-        reset.handleMessage(.string(#"{"type":"item","streamId":"nobody","payload":{}}"#),
+        reset.handleMessage(.string(#"{"type":"item","streamId":"nobody","value":{}}"#),
                             generation: 1)
         XCTAssertEqual(reset.livenessStep(), .probe(missed: 0), "这一拍收到过东西就归零")
         XCTAssertFalse(reset.heardFromPeer, "证据被这一拍消费掉了")
@@ -158,7 +158,7 @@ final class WebSocketConnectionTests: XCTestCase {
         // 就绪那一半另起一个实例，不 `activate()`：端点连不上，握手失败会把阶段推到
         // `.waiting`，与「收到帧」抢同一个时间窗 —— 那样断言就成了赌时序。
         let ready = transport()
-        let stray = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
+        let stray = #"{"type":"item","streamId":"nobody","value":{"type":"ready","clientId":"c1"}}"#
         ready.handleMessage(.string(stray), generation: 0)
         XCTAssertTrue(ready.heardFromPeer, "同一帧也是心跳要的证据 —— 两个判据同一个来源")
         await drain(ready)
@@ -222,7 +222,7 @@ final class WebSocketConnectionTests: XCTestCase {
         let behavior = Behavior()
         let stream = try XCTUnwrap(streams.makeStream(behavior))
 
-        let mine = #"{"type":"item","streamId":"\#(stream.id)","payload":{"kind":"ready"}}"#
+        let mine = #"{"type":"item","streamId":"\#(stream.id)","value":{"type":"ready","clientId":"c1"}}"#
         transport.handleMessage(.string(mine), generation: 1)
         // 帧还在解码头里排着，代次就推走了。
         transport.connect()
@@ -261,12 +261,12 @@ final class WebSocketConnectionTests: XCTestCase {
         let stream = try XCTUnwrap(streams.makeStream(behavior))
         _ = try XCTUnwrap(streams.makeStream(other))
 
-        let mine = #"{"type":"item","streamId":"\#(stream.id)","payload":{"kind":"ready"}}"#
+        let mine = #"{"type":"item","streamId":"\#(stream.id)","value":{"type":"ready","clientId":"c1"}}"#
         transport.handleMessage(.string(mine), generation: 1)
         await drain(transport)
         XCTAssertEqual(behavior.handled, 1, "编号在表里：交给那条流")
 
-        let stranger = #"{"type":"item","streamId":"not-in-the-table","payload":{"kind":"ready"}}"#
+        let stranger = #"{"type":"item","streamId":"not-in-the-table","value":{"type":"ready","clientId":"c1"}}"#
         transport.handleMessage(.string(stranger), generation: 1)
         await drain(transport)
         XCTAssertEqual(behavior.handled, 1, "编号不在表里：谁都收不到")
@@ -280,7 +280,7 @@ final class WebSocketConnectionTests: XCTestCase {
         let transport = transport()
         // 不 `activate()`：这一条只问「坏帧改不改阶段」。端点连不上，握手失败会把阶段推到
         // `.waiting` —— 那与坏帧无关，却和它在同一个时间窗里，两者必须分开才能断言。
-        let ok = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
+        let ok = #"{"type":"item","streamId":"nobody","value":{"type":"ready","clientId":"c1"}}"#
         transport.handleMessage(.string(ok), generation: 0)
         await drain(transport)
         XCTAssertEqual(transport.phase, .ready)
@@ -442,7 +442,7 @@ final class WebSocketConnectionTests: XCTestCase {
     func testOpeningASecondStreamKeepsThePhase() async throws {
         let (transport, streams) = transportWithStreams()
         transport.activate()
-        let ok = #"{"type":"item","streamId":"nobody","payload":{"kind":"ready"}}"#
+        let ok = #"{"type":"item","streamId":"nobody","value":{"type":"ready","clientId":"c1"}}"#
         transport.handleMessage(.string(ok), generation: 1)
         await drain(transport)
         XCTAssertEqual(transport.phase, .ready)
@@ -533,7 +533,7 @@ final class WebSocketConnectionTests: XCTestCase {
     func testForegroundReconnectWakesASilentReadyConnection() async {
         let silent = transport()
         silent.activate()
-        silent.handleMessage(.string(#"{"type":"item","streamId":"nobody","payload":{}}"#),
+        silent.handleMessage(.string(#"{"type":"item","streamId":"nobody","value":{}}"#),
                              generation: 1)
         await drain(silent)
         XCTAssertEqual(silent.phase, .ready, "前置：这一代真的通了")

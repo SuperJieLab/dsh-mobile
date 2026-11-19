@@ -26,8 +26,8 @@ final class SessionStreamReaderTests: XCTestCase {
     /// 缺字段那三条，这里守正向样本本身没被判歪）。
     func testOpeningNeedsAllThreeFields() throws {
         let reading = try read("""
-        {"type":"item","streamId":"s-1","payload":{
-          "sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,
+        {"type":"item","streamId":"s-1","value":{
+          "type":"snapshot","sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,
           "events":[{"type":"user/message","seq":2,"time":1700000000000,"data":{}}]}}
         """)
 
@@ -96,7 +96,7 @@ final class SessionStreamReaderTests: XCTestCase {
     /// 码与原文都要带出来：码决定「值不值得重连」，原文是用户能看懂的那句。
     func testRefusalKeepsCodeAndMessage() throws {
         let reading = try read("""
-        {"type":"error","streamId":"s-1","payload":{"code":"window-too-large","message":"窗口太大"}}
+        {"type":"error","streamId":"s-1","error":{"code":"window-too-large","message":"窗口太大","details":{}}}
         """)
 
         guard case .refused(let failure) = reading.content else {
@@ -126,8 +126,8 @@ final class SessionStreamReaderTests: XCTestCase {
         let cases: [(name: String, text: String)] = [
             ("未知类型", #"{"type":"future-thing","streamId":"s-1","payload":{}}"#),
             ("item 缺载荷", #"{"type":"item","streamId":"s-1"}"#),
-            ("item 带 type 却没有 seq", #"{"type":"item","streamId":"s-1","payload":{"type":"odd"}}"#),
-            ("item 的载荷是空对象", #"{"type":"item","streamId":"s-1","payload":{}}"#),
+            ("item 带 type 却没有 seq", #"{"type":"item","streamId":"s-1","value":{"type":"odd"}}"#),
+            ("item 的载荷是空对象", #"{"type":"item","streamId":"s-1","value":{}}"#),
         ]
 
         for item in cases {
@@ -145,11 +145,11 @@ final class SessionStreamReaderTests: XCTestCase {
     /// 打开帧还在路上时，这条流就被当成开成了，于是它永远等不到自己的基线窗口。
     func testOnlyAnOpeningEstablishesTheStream() throws {
         let samples: [(name: String, text: String, establishes: Bool)] = [
-            ("打开帧", #"{"type":"item","streamId":"s-1","payload":{"sessionId":"s-1","cursor":1,"events":[]}}"#, true),
-            ("事件帧", #"{"type":"item","streamId":"s-1","payload":{"type":"user/message","seq":1,"time":1,"data":{}}}"#, false),
+            ("打开帧", #"{"type":"item","streamId":"s-1","value":{"type":"snapshot","sessionId":"s-1","cursor":1,"events":[]}}"#, true),
+            ("事件帧", #"{"type":"item","streamId":"s-1","value":{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{}}}}"#, false),
             ("占用帧", #"{"type":"usage","streamId":"s-1","payload":{"sessionId":"s-1","asOfSeq":1}}"#, false),
             ("收尾帧", #"{"type":"end","streamId":"s-1"}"#, false),
-            ("拒绝帧", #"{"type":"error","streamId":"s-1","payload":{"code":"internal-error","message":""}}"#, false),
+            ("拒绝帧", #"{"type":"error","streamId":"s-1","error":{"code":"internal-error","message":"","details":{}}}"#, false),
         ]
 
         for sample in samples {
@@ -168,15 +168,15 @@ final class SessionStreamReaderTests: XCTestCase {
 
         for code in ["unknown-session", "unreadable-session", "window-too-large"] {
             let reading = try read("""
-            {"type":"error","streamId":"s-1","payload":{"code":"\(code)","message":""}}
+            {"type":"error","streamId":"s-1","error":{"code":"\(code)","message":"","details":{}}}
             """)
             XCTAssertEqual(reading.next, .stop, "\(code) 是会话级终态 —— 重连只会再收一次")
         }
 
-        let retryable = try read(#"{"type":"error","streamId":"s-1","payload":{"code":"internal-error","message":""}}"#)
+        let retryable = try read(#"{"type":"error","streamId":"s-1","error":{"code":"internal-error","message":"","details":{}}}"#)
         XCTAssertEqual(retryable.next, .retry, "非终态的拒绝要按这条流自己的退避重开")
 
-        let opening = try read(#"{"type":"item","streamId":"s-1","payload":{"sessionId":"s-1","cursor":1,"events":[]}}"#)
+        let opening = try read(#"{"type":"item","streamId":"s-1","value":{"type":"snapshot","sessionId":"s-1","cursor":1,"events":[]}}"#)
         XCTAssertEqual(opening.next, .keep, "打开帧之后什么都不用做")
     }
 
@@ -185,7 +185,7 @@ final class SessionStreamReaderTests: XCTestCase {
     /// 白名单之外的码不该让会话卡死：宁可多开几次（屏幕上看得见在恢复），
     /// 也不要静默挂死。
     func testAnUnknownCodeIsRetried() throws {
-        let reading = try read(#"{"type":"error","streamId":"s-1","payload":{"code":"some-future-code","message":""}}"#)
+        let reading = try read(#"{"type":"error","streamId":"s-1","error":{"code":"some-future-code","message":"","details":{}}}"#)
 
         XCTAssertEqual(reading.next, .retry)
     }
