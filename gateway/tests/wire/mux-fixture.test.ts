@@ -19,7 +19,7 @@ interface ClientSample {
   text: string
   type: 'open' | 'cancel'
   streamId: string
-  op?: string
+  kind?: string
   sessionId?: string
 }
 
@@ -55,7 +55,7 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
     type: 'item',
     streamId: 'e-1',
     value: {
-      kind: 'waterfall', event: 'permission', eventId: 'ev-1', agentId: 's-1', request: {},
+      type: 'waterfall', event: 'permission', eventId: 'ev-1', agentId: 's-1', request: {},
     },
   },
   end: { type: 'end', streamId: 's-9' },
@@ -65,9 +65,9 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
 test('the fixture covers every stream kind and both server frame kinds', () => {
   // 活性锚：样本少一条时下面的循环会静默少测一格，而「少测一格」在测试报告里
   // 长得跟「全绿」一模一样。
-  const ops = new Set(fixture.client.map(sample => sample.op).filter(Boolean))
-  assert.deepEqual([...ops].sort(), ['approvals', 'follow', 'host-events', 'session-list'],
-    '四条流的开流请求都要有样本')
+  const kinds = new Set(fixture.client.map(sample => sample.kind).filter(Boolean))
+  assert.deepEqual([...kinds].sort(), ['control', 'events', 'follow'],
+    '三条流的开流请求都要有样本')
   const serverTypes = new Set(fixture.server.map(sample => sample.type))
   for (const type of ['item', 'end', 'error']) {
     assert.ok(serverTypes.has(type as ServerSample['type']), `服务端帧缺 ${type} 的样本`)
@@ -85,10 +85,10 @@ test('every client sample is exactly what the gateway parses', () => {
     assert.equal(frame.streamId, sample.streamId, `${sample.name}: 编号`)
 
     if (frame.type !== 'open') continue
-    const request = openRequestOf(frame.payload)
-    assert.ok(request !== undefined, `${sample.name}: 网关认不出这个 open 载荷`)
-    assert.equal(request.kind, sample.op, `${sample.name}: 开的是哪种流`)
-    if (sample.op === 'follow') {
+    const request = openRequestOf(frame)
+    assert.ok(!('error' in request), `${sample.name}: 网关认不出这个 open 端点`)
+    assert.equal(request.kind, sample.kind, `${sample.name}: 开的是哪种流`)
+    if (sample.kind === 'follow') {
       assert.equal(sample.sessionId !== undefined, true, `${sample.name}: follow 样本必须带会话名`)
       assert.equal(
         (request as { sessionId?: string }).sessionId,

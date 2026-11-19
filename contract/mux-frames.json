@@ -4,37 +4,31 @@
     "改这里的任何一行，两端都会红；只改一端自己的断言，另一端不会。",
     "client 段：字节由手机端编出，网关端解析。text 是精确字节（手机端按 .sortedKeys 编码，键序确定）。",
     "server 段：网关端编出，手机端解析。这里钉的是语义而不是字节 —— 服务端用 JSON.stringify，",
-    "键序跟着对象字面量走，钉字节会把「加一个字段」变成一次无意义的红。"
+    "键序跟着对象字面量走，钉字节会把「加一个字段」变成一次无意义的红。",
+    "端点名与上游逐字一致：session/follow、session/control、$events（后两者无入参，args 为空对象）。"
   ],
   "client": [
     {
       "name": "follow",
-      "text": "{\"payload\":{\"op\":\"follow\",\"sessionId\":\"s-1\"},\"streamId\":\"s-9\",\"type\":\"open\"}",
+      "text": "{\"endpoint\":\"session/follow\",\"payload\":{\"args\":{\"sessionId\":\"s-1\"}},\"streamId\":\"s-9\",\"type\":\"open\"}",
       "type": "open",
       "streamId": "s-9",
-      "op": "follow",
+      "kind": "follow",
       "sessionId": "s-1"
     },
     {
-      "name": "approvals",
-      "text": "{\"payload\":{\"op\":\"approvals\"},\"streamId\":\"a-1\",\"type\":\"open\"}",
+      "name": "events",
+      "text": "{\"endpoint\":\"$events\",\"payload\":{\"args\":{}},\"streamId\":\"e-1\",\"type\":\"open\"}",
       "type": "open",
-      "streamId": "a-1",
-      "op": "approvals"
+      "streamId": "e-1",
+      "kind": "events"
     },
     {
-      "name": "session-list",
-      "text": "{\"payload\":{\"op\":\"session-list\"},\"streamId\":\"l-1\",\"type\":\"open\"}",
+      "name": "control",
+      "text": "{\"endpoint\":\"session/control\",\"payload\":{\"args\":{}},\"streamId\":\"c-1\",\"type\":\"open\"}",
       "type": "open",
-      "streamId": "l-1",
-      "op": "session-list"
-    },
-    {
-      "name": "host-events",
-      "text": "{\"payload\":{\"op\":\"host-events\"},\"streamId\":\"h-1\",\"type\":\"open\"}",
-      "type": "open",
-      "streamId": "h-1",
-      "op": "host-events"
+      "streamId": "c-1",
+      "kind": "control"
     },
     {
       "name": "cancel",
@@ -52,7 +46,7 @@
     },
     {
       "name": "item-events-waterfall",
-      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"kind\":\"waterfall\",\"event\":\"permission\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{}}}",
+      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"waterfall\",\"event\":\"permission\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{}}}",
       "type": "item",
       "streamId": "e-1"
     },

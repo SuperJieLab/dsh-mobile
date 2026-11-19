@@ -131,9 +131,9 @@ test('approval: a live request reaches the socket as a stream item', { timeout: 
   try {
     const socket = await connect(h.server)
     // 开口即基线：先一条 ready。此刻集合为空，所以它后面没有 waterfall。
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
     const ready = await receive(socket)
-    assert.equal((ready.value as { kind?: string }).kind, 'ready')
+    assert.equal((ready.value as { type?: string }).type, 'ready')
 
     h.feed.push(approvalRequest('e1', 'session-7'))
 
@@ -142,7 +142,7 @@ test('approval: a live request reaches the socket as a stream item', { timeout: 
       type: 'item',
       streamId: 'ev',
       value: {
-        kind: 'waterfall', event: 'approval/request', eventId: 'e1',
+        type: 'waterfall', event: 'approval/request', eventId: 'e1',
         agentId: 'session-7', request: { toolName: 'shell', reason: 'needs write' },
       },
     })
@@ -161,15 +161,15 @@ test('approval: a client that opens later gets the question with the opening bas
     await until(() => h.relay.held().length === 1, 'the question is held before the client arrives')
 
     const socket = await connect(h.server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
 
     // ready 之后紧跟当前集合 —— 没有单独的名单帧，「基线与这条流从哪里开始」是同一件事。
     const ready = await receive(socket)
-    assert.equal((ready.value as { kind?: string }).kind, 'ready')
+    assert.equal((ready.value as { type?: string }).type, 'ready')
 
     const replay = await receive(socket)
-    const payload = replay.value as { kind?: string; agentId?: string }
-    assert.equal(payload.kind, 'waterfall')
+    const payload = replay.value as { type?: string; agentId?: string }
+    assert.equal(payload.type, 'waterfall')
     assert.equal(payload.agentId, 'session-7',
       'the replay carries the identity — this is the half a live-only field would silently miss')
     socket.close()
@@ -184,7 +184,7 @@ test('approval: an upstream cancel reaches the socket as stream cargo', { timeou
   const h = await harness()
   try {
     const socket = await connect(h.server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
     await receive(socket) // ready
 
     h.feed.push(approvalRequest('e1', 'session-7'))
@@ -193,7 +193,7 @@ test('approval: an upstream cancel reaches the socket as stream cargo', { timeou
 
     h.feed.push({ type: 'cancel', eventId: 'e1' })
     const gone = await receive(socket)
-    assert.deepEqual(gone.value, { kind: 'cancel', eventId: 'e1' },
+    assert.deepEqual(gone.value, { type: 'cancel', eventId: 'e1' },
       'a question settled elsewhere must take its card down — this is the other half of the contract')
     assert.deepEqual(h.relay.held(), [], 'and the held set loses it, so the next opening baseline is honest')
     socket.close()
@@ -209,10 +209,10 @@ test('A1/B1: the opening replays the whole set in order, and later arrivals foll
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
 
     const ready = await receive(socket)
-    assert.equal((ready.value as { kind?: string }).kind, 'ready',
+    assert.equal((ready.value as { type?: string }).type, 'ready',
       'the opening baseline starts with `ready` — nothing precedes it')
 
     const replayed = [
@@ -239,14 +239,14 @@ test('A1/B1: an empty set gives `ready` and nothing else — there is no ledger 
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
 
-    assert.equal(((await receive(socket)).value as { kind?: string }).kind, 'ready')
+    assert.equal(((await receive(socket)).value as { type?: string }).type, 'ready')
 
     // 确定性写法：不赌「一段时间内没有帧」，而是让下一帧必须就是刚推的那条。
     approvals.push(held('e1'))
     const next = await receive(socket)
-    assert.equal((next.value as { kind?: string }).kind, 'waterfall',
+    assert.equal((next.value as { type?: string }).type, 'waterfall',
       'ready 与第一条增量之间不该夹着任何一帧 —— 夹着的那一帧就是被删掉的名单')
     socket.close()
   } finally {
@@ -263,14 +263,14 @@ test('B3: reopening the stream puts the whole set on the wire again', { timeout:
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev1', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev1', endpoint: '$events', payload: { args: {} } })
     for (let index = 0; index < 3; index += 1) await receive(socket)
 
     send(socket, { type: 'cancel', streamId: 'ev1' })
-    send(socket, { type: 'open', streamId: 'ev2', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev2', endpoint: '$events', payload: { args: {} } })
 
     const frames = [await receive(socket), await receive(socket), await receive(socket)]
-    assert.equal((frames[0]!.value as { kind?: string }).kind, 'ready')
+    assert.equal((frames[0]!.value as { type?: string }).type, 'ready')
     assert.deepEqual(frames.slice(1).map(frame => (frame.value as { eventId?: string }).eventId),
       ['e1', 'e2'], 'a reopened stream gets the same complete baseline, not the delta since the last one')
     socket.close()
@@ -287,7 +287,7 @@ test('B2: opening before the source is ready is refused — a stale baseline is 
   const server = await eventsOnlyServer(fakeFeed(), approvals)
   try {
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
 
     const refusal = await receive(socket)
     assert.equal(refusal.type, 'error', 'a stream that can only lie must be refused, not opened')
@@ -297,8 +297,8 @@ test('B2: opening before the source is ready is refused — a stale baseline is 
 
     // 拒绝之后编号被收回：再开同一个编号不该被当成协议违规（那会直接断掉连接）。
     approvals.setReady(true)
-    send(socket, { type: 'open', streamId: 'ev', payload: { op: 'approvals' } })
-    assert.equal(((await receive(socket)).value as { kind?: string }).kind, 'ready',
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
+    assert.equal(((await receive(socket)).value as { type?: string }).type, 'ready',
       'the refused stream left nothing behind — the same id opens cleanly')
     socket.close()
   } finally {

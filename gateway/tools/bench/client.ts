@@ -111,7 +111,8 @@ export class BenchClient {
     socket.send(JSON.stringify({
       type: 'open',
       streamId: this.streamId,
-      payload: { op: 'follow', sessionId: this.options.sessionId },
+      endpoint: 'session/follow',
+      payload: { args: { sessionId: this.options.sessionId } },
     }))
   }
 

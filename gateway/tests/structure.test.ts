@@ -656,36 +656,24 @@ function parameterListOf(text: string, name: string): string | undefined {
   return undefined
 }
 
-test('each connection-stream pump takes only its own source port', () => {
-  // 拆三条流买的是「一条流的事故不连坐」。若某个泵顺手拿到另一条流的端口，它就能读到
-  // 对方的就绪状态或集合 —— 那层隔离在类型上就不存在了，而这种错不会有任何运行时症状：
-  // 直到某天有人「顺手」用它做了一次跨流判定。
-  //
-  // 判据必须能红：拿一个真存在但被禁的类型作正控（`pumpSessionList` 里的 `WorkspacePort`
-  // 出现在形参上，它本身合规，但同一个词在 `pumpApprovals` 上就违规）。所以下面分两半 ——
-  // 先验「禁的没出现」，再验「该出现的出现了」，后者防扫描器瞎了。
+test('follow 的泵不拿连接级流的端口，连接级泵拿到它该拿的两个源', () => {
+  // 本期把三条连接级流并成了一条 `$events`，它同时取转发源与审批中继 —— 那是设计，
+  // 不是越界。仍要守的是**另一侧**：follow 的泵不该认识连接级流的任何端口，
+  // 否则「一条流的事故不连坐」在类型上就不存在了。
   const text = readFileSync(join(SRC, 'remote', 'stream.ts'), 'utf8')
-  const forbidden: Array<{ pump: string, types: string[] }> = [
-    { pump: 'pumpApprovals', types: ['WorkspacePort'] },
-    { pump: 'pumpSessionList', types: ['ApprovalSource', 'HeldApproval'] },
-    { pump: 'pumpHostEvents', types: ['ApprovalSource', 'HeldApproval', 'WorkspacePort'] },
-  ]
-  for (const { pump, types } of forbidden) {
-    const params = parameterListOf(text, pump)
-    assert.ok(params !== undefined, `${pump} 没扫到 —— 先怀疑改名或扫描器瞎了`)
-    for (const type of types) {
-      assert.ok(!params.includes(type),
-        `${pump} 的形参里出现了 ${type} —— 这条泵拿到了另一条流的端口`)
-    }
+  const followParams = parameterListOf(text, 'pump')
+  assert.ok(followParams !== undefined, 'pump 没扫到 —— 先怀疑改名或扫描器瞎了')
+  for (const type of ['ForwardedSource', 'ApprovalSource', 'HeldApproval', 'WorkspacePort']) {
+    assert.ok(!followParams.includes(type),
+      `follow 的泵形参里出现了 ${type} —— 它拿到了连接级流的端口`)
   }
 
-  // 活性断言：三个泵都扫到，且各自的端口都在形参上。
-  const approvals = parameterListOf(text, 'pumpApprovals')
-  const sessions = parameterListOf(text, 'pumpSessionList')
-  assert.ok(approvals?.includes('ApprovalSource'), 'pumpApprovals 该拿审批端口')
-  assert.ok(sessions?.includes('WorkspacePort'), 'pumpSessionList 该拿工作空间端口')
-  assert.ok(parameterListOf(text, 'pumpHostEvents')?.includes('ForwardedSource'),
-    'pumpHostEvents 该拿转发源')
+  // 正控：同一个词在 `pumpEvents` 上必须出现，否则上面的「没出现」可能只是扫描器瞎了。
+  const eventsParams = parameterListOf(text, 'pumpEvents')
+  assert.ok(eventsParams !== undefined, 'pumpEvents 没扫到')
+  for (const type of ['ForwardedSource', 'ApprovalSource']) {
+    assert.ok(eventsParams.includes(type), `pumpEvents 应当取 ${type}`)
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1575,10 +1563,15 @@ test('each approval kind is constructed exactly once, where the stream pump live
   const constructionHome = 'remote/stream.ts'
   const declarationHome = 'wire/mux.ts'
   const seen = new Map<string, { file: string; count: number }[]>()
+  // 上游的入站形状（`ports/events.ts`）也叫 `type: 'waterfall'` —— 那是**别人给我们的**
+  // 帧，与 mux 的出站货物同名不同层；`upstream/write.ts` 只是引用它的类型（`Extract<…>`）。
+  // 排除这两处，判据才守得住「只有一处组装出站货物」。
+  const exempt = new Set(['ports/events.ts', 'upstream/write.ts'])
   for (const file of filesUnder(SRC)) {
+    if (exempt.has(where(file))) continue
     const code = stripComments(readFileSync(file, 'utf8'))
     for (const kind of ['waterfall', 'cancel'] as const) {
-      const hits = [...code.matchAll(new RegExp(`kind:\\s*'${kind}'`, 'g'))].length
+      const hits = [...code.matchAll(new RegExp(`type:\\s*'${kind}'`, 'g'))].length
       if (hits === 0) continue
       seen.set(kind, [...(seen.get(kind) ?? []), { file: where(file), count: hits }])
     }
@@ -1613,7 +1606,7 @@ test('A3: the connection-level approval frame is gone for good', () => {
   for (const file of filesUnder(SRC)) {
     scanned += 1
     const code = stripComments(readFileSync(file, 'utf8'))
-    if (code.includes("kind: 'waterfall'")) cargoes += 1
+    if (code.includes("type: 'waterfall'")) cargoes += 1
     if (code.includes("type: 'approval'")) hits.push(where(file))
   }
   assert.ok(scanned > 40, `only scanned ${scanned} source files — the root is wrong`)

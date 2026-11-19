@@ -16,6 +16,7 @@ import type { WireEvent } from './rpc.ts'
 import type { UsageSnapshot } from './usage.ts'
 import type { ModelSelection } from './model.ts'
 import { isPositiveInteger, nonEmptyString } from './fields.ts'
+import { resolveEndpoint, type FollowRequest } from './endpoints.ts'
 
 /**
  * 一条逻辑流的编号 —— **开流那一刻由客户端现造，此后不再复用**。
@@ -32,6 +33,14 @@ export type StreamId = string
 export interface MuxOpenFrame {
   type: 'open'
   streamId: StreamId
+  /**
+   * 这条流要开的是哪个端点 —— 信封层**不判**它，原样交给 `endpoints.ts` 的表。
+   *
+   * 判在这里就违反了「归得上一条流的事只归这条流」：名字不认识要回一条带编号的
+   * `error`，而不是把整条连接关掉。所以这里只透传。
+   */
+  endpoint: unknown
+  /** 端点方法的入参容器：`{ "args": … }`。上游的方法从 `args` 取参数，不是从载荷本身。 */
   payload: unknown
 }
 
@@ -81,20 +90,32 @@ export interface MuxApprovalHeld {
 }
 
 /**
- * 一条待答调用 —— `{op:'approvals'}` 流的一种货物。
+ * 一条待答调用 —— `$events` 流的一种货物（上游叫 `waterfall`）。
  *
  * 四个字段与上游 waterfall 帧逐字相同：这一层不解释载荷，只搬。`agentId` 就是会话身份，
  * 客户端按它入栏 —— 与它在上游的含义一致（`Agent.id` 即 `SessionId`）。
  */
 export interface MuxApprovalWaterfall extends MuxApprovalHeld {
-  kind: 'waterfall'
+  type: 'waterfall'
 }
 
 /** 撤回一条待答调用 —— 唯一携带的寻址信息是 `eventId`。 */
 export interface MuxApprovalCancel {
-  kind: 'cancel'
+  type: 'cancel'
   eventId: string
 }
+
+/**
+ * `$events` 流的货物 —— 四种，与上游 `RemoteEventFrame` 同形。
+ *
+ * 一条流装四种而不是四条流各装一种：上游就是这么分的，分派在客户端按 `type`
+ * 与 `event` 名做。合并的代价是「审批源未就绪，整条流开不起来」，见泵上的注释。
+ */
+export type EventsValue =
+  | { type: 'ready'; clientId: string }
+  | { type: 'emit'; event: string; args: readonly unknown[] }
+  | MuxApprovalWaterfall
+  | MuxApprovalCancel
 
 /**
  * 服务端 → 客户端：一条流的占用读数 —— 流作用域，与 `approval` 不同：
@@ -135,7 +156,9 @@ export function parseClientFrame(text: string): MuxClientFrame | undefined {
 
   if (frame.type === 'cancel') return { type: 'cancel', streamId }
 
-  if (frame.type === 'open') return { type: 'open', streamId, payload: frame.payload }
+  if (frame.type === 'open') {
+    return { type: 'open', streamId, endpoint: frame.endpoint, payload: frame.payload }
+  }
 
   return undefined
 }
@@ -143,17 +166,6 @@ export function parseClientFrame(text: string): MuxClientFrame | undefined {
 /** 把一条服务端帧编码为线上文本。 */
 export function encodeServerFrame(frame: MuxServerFrame): string {
   return JSON.stringify(frame)
-}
-
-/**
- * `open` 载荷携带的 follow 请求 —— 刻意精简。参考请求是
- * `{address, maxMessages?, assistantStream?}`；显著的缺席者是水位：重连会重新
- * 打开并从新 opening 重建窗口，而不是从 cursor 续读。
- */
-export interface FollowRequest {
-  sessionId: string
-  /** 打开的窗口大小；缺省即默认值，与 `page` 相同。 */
-  maxMessages?: number
 }
 
 /**
@@ -178,37 +190,41 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
 }
 
 /**
- * 一条 `open` 帧要开的是**哪种**流 —— 载荷的判定结果。
+ * 一条 `open` 帧要开的是**哪种**流 —— 端点表的判定结果。
  *
  * 与信封分两层判：`parseClientFrame` 只说「这是几号流」，这里说「这条流要什么」。
- * 认不出的 op 因此不是畸形帧 —— 它归得上一条流，只是那条流开不起来（一条带编号的
- * `unknown-op` error，连接与别的流不动）。
+ * 认不出的端点因此不是畸形帧 —— 它归得上一条流，只是那条流开不起来（一条带编号的
+ * `error` 帧，连接与别的流不动）。
  *
- * **四种流四个取值，不是一个带可选字段的形状**：可选字段会把「这条流没有会话」表达成
- * 「会话可能缺席」，而三种连接级流的开口帧形态本来就不同（带集合 / 只有就绪 / 无基线）。
+ * **三种流三个取值**：`events` 是上游的 `$events`，一条流承载四种货物（`ready` /
+ * `emit` / `waterfall` / `cancel`）—— 原来按恢复语义拆出的三条流并回这里。
  */
 export type OpenRequest =
   | ({ kind: 'follow' } & FollowRequest)
-  | { kind: 'approvals' }
-  | { kind: 'session-list' }
-  | { kind: 'host-events' }
+  | { kind: 'events' }
+  | { kind: 'control' }
+
+/** 端点表给出的两种拒绝 —— 调用方据此回一条带编号的 `error`，**不关连接**。 */
+export type OpenRequestRefusal = { readonly error: 'unknown-endpoint' | 'invalid-args' }
 
 /**
- * 把 `open` 载荷校验为一条开流请求。
+ * 把一条 `open` 帧校验为一条开流请求。
  *
- * @returns 认不出的 op、或 follow 缺会话名时返回 `undefined` —— 调用方据此回一条
- *   带编号的 `unknown-op`，**不关连接**。
+ * @returns 请求本身，或两种拒绝之一。端点与参数都由 `endpoints.ts` 判 —— 这一层不
+ *   再有自己的判据，免得多出一处「名字 → 泵」的映射。
  */
-export function openRequestOf(payload: unknown): OpenRequest | undefined {
+export function openRequestOf(frame: MuxOpenFrame): OpenRequest | OpenRequestRefusal {
+  const resolution = resolveEndpoint(frame.endpoint, argsOf(frame.payload))
+  if (!resolution.ok) return { error: resolution.code }
+  return resolution.kind === 'follow'
+    ? { kind: 'follow', ...resolution.request }
+    : { kind: resolution.kind }
+}
+
+/** `payload.args` —— 端点方法的入参容器；载荷不是对象或没有 `args` 时视为缺席。 */
+function argsOf(payload: unknown): unknown {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  switch ((payload as Record<string, unknown>).op) {
-    case 'approvals': return { kind: 'approvals' }
-    case 'session-list': return { kind: 'session-list' }
-    case 'host-events': return { kind: 'host-events' }
-    default: break
-  }
-  const follow = followRequestOf(payload)
-  return follow === undefined ? undefined : { kind: 'follow', ...follow }
+  return (payload as Record<string, unknown>).args
 }
 
 /** 打开帧的载荷：`page` 形状的窗口加上这条流的锚点。 */

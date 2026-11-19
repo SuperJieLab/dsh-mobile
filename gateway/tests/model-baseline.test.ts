@@ -126,7 +126,7 @@ async function baselineOverStream(view: unknown): Promise<{ model: unknown; pres
           resolve(JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>)
         }, { once: true })
         socket.addEventListener('error', () => reject(new Error('socket errored before the opening')), { once: true })
-        socket.send(JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } }))
+        socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
       })
       const payload = opening.value as Record<string, unknown>
       return { model: payload.model, present: 'model' in payload }

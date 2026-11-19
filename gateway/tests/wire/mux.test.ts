@@ -10,9 +10,9 @@ import { encodeServerFrame, followRequestOf, openRequestOf, parseClientFrame } f
 
 test('parseClientFrame: round-trips the client frame shapes', () => {
   const open = parseClientFrame(JSON.stringify({
-    type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' },
+    type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } },
   }))
-  assert.deepEqual(open, { type: 'open', streamId: 's1', payload: { op: 'follow', sessionId: 's1' } })
+  assert.deepEqual(open, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
 
   const cancel = parseClientFrame(JSON.stringify({ type: 'cancel', streamId: 's2' }))
   assert.deepEqual(cancel, { type: 'cancel', streamId: 's2' })
@@ -44,7 +44,7 @@ test('parseClientFrame: a bad payload is still a frame — the envelope is all t
     JSON.stringify({ type: 'open', streamId: 's1' }),                       // open without payload
     JSON.stringify({ type: 'open', streamId: 's1', payload: {} }),          // no sessionId
     JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'nosuch' } }),
-    JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'approvals' } }),
+    JSON.stringify({ type: 'open', streamId: 's1', endpoint: '$events', payload: { args: {} } }),
   ]
   for (const text of attributable) {
     const frame = parseClientFrame(text)
@@ -71,20 +71,39 @@ test('followRequestOf: op is part of the request; lenient on maxMessages, strict
   assert.equal(followRequestOf('s1'), undefined)
 })
 
-test('openRequestOf: the op names which stream, and only four ops have a stream', () => {
-  // 信封（`parseClientFrame`）只说「几号流」，这里说「这条流要什么」。三种连接级流各有
-  // 自己的 op：它们的开口帧形态不同（带集合 / 只有就绪 / 无基线），一个 op 装不下三种。
-  assert.deepEqual(openRequestOf({ op: 'follow', sessionId: 's1' }), { kind: 'follow', sessionId: 's1' })
-  assert.deepEqual(openRequestOf({ op: 'follow', sessionId: 's1', maxMessages: 9 }), { kind: 'follow', sessionId: 's1', maxMessages: 9 })
-  assert.deepEqual(openRequestOf({ op: 'approvals' }), { kind: 'approvals' })
-  assert.deepEqual(openRequestOf({ op: 'session-list' }), { kind: 'session-list' })
-  assert.deepEqual(openRequestOf({ op: 'host-events' }), { kind: 'host-events' })
-  // 缺会话名的 follow 不是一条开得起来的流；HTTP 的 op 同理。
-  assert.equal(openRequestOf({ op: 'follow' }), undefined)
-  assert.equal(openRequestOf({ op: 'snapshot', sessionId: 's1' }), undefined)
-  assert.equal(openRequestOf({ op: 'nosuch' }), undefined)
-  assert.equal(openRequestOf(undefined), undefined)
-  assert.equal(openRequestOf('s1'), undefined, 'a bare string is not a payload with an op')
+test('openRequestOf: 端点说这条流要什么，参数在 payload.args 里', () => {
+  // 信封（`parseClientFrame`）只说「几号流」，这里说「这条流要什么」。三个端点各有
+  // 自己的请求形状：`session/follow` 带会话名，另两条没有入参。
+  assert.deepEqual(
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }),
+    { kind: 'follow', sessionId: 's1' },
+  )
+  assert.deepEqual(
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1', maxMessages: 9 } } }),
+    { kind: 'follow', sessionId: 's1', maxMessages: 9 },
+  )
+  assert.deepEqual(
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: '$events', payload: { args: {} } }),
+    { kind: 'events' },
+  )
+  assert.deepEqual(
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/control', payload: { args: {} } }),
+    { kind: 'control' },
+  )
+  // 名字不在表里与「名字对、参数不对」是两个失败，都不关连接。
+  assert.deepEqual(
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/approvals', payload: { args: {} } }),
+    { error: 'unknown-endpoint' },
+  )
+  assert.deepEqual(
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: {} } }),
+    { error: 'invalid-args' },
+  )
+  assert.deepEqual(
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: undefined, payload: { args: {} } }),
+    { error: 'unknown-endpoint' },
+    '缺端点等于名字不在表里，不是畸形帧',
+  )
 })
 
 test('encodeServerFrame: every server frame round-trips through JSON', () => {

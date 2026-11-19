@@ -180,7 +180,6 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       events: forwardedEvents,
       // 列表增量行的归属来源。与一元的列表路径同一份端口 —— 两处的归属必须同一判据，
       // 否则同一条会话会在列表里和增量里落在两个组。
-      workspace: workspacePort,
       // 待答项随这条流走：开流时重放当前集合、之后随变化增量。它是审批唯一的
       // 投递通道 —— 连接建立时不再预先推一遍（那时还没有流编号可用）。
       approvals: relay,

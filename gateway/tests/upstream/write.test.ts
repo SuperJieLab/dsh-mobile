@@ -37,12 +37,12 @@ function fakeDoor(options: { refuse?: unknown } = {}) {
 
 /** 收集中继的变更 —— 帧的外壳由流泵组，中继只产出数据。 */
 function collector() {
-  const changes: Array<{ kind: 'waterfall'; held: HeldApproval } | { kind: 'cancel'; eventId: string }> = []
+  const changes: Array<{ type: 'waterfall'; held: HeldApproval } | { type: 'cancel'; eventId: string }> = []
   return {
     changes,
     attach(relay: ApprovalRelay): void {
-      relay.onHeld((held) => { changes.push({ kind: 'waterfall', held }) })
-      relay.onCancelled((eventId) => { changes.push({ kind: 'cancel', eventId }) })
+      relay.onHeld((held) => { changes.push({ type: 'waterfall', held }) })
+      relay.onCancelled((eventId) => { changes.push({ type: 'cancel', eventId }) })
     },
   }
 }
@@ -105,7 +105,7 @@ test('relay: the change says which session the question belongs to, with the ups
     await until(() => sink.changes.length === 1, 'the change is announced')
     // 四个字段与上游帧逐字相同：这一层不解释载荷，只搬。
     assert.deepEqual(sink.changes, [{
-      kind: 'waterfall',
+      type: 'waterfall',
       held: {
         event: 'approval/request',
         eventId: 'e1',
@@ -211,7 +211,7 @@ test('relay: a cancel frame clears the question; late answer meets unknown-appro
     feed.push({ type: 'cancel', eventId: 'e1' })
     await until(() => sink.changes.length === 2, 'the cancel is announced')
 
-    assert.deepEqual(sink.changes.at(-1), { kind: 'cancel', eventId: 'e1' })
+    assert.deepEqual(sink.changes.at(-1), { type: 'cancel', eventId: 'e1' })
     assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval')
   } finally {
     stop()
@@ -227,7 +227,7 @@ test('relay: only approval/request waterfalls are announced — the request body
     // 让这三帧走完一整个扇出，再断言 —— 先断言会与上一轮的帧赛跑。
     await new Promise<void>((resolve) => setTimeout(resolve, 50))
     assert.deepEqual(
-      sink.changes.map(change => change.kind === 'waterfall' ? change.held.eventId : 'cancel'),
+      sink.changes.map(change => change.type === 'waterfall' ? change.held.eventId : 'cancel'),
       ['u2'],
       '按事件名筛选：别的 waterfall 与 emit 不进来；而空 request 照收 —— 载荷的内部字段不归中继解释',
     )

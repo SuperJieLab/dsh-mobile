@@ -14,7 +14,6 @@
  */
 
 import { isPositiveInteger, nonEmptyString } from './fields.ts'
-import type { FollowRequest } from './mux.ts'
 
 /** 三个端点名对应的泵。`events` 就是上游的 `$events`。 */
 export type EndpointKind = 'follow' | 'events' | 'control'
@@ -24,6 +23,17 @@ export type EndpointResolution =
   | { readonly ok: true; readonly kind: 'follow'; readonly request: FollowRequest }
   | { readonly ok: true; readonly kind: 'events' | 'control'; readonly request: undefined }
   | { readonly ok: false; readonly code: 'unknown-endpoint' | 'invalid-args' }
+
+/**
+ * `open` 载荷携带的 follow 请求 —— 刻意精简。参考请求是
+ * `{address, maxMessages?, assistantStream?}`；显著的缺席者是水位：重连会重新
+ * 打开并从新 opening 重建窗口，而不是从 cursor 续读。
+ */
+export interface FollowRequest {
+  sessionId: string
+  /** 打开的窗口大小；缺省即默认值，与 `page` 相同。 */
+  maxMessages?: number
+}
 
 /** 三个端点名，按上游的写法原样 —— 这里是它们的**唯一定义处**。 */
 export const ENDPOINTS = {
