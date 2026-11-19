@@ -18,6 +18,7 @@
 
 import { describeError } from '../ports/errors.ts'
 import type { ForwardedSink, ForwardedSource, UpstreamWireFrame } from '../ports/events.ts'
+import { ENDPOINTS } from '../wire/endpoints.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.forwarded)
@@ -100,7 +101,7 @@ export class ForwardedEvents implements ForwardedSource {
     let backoff = RECONNECT_MIN_MS
     while (!signal.aborted) {
       try {
-        const stream = await this.#stream.openWireStream('$events', { args: {} }, signal)
+        const stream = await this.#stream.openWireStream(ENDPOINTS.events, { args: {} }, signal)
         for await (const frame of stream) {
           if (signal.aborted) return
           if (frame.type === 'ready') {

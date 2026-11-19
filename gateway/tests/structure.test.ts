@@ -760,8 +760,8 @@ test('the upstream $events identity has exactly one holder', () => {
     const found = eventEndpointIn(readFileSync(file, 'utf8'))
     return found.length === 0 ? [] : [`${where(file)}: ${found.length}`]
   })
-  assert.deepEqual(endpoints, ['upstream/remote-events.ts: 1'],
-    'so exactly one module may name the endpoint — a second one is a second identity')
+  assert.deepEqual(endpoints, ['wire/endpoints.ts: 1'],
+    'the endpoint table is the only place the name is written; the holder imports it instead of repeating the literal')
 })
 
 // ---------------------------------------------------------------------------
@@ -785,6 +785,7 @@ test('wire/ has no import cycle', () => {
  * 新增导出函数必须先改这张表 —— 改表这个动作会让人停下来回答「它属于哪个形状」。
  */
 const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
+  { file: 'endpoints.ts', name: 'resolveEndpoint', shape: 'EndpointResolution' },
   { file: 'mux.ts', name: 'parseClientFrame', shape: 'MuxClientFrame' },
   { file: 'mux.ts', name: 'encodeServerFrame', shape: 'MuxServerFrame' },
   { file: 'mux.ts', name: 'followRequestOf', shape: 'FollowRequest' },
