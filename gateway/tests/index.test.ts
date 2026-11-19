@@ -887,7 +887,8 @@ function fakeFollowHost(opening: {
       },
       sessionController: {
         follow: async function* (_request: unknown, signal: AbortSignal) {
-          yield { type: 'snapshot', ...opening }
+          // 与 control 读的是同一份 `projected`：两条出口必须给出同一个水位下的同一份值。
+          yield { type: 'snapshot', ...opening, ...(projected === undefined ? {} : { projections: projected }) }
           while (!signal.aborted) {
             while (events.length > 0) yield { type: 'event', event: events.shift()! }
             await new Promise(resolve => setTimeout(resolve, 5))
@@ -973,6 +974,11 @@ test('U6: control 流给 baseline，触发事件后推一条 projection', { time
     // 触发源：一条 follow 流，它的事件是「投影可能变了」的信号。
     socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
     await waitFor(f => f.some(frame => frame.streamId === 's1' && frame.type === 'item'), 'the follow opening')
+
+    // 判据 8：同一 `asOfSeq` 下，两条出口给出同一份视图值。
+    const opening = frames.find(frame => frame.streamId === 's1' && frame.type === 'item')!.value as Record<string, unknown>
+    assert.deepEqual(opening['projections'], { asOfSeq: 3, values: blocks['s1']?.values },
+      '快照的 projections 与 control 的 baseline 必须逐字段相等')
 
     // 只动 contextPressure：breakdown 原样再给一遍，否则它「消失」也会算一条变更 ——
     // 那是 `project` 的整体替换语义，与本条要守的「只带变了的格」是两件事。

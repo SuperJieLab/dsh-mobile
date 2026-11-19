@@ -238,6 +238,14 @@ export interface FollowOpening {
   /** 窗口 —— 序列化方式与 `page` 应答的 `events` 完全一致。 */
   events: readonly WireEvent[]
   /**
+   * 打开时读到的投影基线（`{asOfSeq, values}`）。
+   *
+   * 与 `session/control` 的 `baseline` 同源：同一 `asOfSeq` 下两处给出的值必须逐字段
+   * 相等（判据 8）。客户端以 control 为权威，这里的值只在 control 到达之前当初值用 ——
+   * 但两条出口都得发：上游的 `snapshot` 就带它，砍掉会让两端不同形。
+   */
+  projections?: { asOfSeq: number; values: Readonly<Record<string, unknown>> }
+  /**
    * transient 基线，活跃时原样随行：一个进行中的 assistant 尝试及其累计
    * 文本与下一个 chunk 序号。此处不透明 —— 语义归客户端的 `TransientChannel`
    * 所有；契约只承诺源给什么、到达时不变。

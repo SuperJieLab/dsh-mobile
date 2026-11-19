@@ -462,6 +462,7 @@ async function pumpFollow(
             pageStart: typeof first?.seq === 'number' ? first.seq : cursor,
             hasOlder: start > 0 || frame.hasMore,
             events: kept,
+            ...(frame.projections === undefined ? {} : { projections: frame.projections }),
             ...(frame.assistantStream === undefined ? {} : { assistantStream: frame.assistantStream }),
             ...(model === undefined ? {} : { model }),
           }
