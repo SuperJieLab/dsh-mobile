@@ -14,7 +14,7 @@
 
 import type { WireEvent } from './rpc.ts'
 import type { ModelSelection } from './model.ts'
-import { isPositiveInteger, nonEmptyString } from './fields.ts'
+import { nonEmptyString } from './fields.ts'
 import { resolveEndpoint, type FollowRequest } from './endpoints.ts'
 
 /**
@@ -184,16 +184,6 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
  *   宽容边界：畸形 `maxMessages` 退化为默认值；没有可用 `sessionId` 就不是
  *   follow 请求。
  */
-export function followRequestOf(payload: unknown): FollowRequest | undefined {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  const record = payload as Record<string, unknown>
-  if (record.op !== 'follow') return undefined
-  const sessionId = nonEmptyString(record.sessionId)
-  if (sessionId === undefined) return undefined
-  return isPositiveInteger(record.maxMessages)
-    ? { sessionId, maxMessages: record.maxMessages }
-    : { sessionId }
-}
 
 /**
  * 一条 `open` 帧要开的是**哪种**流 —— 端点表的判定结果。

@@ -6,7 +6,7 @@
  * 两者中间隔着整个传输层 —— 形状对、内容对，仍然可能因为装配漏了一步而什么都不发。
  *
  * 装配照 `src/index.ts` 的接线来：中继先建（它要在第一个客户端接入前就订阅源），然后
- * 与 `events` 成对交给 `attachStreamHandler` —— 审批的投递通道只有 `{op:'approvals'}` 这一条。
+ * 与 `events` 成对交给 `attachStreamHandler` —— 审批的投递通道只有 `$events` 这一条。
  *
  * 覆盖不到的一半（写在代码里而不是留给下一个人猜）：本文件装配的是**它自己**的那一份
  * 接线，所以它证明的是「这段接线能 work」，不是「`index.ts` 里那段一定接了」。
@@ -41,7 +41,7 @@ async function harness() {
 
   const server = createServer()
   attachStreamHandler(server, fakeSource([]), { authenticate: () => true }, {
-    // 审批的投递通道只有这一条：待答项随 `{op:'approvals'}` 的流走。
+    // 审批的投递通道只有这一条：待答项随 `$events` 流走。
     events,
     approvals: relay,
   })

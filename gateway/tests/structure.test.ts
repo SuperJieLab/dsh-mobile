@@ -776,7 +776,6 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'endpoints.ts', name: 'resolveEndpoint', shape: 'EndpointResolution' },
   { file: 'mux.ts', name: 'parseClientFrame', shape: 'MuxClientFrame' },
   { file: 'mux.ts', name: 'encodeServerFrame', shape: 'MuxServerFrame' },
-  { file: 'mux.ts', name: 'followRequestOf', shape: 'FollowRequest' },
   { file: 'mux.ts', name: 'openRequestOf', shape: 'OpenRequest' },
   { file: 'model.ts', name: 'modelSelectRequestOf', shape: 'ModelSelectMessage' },
   { file: 'command.ts', name: 'commandExecuteRequestOf', shape: 'CommandExecuteMessage' },
@@ -1273,9 +1272,9 @@ test('the retired assembler is not exported under any name binding', async () =>
  * 表要覆盖 `protocol/` 的**每一个**导出（下面第二条判据会核对，新加导出不补表就红）。
  * 手法与 `WIRE_CODECS` 同一套：改表这个动作逼人回答「它归哪一层」。
  *
- * `upstream/usage.ts` 是唯一的例外，且是刻意的：`usageSnapshotOf` 认宿主的投影键名
- * （`contextPressure` / `contextBreakdown`），消费者在宿主适配层。放进 `protocol/`
- * 会让 `upstream/` 必须 import `protocol/`（撞 V3）。
+ * 曾经有一个例外（`upstream/usage.ts` 里那条快照函数）：它认宿主的投影键名，
+ * 消费者在宿主适配层。本期那条读取随 `usage` 帧一起退役 —— 取分子规则搬到了客户端
+ * （`UsageView`），网关这侧不再有「认宿主键名」的判断函数，例外也随之消失。
  */
 const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; types: readonly string[] }[] = [
   {
@@ -1288,7 +1287,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
     values: ['LogNotDenseError', 'CursorPastEndError', 'pageWindow', 'upstreamWindow', 'fitOpeningToBytes'],
     types: ['OpeningShrink'],
   },
-  { home: 'protocol/usage.ts', values: ['usageIsTrigger', 'usageShouldEmit'], types: [] },
+  { home: 'protocol/usage.ts', values: ['usageIsTrigger'], types: [] },
   {
     home: 'protocol/error-codes.ts',
     values: ['streamErrorOf', 'readErrorOf'],
@@ -1309,7 +1308,6 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
     ],
     types: ['StoredCredentials', 'PairingOutcome'],
   },
-  { home: 'upstream/usage.ts', values: ['usageSnapshotOf'], types: [] },
 ]
 
 /** 一个模块交出的**值** —— 运行时真话，不是从源码里猜的。 */
@@ -1678,8 +1676,10 @@ test('L6: approval answers never travel on a stream', () => {
  * 守的是「客户端与传输层都不认识上游事件名」这条立场：一旦 `remote/` 或 `protocol/`
  * 里出现它，就有人在第二个地方解释上游，而那一处我们控制不了上游的漂移。
  */
-test('G3: upstream session event names live only in the upstream adapter', () => {
-  const expected = ['upstream/session-events.ts']
+test('G3: 网关不认识上游事件名 —— 解释权归客户端', () => {
+  // 适配器（`upstream/session-events.ts`）已搬到 App：`$events` 把 `emit` 原样转发，
+  // 网关不再把 `api-session/*` 翻成自己的词汇。所以这里的期望从「只在一个文件」
+  // 变成「一个文件都没有」—— 网关一旦又认识这些名字，说明解释权被搬回来了。
   const homes = new Map<string, number>()
   for (const file of filesUnder(SRC)) {
     const code = stripComments(readFileSync(file, 'utf8'))
@@ -1687,11 +1687,8 @@ test('G3: upstream session event names live only in the upstream adapter', () =>
     if (hits > 0) homes.set(where(file), hits)
   }
 
-  // 活性锚：一处都没扫到说明路径或正则失效，下面的比较会「通过」。
-  assert.ok(homes.size > 0, 'no `api-session/*` literal found at all — the scan is broken')
-
-  assert.deepEqual([...homes.keys()].sort(), expected,
-    `upstream event names must live in ${expected.join(' + ')} only — got ${JSON.stringify([...homes.keys()])}`)
+  assert.deepEqual([...homes.keys()], [],
+    `gateway must not know upstream event names — got ${JSON.stringify([...homes.keys()])}`)
 })
 
 // ---------------------------------------------------------------------------

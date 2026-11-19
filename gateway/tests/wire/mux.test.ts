@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { encodeServerFrame, followRequestOf, openRequestOf, parseClientFrame } from '../../src/wire/mux.ts'
+import { encodeServerFrame, openRequestOf, parseClientFrame } from '../../src/wire/mux.ts'
 
 test('parseClientFrame: round-trips the client frame shapes', () => {
   const open = parseClientFrame(JSON.stringify({
@@ -37,39 +37,24 @@ test('parseClientFrame: refuses only what cannot be attributed to a stream', () 
 })
 
 test('parseClientFrame: a bad payload is still a frame — the envelope is all this layer judges', () => {
-  // 这三条**都归得上一条流**（编号在手），所以不在这里拒：坏的是内容，不是这一帧。
-  // 由 `onClientText` 回一条带该编号的 `unknown-op`，连接与别的流都不动 ——
-  // 若它们在这里返回 `undefined`，一个新 op 就会被当成「不是协议」而断掉整条连接。
+  // 这几条**都归得上一条流**（编号在手），所以不在这里拒：坏的是内容，不是这一帧。
+  // 端点层的判定（`unknown-endpoint` / `invalid-args`）由 `openRequestOf` 的测试守，
+  // 这里只守**信封**：编号在、`type` 在，就不该把整条连接判死。
   const attributable = [
     JSON.stringify({ type: 'open', streamId: 's1' }),                       // open without payload
-    JSON.stringify({ type: 'open', streamId: 's1', payload: {} }),          // no sessionId
-    JSON.stringify({ type: 'open', streamId: 's1', payload: { op: 'nosuch' } }),
+    JSON.stringify({ type: 'open', streamId: 's1', payload: {} }),          // no endpoint at all
+    JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'nosuch/x', payload: { args: {} } }),
     JSON.stringify({ type: 'open', streamId: 's1', endpoint: '$events', payload: { args: {} } }),
   ]
   for (const text of attributable) {
     const frame = parseClientFrame(text)
     assert.equal(frame?.type, 'open', `should parse as a frame: ${text}`)
     assert.equal(frame?.streamId, 's1', `the id survives, whatever the payload says: ${text}`)
-    // 载荷这一层仍然拒它 —— 分界两边的判据都在，缺一边就等于把洞挪个位置。
-    assert.equal(followRequestOf((frame as { payload: unknown }).payload), undefined,
-      `the payload is not a follow request: ${text}`)
+    // 载荷层另有判据（`openRequestOf` 的测试），这里不断言它 —— 分界两边的判据各在各处。
+
   }
 })
 
-test('followRequestOf: op is part of the request; lenient on maxMessages, strict on sessionId', () => {
-  assert.deepEqual(followRequestOf({ op: 'follow', sessionId: 's1' }), { sessionId: 's1' })
-  assert.deepEqual(followRequestOf({ op: 'follow', sessionId: 's1', maxMessages: 9 }), { sessionId: 's1', maxMessages: 9 })
-  // Nonsense sizes degrade to the default — the worst case is one wasted window.
-  assert.deepEqual(followRequestOf({ op: 'follow', sessionId: 's1', maxMessages: 0 }), { sessionId: 's1' })
-  assert.deepEqual(followRequestOf({ op: 'follow', sessionId: 's1', maxMessages: -3 }), { sessionId: 's1' })
-  assert.deepEqual(followRequestOf({ op: 'follow', sessionId: 's1', maxMessages: 1.5 }), { sessionId: 's1' })
-  assert.deepEqual(followRequestOf({ op: 'follow', sessionId: 's1', since: 42 }), { sessionId: 's1' }, 'extra fields ignored')
-  // `follow` 是这条校验认得的那一个 op；`events` 的判定在 `openRequestOf`。
-  assert.equal(followRequestOf({ sessionId: 's1' }), undefined, 'missing op')
-  assert.equal(followRequestOf({ op: 'snapshot', sessionId: 's1' }), undefined, 'an HTTP op is not a stream op')
-  assert.equal(followRequestOf(undefined), undefined)
-  assert.equal(followRequestOf('s1'), undefined)
-})
 
 test('openRequestOf: 端点说这条流要什么，参数在 payload.args 里', () => {
   // 信封（`parseClientFrame`）只说「几号流」，这里说「这条流要什么」。三个端点各有

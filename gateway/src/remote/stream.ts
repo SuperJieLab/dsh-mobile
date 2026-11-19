@@ -184,7 +184,7 @@ function excerptOf(text: string): string {
  * 客户端要的状态自己另读。
  *
  * **共用一份源**：`ForwardedSource` 是多订阅者，三条流各订一次、各取自己那一类。归属由
- * 适配器判定（`sessionListChangeOf`）—— 认识上游事件名的只有它，泵不认。
+ * 名字的判别归客户端 —— 泵不认上游事件名，只按 `type` 分派。
  */
 
 

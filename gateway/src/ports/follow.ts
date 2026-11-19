@@ -10,7 +10,6 @@
  */
 
 import type { ModelSelection } from '../wire/model.ts'
-import type { UsageSnapshot } from '../wire/usage.ts'
 
 /**
  * 泵所用的宿主窄面，在此声明是因为各服务的真实类型在 dsh 安装树之外
@@ -41,13 +40,6 @@ export interface FollowSource {
     },
     signal: AbortSignal,
   ): AsyncIterable<UpstreamFollowFrame>
-  /**
-   * 立即读取一个会话的占用投影 —— 同步、内存内：宿主在事件落地时折叠
-   * 投影，所以这是状态读，不是日志走查。
-   *
-   * @returns 读数；宿主不知道该会话时 `undefined`。
-   */
-  occupancyOf(sessionId: string): UsageSnapshot | undefined
 
   /**
    * **全部会话**的投影切取 —— control 流用它建表，再按会话算增量。

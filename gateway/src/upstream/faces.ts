@@ -7,7 +7,6 @@
  * 不再多断。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { usageSnapshotOf } from './usage.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { CommandPort } from '../ports/command.ts'
@@ -119,22 +118,12 @@ export function workspacePortOver(ctx: HostContext): WorkspacePort {
  * 窄切面（`FollowSource`）；controller 只存在于 web-app bundle 中，
  * cordis 会持有本插件直到它出现。
  */
-/** 占用量读取所基于的投影键 —— 具名常量使读取不会物化无人消费的视图。 */
-const OCCUPANCY_KEYS = ['contextPressure', 'contextBreakdown'] as const
-
 export function streamSourceOver(ctx: HostContext): FollowSource {
   // 断言直接点名 `ports/follow.ts` 的形状而非重写一遍：这里的第二份拷贝曾静默过期
   // （漏了 `turnWindow`）。
   const controller = ctx.sessionController as unknown as Pick<FollowSource, 'follow'>
   return {
     follow: (request, signal) => controller.follow(request, signal),
-    occupancyOf: (sessionId) => {
-      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
-      if (session === undefined) return undefined
-      const read = ctx.sessionProjections as unknown as ProjectionsLike
-      const snapshot = read.snapshot(session, OCCUPANCY_KEYS)
-      return snapshot === undefined ? undefined : usageSnapshotOf(snapshot.values, snapshot.asOfSeq)
-    },
     // 模型基线随开流走：与 snapshot 路径同一处读取 —— 开流是存活会话走的路径。
     modelOf: (sessionId) => modelBaselineOf(ctx, sessionId),
     // control 流的基线：全部会话，与上游 `SessionControlController.baseline()` 同形。

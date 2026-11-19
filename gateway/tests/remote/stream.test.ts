@@ -278,7 +278,6 @@ test('an explicit maxMessages reaches upstream as its own target, not the defaul
 test('cancel stops the stream; the pump yields no further frames for it', { timeout: 10_000 }, async () => {
   // A source that would keep yielding forever unless aborted.
   const source: FollowSource = {
-    occupancyOf: () => undefined,
     async *follow(_request, signal) {
       yield snapshotFrame([event(0)], 1)
       let seq = 1
@@ -580,7 +579,6 @@ test('one stream failing leaves the other stream on the same connection alive', 
   const goodLog = [0, 1, 2].map(event)
   const source: FollowSource & { opens: number } = {
     opens: 0,
-    occupancyOf: () => undefined,
     async *follow(request, signal) {
       this.opens += 1
       if (request.address.kind !== 'session') throw new Error('test only supports session follows')
@@ -631,7 +629,6 @@ function lingeringSource(): FollowSource & { started: number; aborted: number } 
   const source = {
     started: 0,
     aborted: 0,
-    occupancyOf: () => undefined,
     async *follow(
       _request: Parameters<FollowSource['follow']>[0],
       signal: AbortSignal,
@@ -805,7 +802,6 @@ function gatedSource(): FollowSource & { aborted: number; entered: Promise<void>
     aborted: 0,
     entered,
     release: () => leave(),
-    occupancyOf: () => undefined,
     async *follow(
       _request: Parameters<FollowSource['follow']>[0],
       signal: AbortSignal,

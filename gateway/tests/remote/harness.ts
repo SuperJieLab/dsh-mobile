@@ -60,7 +60,6 @@ export function fakeSource(
     requests: [],
     // 这套夹具只造事件流：`occupancyOf` 是必填形状，这里给「不知道」；`modelOf` 是可选的，
     // 整套夹具不造模型基线 —— 一个值都不伪造。
-    occupancyOf: () => undefined,
     async *follow(request, signal) {
       this.calls += 1
       this.requests.push(request)
