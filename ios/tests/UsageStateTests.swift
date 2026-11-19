@@ -55,4 +55,34 @@ final class UsageStateTests: XCTestCase {
         XCTAssertTrue(formatTokens(517_000) == "517K", "O2g 尾数 ≥100 取整")
         XCTAssertTrue(formatTokens(1_200_000) == "1.2M", "O2h 百万级")
     }
+    /// R4 的两条来源：control 接管之后，快照那条路（`apply`）不许再覆盖。
+    ///
+    /// 两条水位不同轴（快照是投影切点，control 是事件 seq），所以「比 asOfSeq」在这里
+    /// 没有可比性 —— 只测「新的能进」会漏掉「旧值借低位通过」与「新值被旧水位挡住」两种错序。
+    func testControlTakesOverAndSnapshotCannotOverride() {
+        var state = UsageState()
+        state.adopt(UsagePayload(usedTokens: 50, contextWindow: 100))
+        let verdict = state.apply(UsageSnapshot(asOfSeq: 295, usage: UsagePayload(usedTokens: 90, contextWindow: 100)))
+        XCTAssertEqual(verdict, .stale, "control 已接管，快照的旧值必须被拒")
+        XCTAssertEqual(state.usage?.usedTokens, 50)
+    }
+
+    /// 反序：快照先到，control 后到仍然覆盖（control 是权威）。
+    func testControlOverridesAnEarlierSnapshot() {
+        var state = UsageState()
+        _ = state.apply(UsageSnapshot(asOfSeq: 295, usage: UsagePayload(usedTokens: 90, contextWindow: 100)))
+        state.adopt(UsagePayload(usedTokens: 50, contextWindow: 100))
+        XCTAssertEqual(state.usage?.usedTokens, 50, "control 必须先验")
+    }
+
+    /// control 的更新一条条采纳，包括「读数消失」（`nil` → 隐藏整行）。
+    func testControlUpdatesAreAdoptedInOrder() {
+        var state = UsageState()
+        state.adopt(UsagePayload(usedTokens: 50, contextWindow: 100))
+        state.adopt(UsagePayload(usedTokens: 55, contextWindow: 100))
+        XCTAssertEqual(state.usage?.usedTokens, 55)
+        state.adopt(nil)
+        XCTAssertNil(state.usage, "读数消失也要采纳 —— 界面该隐藏整行，不是停在 55")
+    }
+
 }

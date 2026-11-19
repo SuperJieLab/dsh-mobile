@@ -121,6 +121,8 @@ struct OpeningFrame {
     let projections: ProjectionBlock?
 
     /// 载荷的线上形状。三个字段（sessionId / cursor / events）同在才成形，其余都可缺。
+    /// `projections` 用 `FailableDecodable` 包着：这一格坏了只丢这一格，不该让整条打开帧
+    /// 变成「解不出」—— 那等于为了一个附加读数丢掉整个窗口。
     struct Payload: Decodable {
         let sessionId: String?
         let pageStart: Int?
@@ -129,7 +131,7 @@ struct OpeningFrame {
         let events: [FailableDecodable<SessionEvent>]?
         let assistantStream: JSONValue?
         let model: FailableDecodable<ModelSelection>?
-        let projections: ProjectionBlock?
+        let projections: FailableDecodable<ProjectionBlock>?
 
         /// 缺一个必填字段就不是打开帧 —— 交给别的分类，不猜默认值。
         func frame() -> OpeningFrame? {
@@ -142,7 +144,7 @@ struct OpeningFrame {
                 events: events.compactMap(\.value),
                 assistantStream: assistantStream,
                 model: model?.value,
-                projections: projections
+                projections: projections?.value
             )
         }
     }

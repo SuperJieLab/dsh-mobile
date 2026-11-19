@@ -30,7 +30,12 @@ final class SessionSyncTests: XCTestCase {
             events: [],
             assistantStream: nil,
             model: nil,
-            occupancy: UsageSnapshot(asOfSeq: 295, usage: payload)
+            projections: ProjectionBlock(asOfSeq: 295, values: .object([
+                "contextPressure": .object([
+                    "projectedTokens": .number(148_807),
+                    "contextWindow": .number(1_000_000),
+                ]),
+            ]))
         ))))
 
         XCTAssertEqual(sync.usage, payload,

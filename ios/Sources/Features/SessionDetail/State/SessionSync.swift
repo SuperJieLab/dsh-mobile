@@ -402,11 +402,6 @@ final class SessionSync {
         // 模型基线：opening 的 `model` 是进会话那一刻权威的「下一轮用什么」；不在 = 不知道。
         models.absorb(baseline: opening.model)
 
-        // 占用基线：opening 带的这一份是**这条流上最后一个读数**，后续的 `usage` 帧只在读数
-        // 变化时才来（网关拿它当基线）。不采纳它，没有新轮次的会话就永远显示 `--`，
-        // 而上游投影里其实有值。水位判据仍在 `UsageState` 里 —— 重连时更旧的那份会被拒。
-        if let occupancy = opening.occupancy { applyUsage(occupancy) }
-
         // 先把持久窗口喂给引擎，再放基线事件 —— 顺序不能反：
         // 基线进的是「空引擎」，而紧接着的 refreshView 会用持久窗口重建整段，把基线抹掉。
         refreshView()
