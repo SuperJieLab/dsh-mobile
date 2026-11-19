@@ -79,9 +79,14 @@ final class EventsStream {
                 cancelListeners.fire(value)
             case .events(.emit(let event, let args)):
                 emitListeners.fire((event, args))
-            case .follow, .control, .unknown:
-                // 会话流与投影流的货物、以及本版不认识的种类：丢弃，不猜。
+            case .follow, .control:
+                // 别的流的货物：串流来的，丢弃。
                 break
+            case .unknown(let cargo):
+                // S6 的「可见」：丢弃但不能静默 —— 痕迹里带上货物自己的 `type`，
+                // 否则「网关推了新东西」与「这条流坏了」在日志里长得一样。
+                Log.warn(Log.Module.gateway, "dropped an item type this build does not know",
+                         ["type": cargo["type"]?.string ?? "?"])
             }
             return StreamReply()
 

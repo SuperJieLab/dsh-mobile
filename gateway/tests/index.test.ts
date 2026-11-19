@@ -1003,6 +1003,16 @@ test('U6: control 流给 baseline，触发事件后推一条 projection', { time
     await new Promise(resolve => setTimeout(resolve, 150))
     assert.equal(frames.filter(frame => frame.streamId === 'c1').length, before, '没有触发事件就不重发')
 
+    // 判据 8 的后半：断开 control，follow 的事件照常。两条流互不连坐 —— 这正是
+    // 「一条流的事故不拖垮另一条」在 control 与 follow 之间的那一半。
+    socket.send(JSON.stringify({ type: 'cancel', streamId: 'c1' }))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    // seq 必须接着上一条（follow 承诺无缺口，跳号会被泵拒掉）。
+    follow.emit({ type: 'assistant/message', seq: 5 })
+    await waitFor(f => f.some(frame => frame.streamId === 's1' &&
+      (frame.value as { event?: { seq?: number } } | undefined)?.event?.seq === 5),
+      'follow still delivers after control closed')
+
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {

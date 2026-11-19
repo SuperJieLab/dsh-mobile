@@ -205,10 +205,13 @@ function excerptOf(text: string): string {
  * 生命周期跟着 control 泵的 abort 走（`off()` 里连同空集合一起删），漏删的症状是
  * 「占用量停更」—— 与本期要消灭的那个老症状同形，所以注销写成一条路径。
  */
-const projectionListeners = new Map<string, Set<(seq: number) => void>>()
+const projectionListeners = new Map<string, Set<(sessionId: string, seq: number) => void>>()
 
-function onProjectionChanged(sessionId: string, listener: (seq: number) => void): () => void {
-  const set = projectionListeners.get(sessionId) ?? new Set<(seq: number) => void>()
+function onProjectionChanged(
+  sessionId: string,
+  listener: (sessionId: string, seq: number) => void,
+): () => void {
+  const set = projectionListeners.get(sessionId) ?? new Set<(sessionId: string, seq: number) => void>()
   set.add(listener)
   projectionListeners.set(sessionId, set)
   return () => {
@@ -217,8 +220,10 @@ function onProjectionChanged(sessionId: string, listener: (seq: number) => void)
   }
 }
 
+/// `'*'` 是通配：基线之后才建的会话也要有人听。
 function notifyProjection(sessionId: string, seq: number): void {
-  for (const listener of projectionListeners.get(sessionId) ?? []) listener(seq)
+  for (const listener of projectionListeners.get(sessionId) ?? []) listener(sessionId, seq)
+  for (const listener of projectionListeners.get('*') ?? []) listener(sessionId, seq)
 }
 
 /**
@@ -251,6 +256,12 @@ function pumpControl(
   signal: AbortSignal,
   done: () => void,
 ): void {
+  // 已经取消过：`addEventListener('abort')` 不会补发，所以这里必须先收尾，
+  // 否则流表里留一条永不结束的条目。
+  if (signal.aborted) {
+    done()
+    return
+  }
   const readAll = source.controlBaseline
   if (readAll === undefined) {
     log.error('control stream opened but the projection face is not wired — refused', { stream: streamId })
@@ -275,33 +286,40 @@ function pumpControl(
   }
 
   let last = read()
-  if (last !== undefined) {
-    send(socket, { type: 'item', streamId, value: { type: 'baseline', value: { projections: last } } satisfies ControlValue })
+  if (last === undefined) {
+    log.error('control stream could not read a projection baseline — refused', { stream: streamId })
+    send(socket, {
+      type: 'error',
+      streamId,
+      error: { code: 'internal-error', message: 'the projection baseline could not be read', details: {} },
+    })
+    done()
+    return
   }
+  send(socket, { type: 'item', streamId, value: { type: 'baseline', value: { projections: last } } satisfies ControlValue })
 
-  // 每个会话一个听众：一次通知只重读**它**那一份，不整表重扫。
-  const offs: (() => void)[] = []
-  const sessionIds = new Set(Object.keys(last ?? {}))
-  for (const sessionId of sessionIds) {
-    offs.push(onProjectionChanged(sessionId, (seq) => {
-      const next = read()
-      const current = next?.[sessionId]
-      if (current === undefined) return
-      const previous = last?.[sessionId]
-      if (previous !== undefined && current.asOfSeq <= previous.asOfSeq) return
-      const changes = controlChangesOf(previous?.values ?? {}, current.values)
-      last = next
-      if (changes.length === 0) return
-      send(socket, {
-        type: 'item',
-        streamId,
-        value: { type: 'projection', sessionId, seq, changes } satisfies ControlValue,
-      })
-    }))
-  }
+  // 一个**通配**听众：按会话注册会漏掉「基线之后才建的会话」—— 它不在 `last` 里，
+  // 永远没人替它注册。回调带着跳的 `sessionId`，闭包里只重读**它**那一份，代价与按会话
+  // 注册相同，覆盖面却是全量。
+  const off = onProjectionChanged('*', (sessionId, seq) => {
+    const next = read()
+    const current = next?.[sessionId]
+    if (current === undefined) return
+    const previous = last?.[sessionId]
+    if (previous !== undefined && current.asOfSeq <= previous.asOfSeq) return
+    const changes = controlChangesOf(previous?.values ?? {}, current.values)
+    // **只替换该会话那一块**：整表替换会让另一个会话同时变化时拿到被污染的基准。
+    last = { ...last, [sessionId]: current }
+    if (changes.length === 0) return
+    send(socket, {
+      type: 'item',
+      streamId,
+      value: { type: 'projection', sessionId, seq, changes } satisfies ControlValue,
+    })
+  })
 
   signal.addEventListener('abort', () => {
-    for (const off of offs) off()
+    off()
     done()
   }, { once: true })
 }

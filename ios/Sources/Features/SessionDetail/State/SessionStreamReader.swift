@@ -76,8 +76,12 @@ enum SessionStreamReader {
                 return StreamReading(content: .event(event))
             case .follow(.transient(let inner)):
                 return StreamReading(content: .transient(inner))
-            case .events, .control, .unknown:
-                // 连接级货物与本版不认识的种类：串流来的、或新加的，都丢弃不猜。
+            case .events, .control:
+                // 连接级货物不属于会话流：串流来的，丢弃。
+                return StreamReading(content: .ignored)
+            case .unknown(let cargo):
+                Log.warn(Log.Module.session, "dropped an item type this build does not know",
+                         ["type": cargo["type"]?.string ?? "?"])
                 return StreamReading(content: .ignored)
             }
 

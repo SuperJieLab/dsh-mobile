@@ -16,20 +16,20 @@ enum UsageView {
 
     /// 一份投影切取 → 读数。`values` 是某个会话的投影键值表。
     static func snapshotOf(_ values: JSONValue, asOfSeq: Int) -> UsageSnapshot {
+        UsageSnapshot(asOfSeq: asOfSeq, usage: payloadOf(values))
+    }
+
+    /// 只要分子那一份（control 的更新不带投影水位，用这个）。
+    static func payloadOf(_ values: JSONValue) -> UsagePayload? {
         let pressure = values["contextPressure"]
         let usedTokens = nonNegativeInteger(pressure?["projectedTokens"])
             ?? nonNegativeInteger(pressure?["pressureTokens"])
         let contextWindow = positiveInteger(pressure?["contextWindow"])
-        guard let usedTokens, let contextWindow else {
-            return UsageSnapshot(asOfSeq: asOfSeq)
-        }
-        return UsageSnapshot(
-            asOfSeq: asOfSeq,
-            usage: UsagePayload(
-                usedTokens: usedTokens,
-                contextWindow: contextWindow,
-                breakdown: breakdownOf(values["contextBreakdown"])
-            )
+        guard let usedTokens, let contextWindow else { return nil }
+        return UsagePayload(
+            usedTokens: usedTokens,
+            contextWindow: contextWindow,
+            breakdown: breakdownOf(values["contextBreakdown"])
         )
     }
 

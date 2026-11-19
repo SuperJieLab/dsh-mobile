@@ -178,10 +178,11 @@ final class SessionSync {
     /// 每次进出增长，而它持有的是弱引用，泄漏不会报错，只会让每次投影都多跑一次空转。
     private func subscribeControl() {
         guard controlSubscription == nil, let control else { return }
-        controlSubscription = control.onUpdate { [weak self] sessionId, values, watermark in
+        controlSubscription = control.onUpdate { [weak self] sessionId, values, _ in
             guard let self, sessionId == self.sessionId else { return }
-            // 水位是事件 seq（见 `ControlStream` 的说明）—— 只用来挡乱序，不与 `asOfSeq` 互比。
-            self.applyUsage(UsageView.snapshotOf(values, asOfSeq: watermark))
+            // control 是权威：水位（事件 seq）在 `ControlStream` 里已经用来挡过重放，
+            // 这里不再和快照的 `asOfSeq` 比 —— 两者不是同一条轴。
+            self.applyControl(UsageView.payloadOf(values))
         }
     }
 
@@ -589,6 +590,13 @@ final class SessionSync {
     }
 
     /// 一份占用读数；被丢弃的帧不动视图，乱序与重放不会让百分比跳动。
+    /// control 送来的一条更新：权威，直接覆盖。
+    private func applyControl(_ payload: UsagePayload?) {
+        lastFrameAt = Date()
+        usageState.adopt(payload)
+        usage = usageState.usage
+    }
+
     /// 打开帧的投影基线：**control 到达之前**的初值。
     ///
     /// 两条出口同源，所以这里不需要另算规则 —— 只是把同一份值先放上屏。

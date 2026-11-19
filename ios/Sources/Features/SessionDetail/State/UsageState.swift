@@ -28,4 +28,14 @@ struct UsageState: Equatable {
         snapshot = next
         return .accepted
     }
+
+    /// control 流的更新：**权威且单流有序**，不比水位。
+    ///
+    /// 两条来源的水位不同轴：快照的 `projections.asOfSeq` 是投影切点，control 的
+    /// `projection.seq` 是引发变化的事件 —— 拿一个去比比另一个是错的（`ControlStream`
+    /// 的文件头解释了这一点）。control 在单条流内有序到达，重放由它自己挡掉（`seq` 不前进
+    /// 就丢），所以到这里只需采纳。R4 也把 control 定为权威。
+    mutating func adopt(_ payload: UsagePayload?) {
+        snapshot = UsageSnapshot(asOfSeq: snapshot?.asOfSeq ?? 0, usage: payload)
+    }
 }
