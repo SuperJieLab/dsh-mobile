@@ -90,12 +90,25 @@ test('openRequestOf: the op names which stream, and only four ops have a stream'
 test('encodeServerFrame: every server frame round-trips through JSON', () => {
   // `as const` 保留 `type` 的字面量：宽化后它与 `MuxServerFrame` 的判别式对不上，
   // 而这几个字面量正是「每种帧都过得去」的样本。
-  const item = { type: 'item', streamId: 's1', payload: { type: 'event', seq: 0 } } as const
+  const item = { type: 'item', streamId: 's1', value: { type: 'event', seq: 0 } } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(item)), item)
 
-  const error = { type: 'error', streamId: 's1', payload: { code: 'unknown-session', message: 'no stored session' } } as const
+  const error = {
+    type: 'error',
+    streamId: 's1',
+    error: { code: 'unknown-session', message: 'no stored session', details: {} },
+  } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(error)), error)
 
   const end = { type: 'end', streamId: 's3' } as const
   assert.deepEqual(JSON.parse(encodeServerFrame(end)), end)
+})
+
+test('MuxServerFrame: 第三格改名后，旧的字段名被类型拒绝', () => {
+  // 判据是**编译期**的：类型一旦放宽，`@ts-expect-error` 会报「未使用的豁免」而红。
+  // 这与上面的 JSON 往返不同 —— 那个对任何对象都成立，守不住字段名。
+  // @ts-expect-error item 的第三格叫 value，不再接受 payload
+  encodeServerFrame({ type: 'item', streamId: 's1', payload: {} })
+  // @ts-expect-error error 帧的第三格叫 error
+  encodeServerFrame({ type: 'error', streamId: 's1', payload: { code: 'x', message: 'y' } })
 })

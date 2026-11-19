@@ -21,7 +21,8 @@ export type EndpointKind = 'follow' | 'events' | 'control'
 
 /** 解析结果：认下来了（带泵种类与请求），或两种拒绝之一。 */
 export type EndpointResolution =
-  | { readonly ok: true; readonly kind: EndpointKind; readonly request: FollowRequest | undefined }
+  | { readonly ok: true; readonly kind: 'follow'; readonly request: FollowRequest }
+  | { readonly ok: true; readonly kind: 'events' | 'control'; readonly request: undefined }
   | { readonly ok: false; readonly code: 'unknown-endpoint' | 'invalid-args' }
 
 /** 三个端点名，按上游的写法原样 —— 这里是它们的**唯一定义处**。 */

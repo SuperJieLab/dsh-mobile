@@ -49,17 +49,17 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
   'item-follow-opening': {
     type: 'item',
     streamId: 's-9',
-    payload: { sessionId: 's-1', cursor: 3, pageStart: 1, hasOlder: false, events: [] },
+    value: { sessionId: 's-1', cursor: 3, pageStart: 1, hasOlder: false, events: [] },
   },
   'item-events-waterfall': {
     type: 'item',
     streamId: 'e-1',
-    payload: {
+    value: {
       kind: 'waterfall', event: 'permission', eventId: 'ev-1', agentId: 's-1', request: {},
     },
   },
   end: { type: 'end', streamId: 's-9' },
-  error: { type: 'error', streamId: 's-9', payload: { code: 'unknown-op', message: 'no such op' } },
+  error: { type: 'error', streamId: 's-9', error: { code: 'unknown-op', message: 'no such op', details: {} } },
 }
 
 test('the fixture covers every stream kind and both server frame kinds', () => {

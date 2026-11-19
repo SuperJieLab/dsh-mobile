@@ -1632,7 +1632,7 @@ const streamIdOf = (frame: MuxServerFrame): StreamId => frame.streamId
 
 test('A4: every server frame names the stream it belongs to', () => {
   assert.equal(streamIdOf({ type: 'end', streamId: 's1' }), 's1')
-  assert.equal(streamIdOf({ type: 'error', streamId: 's2', payload: { code: 'x', message: '' } }), 's2',
+  assert.equal(streamIdOf({ type: 'error', streamId: 's2', error: { code: 'x', message: '', details: {} } }), 's2',
     'if a member ever loses `streamId`, this file stops compiling — that is the judge')
 })
 

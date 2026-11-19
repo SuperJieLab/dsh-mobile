@@ -48,7 +48,8 @@ export type MuxClientFrame = MuxOpenFrame | MuxCancelFrame
 export interface MuxItemFrame {
   type: 'item'
   streamId: StreamId
-  payload: unknown
+  /** 货物 —— 一支带判别字段的联合，形状由端点决定。 */
+  value: unknown
 }
 
 /** 服务端 → 客户端：流正常结束。 */
@@ -57,11 +58,12 @@ export interface MuxEndFrame {
   streamId: StreamId
 }
 
-/** 服务端 → 客户端：流出错；`payload` 是协议的错误对象。 */
+/** 服务端 → 客户端：流出错。 */
 export interface MuxErrorFrame {
   type: 'error'
   streamId: StreamId
-  payload: { code: string; message: string }
+  /** 失败对象：三键恒定，`details` 是每个错误码自带结构化信息的地方。 */
+  error: { code: string; message: string; details: Record<string, unknown> }
 }
 
 /**
@@ -184,9 +186,6 @@ export function followRequestOf(payload: unknown): FollowRequest | undefined {
  *
  * **四种流四个取值，不是一个带可选字段的形状**：可选字段会把「这条流没有会话」表达成
  * 「会话可能缺席」，而三种连接级流的开口帧形态本来就不同（带集合 / 只有就绪 / 无基线）。
- *
- * 三种连接级流拆开的原因写在各自的泵上：它们的故障域不同 —— 只有审批那条会「拒绝开流」，
- * 把它与另外两条绑在一起，等于让最脆的那个决定全体的可用性。
  */
 export type OpenRequest =
   | ({ kind: 'follow' } & FollowRequest)

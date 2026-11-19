@@ -188,14 +188,14 @@ export class BenchClient {
     }
     if (frame.type !== 'item') {
       if (frame.type === 'error') {
-        const payload = frame.payload as { code?: string; message?: string } | undefined
+        const payload = frame.error as { code?: string; message?: string } | undefined
         this.error = { code: payload?.code ?? 'internal-error', message: payload?.message ?? '' }
         this.settle()
       }
       return
     }
 
-    const payload = frame.payload as Record<string, unknown> | undefined
+    const payload = frame.value as Record<string, unknown> | undefined
     if (payload === undefined) return
 
     // 打开帧：sessionId + cursor + events 三件齐（判读与 iOS 传输层同一形状）。

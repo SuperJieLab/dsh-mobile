@@ -221,7 +221,7 @@ struct InboundFrame: Decodable {
     /// 线上字节数。只由 `decode(_:)` 补 —— `recordPerf` 用它，缺了会静默变 0。
     private(set) var byteCount: Int = 0
 
-    private enum CodingKeys: String, CodingKey { case type, streamId, payload }
+    private enum CodingKeys: String, CodingKey { case type, streamId, value, error, payload }
 
     /// 给测试与本模块内构造用。线上帧一律走 `decode(_:)` —— 只有它带 `byteCount`。
     init(type: String, streamId: StreamId, payload: InboundPayload? = nil) {
@@ -240,14 +240,14 @@ struct InboundFrame: Decodable {
         switch type {
         case "item":
             do {
-                payload = .item(try container.decode(ItemPayload.self, forKey: .payload))
+                payload = .item(try container.decode(ItemPayload.self, forKey: .value))
                 payloadRejected = false
             } catch {
                 payload = nil
                 payloadRejected = error is ItemPayloadError
             }
         case "error":
-            let decoded = (try? container.decodeIfPresent(FailurePayload.self, forKey: .payload)) ?? nil
+            let decoded = (try? container.decodeIfPresent(FailurePayload.self, forKey: .error)) ?? nil
             payload = .refused(decoded?.failure
                 ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue, message: ""))
             payloadRejected = false

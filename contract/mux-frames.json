@@ -46,13 +46,13 @@
   "server": [
     {
       "name": "item-follow-opening",
-      "text": "{\"type\":\"item\",\"streamId\":\"s-9\",\"payload\":{\"sessionId\":\"s-1\",\"cursor\":3,\"pageStart\":1,\"hasOlder\":false,\"events\":[]}}",
+      "text": "{\"type\":\"item\",\"streamId\":\"s-9\",\"value\":{\"sessionId\":\"s-1\",\"cursor\":3,\"pageStart\":1,\"hasOlder\":false,\"events\":[]}}",
       "type": "item",
       "streamId": "s-9"
     },
     {
       "name": "item-events-waterfall",
-      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"payload\":{\"kind\":\"waterfall\",\"event\":\"permission\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{}}}",
+      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"kind\":\"waterfall\",\"event\":\"permission\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{}}}",
       "type": "item",
       "streamId": "e-1"
     },
@@ -64,7 +64,7 @@
     },
     {
       "name": "error",
-      "text": "{\"type\":\"error\",\"streamId\":\"s-9\",\"payload\":{\"code\":\"unknown-op\",\"message\":\"no such op\"}}",
+      "text": "{\"type\":\"error\",\"streamId\":\"s-9\",\"error\":{\"code\":\"unknown-op\",\"message\":\"no such op\",\"details\":{}}}",
       "type": "error",
       "streamId": "s-9"
     }

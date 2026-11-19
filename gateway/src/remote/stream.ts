@@ -135,7 +135,7 @@ export function onClientText(
 
   const request = openRequestOf(frame.payload)
   if (request === undefined) {
-    send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'unknown-op', message: 'open payload names no stream op this gateway serves' } })
+    send(socket, { type: 'error', streamId: frame.streamId, error: { code: 'unknown-op', message: 'open payload names no stream op this gateway serves', details: {} } })
     return { ok: true }
   }
 
@@ -149,7 +149,7 @@ export function onClientText(
     log.error('a connection stream opened but its source is not wired — refused',
       { stream: frame.streamId, op: request.kind })
     streams.delete(frame.streamId)
-    send(socket, { type: 'error', streamId: frame.streamId, payload: { code: 'internal-error', message } })
+    send(socket, { type: 'error', streamId: frame.streamId, error: { code: 'internal-error', message, details: {} } })
     return { ok: true }
   }
 
@@ -193,13 +193,13 @@ function excerptOf(text: string): string {
 function waterfallItem(streamId: StreamId, held: HeldApproval): MuxItemFrame {
   // 形状由 `wire/mux.ts` 的声明守：少一个字段在这里就编译不过。
   const payload: MuxApprovalWaterfall = { kind: 'waterfall', ...held }
-  return { type: 'item', streamId, payload }
+  return { type: 'item', streamId, value: payload }
 }
 
 /** 一条撤回 → 这条流上的一帧。 */
 function cancelItem(streamId: StreamId, eventId: string): MuxItemFrame {
   const payload: MuxApprovalCancel = { kind: 'cancel', eventId }
-  return { type: 'item', streamId, payload }
+  return { type: 'item', streamId, value: payload }
 }
 
 /**
@@ -254,7 +254,7 @@ function pumpApprovals(
     send(socket, {
       type: 'error',
       streamId,
-      payload: { code: 'source-unavailable', message: 'the forwarded-event source is not ready yet' },
+      error: { code: 'source-unavailable', message: 'the forwarded-event source is not ready yet', details: {} },
     })
     done()
     return
@@ -262,7 +262,7 @@ function pumpApprovals(
 
   const announce = (): void => {
     const generation = feed?.generation
-    send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
+    send(socket, { type: 'item', streamId, value: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
     // 每一条 `ready` 后面紧跟一份当前集合。`ready` 的语义是「从这一刻起你看到的都是新的」，
     // 客户端据此把表重建一次 —— 它不需要一条单独的「清空」帧：没有集契约的帧就没有
     // 「这份名单可信吗」这类要判的事。
@@ -311,7 +311,7 @@ function pumpSessionList(
 ): void {
   const announce = (): void => {
     const generation = feed.generation
-    send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
+    send(socket, { type: 'item', streamId, value: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
   }
   const unsubscribe = feed.subscribe({
     generation: () => { announce() },
@@ -325,7 +325,7 @@ function pumpSessionList(
       // 翻不成列表行的那一类不归这条流（见 `pumpHostEvents`）。
       const change = sessionListChangeOf(frame.event, frame.args, workspace?.snapshot().owners)
       if (change === undefined) return
-      send(socket, { type: 'item', streamId, payload: { kind: 'session-list', change } })
+      send(socket, { type: 'item', streamId, value: { kind: 'session-list', change } })
     },
   })
   announce()
@@ -357,7 +357,7 @@ function pumpHostEvents(
 ): void {
   const announce = (): void => {
     const generation = feed.generation
-    send(socket, { type: 'item', streamId, payload: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
+    send(socket, { type: 'item', streamId, value: { kind: 'ready', ...(generation === undefined ? {} : { generation }) } })
   }
   const unsubscribe = feed.subscribe({
     generation: () => { announce() },
@@ -365,7 +365,7 @@ function pumpHostEvents(
       if (frame.type !== 'emit') return
       if (sessionListChangeOf(frame.event, frame.args) !== undefined) return
       // 名字与参数原样转发：这一层不解释上游事件的内容。
-      send(socket, { type: 'item', streamId, payload: { kind: 'emit', event: frame.event, args: frame.args } })
+      send(socket, { type: 'item', streamId, value: { kind: 'emit', event: frame.event, args: frame.args } })
     },
   })
   announce()
@@ -391,7 +391,7 @@ async function pump(
   openingCapBytes: number,
 ): Promise<void> {
   const sendItem = (payload: unknown, perf?: PerfContext): void => {
-    send(socket, { type: 'item', streamId, payload }, perf)
+    send(socket, { type: 'item', streamId, value: payload }, perf)
   }
 
   /**
@@ -490,7 +490,7 @@ async function pump(
         // 界由字节定、切点由轮定：装不下就按轮边界收窄，连一轮都装不下则拒绝 ——
         // 「断连」与「发半截轮」都不是可接受的降级。
         const frameBytesAt = (start: number): number =>
-          encodeTextFrame(encodeServerFrame({ type: 'item', streamId, payload: openingPayload(start) })).length
+          encodeTextFrame(encodeServerFrame({ type: 'item', streamId, value: openingPayload(start) })).length
         const shrink = fitOpeningToBytes(events, openingCapBytes, frameBytesAt)
         if ('unshrinkable' in shrink) {
           log.error('follow opening exceeds the cap even at one turn — refused',
@@ -506,7 +506,7 @@ async function pump(
           send(socket, {
             type: 'error',
             streamId,
-            payload: { code: 'window-too-large', message: 'the most recent turn alone exceeds this connection\'s opening size cap' },
+            error: { code: 'window-too-large', message: 'the most recent turn alone exceeds this connection\'s opening size cap', details: {} },
           })
           return
         }
@@ -518,7 +518,7 @@ async function pump(
         // 额度 —— 帧超限时，超出的部分可以整个落在这裁不动的一半里。
         const openingBytes = frameBytesAt(shrink.start)
         const fixedBytes = encodeTextFrame(encodeServerFrame({
-          type: 'item', streamId, payload: { ...openingPayload(shrink.start), events: [] },
+          type: 'item', streamId, value: { ...openingPayload(shrink.start), events: [] },
         })).length
         log.info('follow opening', {
           session: request.sessionId,
@@ -549,7 +549,7 @@ async function pump(
         if (expectedSeq !== undefined && event?.seq !== expectedSeq) {
           log.error('follow stream broke continuity',
             { expected: String(expectedSeq), got: String(event?.seq) })
-          send(socket, { type: 'error', streamId, payload: { code: 'internal-error', message: `follow stream skipped seq ${String(expectedSeq)}` } })
+          send(socket, { type: 'error', streamId, error: { code: 'internal-error', message: `follow stream skipped seq ${String(expectedSeq)}`, details: {} } })
           return
         }
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
@@ -578,7 +578,7 @@ async function pump(
     send(socket, { type: 'end', streamId })
   } catch (error) {
     if (!signal.aborted) {
-      send(socket, { type: 'error', streamId, payload: streamErrorOf(error) })
+      send(socket, { type: 'error', streamId, error: { ...streamErrorOf(error), details: {} } })
     }
   } finally {
     done()

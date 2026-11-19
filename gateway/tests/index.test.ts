@@ -632,7 +632,7 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
     })
 
     assert.equal(reply.type, 'error')
-    assert.equal((reply.payload as { code?: string }).code, 'internal-error')
+    assert.equal((reply.error as { code?: string }).code, 'internal-error')
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30)) // let the close clear the heartbeat
   } finally {
@@ -739,9 +739,9 @@ test('opening the approvals stream replays the standing question after ready', {
     const items: Array<Record<string, unknown>> = []
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener('message', event => {
-        const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; payload?: Record<string, unknown> }
-        if (frame.type !== 'item' || frame.payload === undefined) return
-        items.push(frame.payload)
+        const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; value?: Record<string, unknown> }
+        if (frame.type !== 'item' || frame.value === undefined) return
+        items.push(frame.value)
         if (items.length >= 2) resolve()
       })
       socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'approvals' } }))
@@ -782,10 +782,10 @@ test('a request that arrives while the approvals stream is open reaches it live'
     const waterfalls: Array<Record<string, unknown>> = []
     let ready = false
     socket.addEventListener('message', event => {
-      const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; payload?: Record<string, unknown> }
+      const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; value?: Record<string, unknown> }
       if (frame.type !== 'item') return
-      if (frame.payload?.kind === 'ready') { ready = true; return }
-      if (frame.payload?.kind === 'waterfall') waterfalls.push(frame.payload)
+      if (frame.value?.kind === 'ready') { ready = true; return }
+      if (frame.value?.kind === 'waterfall') waterfalls.push(frame.value)
     })
     socket.send(JSON.stringify({ type: 'open', streamId: 'ev', payload: { op: 'approvals' } }))
     for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
@@ -937,7 +937,7 @@ async function openStream(port: number, access: string): Promise<{
 /** The opening item frame's payload, once it has arrived (`cursor` marks it). */
 function openingOf(frames: Record<string, unknown>[]): Record<string, unknown> | undefined {
   return frames
-    .map(frame => frame.payload as Record<string, unknown> | undefined)
+    .map(frame => frame.value as Record<string, unknown> | undefined)
     .find(payload => payload !== undefined && payload['cursor'] !== undefined)
 }
 
@@ -986,7 +986,7 @@ test('U6: the opening carries an occupancy baseline and a trigger event pushes a
 
     // Nothing moved this time: the event still travels, the reading does not.
     follow.emit({ type: 'assistant/message', seq: 5 })
-    await waitFor(f => f.some(frame => frame.type === 'item' && (frame.payload as { seq?: number }).seq === 5), 'the second event')
+    await waitFor(f => f.some(frame => frame.type === 'item' && (frame.value as { seq?: number }).seq === 5), 'the second event')
     await new Promise(resolve => setTimeout(resolve, 150))
     assert.equal(frames.filter(frame => frame.type === 'usage').length, 1, 'an unchanged value must not earn a second frame')
     assert.ok(follow.reads() >= 3, 'the projections were still read — the frame was skipped, not the read')
@@ -1015,7 +1015,7 @@ test('U6: without projections the baseline is absent and no frame is ever pushed
     assert.equal(openingOf(frames)!['occupancy'], undefined, 'nothing displayable means no baseline, not a zero')
 
     follow.emit({ type: 'assistant/message', seq: 2 })
-    await waitFor(f => f.some(frame => frame.type === 'item' && (frame.payload as { seq?: number }).seq === 2), 'the event')
+    await waitFor(f => f.some(frame => frame.type === 'item' && (frame.value as { seq?: number }).seq === 2), 'the event')
     await new Promise(resolve => setTimeout(resolve, 150))
     assert.equal(frames.filter(frame => frame.type === 'usage').length, 0)
 

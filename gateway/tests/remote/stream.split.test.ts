@@ -83,7 +83,7 @@ async function expectFrame(
 ): Promise<Record<string, unknown>> {
   const frame = await receive(socket)
   assert.equal(frame.streamId, streamId, `这一帧该在 ${streamId} 上，实际在 ${String(frame.streamId)} 上`)
-  const payload = frame.payload as Record<string, unknown> | undefined
+  const payload = frame.value as Record<string, unknown> | undefined
   assert.equal(payload?.kind, kind, `${streamId} 上这一帧该是 ${kind}，实际 ${String(payload?.kind)}`)
   return payload ?? {}
 }
@@ -105,7 +105,7 @@ test('U1: a session-list stream opens even when the approval source is not ready
     const refused = await receive(socket)
     assert.equal(refused.type, 'error')
     assert.equal(refused.streamId, 'a1')
-    assert.equal((refused.payload as Record<string, unknown>).code, 'source-unavailable')
+    assert.equal((refused.error as Record<string, unknown>).code, 'source-unavailable')
 
     // 列表流还活着：拒绝之后源上的一条列表变化照样到达。
     feed.emit('api-session/removed', ['s1'])
@@ -230,7 +230,7 @@ test('U4: each source frame reaches exactly one stream', { timeout: 10_000 }, as
       await receive(socket),
       await receive(socket),
     ].map((frame) => {
-      const payload = frame.payload as Record<string, unknown>
+      const payload = frame.value as Record<string, unknown>
       // 只有 `emit` 那一类带"转发的是哪个事件"；`waterfall` 的 `event` 是上游事件名，
       // 不是这里的判别项。
       const event = payload.kind === 'emit' ? `:${String(payload.event)}` : ''
