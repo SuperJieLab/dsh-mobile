@@ -329,7 +329,7 @@ final class SessionSync {
                 fields: ["kind": .text("event"), "devRecv": .number(recv),
                          "devApply": .number(apply), "bytes": .number(Double(bytes))]
             ))
-        case .transient, .usage, .refused, .ended, .ignored:
+        case .transient, .refused, .ended, .ignored:
             break
         }
     }
@@ -344,8 +344,6 @@ final class SessionSync {
             applyLiveEvent(event)
         case .transient(let frame):
             applyTransient(frame)
-        case .usage(let snapshot):
-            applyUsage(snapshot)
         case .refused(let failure):
             handleStreamRefusal(failure)
         case .ended:

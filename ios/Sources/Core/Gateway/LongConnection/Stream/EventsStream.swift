@@ -79,8 +79,8 @@ final class EventsStream {
                 cancelListeners.fire(value)
             case .events(.emit(let event, let args)):
                 emitListeners.fire((event, args))
-            case .follow, .unknown:
-                // 会话流的货物与本版不认识的种类：丢弃，不猜。
+            case .follow, .control, .unknown:
+                // 会话流与投影流的货物、以及本版不认识的种类：丢弃，不猜。
                 break
             }
             return StreamReply()

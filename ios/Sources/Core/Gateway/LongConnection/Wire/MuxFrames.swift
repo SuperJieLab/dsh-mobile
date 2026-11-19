@@ -201,9 +201,6 @@ struct InboundFrame: Decodable {
             payload = .refused(decoded?.failure
                 ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue, message: ""))
             payloadRejected = false
-        case "usage":
-            payload = (try? container.decode(UsageFramePayload.self, forKey: .payload)).map(InboundPayload.usage)
-            payloadRejected = false
         default:
             payload = nil
             payloadRejected = false
@@ -222,7 +219,6 @@ struct InboundFrame: Decodable {
 enum InboundPayload {
     case item(ItemPayload)
     case refused(GatewayFailure)
-    case usage(UsageFramePayload)
 }
 
 /**
@@ -248,26 +244,6 @@ struct FailurePayload: Decodable {
     }
 }
 
-/**
- usage 帧的载荷。
-
- 读数本体是 `UsageSnapshot`，但**会话归属**要一起带出来：帧串流时会收到别人的占用，
- 判读层拿它跟本流比对才能决定画不画。只留快照不留归属，那条判据就没有落点。
- */
-struct UsageFramePayload: Decodable {
-
-    let sessionId: String?
-    let snapshot: UsageSnapshot
-
-    private enum CodingKeys: String, CodingKey { case sessionId }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
-        // 快照自己那一层不认 `sessionId`：未声明的 key 由它跳过，这里不重复声明。
-        snapshot = try UsageSnapshot(from: decoder)
-    }
-}
 
 /**
  `item` 帧的四种载荷形状。
@@ -295,6 +271,7 @@ enum ItemPayload: Decodable {
 
     case follow(FollowValue)
     case events(EventsValue)
+    case control(ControlValue)
     case unknown(JSONValue)
 
     private enum CodingKeys: String, CodingKey {
@@ -330,6 +307,8 @@ enum ItemPayload: Decodable {
             self = .events(.waterfall(try JSONValue(from: decoder)))
         case "cancel":
             self = .events(.cancel(try JSONValue(from: decoder)))
+        case "baseline", "projection":
+            self = .control(try ControlValue(from: decoder))
         default:
             self = .unknown(try JSONValue(from: decoder))
         }
@@ -356,4 +335,56 @@ enum EventsValue {
     case waterfall(JSONValue)
     /// 撤回一条待答调用。
     case cancel(JSONValue)
+}
+
+
+/// `session/control` 的货物 —— 与上游 `SessionControlFrame` 同形。
+///
+/// **一条流装全部会话的投影**：`baseline` 给出每个会话的一次切取，之后的 `projection`
+/// 用 `sessionId` 指明是谁变了，`seq` 是引发变化的那个事件。
+enum ControlValue: Decodable {
+
+    /// 打开时的一次全量：`{[sessionId]: {asOfSeq, values}}`。
+    case baseline([String: ProjectionBlock])
+    /// 一条增量：`changes` 里每项是 `{key, val}` —— 字段名是 `val`。
+    case projection(sessionId: String, seq: Int, changes: [Change])
+
+    /// 一个会话的投影切取。
+    struct ProjectionBlock: Decodable {
+        let asOfSeq: Int
+        let values: JSONValue
+    }
+
+    /// 一个变了格的键与新值。
+    struct Change: Decodable {
+        let key: String
+        let val: JSONValue
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, value, sessionId, seq, changes, projections
+    }
+
+    private enum BaselineKeys: String, CodingKey { case projections }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .type) {
+        case "baseline":
+            // `value.projections` 是中间那一层容器，与上游 `SessionControlBaseline` 同形。
+            let value = try container.nestedContainer(keyedBy: BaselineKeys.self, forKey: .value)
+            self = .baseline(try value.decode([String: ProjectionBlock].self, forKey: .projections))
+        case "projection":
+            self = .projection(
+                sessionId: try container.decode(String.self, forKey: .sessionId),
+                seq: try container.decode(Int.self, forKey: .seq),
+                changes: try container.decode([Change].self, forKey: .changes)
+            )
+        default:
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: container.codingPath,
+                debugDescription: "control 货物只有 baseline 与 projection 两种"
+            ))
+        }
+    }
 }

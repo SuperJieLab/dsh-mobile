@@ -14,8 +14,6 @@ struct StreamReading {
         case event(SessionEvent)
         /// 一条未定稿帧（`start` / `chunk` / `end`），原样转出。
         case transient(JSONValue)
-        /// 一份占用读数。
-        case usage(UsageSnapshot)
         /// 流通道里的协议内拒绝。
         case refused(GatewayFailure)
         /// 流被服务端正常收尾。
@@ -40,7 +38,7 @@ struct StreamReading {
         case .refused(let failure):
             // 会话级终态再开只会得到同一个结果；其余拒绝值得按这条流自己的退避再试一次。
             return SessionStreamReader.isTerminal(code: failure.code) ? .stop : .retry
-        case .opening, .event, .transient, .usage, .ignored:
+        case .opening, .event, .transient, .ignored:
             return .keep
         }
     }
@@ -78,7 +76,7 @@ enum SessionStreamReader {
                 return StreamReading(content: .event(event))
             case .follow(.transient(let inner)):
                 return StreamReading(content: .transient(inner))
-            case .events, .unknown:
+            case .events, .control, .unknown:
                 // 连接级货物与本版不认识的种类：串流来的、或新加的，都丢弃不猜。
                 return StreamReading(content: .ignored)
             }
@@ -95,15 +93,6 @@ enum SessionStreamReader {
 
         case "end":
             return StreamReading(content: .ended)
-
-        case "usage":
-            guard case .usage(let payload)? = frame.payload,
-                  payload.sessionId == sessionId else {
-                // 这里不留痕：外部读数串流是常态（每条 `usage` 帧只属于一个会话，而广播
-                // 让每条连接都收到别人那一份），记日志只会把真正要看的那几行淹掉。
-                return StreamReading(content: .ignored)
-            }
-            return StreamReading(content: .usage(payload.snapshot))
 
         default:
             return StreamReading(content: .ignored)
