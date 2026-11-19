@@ -14,7 +14,7 @@ import Foundation
 @MainActor
 protocol SessionListEventSink {
     @discardableResult
-    func onChange(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void
+    func onEmit(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void
     @discardableResult
     func onReady(_ handler: @escaping () -> Void) -> () -> Void
 }
@@ -128,7 +128,7 @@ final class SessionListState {
         // 两件都接：逐条的增量（改一行），与每一次报到（重拉基线）。少接一条的症状是
         // 「列表不自己动」或「断线之后再也不对齐」—— 都不编译失败。
         // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。
-        stream.onChange { [weak self] event, args in
+        stream.onEmit { [weak self] event, args in
             guard let change = SessionListEvents.changeOf(event: event, args: args) else {
                 Log.warn(Log.Module.session,
                          "dropped a session event this build does not know: \(event)")

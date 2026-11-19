@@ -176,8 +176,9 @@ final class WebSocketConnectionTests: XCTestCase {
             #"{"type":"open","streamId":"\#(id)"}"#
         }
         func handle(_ frame: InboundFrame) -> StreamReply {
-            if case .item(.connectionItem(let json)) = frame.payload,
-               let seq = json["seq"]?.int {
+            // 只看 `seq` 这一格 —— 分派到哪一支不重要，这条判的是**到达顺序**。
+            if case .item(.events(.emit(_, let args))) = frame.payload,
+               let seq = args["seq"]?.int {
                 seen.append(seq)
             }
             return StreamReply()
@@ -198,7 +199,7 @@ final class WebSocketConnectionTests: XCTestCase {
 
         for seq in 1...20 {
             let text = "{\"type\":\"item\",\"streamId\":\"\(stream.id)\","
-                + "\"payload\":{\"kind\":\"emit\",\"event\":\"x\",\"seq\":\(seq)}}"
+                + "\"value\":{\"type\":\"emit\",\"event\":\"x\",\"args\":{\"seq\":\(seq)}}}"
             transport.handleMessage(.string(text), generation: 1)
         }
         await drain(transport)

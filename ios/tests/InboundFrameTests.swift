@@ -41,30 +41,30 @@ final class InboundFrameTests: XCTestCase {
 
     // MARK: - 载荷四支
 
-    /// O1：三字段同在 → 打开帧，载荷直解成强类型。
+    /// O1：`snapshot` → 打开帧，载荷直解成强类型。
     func testOpeningPayloadIsStronglyTyped() throws {
         let frame = try decode("""
-        {"type":"item","streamId":"s-1","payload":{
-          "sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,
+        {"type":"item","streamId":"s-1","value":{
+          "type":"snapshot","sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,
           "events":[{"type":"user/message","seq":2,"time":1700000000000,"data":{}}]}}
         """)
 
-        guard case .item(.opening(let payload)) = frame.payload else {
-            return XCTFail("三字段同在该归 opening，实际：\(String(describing: frame.payload))")
+        guard case .item(.follow(.opening(let payload))) = frame.payload else {
+            return XCTFail("snapshot 该归 opening，实际：\(String(describing: frame.payload))")
         }
         XCTAssertEqual(payload.cursor, 5)
         XCTAssertEqual(payload.events?.compactMap(\.value).map(\.seq), [2])
     }
 
-    /// O2：`type` + `seq` → 事件帧，本体直接是 `SessionEvent`。
+    /// O2：`event` → 事件帧，本体是 `event` 那一格里的 `SessionEvent`。
     func testEventPayloadIsStronglyTyped() throws {
         let frame = try decode("""
-        {"type":"item","streamId":"s-1","payload":
-          {"type":"user/message","seq":7,"time":1700000000000,"data":{}}}
+        {"type":"item","streamId":"s-1","value":{"type":"event","event":
+          {"type":"user/message","seq":7,"time":1700000000000,"data":{}}}}
         """)
 
-        guard case .item(.sessionEvent(let event)) = frame.payload else {
-            return XCTFail("type+seq 该归 sessionEvent，实际：\(String(describing: frame.payload))")
+        guard case .item(.follow(.sessionEvent(let event))) = frame.payload else {
+            return XCTFail("event 该归 sessionEvent，实际：\(String(describing: frame.payload))")
         }
         XCTAssertEqual(event.type, "user/message")
         XCTAssertEqual(event.seq, 7)
@@ -73,28 +73,27 @@ final class InboundFrameTests: XCTestCase {
     /// O3：`assistant-stream` 不带 `seq`，且必须排在事件帧之前被认出来。
     func testTransientPayloadKeepsItsInnerFrame() throws {
         let frame = try decode("""
-        {"type":"item","streamId":"s-1","payload":
+        {"type":"item","streamId":"s-1","value":
           {"type":"assistant-stream","frame":{"type":"chunk","revision":3,"index":2}}}
         """)
 
-        guard case .item(.transient(let inner)) = frame.payload else {
+        guard case .item(.follow(.transient(let inner))) = frame.payload else {
             return XCTFail("assistant-stream 该归 transient，实际：\(String(describing: frame.payload))")
         }
         XCTAssertEqual(inner["type"]?.string, "chunk")
         XCTAssertEqual(inner["index"]?.int, 2)
     }
 
-    /// 事件流的货物：带 `kind`，整份载荷原样保留（消费方要的就是任意形状）。
-    func testConnectionItemKeepsTheWholePayload() throws {
+    /// `$events` 的货物：按 `type` 取支，`ready` 带 `clientId`。
+    func testEventsPayloadIsDiscriminatedByType() throws {
         let frame = try decode("""
-        {"type":"item","streamId":"e-1","payload":{"kind":"ready","generation":3}}
+        {"type":"item","streamId":"e-1","value":{"type":"ready","clientId":"c-1"}}
         """)
 
-        guard case .item(.connectionItem(let payload)) = frame.payload else {
-            return XCTFail("带 kind 的该归 connectionItem，实际：\(String(describing: frame.payload))")
+        guard case .item(.events(.ready(let clientId))) = frame.payload else {
+            return XCTFail("ready 该归 events，实际：\(String(describing: frame.payload))")
         }
-        XCTAssertEqual(payload["kind"]?.string, "ready")
-        XCTAssertEqual(payload["generation"]?.int, 3)
+        XCTAssertEqual(clientId, "c-1")
     }
 
     // MARK: - 非 item 外壳
@@ -168,23 +167,26 @@ final class InboundFrameTests: XCTestCase {
     /// 与「四支都不匹配」分开 —— 那一种是本版不认识的新形状，静默丢弃才对。
     func testBrokenOpeningShapeIsMarked() throws {
         let frame = try decode("""
-        {"type":"item","streamId":"s-1","payload":{"sessionId":"s-1","cursor":"oops","events":[]}}
+        {"type":"item","streamId":"s-1","value":{"type":"snapshot","sessionId":"s-1","cursor":"oops","events":[]}}
         """)
 
         XCTAssertNil(frame.payload, "类型不对就不该成形")
         XCTAssertTrue(frame.payloadRejected, "「解不出」与「不认识」要分得开")
     }
 
-    // MARK: - 顺序契约
-    /// `kind` 排在 `type`+`seq` 之前。事件流的货物可能同时带这两组 key，
-    /// 顺序反了它就会被当成一条会话事件去解，然后失败成 `.ignored` —— 屏幕上永远等不到 `ready`。
-    func testKindWinsOverEventShape() throws {
+    // MARK: - 判别契约
+    /// **只看 `value.type`**：别的键（`seq`、`kind`）不参与分派。
+    ///
+    /// 旧实现的四条判据按书写顺序互相遮挡，改顺序不编译失败、只会让某类帧悄悄换支。
+    /// 现在这一格是唯一的判别字段 —— 加多少别的键都不会改变它落到哪一支。
+    func testTypeIsTheOnlyDiscriminator() throws {
         let frame = try decode("""
-        {"type":"item","streamId":"e-1","payload":{"kind":"emit","event":"x","type":"odd","seq":9}}
+        {"type":"item","streamId":"e-1","value":{"type":"ready","clientId":"c-1","seq":9,"kind":"emit","event":"x"}}
         """)
 
-        guard case .item(.connectionItem) = frame.payload else {
-            return XCTFail("kind 与 type+seq 同时存在时该归 connectionItem，实际：\(String(describing: frame.payload))")
+        guard case .item(.events(.ready(let clientId))) = frame.payload else {
+            return XCTFail("type 说 ready 就该归 ready，实际：\(String(describing: frame.payload))")
         }
+        XCTAssertEqual(clientId, "c-1", "type 是唯一判别字段，别的键不参与分派")
     }
 }

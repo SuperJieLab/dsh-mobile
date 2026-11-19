@@ -24,7 +24,7 @@ final class MuxShapeTests: XCTestCase {
         let text = try MuxOpenFrame.following(sessionId: "s-1", streamId: "s-9").encoded()
 
         XCTAssertEqual(text,
-                       #"{"payload":{"op":"follow","sessionId":"s-1"},"streamId":"s-9","type":"open"}"#,
+                       #"{"endpoint":"session/follow","payload":{"args":{"sessionId":"s-1"}},"streamId":"s-9","type":"open"}"#,
                        "开流帧的字节与形状声明不一致 —— 字段名或外壳三层被改动过")
     }
 
@@ -80,7 +80,7 @@ final class MuxShapeTests: XCTestCase {
     /// 字段名 / 值 / 类型没变，且键序不参与比较。若基线照抄实现的输出，它就只剩「和自己是
     /// 自己」这一句。
     func testOpenFrameKeepsTheWireObjectOfTheDictionaryLiteral() throws {
-        let baseline = #"{"streamId":"s-9","payload":{"sessionId":"s-1","op":"follow"},"type":"open"}"#
+        let baseline = #"{"streamId":"s-9","endpoint":"session/follow","payload":{"args":{"sessionId":"s-1"}},"type":"open"}"#
 
         let baselineObject = try JSONSerialization.jsonObject(with: Data(baseline.utf8))
         let encoded = try MuxOpenFrame.following(sessionId: "s-1", streamId: "s-9").encoded()
@@ -92,8 +92,10 @@ final class MuxShapeTests: XCTestCase {
 
     // MARK: - U3：opening 的判读边界与改造前一致
 
+    /// 把一段**不含 `type`** 的打开帧载荷包成 item 帧：`value` 里补上 `snapshot` 判别字段。
+    /// `dropFirst()` 去掉调用方写的前导 `{`，补回去的是一整段 `{"type":"snapshot", …}`。
     private func frame(_ payload: String) -> Data {
-        Data(#"{"type":"item","streamId":"s-1","payload":\#(payload)}"#.utf8)
+        Data(#"{"type":"item","streamId":"s-1","value":{"type":"snapshot",\#(payload.dropFirst())}"#.utf8)
     }
 
     /// 走产品实际走的那条路：`InboundFrame` 分派到 opening，再成形。
@@ -101,7 +103,7 @@ final class MuxShapeTests: XCTestCase {
     /// 不直接调解码入口 —— 分派那一跳正是「一帧只解析一次」的落点，判据绕开它就守不住
     /// 「三字段同在才归 opening」这件事。
     private func decodeOpening(_ data: Data) -> OpeningFrame? {
-        guard case .item(.opening(let shape))? = InboundFrame.decode(data)?.payload else { return nil }
+        guard case .item(.follow(.opening(let shape)))? = InboundFrame.decode(data)?.payload else { return nil }
         return shape.frame()
     }
 
@@ -192,24 +194,22 @@ final class MuxShapeTests: XCTestCase {
         XCTAssertEqual(page.events.map(\.seq), [7], "events 直传")
     }
 
-    // MARK: - O8：三种连接级流的开流帧
+    // MARK: - O8：连接级流的开流帧
 
-    /// 三种开流帧：外壳与 follow 那一套完全相同，载荷只有 `op`。
+    /// 连接级流的开流帧：外壳与 follow 那一套完全相同，差在 `endpoint` 与 `args`。
     ///
     /// 网关侧的分派靠两段 —— 信封读编号、`openRequestOf` 读 `op`（`wire/mux.ts`）。所以这一帧
     /// 多一个字段（比如顺手带上 `sessionId`）虽不会被拒，却会让两端对「这条流绑不绑会话」的
     /// 理解分岔；少写 `type` 则连信封都读不出，整条连接会被关。
     ///
-    /// 三条一起断言而不是各写一条：它们只在 op 字符串上有差别，分开写会让「少写一种」长得
-    /// 跟「全绿」一样。
+    /// 两条一起断言而不是各写一条：它们只在 `endpoint` 字符串上有差别，分开写会让「少写一种」
+    /// 长得跟「全绿」一样。
     func testConnectionStreamOpenFramesAreTheDeclaredBytes() throws {
         let cases: [(frame: MuxOpenFrame, text: String)] = [
-            (MuxOpenFrame.events(streamId: "a1"),
-             #"{"payload":{"op":"approvals"},"streamId":"a1","type":"open"}"#),
-            (MuxOpenFrame.events(streamId: "l1"),
-             #"{"payload":{"op":"session-list"},"streamId":"l1","type":"open"}"#),
-            (MuxOpenFrame.events(streamId: "h1"),
-             #"{"payload":{"op":"host-events"},"streamId":"h1","type":"open"}"#),
+            (MuxOpenFrame.events(streamId: "e1"),
+             #"{"endpoint":"$events","payload":{"args":{}},"streamId":"e1","type":"open"}"#),
+            (MuxOpenFrame.control(streamId: "c1"),
+             #"{"endpoint":"session/control","payload":{"args":{}},"streamId":"c1","type":"open"}"#),
         ]
         for (frame, text) in cases {
             XCTAssertEqual(try frame.encoded(), text,
@@ -223,9 +223,9 @@ final class MuxShapeTests: XCTestCase {
     /// `muxText(of:)`，哪一天有人在某条路上绕开它自己拼 JSON，这一条先红。
     func testConnectionStreamOpenFrameEncodingIsStableAcrossRuns() throws {
         for make in [
-            { MuxOpenFrame.events(streamId: "a1") },
-            { MuxOpenFrame.events(streamId: "l1") },
-            { MuxOpenFrame.events(streamId: "h1") },
+            { MuxOpenFrame.events(streamId: "e1") },
+            { MuxOpenFrame.control(streamId: "c1") },
+            { MuxOpenFrame.following(sessionId: "s-1", streamId: "f1") },
         ] {
             let texts = try (1...5).map { _ in try make().encoded() }
             XCTAssertEqual(Set(texts).count, 1,

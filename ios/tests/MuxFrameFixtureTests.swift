@@ -26,7 +26,7 @@ final class MuxFrameFixtureTests: XCTestCase {
         let text: String
         let type: String
         let streamId: String
-        let op: String?
+        let kind: String?
         let sessionId: String?
     }
 
@@ -88,14 +88,12 @@ final class MuxFrameFixtureTests: XCTestCase {
                 case "follow":
                     let sessionId = try XCTUnwrap(sample.sessionId, "\(sample.name): follow 缺会话名")
                     encoded = try MuxOpenFrame.following(sessionId: sessionId, streamId: sample.streamId).encoded()
-                case "approvals":
+                case "events":
                     encoded = try MuxOpenFrame.events(streamId: sample.streamId).encoded()
-                case "session-list":
-                    encoded = try MuxOpenFrame.events(streamId: sample.streamId).encoded()
-                case "host-events":
-                    encoded = try MuxOpenFrame.events(streamId: sample.streamId).encoded()
+                case "control":
+                    encoded = try MuxOpenFrame.control(streamId: sample.streamId).encoded()
                 default:
-                    XCTFail("\(sample.name): 样本里的 op 不认识（\(sample.kind ?? "nil")）")
+                    XCTFail("\(sample.name): 样本里的 kind 不认识（\(sample.kind ?? "nil")）")
                     continue
                 }
             case "cancel":

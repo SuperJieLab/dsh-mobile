@@ -308,7 +308,13 @@ enum ItemPayload: Decodable {
         }
         switch type {
         case "snapshot":
-            self = .follow(.opening(try OpeningFrame.Payload(from: decoder)))
+            // 解不出要换成 `ItemPayloadError`：`InboundFrame` 用「是不是这个类型的错」区分
+            // 「解不出」（留痕）与「不认识」（静默丢弃），`DecodingError` 会被当成后者。
+            do {
+                self = .follow(.opening(try OpeningFrame.Payload(from: decoder)))
+            } catch {
+                throw ItemPayloadError.openingShapeBroken
+            }
         case "event":
             self = .follow(.sessionEvent(try container.decode(SessionEvent.self, forKey: .event)))
         case "assistant-stream":
