@@ -31,7 +31,7 @@ import type {
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
 import { permissionSelectRequestOf } from '../wire/permission.ts'
-import { approvalAnswerOf, sessionCreateTargetOf, sessionPromptOf } from '../wire/write.ts'
+import { approvalAnswerOf, sessionCreateTargetOf, sessionPromptOf, type SessionCreateTarget } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
@@ -123,45 +123,33 @@ export async function handle(
         // 读 op。端口缺席的判断在 `modelCatalogOf` 里 —— 新路径也要那一条，放两处会漂。
         return await modelCatalog(model)
       case 'model-select':
-        // 写 op，与写通道的 op 同一纪律。
-        if (model === undefined) return failure('internal-error', 'model channel not wired for "model-select"')
+        // 写 op。端口缺席的判断在 `modelSelectOf` 里，与新路径共用一份。
         return await modelSelect(envelope, model)
       case 'command-catalog':
         // 端口缺席的判断在 `commandCatalogOf` 里，与新路径共用一份。
         return await commandCatalog(envelope, command)
       case 'command-execute':
-        // 写 op：整行原样交给宿主，但「是不是一条命令行」在这里先判。
-        if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
+        // 写 op：整行原样交给宿主，但「是不是一条命令行」在 `commandExecuteOf` 里先判。
         return await commandExecute(envelope, command)
       case 'permission-catalog':
         // 端口缺席的判断在 `permissionCatalogOf` 里，与新路径共用一份。
         return await permissionCatalog(envelope, permission)
       case 'permission-select':
         // 写 op：线上只收预设名，拼命令与目录校验都在适配层。
-        if (permission === undefined) return failure('internal-error', `permission channel not wired for "${op}"`)
         return await permissionSelect(envelope, permission)
       case 'session-create': {
         // 写 op（建实体）。载荷只有一格：落在哪个工作空间；不带就交给宿主当前目录。
-        if (write === undefined) return failure('internal-error', `write channel not wired for "${op}"`)
-        const target = sessionCreateTargetOf(envelope)
-        if (target.kind === 'invalid') {
-          return failure('invalid-request', 'session-create accepts a non-empty workspaceId or none')
-        }
-        return await sessionCreate(write, target.kind === 'workspace' ? target.workspaceId : undefined)
+        return await sessionCreate(write, sessionCreateTargetOf(envelope))
       }
       case 'workspace-create':
         // 写 op（造目录 + 注册）。名字不合法时**一个文件系统调用都不发生**。
-        if (workspace === undefined) return failure('internal-error', `workspace channel not wired for "${op}"`)
         return await workspaceCreate(envelope, workspace)
       case 'workspace-delete':
         // 写 op（解注册）。只删注册 —— 目录与会话日志都由宿主留着。
-        if (workspace === undefined) return failure('internal-error', `workspace channel not wired for "${op}"`)
         return await workspaceDelete(envelope, workspace)
       case 'approval-answer':
       case 'session-prompt':
-        // 写 op。仅只读测试装配会缺 `write`；生产必接线，
-        // 此拒绝在生产不可达。
-        if (write === undefined) return failure('internal-error', `write channel not wired for "${op}"`)
+        // 写 op。端口缺席的判断在两个取值函数里，与新路径共用一份。
         return op === 'approval-answer'
           ? await approvalAnswer(envelope, write)
           : await sessionPrompt(envelope, write)
@@ -183,8 +171,24 @@ export async function handle(
  * 宿主失败**不在这里折**：`handle` 的 catch 用 `readErrorOf` 统一折成 `internal-error`
  * 并把上游的话带进 message。本层不记日志（与其余 op 一致），排障看宿主侧。
  */
-async function sessionCreate(write: WritePort, workspaceId: string | undefined): Promise<Response> {
-  return success({ sessionId: await write.createSession(workspaceId) })
+async function sessionCreate(
+  write: WritePort | undefined,
+  target: SessionCreateTarget,
+): Promise<Response> {
+  // 载荷形状的判断留在这里：它属于「这条请求的语义」，不属于「端口有没有接」。
+  if (target.kind === 'invalid') {
+    return failure('invalid-request', 'session-create accepts a non-empty workspaceId or none')
+  }
+  return unwrap(await sessionCreateOf(write, target.kind === 'workspace' ? target.workspaceId : undefined))
+}
+
+export async function sessionCreateOf(
+  write: WritePort | undefined,
+  workspaceId: string | undefined,
+): Promise<RemoteResult> {
+  // 仅只读测试装配会缺 `write`；生产必接线，此拒绝在生产不可达。
+  if (write === undefined) return refused('internal-error', 'write channel not wired for "session-create"')
+  return { ok: true, value: { sessionId: await write.createSession(workspaceId) } }
 }
 
 /**
@@ -195,14 +199,25 @@ async function sessionCreate(write: WritePort, workspaceId: string | undefined):
  */
 async function workspaceCreate(
   envelope: Record<string, unknown>,
-  workspace: WorkspacePort,
+  workspace: WorkspacePort | undefined,
 ): Promise<Response> {
-  const name = workspaceNameOf(envelope)
+  return unwrap(await workspaceCreateOf(envelope, workspace))
+}
+
+export async function workspaceCreateOf(
+  args: Record<string, unknown>,
+  workspace: WorkspacePort | undefined,
+): Promise<RemoteResult> {
+  if (workspace === undefined) return refused('internal-error', 'workspace channel not wired for "workspace-create"')
+  const name = workspaceNameOf(args)
   if (name === undefined) {
-    return failure('invalid-request', 'workspace-create needs a name that is one non-blank path segment')
+    return refused('invalid-request', 'workspace-create needs a name that is one non-blank path segment')
   }
   const made = await workspace.create(name)
-  return success({ workspaceId: made.workspaceId, title: made.title, created: made.created })
+  return {
+    ok: true,
+    value: { workspaceId: made.workspaceId, title: made.title, created: made.created },
+  }
 }
 
 /**
@@ -216,50 +231,80 @@ async function workspaceCreate(
  */
 async function workspaceDelete(
   envelope: Record<string, unknown>,
-  workspace: WorkspacePort,
+  workspace: WorkspacePort | undefined,
 ): Promise<Response> {
-  const workspaceId = workspaceIdOf(envelope)
+  return unwrap(await workspaceDeleteOf(envelope, workspace))
+}
+
+export async function workspaceDeleteOf(
+  args: Record<string, unknown>,
+  workspace: WorkspacePort | undefined,
+): Promise<RemoteResult> {
+  if (workspace === undefined) return refused('internal-error', 'workspace channel not wired for "workspace-delete"')
+  const workspaceId = workspaceIdOf(args)
   if (workspaceId === undefined) {
-    return failure('invalid-request', 'workspace-delete needs a non-blank workspaceId')
+    return refused('invalid-request', 'workspace-delete needs a non-blank workspaceId')
   }
   await workspace.delete(workspaceId)
-  return success({})
+  return { ok: true, value: {} }
 }
 
 /**
  * 投递一条 approval 应答。`ok` 意为*已投递给挂起的问题* —— 权威结论
  * 是客户端从流中对账的 `approval/decided` 审计事件。
  */
-async function approvalAnswer(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
-  const answer = approvalAnswerOf(envelope)
+async function approvalAnswer(
+  envelope: Record<string, unknown>,
+  write: WritePort | undefined,
+): Promise<Response> {
+  return unwrap(await approvalAnswerValue(envelope, write))
+}
+
+export async function approvalAnswerValue(
+  args: Record<string, unknown>,
+  write: WritePort | undefined,
+): Promise<RemoteResult> {
+  if (write === undefined) return refused('internal-error', 'write channel not wired for "approval-answer"')
+  const answer = approvalAnswerOf(args)
   if (answer === undefined) {
-    return failure('invalid-request', 'approval-answer needs eventId, decision ("allow" | "deny"), and answerId')
+    return refused('invalid-request', 'approval-answer needs eventId, decision ("allow" | "deny"), and answerId')
   }
   const outcome = await write.answerApproval(answer)
   if (outcome === 'unknown-approval') {
-    return failure('unknown-approval', `no pending approval answers to "${answer.eventId}" — already decided, cancelled, or never asked`)
+    return refused('unknown-approval', `no pending approval answers to "${answer.eventId}" — already decided, cancelled, or never asked`)
   }
   if (outcome === 'undelivered') {
     // 上游拒了这条回答：问题仍挂在它那里等着，所以这里不能说 `ok`（`ok` 意为
     // 「已投递给挂起的问题」）。原因在上游的 code 里，网关日志已记。
-    return failure('internal-error', `the gateway refused the answer for "${answer.eventId}" — see the gateway log for its code`)
+    return refused('internal-error', `the gateway refused the answer for "${answer.eventId}" — see the gateway log for its code`)
   }
-  return { v: PROTOCOL_VERSION, ok: true, eventId: answer.eventId }
+  return { ok: true, value: { eventId: answer.eventId } }
 }
 
 /**
  * 收纳一条 prompt。`ok` 意为*已接受进收件箱* —— 回复本体经流到达。
  */
-async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort): Promise<Response> {
-  const prompt = sessionPromptOf(envelope)
+async function sessionPrompt(
+  envelope: Record<string, unknown>,
+  write: WritePort | undefined,
+): Promise<Response> {
+  return unwrap(await sessionPromptValue(envelope, write))
+}
+
+export async function sessionPromptValue(
+  args: Record<string, unknown>,
+  write: WritePort | undefined,
+): Promise<RemoteResult> {
+  if (write === undefined) return refused('internal-error', 'write channel not wired for "session-prompt"')
+  const prompt = sessionPromptOf(args)
   if (prompt === undefined) {
-    return failure('invalid-request', 'session-prompt needs sessionId, promptId, and non-whitespace text')
+    return refused('invalid-request', 'session-prompt needs sessionId, promptId, and non-whitespace text')
   }
   const outcome = await write.promptSession(prompt)
   if (outcome === 'unknown-session') {
-    return failure('unknown-session', `no stored session "${prompt.sessionId}"`)
+    return refused('unknown-session', `no stored session "${prompt.sessionId}"`)
   }
-  return { v: PROTOCOL_VERSION, ok: true, sessionId: prompt.sessionId }
+  return { ok: true, value: { sessionId: prompt.sessionId } }
 }
 
 /**
@@ -268,14 +313,25 @@ async function sessionPrompt(envelope: Record<string, unknown>, write: WritePort
  * 上游的拒绝保留自己的码：`session/model-unavailable` 说模型不可路由，
  * 与畸形请求是不同的补救。
  */
-async function modelSelect(envelope: Record<string, unknown>, model: ModelPort): Promise<Response> {
-  const request = modelSelectRequestOf(envelope)
+async function modelSelect(
+  envelope: Record<string, unknown>,
+  model: ModelPort | undefined,
+): Promise<Response> {
+  return unwrap(await modelSelectOf(envelope, model))
+}
+
+export async function modelSelectOf(
+  args: Record<string, unknown>,
+  model: ModelPort | undefined,
+): Promise<RemoteResult> {
+  if (model === undefined) return refused('internal-error', 'model channel not wired for "model-select"')
+  const request = modelSelectRequestOf(args)
   if (request === undefined) {
-    return failure('invalid-request', 'model-select needs sessionId, provider, and model')
+    return refused('invalid-request', 'model-select needs sessionId, provider, and model')
   }
   const outcome = await model.select(request)
-  if (!outcome.ok) return failure(outcome.code, outcome.message)
-  return { v: PROTOCOL_VERSION, ok: true, selected: { ...outcome.selected } }
+  if (!outcome.ok) return refused(outcome.code, outcome.message)
+  return { ok: true, value: { selected: { ...outcome.selected } } }
 }
 
 /** 模型目录路径：宿主目录原样，去掉客户端用不上的字段。 */
@@ -336,14 +392,25 @@ export async function commandCatalogOf(
  * 两类拒绝保留自己的码：`unknown-command` 说那一行解析不出已注册的命令（客户端改字），
  * 与「这条命令执行失败」（流里的那一行）是不同的补救。
  */
-async function commandExecute(envelope: Record<string, unknown>, command: CommandPort): Promise<Response> {
-  const request = commandExecuteRequestOf(envelope)
+async function commandExecute(
+  envelope: Record<string, unknown>,
+  command: CommandPort | undefined,
+): Promise<Response> {
+  return unwrap(await commandExecuteOf(envelope, command))
+}
+
+export async function commandExecuteOf(
+  args: Record<string, unknown>,
+  command: CommandPort | undefined,
+): Promise<RemoteResult> {
+  if (command === undefined) return refused('internal-error', 'command channel not wired for "command-execute"')
+  const request = commandExecuteRequestOf(args)
   if (request === undefined) {
-    return failure('invalid-request', 'command-execute needs sessionId and a line starting with "/"')
+    return refused('invalid-request', 'command-execute needs sessionId and a line starting with "/"')
   }
   const outcome = await command.execute(request.sessionId, request.line)
-  if (!outcome.ok) return failure(outcome.code, outcome.message)
-  return { v: PROTOCOL_VERSION, ok: true, commandId: outcome.commandId }
+  if (!outcome.ok) return refused(outcome.code, outcome.message)
+  return { ok: true, value: { commandId: outcome.commandId } }
 }
 
 /**
@@ -390,18 +457,27 @@ export async function permissionCatalogOf(
  */
 async function permissionSelect(
   envelope: Record<string, unknown>,
-  permission: PermissionPort,
+  permission: PermissionPort | undefined,
 ): Promise<Response> {
-  const request = permissionSelectRequestOf(envelope)
+  return unwrap(await permissionSelectOf(envelope, permission))
+}
+
+export async function permissionSelectOf(
+  args: Record<string, unknown>,
+  permission: PermissionPort | undefined,
+): Promise<RemoteResult> {
+  if (permission === undefined) return refused('internal-error', 'permission channel not wired for "permission-select"')
+  const request = permissionSelectRequestOf(args)
   if (request === undefined) {
-    return failure('invalid-request', 'permission-select needs sessionId and a non-empty preset')
+    return refused('invalid-request', 'permission-select needs sessionId and a non-empty preset')
   }
   const outcome = await permission.select(request.sessionId, request.preset)
-  if (!outcome.ok) return failure(outcome.code, outcome.message)
+  if (!outcome.ok) return refused(outcome.code, outcome.message)
   return {
-    v: PROTOCOL_VERSION,
     ok: true,
-    ...outcome.current === undefined ? {} : { current: outcome.current },
+    value: {
+      ...outcome.current === undefined ? {} : { current: outcome.current },
+    },
   }
 }
 

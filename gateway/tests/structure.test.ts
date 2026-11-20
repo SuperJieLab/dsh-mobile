@@ -1285,6 +1285,8 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
       'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault',
       'failure', 'success', 'refused', 'unwrap',
       'listSessionsOf', 'snapshotOf', 'pageOf', 'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
+      'modelSelectOf', 'commandExecuteOf', 'permissionSelectOf', 'sessionCreateOf',
+      'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'sessionPromptValue',
     ],
     types: ['Limits', 'Ports'],
   },

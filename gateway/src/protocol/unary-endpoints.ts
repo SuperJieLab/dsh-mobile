@@ -10,12 +10,20 @@
  */
 import type { Limits, Ports } from './rpc.ts'
 import {
+  approvalAnswerValue,
   commandCatalogOf,
+  commandExecuteOf,
   listSessionsOf,
   modelCatalogOf,
+  modelSelectOf,
   pageOf,
   permissionCatalogOf,
+  permissionSelectOf,
+  sessionCreateOf,
+  sessionPromptValue,
   snapshotOf,
+  workspaceCreateOf,
+  workspaceDeleteOf,
 } from './rpc.ts'
 import type { RemoteResult, UnaryEndpointName } from '../wire/unary.ts'
 
@@ -71,6 +79,66 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
     write: false,
     invoke(args, ctx) {
       return permissionCatalogOf(args, ctx.ports.permission)
+    },
+  },
+  'session/selectModel': {
+    write: true,
+    invoke(args, ctx) {
+      return modelSelectOf(args, ctx.ports.model)
+    },
+  },
+  'commands/execute': {
+    write: true,
+    invoke(args, ctx) {
+      return commandExecuteOf(args, ctx.ports.command)
+    },
+  },
+  'mobile/permissionSelect': {
+    write: true,
+    invoke(args, ctx) {
+      return permissionSelectOf(args, ctx.ports.permission)
+    },
+  },
+  'session/create': {
+    write: true,
+    async invoke(args, ctx) {
+      // 载荷形状先判：它是「这条请求的语义」，与「端口有没有接」是两件事。
+      const workspaceId = args.workspaceId
+      if (workspaceId !== undefined && (typeof workspaceId !== 'string' || workspaceId === '')) {
+        return {
+          ok: false,
+          error: {
+            code: 'invalid-request',
+            message: 'session-create accepts a non-empty workspaceId or none',
+            details: {},
+          },
+        }
+      }
+      return sessionCreateOf(ctx.ports.write, workspaceId as string | undefined)
+    },
+  },
+  'mobile/workspaceCreate': {
+    write: true,
+    invoke(args, ctx) {
+      return workspaceCreateOf(args, ctx.ports.workspace)
+    },
+  },
+  'workspace/delete': {
+    write: true,
+    invoke(args, ctx) {
+      return workspaceDeleteOf(args, ctx.ports.workspace)
+    },
+  },
+  'mobile/approvalAnswer': {
+    write: true,
+    invoke(args, ctx) {
+      return approvalAnswerValue(args, ctx.ports.write)
+    },
+  },
+  'session/prompt': {
+    write: true,
+    invoke(args, ctx) {
+      return sessionPromptValue(args, ctx.ports.write)
     },
   },
 }
