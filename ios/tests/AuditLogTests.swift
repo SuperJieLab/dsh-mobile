@@ -117,7 +117,7 @@ final class AuditLogTests: XCTestCase {
     private func writeRequests() -> [any GatewayRequest] {
         [
             SessionPromptRequest(sessionId: "s", text: "t", promptId: "p"),
-            ApprovalAnswerRequest(eventId: "e", decision: "allow", answerId: "a"),
+            ApprovalAnswerRequest(eventId: "e", decision: "allow", answerId: "a", clientId: "c-1"),
             CommandExecuteRequest(sessionId: "s", line: "/clear"),
             PermissionSelectRequest(sessionId: "s", preset: "accept-edits"),
             ModelSelectRequest(sessionId: "s", provider: "p", model: "m"),
