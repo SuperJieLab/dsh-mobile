@@ -18,8 +18,11 @@ export interface UnaryAnswer {
 
 /**
  * 一条请求的体。`rpcId` 固定 —— 判据不验它，验它的是 `unary-shape.test.ts`。
+ *
+ * 不导出：发请求只有 `postEndpoint` / `call` 两条路。放开第三处「自己拼一个体」的口子，
+ * 就有第三处可以拼错而没人发现。
  */
-export function envelopeOf(
+function envelopeOf(
   endpoint: string,
   args: Record<string, unknown> = {},
   rpcId = 'test-rpc',

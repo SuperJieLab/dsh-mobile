@@ -538,53 +538,6 @@ const HTTP_MODULES: ReadonlySet<string> = new Set([
   'http', 'https', 'net', 'http2',
 ])
 
-// ---------------------------------------------------------------------------
-// V2c：信封只在判定层构造
-// ---------------------------------------------------------------------------
-
-/**
- * 源码里手写协议信封的地方 —— 同一个对象字面量的**顶层**同时有 `v:` 与 `ok:` 键。
- *
- * 为什么不按 `/\{[^{}]*\}/` 找：信封里套着 `error: { code, message }`，那个内层
- * 花括号会让正则只能匹配到内层，外层永远配不上 —— 实测把
- * `{ v, ok: false, error: { … } }` 注回 `remote/http.ts` **零命中**。所以这里按
- * 括号深度扫描：先把每个成对的 `{}` 取出来，再看它自己顶层的键。
- *
- * 已知边界（刻意的）：字符串没剥离。远程目录里出现一个"长得像信封"的字符串会
- * 假红 —— 可以接受，假红有人来看，假绿没人知道。
- */
-export function envelopeLiteralsIn(source: string): string[] {
-  const code = stripComments(source)
-  const found: string[] = []
-  const open: number[] = []
-  for (let i = 0; i < code.length; i += 1) {
-    if (code[i] === '{') open.push(i)
-    else if (code[i] === '}' && open.length > 0) {
-      const start = open.pop() as number
-      const body = code.slice(start, i + 1)
-      const keys = topLevelKeysOf(body)
-      if (keys.includes('v') && keys.includes('ok')) found.push(body.replace(/\s+/g, ' ').slice(0, 80))
-    }
-  }
-  return found
-}
-
-/** 一个对象字面量**自己那一层**的键名（不进嵌套的括号）。 */
-function topLevelKeysOf(body: string): string[] {
-  const keys: string[] = []
-  let depth = 0
-  for (let i = 0; i < body.length; i += 1) {
-    const ch = body[i]
-    if (ch === '{' || ch === '(' || ch === '[') depth += 1
-    else if (ch === '}' || ch === ')' || ch === ']') depth -= 1
-    else if (depth === 1) {
-      const match = /^([A-Za-z_$][\w$]*)\s*:/.exec(body.slice(i))
-      if (match !== null && match[1] !== undefined) keys.push(match[1])
-    }
-  }
-  return keys
-}
-
 test('the endpoint envelope has exactly one home, and transport does not build it', () => {
   // 信封（`type` / `rpcId` / `result` 那三格）只在 `wire/unary.ts` 的
   // `encodeServerResponse` / `parseClientRequest` 里出现。为什么值得一条判据：
@@ -1456,23 +1409,6 @@ test('the transport is split by lifetime, and the old single file is gone', () =
   assert.deepEqual(names, expected,
     'ws.ts must be gone: one file cannot show three lifetimes')
 })
-
-/**
- * 「可能含声明」的那部分代码：剥注释、剥字符串、去掉 import 与 `export … from`。
- *
- * 两件事必须去掉，否则不产生声明的写法会被当成声明（两种都是**假红**，
- * 而假红会让人把判据关掉）：
- *   ① `import { type PairResponse } from '…'` —— `type` 与名字相邻，但它只是导入；
- *   ② `export type { PairResponse } from '…'` —— 重导出，同样不声明新名字。
- * 字符串也要剥：`"interface PairResponse is …"` 这种文案不是声明。
- */
-export function declarationScopeOf(source: string): string {
-  return stripComments(source)
-    .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""')
-    .replace(/\bimport\b[^;]*?\bfrom\s*""/g, '')
-    .replace(/\bimport\s*""/g, '')
-    .replace(/\bexport\b[^;]*?\bfrom\s*""/g, '')
-}
 
 // ---------------------------------------------------------------------------
 // V11（已退役）：凭据类 op 的形状有唯一出处
