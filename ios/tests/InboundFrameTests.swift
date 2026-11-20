@@ -155,6 +155,26 @@ final class InboundFrameTests: XCTestCase {
         XCTAssertEqual(inner, .null)
     }
 
+    /// 判据 7 的流那一半：`details` 要解出来，缺了给空字典 ——
+    /// 与一元那边的 `GatewayFailure` 同一套规则，两条通道对同一格不能一个严一个宽。
+    func testErrorFrameCarriesDetails() throws {
+        let withDetails = try decode(
+            #"{"type":"error","streamId":"s-1","error":{"code":"internal-error","message":"x","details":{"field":"cursor"}}}"#
+        )
+        guard case .refused(let failure) = withDetails.payload else {
+            return XCTFail("error 帧该归 refused")
+        }
+        XCTAssertEqual(failure.details["field"], .string("cursor"))
+
+        let withoutDetails = try decode(
+            #"{"type":"error","streamId":"s-1","error":{"code":"internal-error","message":"x"}}"#
+        )
+        guard case .refused(let missing) = withoutDetails.payload else {
+            return XCTFail("缺 details 仍是可读的拒绝")
+        }
+        XCTAssertEqual(missing.details, [:], "缺这一格不整条失败")
+    }
+
     /// `error` 帧缺 `message` 时 `code` 必须活下来。
     /// 整包解不出会把 `window-too-large` 从「会话级终态」降成「可重试」，语义正好反了。
     func testErrorWithoutMessageKeepsItsCode() throws {

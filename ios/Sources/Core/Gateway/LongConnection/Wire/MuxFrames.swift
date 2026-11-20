@@ -240,14 +240,19 @@ struct FailurePayload: Decodable {
 
     let failure: GatewayFailure
 
-    private enum CodingKeys: String, CodingKey { case code, message }
+    private enum CodingKeys: String, CodingKey { case code, message, details }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        // 三格都按「缺了就补默认值」解，与一元那边的 `GatewayFailure` 同一套规则：
+        // 缺 `code` 折成 `internal-error`、缺 `message` 给空串、缺 `details` 给空字典。
+        // **两条通道对同一格不能一个严一个宽** —— 那会让同一个失败在两个入口下
+        // 一个可读、一个报「报文畸形」。
         failure = GatewayFailure(
             code: try container.decodeIfPresent(String.self, forKey: .code)
                 ?? GatewayErrorCode.internalError.rawValue,
-            message: try container.decodeIfPresent(String.self, forKey: .message) ?? ""
+            message: try container.decodeIfPresent(String.self, forKey: .message) ?? "",
+            details: (try? container.decodeIfPresent([String: JSONValue].self, forKey: .details)) ?? [:]
         )
     }
 }
