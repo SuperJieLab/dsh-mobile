@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { encodeServerFrame, openRequestOf, parseClientFrame } from '../../src/wire/mux.ts'
+import { encodeServerFrame, openRequestOf, parseClientFrame, type MuxErrorFrame } from '../../src/wire/mux.ts'
 import { readFileSync } from 'node:fs'
 
 test('parseClientFrame: round-trips the client frame shapes', () => {
@@ -118,21 +118,23 @@ test('MuxServerFrame: 第三格改名后，旧的字段名被类型拒绝', () =
   encodeServerFrame({ type: 'error', streamId: 's1', payload: { code: 'x', message: 'y' } })
 })
 
-// ---------------------------------------------------------------------------
-// 判据 5 / 6：错误形状与服务端帧的三种种类
-// ---------------------------------------------------------------------------
-
-test('error 帧的对象恰好三键 —— code / message / details，没有第四格', () => {
-  // 多一格会让两会端对「哪个格是正文」的理解分岔，少一格则客户端读不到原文。
-  // 用 `Object.keys` 而不是断言某个字段：前者能抓到「悄悄多了一个 details 的兄弟」。
-  const text = encodeServerFrame({
-    type: 'error',
-    streamId: 's-9',
-    error: { code: 'unknown-op', message: 'no such op', details: {} },
-  })
-  const frame = JSON.parse(text) as { error: Record<string, unknown> }
-  assert.deepEqual(Object.keys(frame.error).sort(), ['code', 'details', 'message'])
+test('error 帧少一格 details 编译不过 —— 三键是必填的', () => {
+  // 这条替代原先那条恒真的「恰好三键」：输入自己写三键、`encodeServerFrame` 就是
+  // `JSON.stringify`，那种断言与实现无关。真正会退化的是**类型把 `details` 改成可选** ——
+  // 那时下面这行不再报错，`@ts-expect-error` 变成「未使用的指令」而 `tsc` 失败。
+  // @ts-expect-error 缺 details 必须被拒
+  const missing: MuxErrorFrame = { type: 'error', streamId: 's1', error: { code: 'x', message: 'y' } }
+  assert.equal(missing.type, 'error')
 })
+
+// ---------------------------------------------------------------------------
+// 判据 6：服务端帧的三种种类
+//
+// 判据 5（error 对象恰好三键）没有行为判据：原先那条测试自己写三键字面量再断言三键，
+// 而 `encodeServerFrame` 就是 `JSON.stringify` —— 它只证明「字面量是三键」，与实现无关。
+// 「少一格」由 `MuxErrorFrame.error` 的三个必填字段挡（上一节 `@ts-expect-error` 那组
+// 已经在证明它），「多一格」没有任何构造点可以产生。故删除，不由测试承担。
+// ---------------------------------------------------------------------------
 
 test('服务端帧只有 item / error / end 三种 —— 共享样本里不出现 usage', () => {
   // 帧种类是契约：多一种就得多一条判据、多一处消费者；`usage` 那一种本期退役，

@@ -68,7 +68,10 @@ enum SessionStreamReader {
             switch payload {
             case .follow(.opening(let shape)):
                 guard let opening = shape.frame() else {
-                    // 分派之后才发现必填字段缺了。与「解不出」同归，但已由上面那一行留过痕。
+                    // 分派之后才发现必填字段缺了。走到这里 `payloadRejected` 必为 false ——
+                    // 上面那一行不会执行，所以这里得自己留痕：缺字段的打开帧是开流超时的
+                    // 第一现场，静默忽略会让它和「这一条流什么都没发生」长得一样。
+                    Log.warn(Log.Module.session, "opening missing required fields (sessionId/cursor/events)")
                     return StreamReading(content: .ignored)
                 }
                 return StreamReading(content: .opening(opening))

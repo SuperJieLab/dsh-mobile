@@ -51,10 +51,8 @@ final class SourceLevelTests: XCTestCase {
         // 判读层：进到这里的已经是解好的值，再解一次就是把成本原样加回来。
         for relative in ["Sources/Features/SessionDetail/State/SessionBehavior.swift",
                          "Sources/Features/SessionDetail/State/SessionStreamReader.swift",
-                         "Sources/Features/Approval/State/Stream/ApprovalStreamReader.swift",
-                         "Sources/Features/Approval/State/Stream/ApprovalStream.swift",
-                         "Sources/Features/SessionList/State/Stream/SessionListStreamReader.swift",
-                         "Sources/Features/SessionList/State/Stream/SessionListStream.swift"] {
+                         "Sources/Core/Gateway/LongConnection/Stream/EventsStream.swift",
+                         "Sources/Core/Gateway/LongConnection/Stream/ControlStream.swift"] {
             let count = Self.codeLineCount(
                 of: "JSONDecoder(", in: try read(iosRoot.appendingPathComponent(relative))
             )

@@ -51,7 +51,7 @@ final class MuxFrameFixtureTests: XCTestCase {
                   let type = raw["type"] as? String,
                   let streamId = raw["streamId"] as? String else { return nil }
             return ClientSample(name: name, text: text, type: type, streamId: streamId,
-                                op: raw["op"] as? String, sessionId: raw["sessionId"] as? String)
+                                kind: raw["kind"] as? String, sessionId: raw["sessionId"] as? String)
         }
         let server = (root["server"] as? [[String: Any]] ?? []).compactMap { raw -> ServerSample? in
             guard let name = raw["name"] as? String,
@@ -66,9 +66,9 @@ final class MuxFrameFixtureTests: XCTestCase {
     /// 样本少一条时下面的循环会静默少测一格，而「少测一格」在测试报告里长得跟「全绿」一样。
     func testFixtureCoversEveryStreamKindAndBothServerFrameKinds() throws {
         let fixture = try loadFixture()
-        let ops = Set(fixture.client.compactMap(\.op))
-        XCTAssertEqual(ops, Set(["approvals", "follow", "host-events", "session-list"]),
-                       "四条流的开流请求都要有样本")
+        let kinds = Set(fixture.client.compactMap(\.kind))
+        XCTAssertEqual(kinds, Set(["follow", "events", "control"]),
+                       "三条流的开流请求都要有样本")
         let serverTypes = Set(fixture.server.map(\.type))
         for type in ["item", "end", "error"] {
             XCTAssertTrue(serverTypes.contains(type), "服务端帧缺 \(type) 的样本")

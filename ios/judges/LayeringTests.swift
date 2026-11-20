@@ -732,8 +732,7 @@ final class LayeringTests: XCTestCase {
     /// （漏报方向，靠评审）。
     func testWireShapesAreDeclaredOnce() throws {
         let shapes = ["InboundFrame", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest",
-                      "ApprovalsRequest", "SessionListRequest", "HostEventsRequest",
-                      "OpeningFrame", "UsageFramePayload", "FailurePayload"]
+                      "OpeningFrame", "FailurePayload"]
         var homes: [String: [String]] = [:]
 
         for file in swiftFiles(under: sourcesRoot) {
@@ -1256,19 +1255,19 @@ final class LayeringTests: XCTestCase {
     }
 
 
-    /// 开流帧**按 op 点名**拼装：每一类开流只有一处拼装点，且每一处都在清单写下的位置。
+    /// 开流帧**按工厂点名**拼装：每一类开流只有一处拼装点，且每一处都在清单写下的位置。
     ///
     /// 旧写法只认 `MuxOpenFrame.following(` 一个 marker：第二类开流帧（`events(`）加进来之后
     /// 它照样全绿 ——「一处拼装」这条纪律对新增的那一类一点都没生效。清单因此改成
-    /// 「op → 文件」，并且**清单自己也断**：源码里出现第三个工厂而清单没登记时，最后一条红。
+    /// 「工厂 → 文件」，并且**清单自己也断**：源码里出现清单没登记的工厂时，最后一条红。
     ///
-    /// 拼装点住在状态层与 App 级容器，所以形状判据只能以「点名一处」的方式容纳它们：
+    /// 拼装点住在状态层与传输层，所以形状判据只能以「点名一处」的方式容纳它们：
     /// 豁免要写出坐标，坐标对不上（清单里那个文件不再构造，或别处也构造）就红。
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
             ("following", "Features/SessionDetail/State/SessionBehavior.swift"),
-            ("approvals", "Features/Approval/State/Stream/ApprovalStream.swift"),
-            ("sessionList", "Features/SessionList/State/Stream/SessionListStream.swift"),
+            ("events", "Core/Gateway/LongConnection/Stream/EventsStream.swift"),
+            ("control", "Core/Gateway/LongConnection/Stream/ControlStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {
@@ -1415,19 +1414,19 @@ final class LayeringTests: XCTestCase {
                       "构造入口不是 fileprivate —— 业务侧能造出一个不在表里的流")
     }
 
-    /// 三条业务流都只经**同一个造流口**接上流层：会话详情与两条连接级流平级。
+    /// 三条业务流都只经**同一个造流口**接上流层：会话详情、`$events`、`session/control` 平级。
     ///
     /// 这一条守的是「平级」这个承诺的形状：任何一条被特殊对待（自己拼开流文本、
     /// 自己持有传输层、走另一条入口），它们就不再同构，而用户看不出区别。
     func testEveryBusinessStreamUsesTheSameFactory() throws {
         let session = sourcesRoot
             .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
-        let approvals = sourcesRoot
-            .appendingPathComponent("Features/Approval/State/Stream/ApprovalStream.swift")
-        let list = sourcesRoot
-            .appendingPathComponent("Features/SessionList/State/Stream/SessionListStream.swift")
+        let events = sourcesRoot
+            .appendingPathComponent("Core/Gateway/LongConnection/Stream/EventsStream.swift")
+        let control = sourcesRoot
+            .appendingPathComponent("Core/Gateway/LongConnection/Stream/ControlStream.swift")
 
-        for (name, url) in [("会话详情", session), ("审批流", approvals), ("列表流", list)] {
+        for (name, url) in [("会话详情", session), ("$events", events), ("session/control", control)] {
             let lines = codeLines(in: try String(contentsOf: url, encoding: .utf8))
             XCTAssertTrue(lines.contains { $0.1.contains("any StreamFactory") },
                           "\(name) 没有接在 StreamFactory 上 —— 两条流不再同构")
@@ -1486,8 +1485,8 @@ final class LayeringTests: XCTestCase {
             // 层界与命名那一期作废的名字：作用域词与「宿主」都不再说它是什么。
             "GatewayHost", "GatewayConnection", "ConnectionEventStream",
             "ConnectionEventReader", "ConnectionEventReading", "StreamPort",
-            // 一条流装三种货物那一代的名字：拆完之后流的名字与 op 名一一对应，
-            // 这三个词不该再出现（`SessionListStream` 不含 `EventStream`，不会误伤）。
+            // 一条流装三种货物那一代的名字：拆完之后流的名字与端点名一一对应，
+            // 这三个词不该再出现（`EventsStream` 不含 `EventStream`，不会误伤）。
             "EventStream", "EventReader", "EventReading",
             // 逐字段搬运窗口那一期：`Window` 与那三个字段一起没了，剩下两条墓碑判据
             // 并进这张名单。带括号是为了不误伤 `livenessWindow` / `flushWindowNanos`。
@@ -1539,28 +1538,29 @@ final class LayeringTests: XCTestCase {
         XCTAssertTrue(link.contains("func makeStream"), "造流入口没扫到 —— 判据可能扫错了树")
     }
 
-    /// 两种新货物在判读器里**各有一支**（恰好一次）—— 只改类型不加分支时，审批到不了任何地方；
-    /// 而两支变三支，说明有人在第二个地方又解释了一遍这个 kind。
+    /// `$events` 的四种货物在判读器里**各有一支**（恰好一支）—— 只改类型不加分支时，
+    /// 那条货到不了任何地方；而同一个货物出现两支，说明有人在第二个地方又解释了一遍它。
     ///
-    /// 正控：`"emit"` 必须命中，否则说明扫错了文件。
+    /// 别的流的货物（follow / control）必须汇成同一支丢弃：串流来的东西不在这里各自解释，
+    /// 否则每加一条流，这里就多一处判断。
     ///
-    /// 末尾那条守的是「认不出时留痕要带名字」：不带 `\(kind)` 的那行 warn 现场只剩
+    /// 正控：`emit` 必须命中，否则说明扫错了文件。
+    ///
+    /// 末尾那条守的是「认不出时留痕要带名字」：不带 `\(type)` 的那行 warn 现场只剩
     /// 「丢了一条东西」，而版本错配时最要紧的正是**丢的是哪一种**。
-    func testTheApprovalCargoesAreRead() throws {
+    func testTheEventsCargoesAreRead() throws {
         let file = sourcesRoot
-            .appendingPathComponent("Features/Approval/State/Stream/ApprovalStreamReader.swift")
+            .appendingPathComponent("Core/Gateway/LongConnection/Stream/EventsStream.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
-        for kind in ["waterfall", "cancel"] {
-            let hits = text.components(separatedBy: "\"\(kind)\"").count - 1
-            XCTAssertEqual(hits, 1, "判读器里 \"\(kind)\" 该恰好出现一次，实际 \(hits) 次")
+        let code = codeLines(in: text)
+        for cargo in ["ready", "waterfall", "cancel", "emit"] {
+            let hits = code.filter { $0.1.contains(".events(.\(cargo)") }.count
+            XCTAssertEqual(hits, 1, "判读器里 \(cargo) 该恰好一支，实际 \(hits) 支")
         }
-        // 别的流的货物名不该出现在这里：出现在判读器里就说明这条流又开始认别人的货了。
-        for foreign in ["session-list", "emit"] {
-            XCTAssertFalse(text.contains("\"\(foreign)\""),
-                           "审批流的判读器里出现了 \"\(foreign)\" —— 它归另一条流")
-        }
-        XCTAssertTrue(text.contains("does not carry: \\(kind)"),
-                      "认不出的 kind 没被写进日志 —— 版本错配时现场分不出丢的是什么")
+        XCTAssertTrue(code.contains { $0.1.contains("case .follow, .control") },
+                      "别的流的货物没有汇成一支丢弃 —— 每加一条流这里就多一处判断")
+        XCTAssertTrue(text.contains(#"cargo["type"]?.string"#),
+                      "认不出的货物没被写进日志 —— 版本错配时现场分不出丢的是哪一种")
     }
 
     /// 列表行的待审批标记撤干净了：类型、计数、渲染三样都不许留。
@@ -2114,7 +2114,7 @@ final class LayeringTests: XCTestCase {
     /// 对象图里的每件服务**全仓各一个实例**，且都建在 `AppServices.swift`。
     ///
     /// 多一个实例的症状全是静默的：两个 `TailnetNode` 各起一份 Go 运行时；两条列表流
-    /// 各自只收到一半事件；两张待答表各说各话。而**少一个**（有人就地 `SessionListStream()`）同样是
+    /// 各自只收到一半事件；两张待答表各说各话。而**少一个**（有人就地 `EventsStream()`）同样是
     /// 静默的 —— 新造的那个没人喂事件，屏上表现为「永远不更新」。
     ///
     /// 表驱动而不是逐条写：加一件服务只加一行，漏加会以「扫到的服务太少」暴露
@@ -2128,8 +2128,8 @@ final class LayeringTests: XCTestCase {
             ("CredentialStore.shared", "身份真值（单例）"),
             ("RpcClient(", "请求门面"),
             ("LongConnection(", "长连接"),
-            ("SessionListStream(", "列表流"),
-            ("ApprovalStream(", "审批流"),
+            ("EventsStream(", "连接级事件流"),
+            ("ControlStream(", "投影基线流"),
             ("ApprovalStore(", "待答表"),
         ]
         var found: [String: [String]] = [:]
@@ -2251,7 +2251,7 @@ final class LayeringTests: XCTestCase {
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
         ]
-        let banned = ["RpcClient", "LongConnection", "SessionListStream", "ApprovalStream"]
+        let banned = ["RpcClient", "LongConnection", "EventsStream", "ControlStream"]
         var scanned = 0
         for path in files {
             let url = sourcesRoot.appendingPathComponent(path)
@@ -3066,7 +3066,7 @@ final class LayeringTests: XCTestCase {
     /// 删掉它，两端的判据全绿而列表永远不动。结构判据是唯一守得住它的形式。
     ///
     /// 锚落在**列表的装配段**：它造这个 state，也就由它接。渲染视图的字段里没有
-    /// `SessionListStream`，所以锚不在视图 —— 那一半（服务不进渲染视图的
+    /// `EventsStream`，所以锚不在视图 —— 那一半（服务不进渲染视图的
     /// 字段）由 `testRenderViewsHoldNoServices` 守，两条各守一半。
     func testTheListStateIsSubscribedToTheStream() throws {
         let assembler = sourcesRoot.appendingPathComponent(

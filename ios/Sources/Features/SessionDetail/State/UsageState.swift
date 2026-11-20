@@ -19,12 +19,12 @@ struct UsageState: Equatable {
     /// 已经采用的那一份读数；`nil` = 还没有收到过任何帧。
     private(set) var snapshot: UsageSnapshot?
 
-    /// control 是否已经接管。一旦接管，快照那条路（`apply`）不再覆盖 —— R4 把 control
-    /// 定为权威，而两条来源的水位不同轴（快照是投影切点，control 是事件 seq），
+    /// control 是否已经接管。一旦接管，快照那条路（`apply`）不再覆盖 —— control 是权威，
+    /// 而两条来源的水位不同轴（快照是投影切点，control 是事件 seq），
     /// 用同一个 `asOfSeq` 去比必然出现「旧值借低位通过」或「新值被旧水位挡住」。
     private var controlAdopted = false
 
-    /// 当前该显示的占用值。为 `nil` 时界面**隐藏整行** —— 「没有读数」不是「占用 0%」。
+    /// 当前该显示的占用值。为 `nil` 时界面显示 `--` —— 「没有读数」不是「占用 0%」。
     var usage: UsagePayload? { snapshot?.usage }
 
     /// 收一条帧。

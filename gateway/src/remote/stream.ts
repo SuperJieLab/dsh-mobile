@@ -8,16 +8,17 @@
  * 一条流失败时**只有这条结束**：泵的 catch 把异常折成 error 帧，`finally` 清掉
  * 自己的 streamId；同一条连接上的其它流继续。
  *
- * **本文件出现四条错误码，归属各不相同**（`ISSUES` A13 的分类结果）：
+ * **本文件出现五条错误码，归属各不相同**（`ISSUES` A13 的分类结果）：
  *
  *   window-too-large   传输自有 —— 说的是「这一帧装不下」，由字节上界
  *                      （`StreamOptions.openingCapBytes`）产生，不是会话状态
- *   unknown-op         载荷不是这条流认得的请求 —— 形状判定用 `wire/mux.ts` 的
- *                      `openRequestOf`，这里只决定怎么回：一条带编号的 error 帧，
- *                      **连接与其他流不动**
+ *   unknown-endpoint   端点名不在表里 —— 两端说不到一处，客户端重开也没用
+ *   invalid-args       端点名对、入参不对 —— 同一处说错了东西，客户端的错
+ *                      两条都由 `wire/endpoints.ts` 判出，这里只决定怎么回：
+ *                      一条带编号的 error 帧，**连接与其他流不动**
  *   source-unavailable 事件源在、但这一代还没就绪 —— 给一份「看起来有、其实不知道」
  *                      的待答集合比拒绝更坏，所以拒绝；客户端按可重试处理（传输自有，
- *                      与 `unknown-op` 同族，不进 `protocol/error-codes.ts` 的上游映射）
+ *                      与上面两条同族，不进 `protocol/error-codes.ts` 的上游映射）
  *   internal-error     **这一条有三个产生者**：上游失败经映射（那种在
  *                      `protocol/error-codes.ts`）；本层自己发现的「源承诺无缺口、
  *                      实际却跳了 seq」—— 那不是上游抛的错，是传输在见证契约被违反；
@@ -33,7 +34,9 @@ import {
   DEFAULT_FOLLOW_MESSAGES,
   openRequestOf,
   parseClientFrame,
+  type EventsValue,
   type FollowOpening,
+  type FollowValue,
   type MuxApprovalWaterfall,
   type StreamId,
 } from '../wire/mux.ts'
@@ -75,7 +78,7 @@ const EXCERPT_LIMIT = 120
  *
  * 两档分界的判据是**编号在不在手**，不是内容坏到什么程度：
  *
- *   - **编号在手**（信封完好）→ 这条流的事：op 认不出就回一条带该编号的 `unknown-op`，
+ *   - **编号在手**（信封完好）→ 这条流的事：端点名不认就回一条带该编号的 `unknown-endpoint`，
  *     连接与别的流不动。内容坏了不等于这条连接不可信 —— 它还能服务别的流。
  *   - **编号读不出**（不是 JSON、缺 `streamId`、`type` 不认识）→ 无从归流，报
  *     `unreadable-frame`，调用方关连接。
@@ -356,7 +359,7 @@ function pumpEvents(
   const clientId = randomUUID()
 
   const announce = (): void => {
-    send(socket, { type: 'item', streamId, value: { type: 'ready', clientId } })
+    send(socket, { type: 'item', streamId, value: { type: 'ready', clientId } satisfies EventsValue })
     // 每一条 `ready` 后面紧跟一份当前集合 —— 「从这一刻起你看到的都是新的」，
     // 客户端据此把表重建一次，不需要一条单独的「清空」帧。
     for (const held of approvals.held()) {
@@ -369,7 +372,7 @@ function pumpEvents(
     frame: (frame) => {
       if (frame.type !== 'emit') return
       // 名字与参数原样转发：这一层不解释上游事件的内容（`api-session/*` 的选择归客户端）。
-      send(socket, { type: 'item', streamId, value: { type: 'emit', event: frame.event, args: frame.args } })
+      send(socket, { type: 'item', streamId, value: { type: 'emit', event: frame.event, args: frame.args } satisfies EventsValue })
     },
   })
   // 先订阅、再发开口帧：两句之间没有 `await`，源不可能插进来一帧。
@@ -380,7 +383,7 @@ function pumpEvents(
     send(socket, { type: 'item', streamId, value: waterfallValue(held) })
   })
   const offCancelled = approvals.onCancelled((eventId) => {
-    send(socket, { type: 'item', streamId, value: { type: 'cancel', eventId } })
+    send(socket, { type: 'item', streamId, value: { type: 'cancel', eventId } satisfies EventsValue })
   })
 
   signal.addEventListener('abort', () => {
@@ -552,7 +555,7 @@ async function pumpFollow(
           return
         }
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
-        sendItem({ type: 'event', event }, {
+        sendItem({ type: 'event', event } satisfies FollowValue, {
           sessionId: request.sessionId,
           kind: 'event',
           ...(typeof event?.seq === 'number' ? { seq: event.seq } : {}),
@@ -573,7 +576,7 @@ async function pumpFollow(
         if (transientCount === 1 || transientCount % 50 === 0) {
           log.info('transient frames forwarded', { count: transientCount })
         }
-        sendItem({ type: 'assistant-stream', frame: frame.frame }) // 原样，无 cursor
+        sendItem({ type: 'assistant-stream', frame: frame.frame } satisfies FollowValue) // 原样，无 cursor
         continue
       }
     }

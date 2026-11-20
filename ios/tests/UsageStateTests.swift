@@ -54,7 +54,7 @@ final class UsageStateTests: XCTestCase {
         XCTAssertTrue(formatTokens(517_000) == "517K", "O2g 尾数 ≥100 取整")
         XCTAssertTrue(formatTokens(1_200_000) == "1.2M", "O2h 百万级")
     }
-    /// R4 的两条来源：control 接管之后，快照那条路（`apply`）不许再覆盖。
+    /// 两条来源的覆盖规则：control 接管之后，快照那条路（`apply`）不许再覆盖。
     ///
     /// 两条水位不同轴（快照是投影切点，control 是事件 seq），所以「比 asOfSeq」在这里
     /// 没有可比性 —— 只测「新的能进」会漏掉「旧值借低位通过」与「新值被旧水位挡住」两种错序。

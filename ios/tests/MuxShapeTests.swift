@@ -198,7 +198,7 @@ final class MuxShapeTests: XCTestCase {
 
     /// 连接级流的开流帧：外壳与 follow 那一套完全相同，差在 `endpoint` 与 `args`。
     ///
-    /// 网关侧的分派靠两段 —— 信封读编号、`openRequestOf` 读 `op`（`wire/mux.ts`）。所以这一帧
+    /// 网关侧的分派靠两段 —— 信封读编号、`openRequestOf` 查端点表（`wire/endpoints.ts`）。所以这一帧
     /// 多一个字段（比如顺手带上 `sessionId`）虽不会被拒，却会让两端对「这条流绑不绑会话」的
     /// 理解分岔；少写 `type` 则连信封都读不出，整条连接会被关。
     ///

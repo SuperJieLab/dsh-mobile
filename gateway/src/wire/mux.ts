@@ -136,6 +136,18 @@ export type ControlValue =
     changes: readonly { key: string; val: unknown }[]
   }
 
+/**
+ * `session/follow` 的货物 —— 三种，每种带自己的判别字段。
+ *
+ * 与 `EventsValue` / `ControlValue` 并列：三条流各自一张表，出货处用 `satisfies`
+ * 让它生效。**没有一张跨三条流的总表** —— `MuxItemFrame.value` 在解析层是 `unknown`
+ * （形状由端点决定，判在信封层等于把货物知识挪进来），总表也就没有消费方。
+ */
+export type FollowValue =
+  | ({ type: 'snapshot' } & FollowOpening)
+  | { type: 'event'; event: unknown }
+  | { type: 'assistant-stream'; frame: unknown }
+
 export type MuxServerFrame = MuxItemFrame | MuxEndFrame | MuxErrorFrame
 
 /**

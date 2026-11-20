@@ -112,20 +112,35 @@ final class InboundFrameTests: XCTestCase {
 
     // MARK: - 认不出的载荷
 
-    /// 四条「认不出」：缺三个字段、空对象、只有 type 没有 seq、未知 type。
-    /// 它们共用一条判据：**载荷解不出来 → `nil`**，而不是让整帧解码失败。
-    func testUnrecognizedItemPayloadsBecomeNil() throws {
-        let cases: [(name: String, payload: String)] = [
+    /// 两类要分开，判据不同：
+    ///
+    /// - **解不出**（缺 `type`）：`payload == nil` 且 `payloadRejected == true` —— 要留痕，
+    ///   否则「对端还在说旧协议」与「这一帧坏了」在日志里都等于什么都没发生。
+    /// - **不认识**（`type` 不认识）：落 `.unknown` 且原样载荷带着 —— 那是新版本的货物，
+    ///   旧客户端该忽略它，但要知道丢的是哪一种（S6 的「可见」）。
+    func testUnparsableItemPayloadsAreMarkedAndUnknownsAreKept() throws {
+        let unparsable: [(name: String, payload: String)] = [
             ("空对象", "{}"),
-            ("只有 type", #"{"type":"odd"}"#),
-            ("未知 type", #"{"type":"future-thing","data":{}}"#),
-            ("缺 events", #"{"sessionId":"s-1","cursor":1}"#),
+            ("没有 type", #"{"sessionId":"s-1","cursor":1}"#),
         ]
-
-        for item in cases {
-            let text = #"{"type":"item","streamId":"s-1","payload":\#(item.payload)}"#
-            let frame = try decode(text)
+        for item in unparsable {
+            let frame = try decode(#"{"type":"item","streamId":"s-1","value":\#(item.payload)}"#)
             XCTAssertNil(frame.payload, "「\(item.name)」该是 nil，实际：\(String(describing: frame.payload))")
+            XCTAssertTrue(frame.payloadRejected, "「\(item.name)」解不出要留痕")
+        }
+
+        let unknown: [(name: String, payload: String, type: String)] = [
+            ("只有未知 type", #"{"type":"odd"}"#, "odd"),
+            ("未知 type 带载荷", #"{"type":"future-thing","data":{}}"#, "future-thing"),
+        ]
+        for item in unknown {
+            let frame = try decode(#"{"type":"item","streamId":"s-1","value":\#(item.payload)}"#)
+            guard case .item(.unknown(let cargo)) = frame.payload else {
+                return XCTFail("「\(item.name)」该落 unknown，实际：\(String(describing: frame.payload))")
+            }
+            XCTAssertEqual(cargo["type"]?.string, item.type,
+                           "原样载荷要带着 —— 留痕时能看出丢的是哪一种")
+            XCTAssertFalse(frame.payloadRejected, "不认识不是解不出，不该置留痕标记")
         }
     }
 
@@ -178,6 +193,49 @@ final class InboundFrameTests: XCTestCase {
         }
         XCTAssertEqual(clientId, "c-1", "type 是唯一判别字段，别的键不参与分派")
     }
+    /// 判据 2 的覆盖面：三条流的九种货物**各有一支自己的落点**。
+    ///
+    /// 只验 `ready` 一支时，加一种货物而漏写分支看不出差别 —— 那一帧会被 `default`
+    /// 接成 `unknown`，而 `unknown` 也是「合法」的落点，测试照样绿。
+    func testEveryCargoHasItsOwnBranch() throws {
+        let cases: [(name: String, value: String, branch: String)] = [
+            ("follow 的快照", #"{"type":"snapshot","sessionId":"s-1","cursor":1,"events":[]}"#, "follow.opening"),
+            ("follow 的事件", #"{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{}}}"#, "follow.event"),
+            ("follow 的未定稿", #"{"type":"assistant-stream","frame":{}}"#, "follow.transient"),
+            ("events 的 ready", #"{"type":"ready","clientId":"c-1"}"#, "events.ready"),
+            ("events 的 emit", #"{"type":"emit","event":"x","args":[]}"#, "events.emit"),
+            ("events 的待答", #"{"type":"waterfall","event":"approval/request","eventId":"e-1","agentId":"a-1","request":{}}"#, "events.waterfall"),
+            ("events 的撤回", #"{"type":"cancel","eventId":"e-1"}"#, "events.cancel"),
+            ("control 的基线", #"{"type":"baseline","value":{"projections":{"s-1":{"asOfSeq":3,"values":{}}}}}"#, "control.baseline"),
+            ("control 的增量", #"{"type":"projection","sessionId":"s-1","seq":3,"changes":[{"key":"title","val":"x"}]}"#, "control.projection"),
+        ]
+
+        for item in cases {
+            let frame = try decode(#"{"type":"item","streamId":"s-1","value":\#(item.value)}"#)
+            XCTAssertEqual(Self.branchName(frame.payload), item.branch,
+                           "「\(item.name)」落错了支，实际：\(String(describing: frame.payload))")
+            XCTAssertFalse(frame.payloadRejected, "「\(item.name)」是合法货物，不该被判成解不出")
+        }
+    }
+
+    /// 载荷落在哪一支 —— 给上面那张表一个可断言的标签。
+    private static func branchName(_ payload: InboundPayload?) -> String {
+        switch payload {
+        case .some(.item(.follow(.opening))): return "follow.opening"
+        case .some(.item(.follow(.sessionEvent))): return "follow.event"
+        case .some(.item(.follow(.transient))): return "follow.transient"
+        case .some(.item(.events(.ready))): return "events.ready"
+        case .some(.item(.events(.emit))): return "events.emit"
+        case .some(.item(.events(.waterfall))): return "events.waterfall"
+        case .some(.item(.events(.cancel))): return "events.cancel"
+        case .some(.item(.control(.baseline))): return "control.baseline"
+        case .some(.item(.control(.projection))): return "control.projection"
+        case .some(.item(.unknown)): return "unknown"
+        case .some(.refused): return "refused"
+        case .none: return "nil"
+        }
+    }
+
     /// 判据 4：旧形状 `{payload:…}` 必须判读失败**并留痕**。
     ///
     /// 静默丢弃是这条判据要防的那件事：它会让「对端还在说旧协议」表现得和「这一帧坏了」

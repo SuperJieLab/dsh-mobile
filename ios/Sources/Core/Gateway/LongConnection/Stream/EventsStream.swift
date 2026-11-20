@@ -112,8 +112,12 @@ final class EventsStream {
 
 extension EventsStream: StreamBehavior {
 
-    /// 日志里认人的标识。
-    var label: String { "events" }
+    /// 日志里认人的标识 —— 用端点原文（带 `$`）。
+    ///
+    /// 不带 `$` 的 `"events"` 与端点名长得一样，会让「流层按端点名分支」的判据把它当成
+    /// 那一类写法（`testStreamLayerLooksNeitherUpNorOut` 的禁词表）。这一格只进日志，
+    /// 不参与任何分派 —— 开流走 `build` 里的工厂，端点名只有 `wire/endpoints.ts` 定义。
+    var label: String { "$events" }
 
     func build(_ id: StreamId) throws -> String {
         try MuxOpenFrame.events(streamId: id).encoded()

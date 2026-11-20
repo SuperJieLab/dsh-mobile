@@ -58,7 +58,7 @@
     },
     {
       "name": "error",
-      "text": "{\"type\":\"error\",\"streamId\":\"s-9\",\"error\":{\"code\":\"unknown-op\",\"message\":\"no such op\",\"details\":{}}}",
+      "text": "{\"type\":\"error\",\"streamId\":\"s-9\",\"error\":{\"code\":\"unknown-endpoint\",\"message\":\"no such endpoint\",\"details\":{}}}",
       "type": "error",
       "streamId": "s-9"
     }

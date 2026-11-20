@@ -1,9 +1,9 @@
 /**
  * 投影值 → 要画的读数。
  *
- * 规则从网关搬回（`upstream/usage.ts` 的 `usageSnapshotOf`）：分子先取
+ * 规则由这里定义（网关只转发投影视图值）：分子先取
  * `contextPressure.projectedTokens`、缺则 `pressureTokens`；分母是 `contextWindow`，
- * 必须为正。**两者缺一即「未知」**，不是 0% —— 界面据此隐藏整行。
+ * 必须为正。**两者缺一即「未知」**，不是 0% —— 界面据此显示 `--`，不是「占用 0%」。
  *
  * 三部分拆解（`contextBreakdown`）必须三者同时在、且不全为零：残缺的拆解
  * 误导多于告知。

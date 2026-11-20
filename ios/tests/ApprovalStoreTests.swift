@@ -219,8 +219,8 @@ final class ApprovalStoreTests: XCTestCase {
             return {}
         }
 
-        func onGeneration(_ handler: @escaping (Int?) -> Void) -> () -> Void {
-            registrations.append("generation")
+        func onReady(_ handler: @escaping () -> Void) -> () -> Void {
+            registrations.append("ready")
             return {}
         }
     }
@@ -235,11 +235,11 @@ final class ApprovalStoreTests: XCTestCase {
         let store = ApprovalStore(answerer: FakeAnswerer())
 
         store.attach(sink: sink)
-        XCTAssertEqual(sink.registrations, ["waterfall", "cancel", "generation"],
-                       "一次挂载注册两种货物 + 一个代次听众")
+        XCTAssertEqual(sink.registrations, ["waterfall", "cancel", "ready"],
+                       "一次挂载注册两种货物 + 一个就绪听众")
 
         store.attach(sink: sink)
-        XCTAssertEqual(sink.registrations, ["waterfall", "cancel", "generation"], "第二次不该再注册")
+        XCTAssertEqual(sink.registrations, ["waterfall", "cancel", "ready"], "第二次不该再注册")
     }
 
     /// 三处接线一次断完：待答调用进表、撤回带走它、源失效清空。

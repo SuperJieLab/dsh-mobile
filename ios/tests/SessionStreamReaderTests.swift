@@ -43,8 +43,8 @@ final class SessionStreamReaderTests: XCTestCase {
     /// 载荷本体就是一条事件 —— 判读只负责认出它，值靠直解一次拿到。
     func testEventFrameCarriesTheEvent() throws {
         let reading = try read("""
-        {"type":"item","streamId":"s-1","payload":
-          {"type":"user/message","seq":7,"time":1700000000000,"data":{}}}
+        {"type":"item","streamId":"s-1","value":
+          {"type":"event","event":{"type":"user/message","seq":7,"time":1700000000000,"data":{}}}}
         """)
 
         guard case .event(let event) = reading.content else {
@@ -60,7 +60,7 @@ final class SessionStreamReaderTests: XCTestCase {
     /// 当成事件帧丢掉（事件解码失败即 `.ignored`），屏幕上「正在生成」那一段就永远不出现。
     func testTransientFrameKeepsItsInnerFrame() throws {
         let reading = try read("""
-        {"type":"item","streamId":"s-1","payload":
+        {"type":"item","streamId":"s-1","value":
           {"type":"assistant-stream","frame":{"type":"chunk","revision":3,"index":2}}}
         """)
 
@@ -104,7 +104,7 @@ final class SessionStreamReaderTests: XCTestCase {
     /// （没有 `seq`）。一律 `.ignored` —— 丢弃，不重试也不猜。
     func testUnrecognizedFramesAreIgnored() throws {
         let cases: [(name: String, text: String)] = [
-            ("未知类型", #"{"type":"future-thing","streamId":"s-1","payload":{}}"#),
+            ("未知类型", #"{"type":"future-thing","streamId":"s-1","value":{}}"#),
             ("item 缺载荷", #"{"type":"item","streamId":"s-1"}"#),
             ("item 带 type 却没有 seq", #"{"type":"item","streamId":"s-1","value":{"type":"odd"}}"#),
             ("item 的载荷是空对象", #"{"type":"item","streamId":"s-1","value":{}}"#),

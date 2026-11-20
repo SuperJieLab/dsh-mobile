@@ -59,7 +59,7 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
     },
   },
   end: { type: 'end', streamId: 's-9' },
-  error: { type: 'error', streamId: 's-9', error: { code: 'unknown-op', message: 'no such op', details: {} } },
+  error: { type: 'error', streamId: 's-9', error: { code: 'unknown-endpoint', message: 'no such endpoint', details: {} } },
 }
 
 test('the fixture covers every stream kind and both server frame kinds', () => {
