@@ -138,6 +138,49 @@ test('拒绝码与旧路径逐字相同 —— 迁移的是信封，不是语义
   })
 })
 
+test('判据 3 的另一半：没有必填 args 的两个端点，也要有一个「服务端会拒」的样本', async () => {
+  // `mobile/listSessions` 与 `session/modelCatalog` 收的是空对象，参数上拒不了它们。
+  // 但「拒」不等于「参数非法」：端口缺席、数据源抛错都该折成拒绝而不是断开连接。
+  // 这两条各喂一次那种情形 —— 少了它们，判据 3 的「每个端点各一次拒绝」只覆盖 12/14。
+  const broken: RpcListenerDeps = {
+    ...deps(),
+    modelPort: undefined,
+    // 宿主读列表时抛：`listSessionsOf` 不折异常，折在 `invokeEndpoint` 那一层。
+    sessionPort: {
+      list: async () => { throw new Error('listing exploded') },
+      read: async () => undefined,
+      readAll: async () => undefined,
+    },
+  }
+  const server = createRpcListener(broken)
+  server.listen(0)
+  try {
+    await once(server, 'listening')
+    const { port } = server.address() as AddressInfo
+    const base = `http://127.0.0.1:${port}`
+    const send = async (endpoint: string): Promise<Record<string, unknown>> => {
+      const response = await fetch(`${base}/api/${endpoint}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer t' },
+        body: JSON.stringify({ type: 'client-request', rpcId: 'r', method: endpoint, payload: { args: {} } }),
+      })
+      assert.equal(response.status, 200, '已归到端点的事，用信封而不是状态码表达')
+      return (await response.json() as { result: Record<string, unknown> }).result
+    }
+
+    for (const endpoint of ['mobile/listSessions', 'session/modelCatalog']) {
+      const result = await send(endpoint)
+      assert.equal(result.ok, false, `「${endpoint}」在这种装配下该拒`)
+      const error = result.error as Record<string, unknown>
+      assert.equal(error.code, 'internal-error', `「${endpoint}」: 后端故障折成 internal-error`)
+      assert.deepEqual(Object.keys(error).sort(), ['code', 'details', 'message'])
+    }
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
 test('判据 5：畸形 beforeSeq 退化为最新窗口，不拒答', async () => {
   await withListener(async (post) => {
     const result = resultOf(await post('/api/mobile/page', { sessionId: 's-1', beforeSeq: 'oops' }))

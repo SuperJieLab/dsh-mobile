@@ -45,6 +45,25 @@ struct GatewayFailure: Decodable, Equatable {
     /// 缺省给空字典：**必填是服务端的义务，客户端不接受「缺一格就整条失败」** ——
     /// 那会把一条可读的拒绝退化成「报文畸形」。
     var details: [String: JSONValue] = [:]
+
+    private enum CodingKeys: String, CodingKey { case code, message, details }
+
+    /// 手写而不是靠合成：`Decodable` 的合成**不看属性默认值** —— 属性写了 `= [:]`，
+    /// 缺这一格时它照样抛 `keyNotFound`。默认值只对「有人手动构造」那一侧生效，
+    /// 解码路径必须显式 `decodeIfPresent`。这也是流通道 `FailurePayload` 的同一套规则：
+    /// 两条通道对同一格不能一个严一个宽。
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decode(String.self, forKey: .code)
+        message = try container.decode(String.self, forKey: .message)
+        details = try container.decodeIfPresent([String: JSONValue].self, forKey: .details) ?? [:]
+    }
+
+    init(code: String, message: String, details: [String: JSONValue] = [:]) {
+        self.code = code
+        self.message = message
+        self.details = details
+    }
 }
 
 extension GatewayFailure {

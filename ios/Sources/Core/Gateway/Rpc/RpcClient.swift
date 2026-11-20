@@ -147,8 +147,9 @@ final class RpcClient {
         guard let auditable = request as? AuditableRequest else { return }
         audit?.record(AuditEntry(
             at: Date(),
-            // 记端点名：同一件事在审计历史里只有一种写法。旧名（`session-prompt` 之类）
-            // 是网关那一侧的词汇，客户端不再认识它。
+            // 记端点名：客户端这一侧从这一版起只有端点名（旧 op 名它已经不认识）。
+            // 因此**升级当月**的审计文件里，同一件事会有两种写法 —— 那是这次协议改造
+            // 的已知代价，不靠客户端伪造一个它没有的映射来掩盖。
             op: Request.endpoint,
             target: auditable.auditTarget,
             result: result,

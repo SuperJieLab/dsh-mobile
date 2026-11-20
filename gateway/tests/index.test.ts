@@ -230,9 +230,9 @@ test('the pair op answers with a full envelope and issues a device token', async
 
     // 同一枚码只能用一次 —— 顺带证明这一条打的是真规则，不是某个假分支。
     const refused = await call(port, 'mobile/pair', { code }) as UnaryAnswer & { error?: { code: string } }
-    // 配对失败从前是 401。现在它是一条**归到了端点的**调用，业务失败用信封表达，
-    // 状态码 200；401 留给「打普通端点却没票」。手机侧据此的分别见判据 9。
-    assert.equal(refused.status, 200)
+    // 配对失败是**身份断言**，回 401（契约 §4.5）。手机侧据 401 判「这条关系不成立」，
+    // 回 200 会让那条分支走不到 —— 撤销之后只会无限重试。
+    assert.equal(refused.status, 401)
     assert.equal(refused.ok, false)
     assert.equal(refused.error?.code, 'invalid-pairing-code')
   } finally {
@@ -526,10 +526,9 @@ test('a wrong device token cannot mint an access token', async () => {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
 
     const body = await call(port, 'mobile/refresh', { deviceToken: 'not-the-paired-token' }) as UnaryAnswer & { error?: { code: string } }
-    // 免票端点上的失败是**业务失败**：200 + 信封里的 `unauthenticated`。
-    // 401 现在只有一个意思 —— 打普通端点时没有有效票。两者必须分开：客户端拿 401
-    // 会去续期，而「续期被拒」若也是 401，它就原地打转。
-    assert.equal(body.status, 200)
+    // 关系被撤销 = 身份断言，回 401。客户端**正是**靠这个 401 去清凭证、回未配对态；
+    // 回 200 的话它会把这条当成传输故障无限重试。
+    assert.equal(body.status, 401)
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()

@@ -56,7 +56,10 @@ extension RpcClientError: LocalizedError {
 
         case .badStatus(let code):
             switch code {
-            case 400: return "网关说这次请求的 body 不是合法 JSON（HTTP 400）。"
+            // 400 有两种：body 不是 JSON，以及 body 是 JSON 但**信封**不合格
+            // （四格不齐 / `payload` 不是恰好一格 `args`）。后者是客户端自己的编码问题，
+            // 说成「不是合法 JSON」会把人支到错误的方向 —— 所以文案只说「报文不合格」。
+            case 400: return "网关读不出这次请求的报文（HTTP 400）—— body 不是 JSON，或信封少/多了格子。"
             case 413: return "请求 body 超过网关的 1 MiB 上限（HTTP 413）。"
             // 404 现在只有一个原因：路径上那个端点不在网关的表里 —— 两边版本不一致。
             // 从前这个信息由版本字段承担，现在落在这一支上。

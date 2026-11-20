@@ -117,9 +117,12 @@ export function parseClientRequest(text: string): ClientRequest | undefined {
   for (const key of keys) if (!REQUEST_KEYS.has(key)) return undefined
 
   if (body.type !== 'client-request') return undefined
-  const rpcId = nonEmptyString(body.rpcId)
+  // `rpcId` 只用于对日志，**不校验格式也不要求非空**：空串照收（客户端没有可用 id 时
+  // 就发空串），网关按空串记。`method` 不同 —— 它要与路径比对，空的等于没说是哪条端点。
+  if (typeof body.rpcId !== 'string') return undefined
+  const rpcId = body.rpcId
   const method = nonEmptyString(body.method)
-  if (rpcId === undefined || method === undefined) return undefined
+  if (method === undefined) return undefined
 
   if (typeof body.payload !== 'object' || body.payload === null || Array.isArray(body.payload)) {
     return undefined

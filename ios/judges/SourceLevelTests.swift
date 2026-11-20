@@ -192,35 +192,49 @@ final class SourceLevelTests: XCTestCase {
     /// 所以这里从源码取两样 —— 哪些请求类型实现了那个协议、以及它们的 `op` 字面量。
     ///
     /// 两处活性锚是必须的：取到 0 个时「两边一致」只说明两边都空。
-    func testClientCoversEveryWriteOpTheGatewayDeclares() throws {
-        let declared = try gatewayWriteOps()
+    func testClientCoversEveryWriteEndpointTheGatewayDeclares() throws {
+        let declared = try gatewayWriteEndpoints()
         XCTAssertGreaterThanOrEqual(declared.count, 5,
-                                    "只读到 \(declared.count) 个写 op —— 先怀疑路径或正则")
+                                    "只读到 \(declared.count) 个写端点 —— 先怀疑路径或正则")
 
-        let covered = try auditableClientOps()
+        let covered = try auditableClientEndpoints()
         XCTAssertGreaterThanOrEqual(covered.count, 5,
-                                    "只读到 \(covered.count) 个可审计请求 —— 先怀疑解析")
+                                    "只读到 \(covered.count) 个可审计端点 —— 先怀疑解析")
 
         let missing = declared.subtracting(covered)
-        XCTAssertEqual(missing, [], "这些写 op 客户端没有可审计的请求：\(missing.sorted())")
+        XCTAssertEqual(missing, [], "这些写端点客户端没有可审计的请求：\(missing.sorted())")
+        // 反向：客户端记了审计、网关却当读端点的那些 —— 那会让「谁改了什么」多出
+        // 一条什么都不改的记录，而它比漏记更难发现（审计看起来更"全"了）。
+        let extra = covered.subtracting(declared)
+        XCTAssertEqual(extra, [], "这些端点在客户端会留痕、但网关声明成读：\(extra.sorted())")
     }
 
-    /// 网关的写 op 清单。读的是网关源码 —— 那是唯一真源。
-    private func gatewayWriteOps() throws -> Set<String> {
-        let source = try read(repoRoot.appendingPathComponent("gateway/src/audit.ts"))
-        guard let start = source.range(of: "WRITE_OPS = ["),
-              let end = source.range(of: "] as const", range: start.upperBound..<source.endIndex)
-        else { return [] }
-        let body = String(source[start.upperBound..<end.lowerBound])
-        return Set(Self.literals(in: body, pattern: #"'([a-z][a-z-]+)'"#))
+    /// 网关声明的**写端点**清单。读的是端点表 —— 那是唯一判定处（`write: true` 那一格）。
+    ///
+    /// 一期之前这里读的是 `audit.ts` 的 `WRITE_OPS`；信封改造把那份清单删了，
+    /// 判定只剩端点表一处。名字从旧 op 名换成了端点名 —— 判据两边都换，否则它读空。
+    private func gatewayWriteEndpoints() throws -> Set<String> {
+        let source = try read(repoRoot.appendingPathComponent(
+            "gateway/src/protocol/unary-endpoints.ts"))
+        let pattern = try NSRegularExpression(
+            pattern: #"'([^'\s]+/[^'\s]+)':\s*\{\s*legacyOp:\s*'[^']*',\s*write:\s*(true|false)"#)
+        let range = NSRange(source.startIndex..., in: source)
+        var writes = Set<String>()
+        for match in pattern.matches(in: source, range: range) {
+            guard let nameRange = Range(match.range(at: 1), in: source),
+                  let flagRange = Range(match.range(at: 2), in: source) else { continue }
+            if source[flagRange] == "true" { writes.insert(String(source[nameRange])) }
+        }
+        return writes
     }
 
-    /// 客户端可审计的 op：请求类型实现了 `AuditableRequest`，且它的 `op` 是个字面量。
-    private func auditableClientOps() throws -> Set<String> {
+    /// 客户端可审计的**端点**名：请求类型实现了 `AuditableRequest`，且它的 `endpoint`
+    /// 是个字面量（`static let endpoint = "…"`）。
+    private func auditableClientEndpoints() throws -> Set<String> {
         let messages = try read(iosRoot.appendingPathComponent(
             "Sources/Core/Gateway/Rpc/Wire/RpcMessages.swift"))
 
-        var opsByType: [String: String] = [:]
+        var endpointByType: [String: String] = [:]
         let structPattern = try NSRegularExpression(
             pattern: #"struct\s+(\w+)\s*:\s*GatewayRequest\s*\{([\s\S]*?)\n\}"#)
         let range = NSRange(messages.startIndex..., in: messages)
@@ -228,8 +242,9 @@ final class SourceLevelTests: XCTestCase {
             guard let nameRange = Range(match.range(at: 1), in: messages),
                   let bodyRange = Range(match.range(at: 2), in: messages) else { continue }
             let body = String(messages[bodyRange])
-            guard let op = Self.literals(in: body, pattern: #"let op = "([^"]+)""#).first else { continue }
-            opsByType[String(messages[nameRange])] = op
+            guard let endpoint = Self.literals(in: body, pattern: #"static let endpoint = "([^"]+)""#).first
+            else { continue }
+            endpointByType[String(messages[nameRange])] = endpoint
         }
 
         var auditable = Set<String>()
@@ -237,7 +252,7 @@ final class SourceLevelTests: XCTestCase {
             guard let text = try? read(file) else { continue }
             auditable.formUnion(Self.literals(in: text, pattern: #"extension\s+(\w+)\s*:\s*AuditableRequest"#))
         }
-        return Set(auditable.compactMap { opsByType[$0] })
+        return Set(auditable.compactMap { endpointByType[$0] })
     }
 
     private static func literals(in text: String, pattern: String) -> [String] {

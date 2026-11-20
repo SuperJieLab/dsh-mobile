@@ -69,17 +69,29 @@ test('payload 只许一格 args；args 必须是对象', () => {
   }
 })
 
-test('不是 JSON、不是对象、rpcId 为空串 —— 都拒', () => {
+test('不是 JSON、不是对象 —— 都拒；但空 rpcId 照收', () => {
   for (const body of ['', 'not json', '[]', '3', 'null']) {
     assert.equal(parseClientRequest(body), undefined, `「${body}」不是一条请求`)
   }
+  // `rpcId` 只用于对日志：契约 §三 说「不校验格式」。空串是「客户端没有可用的 id」，
+  // 网关按空串记 —— 拒掉它等于给一个只影响排障的字段加了一条硬约束。
   const emptyRpcId = JSON.stringify({
     type: 'client-request',
     rpcId: '',
     method: 'session/modelCatalog',
     payload: { args: {} },
   })
-  assert.equal(parseClientRequest(emptyRpcId), undefined, 'rpcId 是关联键，空串等于没有')
+  const parsed = parseClientRequest(emptyRpcId)
+  assert.ok(parsed !== undefined, '空 rpcId 是合法的关联键缺失，不是坏报文')
+  assert.equal(parsed.rpcId, '')
+  // 非字符串才是坏报文：那是形状，不是取值。
+  const numeric = JSON.stringify({
+    type: 'client-request',
+    rpcId: 7,
+    method: 'session/modelCatalog',
+    payload: { args: {} },
+  })
+  assert.equal(parseClientRequest(numeric), undefined, 'rpcId 不是字符串 → 外壳不合格')
 })
 
 test('应答：成功与失败各是 server-response 的三格', () => {

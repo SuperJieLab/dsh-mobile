@@ -78,9 +78,9 @@ export interface RpcListenerDeps {
 }
 
 /**
- * 构建插件自己的 HTTP 监听器：一个 server，`POST /rpc` 走单向调用，
+ * 构建插件自己的 HTTP 监听器：一个 server，`POST /api/<命名空间>/<方法>` 走一元调用，
  * 流升级共享端口（与其他请求同一闸门 —— 无有效 access token，就没有 101；
- * 见 remote/server.ts）。
+ * 见 remote/connection.ts）。
  */
 export function createRpcListener(deps: RpcListenerDeps): Server {
   // `respond` 从不 reject；此处抛出会成为未处理的 rejection。
@@ -192,6 +192,22 @@ async function answerEndpoint(
   deps: RpcListenerDeps,
   authorization: string | undefined,
 ): Promise<EndpointReply> {
+  // 身份先于一切：除免票的两条，没有票的请求不该得到任何业务答复 —— 连「你名字拼错了」
+  // 都不该说。顺序反了的话，一条无票的畸形请求会拿到 200，而契约说这种请求是 401。
+  //
+  // 免票的那两条是「拿票」的端点 —— 要求它们先有票是死锁。
+  if (endpoint.unauthenticated !== true && !deps.vault.authenticate(authorization)) {
+    // info 而非 warn：票过期后的这次 401 是续期编排的正常一环，客户端会静默换票重试。
+    log.info('endpoint refused: no live access token', { endpoint: endpointName })
+    return {
+      status: 401,
+      result: {
+        ok: false,
+        error: { code: 'unauthenticated', message: 'missing or expired access token — pair first, then refresh', details: {} },
+      },
+    }
+  }
+
   if (parsed.method !== endpointName) {
     // 信封里的方法名与路径不一致：这是「客户端把两个名字拼错了」，
     // 属于同一处说错了东西，不该落到处理器。
@@ -204,19 +220,6 @@ async function answerEndpoint(
           message: 'the method in the envelope does not match the endpoint in the path',
           details: { method: parsed.method, endpoint: endpointName },
         },
-      },
-    }
-  }
-
-  // 免票的那两条是「拿票」的端点 —— 要求它们先有票是死锁。
-  if (endpoint.unauthenticated !== true && !deps.vault.authenticate(authorization)) {
-    // info 而非 warn：票过期后的这次 401 是续期编排的正常一环，客户端会静默换票重试。
-    log.info('endpoint refused: no live access token', { endpoint: endpointName })
-    return {
-      status: 401,
-      result: {
-        ok: false,
-        error: { code: 'unauthenticated', message: 'missing or expired access token — pair first, then refresh', details: {} },
       },
     }
   }
@@ -256,7 +259,11 @@ async function answerEndpoint(
     log.error('endpoint refused', { endpoint: endpointName, error: JSON.stringify(result.error) })
   }
 
-  return { status: 200, result }
+  // 免票端点的两种失败（配对码不对 / 关系被撤销）是**身份断言**，不是业务结果：
+  // 契约 §4.5 说它们回 401，客户端也据 401 判「这条关系不成立了」——回 200 会让
+  // 那条分支走不到，撤销之后只会无限重试。其余端点一律 200，连拒绝也是。
+  const status = endpoint.unauthenticated === true && !result.ok ? 401 : 200
+  return { status, result }
 }
 
 /**

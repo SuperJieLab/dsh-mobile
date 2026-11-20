@@ -129,9 +129,12 @@ final class AuditLogTests: XCTestCase {
 
     func testEveryWriteRequestCarriesAnAuditTarget() {
         for request in writeRequests() {
+            // 请求的身份现在是静态的端点名（`GatewayRequest.endpoint`）—— 报错信息里
+            // 用它指认是哪一条，比「某个请求」有用。
+            let name = type(of: request).endpoint
             let auditable = request as? AuditableRequest
-            XCTAssertNotNil(auditable, "\(request.op) 没实现 AuditableRequest —— 它的写操作不会留痕")
-            XCTAssertNotEqual(auditable?.auditTarget, "", "\(request.op) 的审计目标不能是空串")
+            XCTAssertNotNil(auditable, "\(name) 没实现 AuditableRequest —— 它的写操作不会留痕")
+            XCTAssertNotEqual(auditable?.auditTarget, "", "\(name) 的审计目标不能是空串")
         }
     }
 
@@ -144,7 +147,7 @@ final class AuditLogTests: XCTestCase {
             PermissionCatalogRequest(sessionId: "s"),
         ]
         for request in reads {
-            XCTAssertNil(request as? AuditableRequest, "\(request.op) 是读 op，不该进审计")
+            XCTAssertNil(request as? AuditableRequest, "\(type(of: request).endpoint) 是读端点，不该进审计")
         }
     }
 }

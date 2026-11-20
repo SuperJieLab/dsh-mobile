@@ -1,5 +1,5 @@
 /**
- * 判据 9：`api-session/*` → 列表变化。
+ * 判据 9：`api-session/…` 这类事件 → 列表变化。
  *
  * 翻译从网关搬到客户端（`upstream/session-events.ts` → `SessionListEvents`），
  * 搬的是一次**行为迁移** —— 两边的错法不同（一边多一条、一边少一条），

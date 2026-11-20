@@ -1300,7 +1300,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   {
     home: 'protocol/unary-endpoints.ts',
     values: ['unaryEndpointOf', 'registeredEndpointNames', 'isWriteEndpoint', 'invokeEndpoint'],
-    types: ['UnaryContext', 'UnaryEndpoint', 'UnaryAuthPort'],
+    types: ['UnaryContext', 'UnaryEndpoint'],
   },
   {
     home: 'protocol/window.ts',

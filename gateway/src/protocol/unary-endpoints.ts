@@ -11,8 +11,9 @@
  * 所以映射写在表里，不另建一张。
  */
 import { readErrorOf } from './error-codes.ts'
-import type { Limits, Ports } from './rpc.ts'
+import { refused, type Limits, type Ports } from './rpc.ts'
 import { pairOf, refreshOf } from './auth-ops.ts'
+import { sessionCreateTargetOf } from '../wire/write.ts'
 import type { AuthPort } from './auth-ops.ts'
 import {
   approvalAnswerValue,
@@ -60,9 +61,6 @@ export interface UnaryEndpoint {
   readonly legacyOp: string
   invoke(args: Readonly<Record<string, unknown>>, ctx: UnaryContext): Promise<RemoteResult>
 }
-
-/** 鉴权端口与端点表放在一起：两条免票端点是这张表里唯一的例外。 */
-export type UnaryAuthPort = AuthPort
 
 /**
  * 已接上的端点。**没登记的名字在路由层就是 404** —— 与「登记了但参数不对」是两种
@@ -136,19 +134,16 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
     legacyOp: 'session-create',
     write: true,
     async invoke(args, ctx) {
-      // 载荷形状先判：它是「这条请求的语义」，与「端口有没有接」是两件事。
-      const workspaceId = args.workspaceId
-      if (workspaceId !== undefined && (typeof workspaceId !== 'string' || workspaceId === '')) {
-        return {
-          ok: false,
-          error: {
-            code: 'invalid-request',
-            message: 'session-create accepts a non-empty workspaceId or none',
-            details: {},
-          },
-        }
+      // 载荷的形状由 `wire/` 的 codec 判（`sessionCreateTargetOf` 的三态）—— 这里不另写
+      // 一份「什么算合法」，否则两处会在某个边界上分家。
+      const target = sessionCreateTargetOf(args)
+      if (target.kind === 'invalid') {
+        return refused('invalid-request', 'session-create accepts a non-empty workspaceId or none')
       }
-      return sessionCreateOf(ctx.ports.write, workspaceId as string | undefined)
+      return sessionCreateOf(
+        ctx.ports.write,
+        target.kind === 'workspace' ? target.workspaceId : undefined,
+      )
     },
   },
   'mobile/workspaceCreate': {
@@ -234,7 +229,7 @@ export function registeredEndpointNames(): readonly string[] {
   return Object.keys(ENDPOINTS)
 }
 
-/** 这条端点是不是写操作。审计按它判 —— 表是唯一的判定处。 */
+/** 这条端点是不是写操作。判据与将来的「端点清单」按它算 —— 表是唯一的判定处。 */
 export function isWriteEndpoint(name: string): boolean {
   return ENDPOINTS[name as UnaryEndpointName]?.write === true
 }

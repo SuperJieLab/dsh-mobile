@@ -98,7 +98,8 @@ test('无票打 mobile/pair 不被缺票拒 —— 拿票的端点要先有票�
     assert.deepEqual(result.value, { deviceToken: 'd-1' })
 
     const wrong = await post('/api/mobile/pair', { code: '000000' }, '')
-    assert.equal(wrong.status, 200, '拒绝用信封表达，不用状态码')
+    // 免票端点的失败是身份断言 → 401（契约 §4.5）。体仍是信封，客户端只有一套解码。
+    assert.equal(wrong.status, 401)
     const wrongResult = (await wrong.json() as { result: Record<string, unknown> }).result
     assert.equal(wrongResult.ok, false)
     assert.equal((wrongResult.error as Record<string, unknown>).code, 'invalid-pairing-code')
@@ -137,8 +138,21 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
   const writes = names.filter(isWriteEndpoint)
   const reads = names.filter(name => !isWriteEndpoint(name))
 
-  // 活性锚：标记全塌成 false 时上面两个数组会退化成「零写、全读」，下面的循环照样绿。
-  assert.equal(writes.length, 8, `写端点认出 ${writes.length} 个，期望 8 —— 先怀疑写标记`);
+  // 期望集合是**写死的**，不从被测的同一个标记算 —— 否则把两个端点的标记对调，
+  // 「数量仍是 8」而语义整体反转，这条判据一声不响。名单出处：契约 §4.6–§4.12
+  // 每个端点自己标的读/写。
+  const expectedWrites = [
+    'session/selectModel',
+    'commands/execute',
+    'mobile/permissionSelect',
+    'session/create',
+    'mobile/workspaceCreate',
+    'workspace/delete',
+    'mobile/approvalAnswer',
+    'session/prompt',
+  ]
+  assert.deepEqual([...writes].sort(), [...expectedWrites].sort(),
+    '写端点的集合（不是个数）必须与契约一致 —— 标错一个，那一类操作的审计整列错位');
   assert.equal(writes.length + reads.length, names.length);
 
   await withListener(async (post) => {

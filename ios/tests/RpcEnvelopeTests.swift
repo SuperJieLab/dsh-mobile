@@ -53,7 +53,7 @@ final class RpcEnvelopeTests: XCTestCase {
             ),
         ])
 
-        _ = try await client().perform(ListSessionsRequest(), authenticated: false)
+        let _: ListSessionsResponse = try await client().perform(ListSessionsRequest(), authenticated: false)
 
         let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["mobile/listSessions"],
                                  "这一发没到达 mobile/listSessions —— 先看路径")
@@ -79,7 +79,7 @@ final class RpcEnvelopeTests: XCTestCase {
         ])
 
         do {
-            _ = try await client().perform(ListSessionsRequest(), authenticated: false)
+            let _: ListSessionsResponse = try await client().perform(ListSessionsRequest(), authenticated: false)
             XCTFail("被拒的请求不该返回应答")
         } catch let RpcClientError.refused(failure) {
             XCTAssertEqual(failure.code, "invalid-request")
@@ -98,7 +98,7 @@ final class RpcEnvelopeTests: XCTestCase {
         ])
 
         do {
-            _ = try await client().perform(ListSessionsRequest(), authenticated: false)
+            let _: ListSessionsResponse = try await client().perform(ListSessionsRequest(), authenticated: false)
             XCTFail("被拒的请求不该返回应答")
         } catch let RpcClientError.refused(failure) {
             XCTAssertEqual(failure.code, "unknown-session",
