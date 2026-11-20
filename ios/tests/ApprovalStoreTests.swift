@@ -274,7 +274,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testAttachWiresTheApprovalPathAndSourceLoss() throws {
         let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(sink: events)
+        store.attach(sink: EventsApprovalSink(stream: events))
 
         events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").count, 1, "货物从流里进来就成了一条")
@@ -295,7 +295,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testACancelWithoutAnEventIdKeepsTheCard() throws {
         let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(sink: events)
+        store.attach(sink: EventsApprovalSink(stream: events))
 
         events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").count, 1)
@@ -314,7 +314,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testEveryReadyRebuildsTheTableFromTheReplay() throws {
         let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(sink: events)
+        store.attach(sink: EventsApprovalSink(stream: events))
 
         store.receive(waterfall(eventId: "e9"))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "断线之前收到的那一条还在")
@@ -402,7 +402,7 @@ final class ApprovalOwnershipTests: XCTestCase {
         let events = EventsStream()
         let answerer = RecordingAnswerer()
         let store = ApprovalStore(answerer: answerer)
-        store.attach(sink: events)
+        store.attach(sink: EventsApprovalSink(stream: events))
 
         // 先给一条 ready：id 从此住在流上。
         _ = events.handle(try frame(#"{"type":"item","streamId":"e1","value":{"type":"ready","clientId":"c-42"}}"#))

@@ -134,7 +134,7 @@ final class SourceLevelTests: XCTestCase {
     func testDroppedListChangeLeavesAVisibleTrace() throws {
         let source = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionList/State/SessionListState.swift"))
-        XCTAssertTrue(source.contains("dropped a session-list change this build does not know"),
+        XCTAssertTrue(source.contains("dropped a session event this build does not know"),
                       "留痕句不在了 —— 坏增量被丢弃时现场只剩这一行")
     }
 

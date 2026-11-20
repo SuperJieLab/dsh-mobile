@@ -152,7 +152,7 @@ struct AppServices {
         for step in steps {
             switch step {
             case .attachApprovals:
-                approvals.attach(sink: eventsStream)
+                approvals.attach(sink: EventsApprovalSink(stream: eventsStream))
             case .activateLink:
                 link.activate()
             case .attachStreams:

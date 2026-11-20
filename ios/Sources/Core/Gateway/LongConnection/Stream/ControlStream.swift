@@ -15,7 +15,9 @@ import Foundation
 final class ControlStream {
 
     /// 某个会话的投影更新（整份值 + 水位）。
-    private let updateListeners = ListenerTable<(String, JSONValue, Int)>()
+    /// 投影变化的听众表。**只给表，不给具名口** —— 订阅面在
+    /// `Features/SessionDetail/State/SessionSync.swift` 里自己挂。
+    let updateListeners = ListenerTable<(String, JSONValue, Int)>()
 
     /// 每个会话的投影表：`sessionId -> {key: value}`。
     private var tables: [String: [String: JSONValue]] = [:]
@@ -35,12 +37,6 @@ final class ControlStream {
         guard stream == nil || detached else { return }
         detached = false
         stream = factory.makeStream(self)
-    }
-
-    /// 某个会话的投影变了。回调带**更新后的整份值**与水位。
-    @discardableResult
-    func onUpdate(_ handler: @escaping (String, JSONValue, Int) -> Void) -> () -> Void {
-        updateListeners.add(handler)
     }
 
     func handle(_ frame: InboundFrame) -> StreamReply {

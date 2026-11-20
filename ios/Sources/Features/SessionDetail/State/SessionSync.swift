@@ -178,7 +178,8 @@ final class SessionSync {
     /// 每次进出增长，而它持有的是弱引用，泄漏不会报错，只会让每次投影都多跑一次空转。
     private func subscribeControl() {
         guard controlSubscription == nil, let control else { return }
-        controlSubscription = control.onUpdate { [weak self] sessionId, values, _ in
+        controlSubscription = control.updateListeners.add { [weak self] payload in
+            let (sessionId, values, _) = payload
             guard let self, sessionId == self.sessionId else { return }
             // control 是权威：水位（事件 seq）在 `ControlStream` 里已经用来挡过重放，
             // 这里不再和快照的 `asOfSeq` 比 —— 两者不是同一条轴。

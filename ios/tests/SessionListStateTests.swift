@@ -251,7 +251,7 @@ final class SessionListStateTests: XCTestCase {
     func testAFrameOnTheStreamReachesTheList() throws {
         let state = make(FakeFetch())
         let stream = EventsStream()
-        state.attach(stream: stream)
+        state.attach(stream: EventsListSink(stream: stream))
 
         let data = Data("""
         {"type":"item","streamId":"e1","value":{"type":"emit","event":"api-session/added",
@@ -268,7 +268,7 @@ final class SessionListStateTests: XCTestCase {
     func testMalformedListChangeIsDroppedAtTheConsumer() throws {
         let state = make(FakeFetch())
         let stream = EventsStream()
-        state.attach(stream: stream)
+        state.attach(stream: EventsListSink(stream: stream))
 
         for text in [
             // 不是事件的 `emit`：`args` 不是数组。
@@ -362,7 +362,7 @@ final class SessionListStateTests: XCTestCase {
         fetch.holds = false
         let state = make(fetch)
         let stream = EventsStream()
-        state.attach(stream: stream)
+        state.attach(stream: EventsListSink(stream: stream))
 
         stream.handle(try readyFrame())
         await settle()
@@ -387,7 +387,7 @@ final class SessionListStateTests: XCTestCase {
         fetch.holds = true          // 第一次取数挂住，模拟「在途那一次还没落地」
         let state = make(fetch)
         let stream = EventsStream()
-        state.attach(stream: stream)
+        state.attach(stream: EventsListSink(stream: stream))
 
         stream.handle(try readyFrame())
         await settle()

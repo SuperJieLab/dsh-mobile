@@ -44,7 +44,7 @@ struct RootScreen: View {
             // 列表永远是根。前置条件不满足时它只在顶部提示（那条提示由列表自己画）——
             // 正在读会话的人不会被整屏弹走，而修配置从齿轮开始。
             SessionListAssembler(client: services.client,
-                                 stream: services.eventsStream,
+                                 stream: EventsListSink(stream: services.eventsStream),
                                  store: services.store,
                                  navigate: { path.append($0) })
                 .navigationDestination(for: Destination.self) { route in

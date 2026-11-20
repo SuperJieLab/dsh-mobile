@@ -19,8 +19,6 @@ protocol SessionListEventSink {
     func onReady(_ handler: @escaping () -> Void) -> () -> Void
 }
 
-extension EventsStream: SessionListEventSink {}
-
 @MainActor
 @Observable
 final class SessionListState {

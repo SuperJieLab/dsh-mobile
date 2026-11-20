@@ -59,8 +59,6 @@ protocol ApprovalEventSink {
     func onReady(_ handler: @escaping () -> Void) -> () -> Void
 }
 
-extension EventsStream: ApprovalEventSink {}
-
 @MainActor
 @Observable
 final class ApprovalStore {

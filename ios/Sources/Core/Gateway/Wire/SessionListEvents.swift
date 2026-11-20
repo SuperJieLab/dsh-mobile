@@ -12,7 +12,8 @@ import Foundation
 
 enum SessionListEvents {
 
-    /// 一条 `emit` 的载荷 → 列表变化。认不出的事件（不是 `api-session` 那几类、或参数不对）返回 `nil`。
+    /// 一条 `emit` 的载荷 → 列表变化。
+    /// 认不出的事件（不是 `api-session` 那几类、或参数不对）返回 `nil`。
     static func changeOf(event: String, args: JSONValue) -> SessionListChange? {
         guard let items = args.array else { return nil }
         switch event {

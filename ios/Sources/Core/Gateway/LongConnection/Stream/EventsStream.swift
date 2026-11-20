@@ -14,15 +14,20 @@ import Foundation
 @MainActor
 final class EventsStream {
 
+    // 四张听众表**只给表，不给具名的订阅口**：`onWaterfall` / `onCancel` 那一族住在业务侧
+    // 的适配器里（`Features/Approval/State/EventsApprovalSink.swift`）。理由不是洁癖 ——
+    // 通信域的承诺是「不认识业务」，具名口一旦长在这里，加一种货物就要改通信域，
+    // 而那条承诺没有任何编译期保证（`ios/judges` 的 `testCoreHasNoBusinessSubscriptions` 守它）。
+
     /// 源就绪的听众，按注册顺序调用。**每次 ready 都通知** —— 语义是
     /// 「从这一刻起你看到的都是新的」，消费方据此重建自己的基线。
-    private let readyListeners = ListenerTable<Void>()
+    let readyListeners = ListenerTable<Void>()
     /// 一条待答调用。
-    private let waterfallListeners = ListenerTable<JSONValue>()
+    let waterfallListeners = ListenerTable<JSONValue>()
     /// 一条撤回。
-    private let cancelListeners = ListenerTable<JSONValue>()
+    let cancelListeners = ListenerTable<JSONValue>()
     /// 一条上游事件：名字与参数原样。
-    private let emitListeners = ListenerTable<(String, JSONValue)>()
+    let emitListeners = ListenerTable<(String, JSONValue)>()
 
     /// 这条流在网关那里的登记键，来自最近一次 `ready`。应答审批要把它带回去。
     ///
@@ -43,26 +48,6 @@ final class EventsStream {
         guard stream == nil || detached else { return }
         detached = false
         stream = factory.makeStream(self)
-    }
-
-    @discardableResult
-    func onReady(_ handler: @escaping () -> Void) -> () -> Void {
-        readyListeners.add { _ in handler() }
-    }
-
-    @discardableResult
-    func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void {
-        waterfallListeners.add(handler)
-    }
-
-    @discardableResult
-    func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void {
-        cancelListeners.add(handler)
-    }
-
-    @discardableResult
-    func onEmit(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void {
-        emitListeners.add { pair in handler(pair.0, pair.1) }
     }
 
     /// 判读之后的那一跳 —— 本类唯一的入口。

@@ -1498,7 +1498,7 @@ final class LayeringTests: XCTestCase {
             scanned += 1
             let text = try String(contentsOf: file, encoding: .utf8)
             for (line, code) in codeLines(in: text) {
-                for name in retired where code.contains(name) {
+                for name in retired where Self.containsWord(code, name) {
                     hits.append("\(file.lastPathComponent):\(line) \(name)")
                 }
             }
@@ -1512,6 +1512,25 @@ final class LayeringTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(mux.contains("static func newStreamId()"), "新造号点没扫到 —— 判据可能扫错了树")
+    }
+
+    /// `name` 是否**作为独立标识符**出现在一行代码里。
+    ///
+    /// 子串匹配会把变量 `controlSubscription` 认成旧类型名 `Subscription`，也会让
+    /// `livenessWindow(` 撞上旧名 `Window(` —— 两种都是误报，而误报的代价是逼着人去给
+    /// 一个**好名字**改名。边界只看前后各一个字符是不是标识符字符。
+    private static func containsWord(_ code: String, _ name: String) -> Bool {
+        let isIdentifier: (Character) -> Bool = { $0.isLetter || $0.isNumber || $0 == "_" }
+        var searchStart = code.startIndex
+        while let found = code.range(of: name, range: searchStart..<code.endIndex) {
+            let before = found.lowerBound == code.startIndex ? nil : code[code.index(before: found.lowerBound)]
+            let after = found.upperBound == code.endIndex ? nil : code[found.upperBound]
+            let leftIsBoundary = !(before.map(isIdentifier) ?? false)
+            let rightIsBoundary = !(after.map(isIdentifier) ?? false)
+            if leftIsBoundary && rightIsBoundary { return true }
+            searchStart = found.upperBound
+        }
+        return false
     }
 
     /// 一条投递通道：无编号帧那条路整条没了，客户端收到的帧只有「进流表」一种去处。
@@ -3081,20 +3100,30 @@ final class LayeringTests: XCTestCase {
                       "扫错文件了：连首载都不在这份文件里")
     }
 
-    /// 上游的事件名与字段名不出网关。手机端只认 `SessionListChange` 的四支 ——
-    /// 它若也认识 `api-session/added`，上游每改一次形状就要改两处。
-    func testTheClientDoesNotKnowUpstreamEventNames() throws {
-        var hits: [String] = []
+    /// 上游事件名**只许在一处**被认识：列表增量的适配器（`SessionListEvents`）。
+    ///
+    /// 这条判据原先断的是「客户端不认识上游事件名」—— F1 之前分工是网关把事件翻译好再下发，
+    /// 客户端只认 `SessionListChange`。F1 之后反过来：契约说 `emit` 原样转发、网关不解释事件名，
+    /// 分派在客户端按 `event` 名做（判据 9 要求的正是这个）。所以判据跟着变，
+    /// **但不是取消**：它守的东西从「一处都不认识」变成「只有一处认识」——
+    /// 两处认识的话，上游改一次形状就要改两处，而漏掉的那一处不会编译失败。
+    func testOnlyTheListAdapterKnowsUpstreamEventNames() throws {
         var scanned = 0
+        var sites: Set<String> = []
+        var known = 0
         for file in swiftFiles(under: sourcesRoot) {
             scanned += 1
             let text = try String(contentsOf: file, encoding: .utf8)
-            for (line, code) in codeLines(in: text) where code.contains("api-session/") {
-                hits.append("\(file.lastPathComponent):\(line)")
+            for (_, code) in codeLines(in: text) where code.contains("api-session/") {
+                sites.insert(file.lastPathComponent)
+                known += 1
             }
         }
         XCTAssertGreaterThan(scanned, 50, "扫到的源码文件太少 —— 先怀疑路径推算")
-        XCTAssertEqual(hits, [], "客户端出现了上游事件名：\(hits)")
+        XCTAssertEqual(sites, ["SessionListEvents.swift"],
+                       "上游事件名只许出现在列表适配器里；实际出现在：\(sites.sorted())")
+        XCTAssertGreaterThan(known, 3,
+                             "适配器里一条上游事件名都没扫到 —— 空集会被读成合规")
     }
 
     // MARK: - 扫描工具
