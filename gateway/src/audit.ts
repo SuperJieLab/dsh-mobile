@@ -12,7 +12,7 @@ import { join } from 'node:path';
 
 import { formatLogFields } from './log.ts';
 import { logTimestamp } from './timestamp.ts';
-import type { Response } from './wire/rpc.ts';
+
 
 /**
  * 写 op 的清单 —— **唯一真源**。
@@ -189,13 +189,16 @@ export function defaultAuditDirectory(): string {
 export function auditEntryOf(
   op: string,
   message: Record<string, unknown>,
-  answer: Response,
+  // 只取「成不成」与拒绝码两格 —— 旧信封（`{v, ok, error?}`）与新结果
+  // （`{ok, value}` / `{ok, error}`）都满足这个形状，过渡期两条路径共用一份。
+  answer: { readonly ok: boolean; readonly error?: { readonly code: string } },
   requestId?: string,
 ): Omit<AuditEntry, 'at'> {
   const base = { op, target: auditTargetOf(op, message), request: requestId };
   return answer.ok
     ? { ...base, result: 'ok' }
-    : { ...base, result: 'refused', code: answer.error.code };
+    // 拒绝时错误一定在：两条路径的失败形状都带 `error`，`??` 只为类型收窄。
+    : { ...base, result: 'refused', code: answer.error?.code ?? 'unknown' };
 }
 
 /**

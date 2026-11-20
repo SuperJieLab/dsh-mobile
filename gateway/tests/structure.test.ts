@@ -1292,8 +1292,8 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   {
     home: 'protocol/unary-endpoints.ts',
-    values: ['unaryEndpointOf', 'registeredEndpointNames'],
-    types: ['UnaryContext', 'UnaryEndpoint'],
+    values: ['unaryEndpointOf', 'registeredEndpointNames', 'isWriteEndpoint', 'writeEndpointLegacyOps'],
+    types: ['UnaryContext', 'UnaryEndpoint', 'UnaryAuthPort'],
   },
   {
     home: 'protocol/window.ts',
@@ -1308,7 +1308,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   {
     home: 'protocol/auth-ops.ts',
-    values: ['handleAuthOp'],
+    values: ['handleAuthOp', 'pairOf', 'refreshOf'],
     types: ['AuthPort'],
   },
   {

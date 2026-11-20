@@ -185,41 +185,55 @@ async function respondToEndpoint(
     return
   }
 
-  const answer = await answerEndpoint(parsed, endpointName, endpoint, deps, request.headers.authorization)
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-  response.end(`${encodeServerResponse(parsed.rpcId, answer)}\n`)
+  const reply = await answerEndpoint(parsed, endpointName, endpoint, deps, request.headers.authorization)
+  response.writeHead(reply.status, { 'content-type': 'application/json; charset=utf-8' })
+  response.end(`${encodeServerResponse(parsed.rpcId, reply.result)}\n`)
 }
 
 /** 一条已归到端点的请求：判身份、判名字一致、交给处理器。 */
+/** 一条端点的应答：状态码由「归没归上这条调用」决定，不由业务成败决定。 */
+interface EndpointReply {
+  readonly status: number
+  readonly result: RemoteResult
+}
+
 async function answerEndpoint(
   parsed: ClientRequest,
   endpointName: string,
   endpoint: NonNullable<ReturnType<typeof unaryEndpointOf>>,
   deps: RpcListenerDeps,
   authorization: string | undefined,
-): Promise<RemoteResult> {
+): Promise<EndpointReply> {
   if (parsed.method !== endpointName) {
     // 信封里的方法名与路径不一致：这是「客户端把两个名字拼错了」，
     // 属于同一处说错了东西，不该落到处理器。
     return {
-      ok: false,
-      error: {
-        code: 'invalid-request',
-        message: 'the method in the envelope does not match the endpoint in the path',
-        details: { method: parsed.method, endpoint: endpointName },
+      status: 200,
+      result: {
+        ok: false,
+        error: {
+          code: 'invalid-request',
+          message: 'the method in the envelope does not match the endpoint in the path',
+          details: { method: parsed.method, endpoint: endpointName },
+        },
       },
     }
   }
 
-  if (!deps.vault.authenticate(authorization)) {
+  // 免票的那两条是「拿票」的端点 —— 要求它们先有票是死锁。
+  if (endpoint.unauthenticated !== true && !deps.vault.authenticate(authorization)) {
+    // info 而非 warn：票过期后的这次 401 是续期编排的正常一环，客户端会静默换票重试。
     log.info('endpoint refused: no live access token', { endpoint: endpointName })
     return {
-      ok: false,
-      error: { code: 'unauthenticated', message: 'missing or expired access token — pair first, then refresh', details: {} },
+      status: 401,
+      result: {
+        ok: false,
+        error: { code: 'unauthenticated', message: 'missing or expired access token — pair first, then refresh', details: {} },
+      },
     }
   }
 
-  return endpoint.invoke(parsed.payload.args, {
+  const result = await endpoint.invoke(parsed.payload.args, {
     ports: {
       session: deps.sessionPort,
       write: deps.writePort,
@@ -230,7 +244,20 @@ async function answerEndpoint(
     },
     now: Date.now,
     limits: deps.limits,
+    auth: deps.vault,
   })
+
+  if (endpoint.write) {
+    deps.auditLog?.append(
+      auditEntryOf(endpoint.legacyOp, parsed.payload.args, result, currentRequestId()),
+    )
+  }
+  deps.metrics?.count('dsh_rpc_requests_total', {
+    op: endpoint.legacyOp,
+    result: result.ok ? 'ok' : 'refused',
+  })
+
+  return { status: 200, result }
 }
 
 /** `respond` 的 `/rpc` POST 分支，已带请求标记。 */

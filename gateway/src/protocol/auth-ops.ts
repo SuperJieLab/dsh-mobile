@@ -10,7 +10,8 @@
  */
 
 import type { PairRequest, PairResponse, RefreshRequest, RefreshResponse } from '../wire/auth.ts'
-import { failure, success } from './rpc.ts'
+import type { RemoteResult } from '../wire/unary.ts'
+import { refused, unwrap } from './rpc.ts'
 
 /**
  * 本模块要的两件本事 —— 由凭据库实现，结构上即可（不需要适配器）。
@@ -50,22 +51,31 @@ export function handleAuthOp(
     deviceToken?: RefreshRequest['deviceToken']
   }
 
-  if (op === 'pair') {
-    const outcome = port.pair(payload.code)
-    if (!outcome.ok) {
-      // 四种失败原因的措辞逐字来自规则层 —— 这一层只把它搬进信封。
-      return failure('invalid-pairing-code', outcome.reason)
-    }
-    return success({ deviceToken: outcome.deviceToken })
-  }
+  return unwrap(op === 'pair' ? pairOf(payload.code, port) : refreshOf(payload.deviceToken, port))
+}
 
-  const outcome = port.refresh(payload.deviceToken)
+/** `pair` 的业务字段。两条路径共用一份判定 —— 措辞与码都不抄第二遍。 */
+export function pairOf(code: unknown, port: AuthPort): RemoteResult {
+  const outcome = port.pair(code)
   if (!outcome.ok) {
-    return failure('unauthenticated', 'unknown device token — pair again')
+    // 四种失败原因的措辞逐字来自规则层 —— 这一层只把它搬进信封。
+    return refused('invalid-pairing-code', outcome.reason)
   }
-  return success({
-    accessToken: outcome.accessToken,
-    expiresAt: outcome.expiresAt,
-    deviceToken: outcome.deviceToken,
-  })
+  return { ok: true, value: { deviceToken: outcome.deviceToken } }
+}
+
+/** `refresh` 的业务字段。 */
+export function refreshOf(deviceToken: unknown, port: AuthPort): RemoteResult {
+  const outcome = port.refresh(deviceToken)
+  if (!outcome.ok) {
+    return refused('unauthenticated', 'unknown device token — pair again')
+  }
+  return {
+    ok: true,
+    value: {
+      accessToken: outcome.accessToken,
+      expiresAt: outcome.expiresAt,
+      deviceToken: outcome.deviceToken,
+    },
+  }
 }
