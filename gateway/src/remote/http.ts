@@ -8,6 +8,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
 import { failure, handle, type Limits } from '../protocol/rpc.ts'
+import { unaryEndpointOf } from '../protocol/unary-endpoints.ts'
 import { handleAuthOp } from '../protocol/auth-ops.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
@@ -20,6 +21,7 @@ import { auditEntryOf, isWriteOp, type AuditLog } from '../audit.ts'
 import type { Metrics } from '../metrics.ts'
 import { CredentialVault } from './credentials.ts'
 import type { PairResponse, RefreshResponse } from '../wire/auth.ts'
+import { encodeServerResponse, parseClientRequest, type ClientRequest, type RemoteResult } from '../wire/unary.ts'
 import { createLogger, LogModule, currentRequestId, mintRequestId, runWithRequestId } from '../log.ts'
 
 const log = createLogger(LogModule.http)
@@ -102,6 +104,18 @@ async function respond(
     return
   }
 
+  if (path.startsWith('/api/')) {
+    // 一元调用的新路径：`/api/<命名空间>/<方法>`。端点名进路径是照上游的形状，
+    // 判它算不算一条端点、由谁处理，见 {@link respondToEndpoint}。
+    if (request.method !== 'POST') {
+      response.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'POST' })
+      response.end('use POST\n')
+      return
+    }
+    await runWithRequestId(requestIdOf(request.headers), () => respondToEndpoint(request, response, path, deps))
+    return
+  }
+
   if (path !== '/rpc') {
     // 存活探测，以及任何未知路径的回答。纯传输层：不涉协议消息，
     // 也不涉信封。版本号取常量而非硬编码 —— 它能升，这句话不能跟着说谎。
@@ -122,6 +136,101 @@ async function respond(
   // 同一次请求，所以标记要在这里设、而不是等到 `handle` 那一步 —— 否则「401 被拒」
   // 那种最需要归因的行反而不带标记。
   await runWithRequestId(requestIdOf(request.headers), () => respondInScope(request, response, deps))
+}
+
+/**
+ * 从路径取出端点名。**只认恰好两段** —— 一段、三段、空段都不算。
+ *
+ * 不算的与「算但表里没有」处理相同（404 纯文本），但理由不同：前者还不是一条消息
+ * （连 `rpcId` 都没有，包不出信封），后者是一条合格的请求打到了不存在的端点。
+ * 两者都不该回信封，否则客户端会得到一条它无法归属的拒绝。
+ */
+function endpointOfPath(path: string): string | undefined {
+  const segments = path.slice('/api/'.length).split('/')
+  if (segments.length !== 2) return undefined
+  const [namespace, method] = segments
+  if (namespace === '' || method === '') return undefined
+  return `${namespace}/${method}`
+}
+
+/** `/api/<ns>/<method>` 的 POST 分支。已带请求标记。 */
+async function respondToEndpoint(
+  request: IncomingMessage,
+  response: ServerResponse,
+  path: string,
+  deps: RpcListenerDeps,
+): Promise<void> {
+  const endpointName = endpointOfPath(path)
+  const endpoint = endpointName === undefined ? undefined : unaryEndpointOf(endpointName)
+  if (endpointName === undefined || endpoint === undefined) {
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    response.end('not found\n')
+    return
+  }
+
+  let body: string
+  try {
+    body = await readBody(request)
+  } catch (error) {
+    response.writeHead(error instanceof TooLargeError ? 413 : 400, { 'content-type': 'text/plain; charset=utf-8' })
+    response.end(`malformed request: ${String(error)}\n`)
+    return
+  }
+
+  const parsed = parseClientRequest(body)
+  if (parsed === undefined) {
+    // 外壳不合格时连 `rpcId` 都不可信，包不出可归属的信封 —— 与「解析不了的东西不是消息」同一条分界。
+    response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+    response.end('malformed request: not a client-request\n')
+    return
+  }
+
+  const answer = await answerEndpoint(parsed, endpointName, endpoint, deps, request.headers.authorization)
+  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+  response.end(`${encodeServerResponse(parsed.rpcId, answer)}\n`)
+}
+
+/** 一条已归到端点的请求：判身份、判名字一致、交给处理器。 */
+async function answerEndpoint(
+  parsed: ClientRequest,
+  endpointName: string,
+  endpoint: NonNullable<ReturnType<typeof unaryEndpointOf>>,
+  deps: RpcListenerDeps,
+  authorization: string | undefined,
+): Promise<RemoteResult> {
+  if (parsed.method !== endpointName) {
+    // 信封里的方法名与路径不一致：这是「客户端把两个名字拼错了」，
+    // 属于同一处说错了东西，不该落到处理器。
+    return {
+      ok: false,
+      error: {
+        code: 'invalid-request',
+        message: 'the method in the envelope does not match the endpoint in the path',
+        details: { method: parsed.method, endpoint: endpointName },
+      },
+    }
+  }
+
+  if (!deps.vault.authenticate(authorization)) {
+    log.info('endpoint refused: no live access token', { endpoint: endpointName })
+    return {
+      ok: false,
+      error: { code: 'unauthenticated', message: 'missing or expired access token — pair first, then refresh', details: {} },
+    }
+  }
+
+  return endpoint.invoke(parsed.payload.args, {
+    ports: {
+      session: deps.sessionPort,
+      write: deps.writePort,
+      model: deps.modelPort,
+      command: deps.commandPort,
+      workspace: deps.workspacePort,
+      permission: deps.permissionPort,
+    },
+    now: Date.now,
+    limits: deps.limits,
+  })
 }
 
 /** `respond` 的 `/rpc` POST 分支，已带请求标记。 */

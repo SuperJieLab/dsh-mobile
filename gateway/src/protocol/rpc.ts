@@ -389,13 +389,26 @@ async function listSessions(
   workspace: WorkspacePort | undefined,
   now: () => number,
 ): Promise<Response> {
+  return { v: PROTOCOL_VERSION, ok: true, ...await listSessionsOf(port, workspace, now) }
+}
+
+/**
+ * 列表应答的**业务字段**（不含信封）。
+ *
+ * 单独一个函数是为了两条通道共用同一份装配：旧的一元路径包 `{v, ok}`，新的端点路径
+ * 包 `{type, rpcId, result}`。把装配抄第二遍，两条路径迟早会在某个字段上分叉，
+ * 而分叉的症状是「同一个列表在两个入口长得不一样」。
+ */
+export async function listSessionsOf(
+  port: SessionPort,
+  workspace: WorkspacePort | undefined,
+  now: () => number,
+): Promise<Record<string, unknown>> {
   const summaries = [...await port.list()]
   // 在此排序而非在客户端排，让所有客户端的顺序一致。
   summaries.sort((left, right) => right.updatedAt - left.updatedAt)
   const groups = workspace?.snapshot()
   return {
-    v: PROTOCOL_VERSION,
-    ok: true,
     serverTime: now(),
     ...groups === undefined ? {} : { workspaces: groups.rows },
     sessions: summaries.map(row => toWireSummary(row, groups?.owners.get(row.id))),
