@@ -2,9 +2,10 @@
  * 面向手机的 HTTP 传输：路由一条请求、执行传输层守卫、把守身份 ——
  * socket 层调用方欠协议的一切，只要不是协议本身。
  *
- * 状态码不是协议 —— 结果由信封携带，端点归上了、但业务没成，仍是 HTTP 200。
- * 401 只有一个意思：打一条要票的端点却没票（客户端据此续期）。`/api/<命名空间>/<方法>`
- * 承载一元调用；其余路径只帮人区分「监听器活着」与「什么都没在听」。
+ * 状态码不是协议 —— 结果由信封携带。两条例外都是**身份**而不是业务：没票打要票的端点
+ * 是 401，免票端点（`pair` / `refresh`）的失败也是 401 —— 客户端正是靠它判「这条关系
+ * 不成立了」。其余一切，连业务拒绝，都是 200。`/api/<命名空间>/<方法>` 承载一元调用；
+ * 其余路径只帮人区分「监听器活着」与「什么都没在听」。
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
@@ -179,7 +180,7 @@ async function respondToEndpoint(
 }
 
 /** 一条已归到端点的请求：判身份、判名字一致、交给处理器。 */
-/** 一条端点的应答：状态码由「归没归上这条调用」决定，不由业务成败决定。 */
+/** 一条端点的应答：状态码只表达「身份成不成立」，业务成败全在 `result` 里。 */
 interface EndpointReply {
   readonly status: number
   readonly result: RemoteResult

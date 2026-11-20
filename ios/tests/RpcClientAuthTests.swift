@@ -316,4 +316,40 @@ final class RpcClientAuthTests: XCTestCase {
         XCTAssertEqual(stored, "device-token", "没有轮换字段时不该动凭证")
         XCTAssertTrue(store.hasDeviceToken, "关系仍在")
     }
+
+    /// 续期被 401 拒 = **关系被服务端撤销**：必须清凭证，不能当成传输故障重试。
+    ///
+    /// 守的是一种很容易写反的语义：续期被拒回的是 **401**，不是 200 的业务拒绝。
+    /// 若网关改回 200，这里抛出的是 `.refused` 而不是 `.unauthenticated`，下面这个
+    /// catch 就走不到 —— App 会无限重试、永不清凭证，用户看到「换票失败」而不是「请重新配对」。
+    func testARejectedRefreshDiscardsTheIdentity() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "mobile/refresh": .init(
+                status: 401,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":false,"error":{"code":"unauthenticated","message":"unknown device token — pair again","details":{}}}}"#
+            ),
+        ])
+        var stored: String? = "device-token"
+        let store = CredentialStore(storage: .init(
+            read: { stored },
+            write: { stored = $0 },
+            delete: { stored = nil }
+        ))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ScriptedURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = RpcClient(session: { session },
+                               baseURL: { URL(string: "http://127.0.0.1:3081")! },
+                               credentials: store)
+
+        do {
+            _ = try await fetchSessions(client)
+            XCTFail("续期被拒之后不该拿到列表")
+        } catch {
+            // 失败是预期的；重要的是下面那条 —— 凭证有没有清。
+        }
+
+        XCTAssertNil(stored, "关系被撤销时凭证必须清掉，否则下一次还在拿它换票")
+        XCTAssertFalse(store.hasDeviceToken, "「关系仍在」与「凭证已删」不能同时成立")
+    }
 }

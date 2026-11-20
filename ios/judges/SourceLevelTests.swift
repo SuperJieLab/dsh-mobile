@@ -189,16 +189,18 @@ final class SourceLevelTests: XCTestCase {
     // MARK: - 网关声明的写 op 都要有可审计的客户端请求
 
     /// 客户端这一侧由**类型**表达：实现了 `AuditableRequest` 就是一次写操作，不再维护 op 名单。
-    /// 所以这里从源码取两样 —— 哪些请求类型实现了那个协议、以及它们的 `op` 字面量。
+    /// 所以这里从源码取两样 —— 哪些请求类型实现了那个协议、以及它们的端点名（`endpoint`）。
     ///
     /// 两处活性锚是必须的：取到 0 个时「两边一致」只说明两边都空。
     func testClientCoversEveryWriteEndpointTheGatewayDeclares() throws {
         let declared = try gatewayWriteEndpoints()
-        XCTAssertGreaterThanOrEqual(declared.count, 5,
+        // 锚写成 8 而不是 5：今天是 8 个。锚低于真实值时，少读出一个（8→7）不会红，
+        // 而「漏掉一个写端点」正是这条判据要抓的。
+        XCTAssertGreaterThanOrEqual(declared.count, 8,
                                     "只读到 \(declared.count) 个写端点 —— 先怀疑路径或正则")
 
         let covered = try auditableClientEndpoints()
-        XCTAssertGreaterThanOrEqual(covered.count, 5,
+        XCTAssertGreaterThanOrEqual(covered.count, 8,
                                     "只读到 \(covered.count) 个可审计端点 —— 先怀疑解析")
 
         let missing = declared.subtracting(covered)

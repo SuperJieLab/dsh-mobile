@@ -12,7 +12,7 @@ import Foundation
 enum RpcClientError: Error {
     /// 请求压根没发出去或没回来 —— 网络层的事，不是协议层的事。
     case transport(url: URL, underlying: Error)
-    /// 回来了，但 HTTP 状态不是 200（协议下 400 = body 不是 JSON，413 = body 过大，
+    /// 回来了，但 HTTP 状态不是 200（协议下 400 = 报文不合格：不是 JSON 或信封缺/多格，413 = body 过大，
     /// **404 = 路径上那个端点不在网关的表里**）。
     case badStatus(Int)
     /// 回来了、200，但不是我们能读的报文。`detail` 写**缺了哪个字段** —— 那是协议词汇，

@@ -52,7 +52,9 @@ const deps = (): RpcListenerDeps => ({
   auditLog: { append: (entry: Omit<AuditEntry, 'at'>) => { records.push(entry) } } as never,
 })
 
-async function withListener(run: (post: (path: string, args: unknown, token?: string) => Promise<Response>) => Promise<void>): Promise<void> {
+async function withListener(
+  run: (post: (path: string, args: unknown, token?: string, method?: string) => Promise<Response>) => Promise<void>,
+): Promise<void> {
   records.length = 0
   const server = createRpcListener(deps())
   server.listen(0)
@@ -60,13 +62,14 @@ async function withListener(run: (post: (path: string, args: unknown, token?: st
     await once(server, 'listening')
     const { port } = server.address() as AddressInfo
     const base = `http://127.0.0.1:${port}`
-    await run((path, args, token = 'Bearer good') => fetch(`${base}${path}`, {
+    await run((path, args, token = 'Bearer good', method) => fetch(`${base}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: token },
       body: JSON.stringify({
         type: 'client-request',
         rpcId: 'r-1',
-        method: path.slice('/api/'.length),
+        // 默认与路径同值；传 `method` 才能造出「名字不一致」那种请求。
+        method: method ?? path.slice('/api/'.length),
         payload: { args },
       }),
     }))
@@ -168,5 +171,18 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
       await post(`/api/${name}`, {})
       assert.equal(records.length, afterWrites, `${name} 是读端点，不该留审计`)
     }
+  })
+})
+
+test('无票且 method 与路径不一致 → 401，不是 200 的 invalid-request', async () => {
+  // 顺序判据：身份先于名字一致性。反过来的话，一条无票的畸形请求会拿到 200 的业务答复，
+  // 而契约 §4.5 说「除 pair/refresh 之外的一切请求必须带 Authorization」。
+  await withListener(async (post) => {
+    const response = await post(
+      '/api/session/prompt', { sessionId: 's', promptId: 'p', text: 'hi' }, '', 'session/prompt-nope',
+    )
+    assert.equal(response.status, 401, '先判身份：没有票就没有业务答复')
+    const result = (await response.json() as { result: Record<string, unknown> }).result
+    assert.equal((result.error as Record<string, unknown>).code, 'unauthenticated')
   })
 })

@@ -56,7 +56,10 @@ struct GatewayFailure: Decodable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         code = try container.decode(String.self, forKey: .code)
         message = try container.decode(String.self, forKey: .message)
-        details = try container.decodeIfPresent([String: JSONValue].self, forKey: .details) ?? [:]
+        // `try?` 而不是 `try`：`details` 是**排障用的附加信息**，它形状不对（比如服务端
+        // 给了字符串）不该把一条可读的拒绝退化成「报文畸形」。流通道的 `FailurePayload`
+        // 用的是同一条规则 —— 两条通道对同一格宽严一致。
+        details = (try? container.decodeIfPresent([String: JSONValue].self, forKey: .details)) ?? [:]
     }
 
     init(code: String, message: String, details: [String: JSONValue] = [:]) {
