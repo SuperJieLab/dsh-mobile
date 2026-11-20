@@ -164,16 +164,18 @@ final class ModelProtocolTests: XCTestCase {
     private func encodeRequests() {
         let catalog = try? encoder.encode(ModelCatalogRequest())
         let catalogBody = catalog.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        // 第 2 期起一元调用按**端点名**寻址：`op` 与版本字段一起退役了。
-        XCTAssertTrue(catalogBody.contains(#""method":"session/modelCatalog""#),
-                      "E1a model-catalog 请求带端点名")
+        // 第 2 期起一元调用按**端点名**寻址：`op` 与版本字段一起退役了。名字由请求类型自己
+        // 声明（`endpoint`），信封由传输层拼 —— 所以这里断言的是那一格，不是编出来的字节。
+        XCTAssertEqual(ModelCatalogRequest.endpoint, "session/modelCatalog", "E1a model-catalog 的端点名")
+        XCTAssertEqual(catalogBody, "{}", "E1a 载荷是空的 —— 它没有入参")
 
         let select = try? encoder.encode(
             ModelSelectRequest(sessionId: "s-1", provider: "deepseek", model: "v3.2", reasoningEffort: nil)
         )
         let selectBody = select.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        XCTAssertTrue(selectBody.contains(#""method":"session/selectModel""#) && selectBody.contains(#""sessionId":"s-1""#),
-                      "E1b model-select 请求带端点名 / sessionId / 选择")
+        XCTAssertEqual(ModelSelectRequest.endpoint, "session/selectModel", "E1b model-select 的端点名")
+        XCTAssertTrue(selectBody.contains(#""sessionId":"s-1""#) && selectBody.contains(#""model":"v3.2""#),
+                      "E1b 载荷带 sessionId 与选择")
         XCTAssertTrue(!selectBody.contains("reasoningEffort"), "E1c reasoningEffort 为 nil 时整个字段缺席（encodeIfPresent）")
     }
 }
