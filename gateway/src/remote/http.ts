@@ -8,7 +8,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
 import { failure, handle, type Limits } from '../protocol/rpc.ts'
-import { unaryEndpointOf } from '../protocol/unary-endpoints.ts'
+import { invokeEndpoint, unaryEndpointOf } from '../protocol/unary-endpoints.ts'
 import { handleAuthOp } from '../protocol/auth-ops.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
@@ -233,7 +233,7 @@ async function answerEndpoint(
     }
   }
 
-  const result = await endpoint.invoke(parsed.payload.args, {
+  const result = await invokeEndpoint(endpointName, parsed.payload.args, {
     ports: {
       session: deps.sessionPort,
       write: deps.writePort,

@@ -1292,7 +1292,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   {
     home: 'protocol/unary-endpoints.ts',
-    values: ['unaryEndpointOf', 'registeredEndpointNames', 'isWriteEndpoint', 'writeEndpointLegacyOps'],
+    values: ['unaryEndpointOf', 'registeredEndpointNames', 'isWriteEndpoint', 'writeEndpointLegacyOps', 'invokeEndpoint'],
     types: ['UnaryContext', 'UnaryEndpoint', 'UnaryAuthPort'],
   },
   {

@@ -8,6 +8,7 @@
  * 过渡期：旧的一元路径（`POST /rpc` + `{v, op}`）还在，两边共用同一个取值函数
  * （例如 `listSessionsOf`），所以同一个功能不会有两份装配。旧路径在最后一轮删除。
  */
+import { readErrorOf } from './error-codes.ts'
 import type { Limits, Ports } from './rpc.ts'
 import { pairOf, refreshOf } from './auth-ops.ts'
 import type { AuthPort } from './auth-ops.ts'
@@ -195,6 +196,33 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
 /** 查表。名字不合法或还没接上都返回 `undefined`。 */
 export function unaryEndpointOf(name: string): UnaryEndpoint | undefined {
   return ENDPOINTS[name as UnaryEndpointName]
+}
+
+/**
+ * 调一条端点，**并把处理器抛出的异常折成拒绝**。
+ *
+ * 折叠只在这一处：传输层（`remote/http.ts`）与测试辅助都调它，谁都不自己 catch。
+ * 分成两处时，一处折了、一处没折，症状是「同一个故障在两条入口下一条回信封、一条
+ * 断成未处理的 rejection」—— 而后者在 HTTP 上表现为连接被掐，客户端看到的是传输失败。
+ *
+ * 折法沿用 `readErrorOf` 的两档：不可解读的日志是 `unreadable-session`，其余
+ * `internal-error`。与旧路径逐字相同 —— 迁移换的是信封，不是故障词汇。
+ */
+export async function invokeEndpoint(
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+  ctx: UnaryContext,
+): Promise<RemoteResult> {
+  const endpoint = unaryEndpointOf(name)
+  if (endpoint === undefined) {
+    return { ok: false, error: { code: 'unknown-endpoint', message: `no endpoint "${name}"`, details: {} } }
+  }
+  try {
+    return await endpoint.invoke(args, ctx)
+  } catch (error) {
+    const refusal = readErrorOf(error)
+    return { ok: false, error: { code: refusal.code, message: refusal.message, details: {} } }
+  }
 }
 
 /** 已登记的名字 —— 判据与将来的「端点清单」共用一份，不另抄。 */

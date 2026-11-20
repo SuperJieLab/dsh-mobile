@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { handle } from '../../src/protocol/rpc.ts'
+import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WritePort } from '../../src/ports/write.ts'
 import type { ApprovalAnswerMessage, SessionPromptMessage } from '../../src/wire/write.ts'
@@ -40,33 +40,33 @@ function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; promp
 
 test('handle dispatches approval-answer to the write port and answers delivered', async () => {
   const { port } = fakeWrite()
-  const answer = await handle({ v: 2, op: 'approval-answer', eventId: 'a', decision: 'allow', answerId: 'k' }, { session: PORT, write: port })
-  assert.deepEqual(answer, { v: 2, ok: true, eventId: 'a' })
+  const answer = await invoke('mobile/approvalAnswer', { eventId: 'a', decision: 'allow', answerId: 'k' }, { session: PORT, write: port })
+  assert.deepEqual(answer, { ok: true, value: { eventId: 'a'} })
 })
 
 test('handle: unknown-approval and invalid-request come back as protocol refusals', async () => {
   const { port } = fakeWrite()
-  const unknown = await handle({ v: 2, op: 'approval-answer', eventId: 'gone', decision: 'allow', answerId: 'k' }, { session: PORT, write: { ...port, async answerApproval() { return 'unknown-approval' } } })
+  const unknown = await invoke('mobile/approvalAnswer', { eventId: 'gone', decision: 'allow', answerId: 'k' }, { session: PORT, write: { ...port, async answerApproval() { return 'unknown-approval' } } })
   assert.equal(unknown.ok, false)
   assert.equal(unknown.ok ? '' : unknown.error.code, 'unknown-approval')
 
-  const malformed = await handle({ v: 2, op: 'approval-answer', eventId: 'a' }, { session: PORT, write: port })
+  const malformed = await invoke('mobile/approvalAnswer', { eventId: 'a' }, { session: PORT, write: port })
   assert.equal(malformed.ok, false)
   assert.equal(malformed.ok ? '' : malformed.error.code, 'invalid-request')
 })
 
 test('handle dispatches session-prompt; unknown session keeps the read-path code', async () => {
   const { port } = fakeWrite()
-  const ok = await handle({ v: 2, op: 'session-prompt', sessionId: 's', text: 'hi', promptId: 'p' }, { session: PORT, write: port })
-  assert.deepEqual(ok, { v: 2, ok: true, sessionId: 's' })
+  const ok = await invoke('session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }, { session: PORT, write: port })
+  assert.deepEqual(ok, { ok: true, value: { sessionId: 's'} })
 
-  const missing = await handle({ v: 2, op: 'session-prompt', sessionId: 'missing', text: 'hi', promptId: 'p' }, { session: PORT, write: port })
+  const missing = await invoke('session/prompt', { sessionId: 'missing', text: 'hi', promptId: 'p' }, { session: PORT, write: port })
   assert.equal(missing.ok, false)
   assert.equal(missing.ok ? '' : missing.error.code, 'unknown-session')
 })
 
 test('write ops without a wired channel refuse as internal-error, not unknown-op', async () => {
-  const reply = await handle({ v: 2, op: 'session-prompt', sessionId: 's', text: 'hi', promptId: 'p' }, { session: PORT })
+  const reply = await invoke('session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }, { session: PORT })
   assert.equal(reply.ok, false)
   assert.equal(reply.ok ? '' : reply.error.code, 'internal-error')
 })

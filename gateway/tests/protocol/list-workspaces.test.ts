@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { handle } from '../../src/protocol/rpc.ts'
+import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WorkspacePort, WorkspaceSnapshot } from '../../src/ports/workspace.ts'
 import type { SessionRow } from '../../src/wire/rpc.ts'
@@ -35,8 +35,11 @@ function workspacePort(snapshot: WorkspaceSnapshot): WorkspacePort {
  * 只跑 `list-sessions`。`handle` 的通道按位置追加，列表路径只用到前两位 ——
  * 这个包装让每条用例里那句调用只写与本题有关的东西。
  */
-function listSessions(port: SessionPort, workspaces?: WorkspacePort) {
-  return handle({ v: 2, op: 'list-sessions' }, { session: port, workspace: workspaces }, Date.now)
+async function listSessions(port: SessionPort, workspaces?: WorkspacePort): Promise<ListAnswer> {
+  const result = await invoke('mobile/listSessions', {}, { session: port, workspace: workspaces }, Date.now)
+  // 新结果是 `{ok, value}` 两层；这组用例读的是「清单与归属」，铺平一次让断言
+  // 只说那件事，不每句都写 `.value?.`。
+  return { ok: result.ok, ...(result.ok ? result.value as object : {}) }
 }
 
 interface ListAnswer {

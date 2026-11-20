@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { handle } from '../../src/protocol/rpc.ts'
+import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WorkspacePort } from '../../src/ports/workspace.ts'
 
@@ -39,7 +39,7 @@ function workspacePort(remove: (id: string) => Promise<void>): {
 
 /** 发一条 `workspace-delete`。端口按位置追加在 `handle` 的末尾。 */
 function ask(workspaceId: unknown, port: WorkspacePort | undefined) {
-  return handle({ v: 2, op: 'workspace-delete', workspaceId }, { session: PORT, workspace: port }, Date.now)
+  return invoke('workspace/delete', { workspaceId }, { session: PORT, workspace: port }, Date.now)
 }
 
 interface Answer {

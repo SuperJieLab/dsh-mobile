@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { handle } from '../../src/protocol/rpc.ts'
+import { invoke, valueOf } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import { modelSelectRequestOf } from '../../src/wire/model.ts'
 import type { ModelPort } from '../../src/ports/model.ts'
@@ -49,18 +49,18 @@ function fakeModel(): ModelPort {
 // -- model-catalog (G1) ------------------------------------------------------
 
 test('model-catalog: the catalog comes back as the envelope body', async () => {
-  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: fakeModel() })
+  const reply = await invoke('session/modelCatalog', {}, { session: PORT, model: fakeModel() })
   assert.equal(reply.ok, true)
-  if (!reply.ok) return
-  assert.deepEqual(reply.default, { provider: 'deepseek', model: 'deepseek-chat' })
-  assert.deepEqual(reply.groups, CATALOG.groups)
-  assert.deepEqual(reply.failures, CATALOG.failures)
+  const body = valueOf<{ default?: unknown; groups?: unknown; failures?: unknown }>(reply)
+  assert.deepEqual(body.default, { provider: 'deepseek', model: 'deepseek-chat' })
+  assert.deepEqual(body.groups, CATALOG.groups)
+  assert.deepEqual(body.failures, CATALOG.failures)
 })
 
 test('model-catalog: upstream default absent means the field is absent', async () => {
   const model = fakeModel()
   const bare = { ...CATALOG, default: undefined }
-  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: {
+  const reply = await invoke('session/modelCatalog', {}, { session: PORT, model: {
     ...model,
     catalog: async () => bare,
   } })
@@ -78,13 +78,12 @@ test('model-catalog: a model\'s reasoning levels ride along untouched', async ()
     ...CATALOG,
     groups: [{ ...CATALOG.groups[0], models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', reasoning }] }],
   }
-  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: {
+  const reply = await invoke('session/modelCatalog', {}, { session: PORT, model: {
     ...fakeModel(),
     catalog: async () => withLevels,
   } })
   assert.equal(reply.ok, true)
-  if (!reply.ok) return
-  const groups = reply.groups as typeof withLevels.groups
+  const groups = valueOf<{ groups: typeof withLevels.groups }>(reply).groups
   // 目录是宿主的：`efforts` 与 `defaultEffort` 逐字透传，网关不重排、不补齐。
   assert.deepEqual(groups[0]?.models[0]?.reasoning, reasoning)
 })
@@ -118,12 +117,8 @@ test('model-select: malformed payloads are refused, not normalized (fail-closed,
 })
 
 test('model-select: accepted selection comes back as the normalized choice', async () => {
-  const reply = await handle({ v: 2, op: 'model-select', sessionId: 's', provider: 'deepseek', model: 'deepseek-chat' }, { session: PORT, write: fakeWritePort(), model: fakeModel() })
-  assert.deepEqual(reply, {
-    v: 2,
-    ok: true,
-    selected: { provider: 'deepseek', model: 'deepseek-chat' },
-  })
+  const reply = await invoke('session/selectModel', { sessionId: 's', provider: 'deepseek', model: 'deepseek-chat' }, { session: PORT, write: fakeWritePort(), model: fakeModel() })
+  assert.deepEqual(reply, { ok: true, value: { selected: { provider: 'deepseek', model: 'deepseek-chat' }} })
 })
 
 test('model-select: upstream refusals come back with their own code', async () => {
@@ -135,19 +130,15 @@ test('model-select: upstream refusals come back with their own code', async () =
       message: 'no adapter serves provider "x"',
     }),
   }
-  const reply = await handle({ v: 2, op: 'model-select', sessionId: 's', provider: 'x', model: 'm' }, { session: PORT, write: fakeWritePort(), model: refusing })
-  assert.deepEqual(reply, {
-    v: 2,
-    ok: false,
-    error: { code: 'session/model-unavailable', message: 'no adapter serves provider "x"' },
-  })
+  const reply = await invoke('session/selectModel', { sessionId: 's', provider: 'x', model: 'm' }, { session: PORT, write: fakeWritePort(), model: refusing })
+  assert.deepEqual(reply, { ok: false, error: { code: 'session/model-unavailable', message: 'no adapter serves provider "x"', details: {} } })
 })
 
 test('model-select: malformed payload is invalid-request, never reaches the port', async () => {
   const model = fakeModel()
   let asked = false
   const spy: ModelPort = { ...model, select: async (r) => { asked = true; return model.select(r) } }
-  const reply = await handle({ v: 2, op: 'model-select', sessionId: 's', provider: '' , model: 'm' }, { session: PORT, write: fakeWritePort(), model: spy })
+  const reply = await invoke('session/selectModel', { sessionId: 's', provider: '' , model: 'm' }, { session: PORT, write: fakeWritePort(), model: spy })
   assert.equal(reply.ok, false)
   if (!reply.ok) assert.equal(reply.error.code, 'invalid-request')
   assert.equal(asked, false)
@@ -155,15 +146,11 @@ test('model-select: malformed payload is invalid-request, never reaches the port
 
 test('model-catalog: a wedged catalog source is an internal-error envelope, not a crash', async () => {
   const model = fakeModel()
-  const reply = await handle({ v: 2, op: 'model-catalog' }, { session: PORT, model: {
+  const reply = await invoke('session/modelCatalog', {}, { session: PORT, model: {
     ...model,
     catalog: async () => {
       throw new Error('registry exploded')
     },
   } })
-  assert.deepEqual(reply, {
-    v: 2,
-    ok: false,
-    error: { code: 'internal-error', message: 'registry exploded' },
-  })
+  assert.deepEqual(reply, { ok: false, error: { code: 'internal-error', message: 'registry exploded', details: {} } })
 })

@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { handle } from '../../src/protocol/rpc.ts'
+import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WorkspacePort } from '../../src/ports/workspace.ts'
 
@@ -36,8 +36,14 @@ function workspacePort(
 }
 
 /** 发一条 `workspace-create`。端口按位置追加在 `handle` 的末尾。 */
-function ask(name: unknown, port: WorkspacePort | undefined) {
-  return handle({ v: 2, op: 'workspace-create', name }, { session: PORT, workspace: port }, Date.now)
+async function ask(name: unknown, port: WorkspacePort | undefined) {
+  const result = await invoke('mobile/workspaceCreate', { name }, { session: PORT, workspace: port }, Date.now)
+  // 铺平一层：这组用例读的是「回包里那三格」，不该每句都写 `.value?.`。
+  return {
+    ok: result.ok,
+    ...(result.ok ? result.value as object : {}),
+    ...(result.ok ? {} : { error: result.error }),
+  }
 }
 
 interface Answer {
