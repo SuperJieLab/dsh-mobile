@@ -20,6 +20,7 @@ import type { CommandPort } from '../ports/command.ts'
 import type { PermissionPort } from '../ports/permission.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import { PROTOCOL_VERSION } from '../wire/rpc.ts'
+import type { RemoteResult } from '../wire/unary.ts'
 import type {
   WireEvent,
   SessionRow,
@@ -119,27 +120,21 @@ export async function handle(
       case 'page':
         return await page(envelope, port)
       case 'model-catalog':
-        // 读 op。端口缺席是装配层宣布过的事实（`faces.ts` 在宿主没有模型切面时
-        // 返回 undefined 并留痕），所以这一支在生产也可达 —— 拒答而不是崩。
-        if (model === undefined) return failure('internal-error', 'model channel not wired for "model-catalog"')
+        // 读 op。端口缺席的判断在 `modelCatalogOf` 里 —— 新路径也要那一条，放两处会漂。
         return await modelCatalog(model)
       case 'model-select':
         // 写 op，与写通道的 op 同一纪律。
         if (model === undefined) return failure('internal-error', 'model channel not wired for "model-select"')
         return await modelSelect(envelope, model)
       case 'command-catalog':
-        // 仅只读测试装配会缺这个端口：生产装配的命令端口总在，服务缺席由那次调用抛出
-        // （折成 `internal-error`），不在这里判。
-        if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
+        // 端口缺席的判断在 `commandCatalogOf` 里，与新路径共用一份。
         return await commandCatalog(envelope, command)
       case 'command-execute':
         // 写 op：整行原样交给宿主，但「是不是一条命令行」在这里先判。
         if (command === undefined) return failure('internal-error', `command channel not wired for "${op}"`)
         return await commandExecute(envelope, command)
       case 'permission-catalog':
-        // 读 op。端口缺席只发生在只读测试装配里；生产装配的端口总在，而「权限服务
-        // 没装」这件事由端口自己用「options 缺席」表达，不在这里判。
-        if (permission === undefined) return failure('internal-error', `permission channel not wired for "${op}"`)
+        // 端口缺席的判断在 `permissionCatalogOf` 里，与新路径共用一份。
         return await permissionCatalog(envelope, permission)
       case 'permission-select':
         // 写 op：线上只收预设名，拼命令与目录校验都在适配层。
@@ -284,14 +279,24 @@ async function modelSelect(envelope: Record<string, unknown>, model: ModelPort):
 }
 
 /** 模型目录路径：宿主目录原样，去掉客户端用不上的字段。 */
-async function modelCatalog(model: ModelPort): Promise<Response> {
+async function modelCatalog(model: ModelPort | undefined): Promise<Response> {
+  return unwrap(await modelCatalogOf(model))
+}
+
+/**
+ * 模型目录的业务字段。端口缺席是装配层宣布过的事实（`faces.ts` 在宿主没有模型切面时
+ * 返回 `undefined` 并留痕），所以这一支在生产也可达 —— 拒答而不是崩。
+ */
+export async function modelCatalogOf(model: ModelPort | undefined): Promise<RemoteResult> {
+  if (model === undefined) return refused('internal-error', 'model channel not wired for "model-catalog"')
   const catalog = await model.catalog()
   return {
-    v: PROTOCOL_VERSION,
     ok: true,
-    ...catalog.default === undefined ? {} : { default: catalog.default },
-    groups: [...catalog.groups],
-    failures: [...catalog.failures],
+    value: {
+      ...catalog.default === undefined ? {} : { default: catalog.default },
+      groups: [...catalog.groups],
+      failures: [...catalog.failures],
+    },
   }
 }
 
@@ -301,14 +306,27 @@ async function modelCatalog(model: ModelPort): Promise<Response> {
  * 会话不在 → `unknown-session`（不是空列表）：没有 agent 就没有 per-agent 的命令集，
  * 空列表会让客户端把「这个会话没了」误读成「这个会话没有命令」。
  */
-async function commandCatalog(envelope: Record<string, unknown>, command: CommandPort): Promise<Response> {
-  const sessionId = envelope.sessionId
+async function commandCatalog(
+  envelope: Record<string, unknown>,
+  command: CommandPort | undefined,
+): Promise<Response> {
+  return unwrap(await commandCatalogOf(envelope, command))
+}
+
+export async function commandCatalogOf(
+  args: Record<string, unknown>,
+  command: CommandPort | undefined,
+): Promise<RemoteResult> {
+  // 仅只读测试装配会缺这个端口：生产装配的命令端口总在，服务缺席由那次调用抛出
+  // （折成 `internal-error`），不在这里判。
+  if (command === undefined) return refused('internal-error', 'command channel not wired for "command-catalog"')
+  const sessionId = args.sessionId
   if (typeof sessionId !== 'string' || sessionId === '') {
-    return failure('unknown-session', 'sessionId must be a non-empty string')
+    return refused('unknown-session', 'sessionId must be a non-empty string')
   }
   const commands = await command.list(sessionId)
-  if (commands === undefined) return failure('unknown-session', `no live session "${sessionId}"`)
-  return { v: PROTOCOL_VERSION, ok: true, commands: [...commands] }
+  if (commands === undefined) return refused('unknown-session', `no live session "${sessionId}"`)
+  return { ok: true, value: { commands: [...commands] } }
 }
 
 /**
@@ -337,18 +355,29 @@ async function commandExecute(envelope: Record<string, unknown>, command: Comman
  */
 async function permissionCatalog(
   envelope: Record<string, unknown>,
-  permission: PermissionPort,
+  permission: PermissionPort | undefined,
 ): Promise<Response> {
-  const sessionId = envelope.sessionId
+  return unwrap(await permissionCatalogOf(envelope, permission))
+}
+
+export async function permissionCatalogOf(
+  args: Record<string, unknown>,
+  permission: PermissionPort | undefined,
+): Promise<RemoteResult> {
+  // 端口缺席只发生在只读测试装配里；生产装配的端口总在，而「权限服务没装」这件事
+  // 由端口自己用「options 缺席」表达，不在这里判。
+  if (permission === undefined) return refused('internal-error', 'permission channel not wired for "permission-catalog"')
+  const sessionId = args.sessionId
   if (typeof sessionId !== 'string' || sessionId === '') {
-    return failure('unknown-session', 'sessionId must be a non-empty string')
+    return refused('unknown-session', 'sessionId must be a non-empty string')
   }
   const view = await permission.catalog(sessionId)
   return {
-    v: PROTOCOL_VERSION,
     ok: true,
-    ...view.current === undefined ? {} : { current: view.current },
-    ...view.options === undefined ? {} : { options: [...view.options] },
+    value: {
+      ...view.current === undefined ? {} : { current: view.current },
+      ...view.options === undefined ? {} : { options: [...view.options] },
+    },
   }
 }
 
@@ -438,33 +467,42 @@ function toWireSummary(row: SessionRow, workspaceId: string | undefined): Record
 
 /** 读路径：一个会话自客户端水位之后的事件。 */
 async function snapshot(envelope: Record<string, unknown>, port: SessionPort, limits: Limits): Promise<Response> {
-  const sessionId = envelope.sessionId
+  return unwrap(await snapshotOf(envelope, port, limits))
+}
+
+export async function snapshotOf(
+  args: Record<string, unknown>,
+  port: SessionPort,
+  limits: Limits,
+): Promise<RemoteResult> {
+  const sessionId = args.sessionId
   if (typeof sessionId !== 'string' || sessionId === '') {
     // 用 `unknown-session` 而非新码：不是非空字符串的 id 永远不可能命名
     // 已存储的会话，调用方的补救相同。
-    return failure('unknown-session', 'sessionId must be a non-empty string')
+    return refused('unknown-session', 'sessionId must be a non-empty string')
   }
 
-  const since = normalizeSince(envelope.since)
+  const since = normalizeSince(args.since)
   const slice = await port.read(sessionId, since, limits.maxDeltaEvents)
-  if (slice === undefined) return failure('unknown-session', `no stored session "${sessionId}"`)
+  if (slice === undefined) return refused('unknown-session', `no stored session "${sessionId}"`)
 
   if (slice.staleCursor) {
     // 用错误码，不用静默空应答：整个视图已不可信，布尔会被吞掉。
-    return failure('resync-required', `since ${since} cannot exist: this session's log is empty`)
+    return refused('resync-required', `since ${since} cannot exist: this session's log is empty`)
   }
 
   const events = fitToByteCap(slice.events, limits.maxDeltaBytes)
   const last = events.at(-1)
   return {
-    v: PROTOCOL_VERSION,
     ok: true,
-    sessionId,
-    asOfSeq: last === undefined ? since : last.seq + 1,
-    hasMore: slice.hasMore || events.length < slice.events.length,
-    events: [...events],
-    // 基线随每条 snapshot 应答随行；缺省仍是缺省。
-    ...slice.model === undefined ? {} : { model: slice.model },
+    value: {
+      sessionId,
+      asOfSeq: last === undefined ? since : last.seq + 1,
+      hasMore: slice.hasMore || events.length < slice.events.length,
+      events: [...events],
+      // 基线随每条 snapshot 应答随行；缺省仍是缺省。
+      ...slice.model === undefined ? {} : { model: slice.model },
+    },
   }
 }
 
@@ -473,24 +511,31 @@ async function snapshot(envelope: Record<string, unknown>, port: SessionPort, li
  * 一轮 —— 边界规则见 `./window.ts` 的 `pageWindow`。
  */
 async function page(envelope: Record<string, unknown>, port: SessionPort): Promise<Response> {
-  const sessionId = envelope.sessionId
+  return unwrap(await pageOf(envelope, port))
+}
+
+export async function pageOf(
+  args: Record<string, unknown>,
+  port: SessionPort,
+): Promise<RemoteResult> {
+  const sessionId = args.sessionId
   if (typeof sessionId !== 'string' || sessionId === '') {
-    return failure('unknown-session', 'sessionId must be a non-empty string')
+    return refused('unknown-session', 'sessionId must be a non-empty string')
   }
 
-  const maxMessages = isPositiveInteger(envelope.maxMessages)
-    ? envelope.maxMessages
+  const maxMessages = isPositiveInteger(args.maxMessages)
+    ? args.maxMessages
     : DEFAULT_PAGE_MESSAGES
 
   // 畸形 `beforeSeq` 退化为最新窗口，正如畸形 `since` 退化为 `0`：
   // 是合法应答，至多多付一个窗口。
-  const requested = envelope.beforeSeq
+  const requested = args.beforeSeq
   const beforeSeq = Number.isSafeInteger(requested) && (requested as number) >= 0
     ? requested as number
     : undefined
 
   const events = await port.readAll(sessionId)
-  if (events === undefined) return failure('unknown-session', `no stored session "${sessionId}"`)
+  if (events === undefined) return refused('unknown-session', `no stored session "${sessionId}"`)
 
   let window: PageWindow
   try {
@@ -498,19 +543,20 @@ async function page(envelope: Record<string, unknown>, port: SessionPort): Promi
   } catch (error) {
     // 两种拒绝：不可解读的日志是 `unreadable-session`，cursor 越过末端是
     // `resync-required`（M1 判据 P4）。
-    if (error instanceof LogNotDenseError) return failure('unreadable-session', error.message)
-    if (error instanceof CursorPastEndError) return failure('resync-required', error.message)
+    if (error instanceof LogNotDenseError) return refused('unreadable-session', error.message)
+    if (error instanceof CursorPastEndError) return refused('resync-required', error.message)
     throw error
   }
 
   return {
-    v: PROTOCOL_VERSION,
     ok: true,
-    sessionId,
-    pageStart: window.pageStart,
-    asOfSeq: window.asOfSeq,
-    hasOlder: window.hasOlder,
-    events: [...window.events],
+    value: {
+      sessionId,
+      pageStart: window.pageStart,
+      asOfSeq: window.asOfSeq,
+      hasOlder: window.hasOlder,
+      events: [...window.events],
+    },
   }
 }
 
@@ -590,6 +636,31 @@ function versionRefusalOf(sent: unknown): string {
     return `this gateway speaks protocol v${PROTOCOL_VERSION}, the request said v${sent} — upgrade the client`
   }
   return `this gateway speaks protocol v${PROTOCOL_VERSION}, the request said v${sent} — upgrade the gateway`
+}
+
+/**
+ * 一次失败的新形状（三格，`details` 恒为对象）。
+ *
+ * 过渡期两条路径共用同一份取值函数，所以失败也共用一份构造：新路径直接用，
+ * 旧路径经 {@link unwrap} 剥掉 `details` —— 旧信封只有两格，多一格会让既有断言红。
+ */
+export function refused(
+  code: string,
+  message: string,
+  details: Record<string, unknown> = {},
+): RemoteResult {
+  return { ok: false, error: { code, message, details } }
+}
+
+/**
+ * 新结果 → 旧信封。**这是过渡期唯一的翻译点**：两条路径的行为差异只可能出在这里，
+ * 而它只有四个分支（成功 / 失败），比让每个 op 各写一遍薄得多。
+ */
+export function unwrap(result: RemoteResult): Response {
+  if (result.ok) {
+    return { v: PROTOCOL_VERSION, ok: true, ...(result.value as Record<string, unknown>) }
+  }
+  return failure(result.error.code, result.error.message)
 }
 
 /**

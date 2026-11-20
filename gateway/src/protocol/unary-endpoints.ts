@@ -9,7 +9,14 @@
  * （例如 `listSessionsOf`），所以同一个功能不会有两份装配。旧路径在最后一轮删除。
  */
 import type { Limits, Ports } from './rpc.ts'
-import { listSessionsOf } from './rpc.ts'
+import {
+  commandCatalogOf,
+  listSessionsOf,
+  modelCatalogOf,
+  pageOf,
+  permissionCatalogOf,
+  snapshotOf,
+} from './rpc.ts'
 import type { RemoteResult, UnaryEndpointName } from '../wire/unary.ts'
 
 /** 处理器需要的全部外部输入。`now` 注入是为了判据能钉住时间。 */
@@ -34,6 +41,36 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
     write: false,
     async invoke(_args, ctx) {
       return { ok: true, value: await listSessionsOf(ctx.ports.session, ctx.ports.workspace, ctx.now) }
+    },
+  },
+  'mobile/snapshot': {
+    write: false,
+    invoke(args, ctx) {
+      return snapshotOf(args, ctx.ports.session, ctx.limits)
+    },
+  },
+  'mobile/page': {
+    write: false,
+    invoke(args, ctx) {
+      return pageOf(args, ctx.ports.session)
+    },
+  },
+  'session/modelCatalog': {
+    write: false,
+    invoke(_args, ctx) {
+      return modelCatalogOf(ctx.ports.model)
+    },
+  },
+  'commands/list': {
+    write: false,
+    invoke(args, ctx) {
+      return commandCatalogOf(args, ctx.ports.command)
+    },
+  },
+  'mobile/permissionCatalog': {
+    write: false,
+    invoke(args, ctx) {
+      return permissionCatalogOf(args, ctx.ports.permission)
     },
   },
 }

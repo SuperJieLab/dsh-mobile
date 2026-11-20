@@ -1281,7 +1281,11 @@ test('the retired assembler is not exported under any name binding', async () =>
 const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; types: readonly string[] }[] = [
   {
     home: 'protocol/rpc.ts',
-    values: ['DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault', 'failure', 'success', 'listSessionsOf'],
+    values: [
+      'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault',
+      'failure', 'success', 'refused', 'unwrap',
+      'listSessionsOf', 'snapshotOf', 'pageOf', 'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
+    ],
     types: ['Limits', 'Ports'],
   },
   {
