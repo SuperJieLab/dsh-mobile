@@ -10,10 +10,8 @@ extension GatewayErrorCode {
     /// 人话解释，用于把服务端的拒绝变成用户看得懂的一句话。未知码返回 nil。
     var explanation: String? {
         switch self {
-        case .unsupportedVersion:
-            return "网关不认识这次请求的协议版本 —— 两端版本不一致。"
-        case .unknownOp:
-            return "网关不认识这个操作名 —— 客户端用了一个服务端没有的 op。"
+        case .unknownEndpoint:
+            return "网关不认识这个操作 —— 两端版本不一致，升级之后它就认得。"
         case .unknownSession:
             return "这个会话在 Mac 上找不到了 —— 可能已被删除。"
         case .unreadableSession:
@@ -60,14 +58,14 @@ extension RpcClientError: LocalizedError {
             switch code {
             case 400: return "网关说这次请求的 body 不是合法 JSON（HTTP 400）。"
             case 413: return "请求 body 超过网关的 1 MiB 上限（HTTP 413）。"
+            // 404 现在只有一个原因：路径上那个端点不在网关的表里 —— 两边版本不一致。
+            // 从前这个信息由版本字段承担，现在落在这一支上。
+            case 404: return "网关不支持这个操作（HTTP 404）—— 两边版本不一致，升级之后它会认得。"
             default: return "网关回了 HTTP \(code)。"
             }
 
         case .malformedResponse(let detail):
             return "网关的响应读不出来：\(detail)"
-
-        case .versionMismatch(let v):
-            return Self.explain(versionMismatch: v)
 
         case .refused(let failure):
             return failure.readableDescription
@@ -111,15 +109,4 @@ extension RpcClientError: LocalizedError {
         }
     }
 
-    /// 版本不匹配的文案**带方向**。
-    ///
-    /// 「两端版本不一致」这句话本身不可行动 —— 两个方向要做的事完全不同：装新 App，
-    /// 还是升级 Mac 上的网关。方向从版本号大小就能读出来，没有理由不说。
-    private static func explain(versionMismatch gatewaySays: Int) -> String {
-        let mine = gatewayProtocolVersion
-        if gatewaySays > mine {
-            return "网关说的是协议 v\(gatewaySays)，本客户端只会说 v\(mine) —— 客户端太旧，请升级 App。"
-        }
-        return "网关说的是协议 v\(gatewaySays)，本客户端只会说 v\(mine) —— 网关太旧，请升级 Mac 上的网关。"
-    }
 }

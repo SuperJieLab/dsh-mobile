@@ -50,6 +50,12 @@ final class ScriptedURLProtocol: URLProtocol {
         return calls
     }
 
+    /// 路径的末两段：`/api/mobile/listSessions` → `mobile/listSessions`。
+    private static func endpointOf(_ url: URL?) -> String? {
+        guard let segments = url?.pathComponents.filter({ $0 != "/" }), segments.count >= 2 else { return nil }
+        return segments.suffix(2).joined(separator: "/")
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
@@ -61,7 +67,10 @@ final class ScriptedURLProtocol: URLProtocol {
         // `URLProtocol` 拿到的 `httpBody` 是空的 —— 请求体在 `httpBodyStream` 里，只能从流读。
         let body = request.httpBody ?? Self.bodyStream(of: request)
         let parsed = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        let op = parsed.flatMap { $0["op"] as? String } ?? "?"
+        // 端点名在路径的末两段上，不在体里 —— 体里只有 `method`、`payload.args` 与两个信封键。
+        // 按路径认领而不是按到达顺序：断言的落点是「哪一发带了票」，顺序发牌会把
+        // 「多了一发」与「顺序错了」混成同一个失败。
+        let op = Self.endpointOf(request.url) ?? "?"
 
         let reply = Self.claim(
             op: op, authorization: request.value(forHTTPHeaderField: "Authorization"), body: parsed
@@ -87,7 +96,7 @@ final class ScriptedURLProtocol: URLProtocol {
         if let body { bodies[op, default: []].append(body) }
         return replies[op] ?? Reply(
             status: 200,
-            body: #"{"v":2,"ok":false,"error":{"code":"internal-error","message":"no reply scripted for \#(op)"}}"#
+            body: #"{"type":"server-response","rpcId":"r","result":{"ok":false,"error":{"code":"internal-error","message":"no reply scripted for \#(op)","details":{}}}}"#
         )
     }
 
@@ -112,16 +121,16 @@ final class RpcClientAuthTests: XCTestCase {
     /// 一句续期应答。抽成构造器是为了让断言那一屏读得下去 —— 内联的 JSON 有 120 列。
     private static func ticket(_ token: String, expiresAt: Double = 9_999_999_999_999) -> ScriptedURLProtocol.Reply {
         .init(status: 200,
-              body: #"{"v":2,"ok":true,"accessToken":"\#(token)","expiresAt":\#(expiresAt)}"#)
+              body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accessToken":"\#(token)","expiresAt":\#(expiresAt),"deviceToken":"d"}}}"#)
     }
 
     /// 一句空的会话列表应答：这几条用例只关心票的顺序，列表内容无所谓。
     private static let noSessions = ScriptedURLProtocol.Reply(
-        status: 200, body: #"{"v":2,"ok":true,"sessions":[],"serverTime":0}"#
+        status: 200, body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"sessions":[],"serverTime":0}}}"#
     )
 
     private static func script(ticket: ScriptedURLProtocol.Reply) {
-        ScriptedURLProtocol.reset(replies: ["refresh": ticket, "list-sessions": noSessions])
+        ScriptedURLProtocol.reset(replies: ["mobile/refresh": ticket, "mobile/listSessions": noSessions])
     }
 
     override func setUp() {
@@ -159,7 +168,7 @@ final class RpcClientAuthTests: XCTestCase {
         _ = try await fetchSessions(client)
 
         let calls = ScriptedURLProtocol.snapshot()
-        XCTAssertEqual(calls.map(\.op), ["refresh", "list-sessions"],
+        XCTAssertEqual(calls.map(\.op), ["mobile/refresh", "mobile/listSessions"],
                        "顺序是先换票、再发业务请求：\(calls.map(\.op))")
         XCTAssertEqual(calls[1].authorization, "Bearer fresh",
                        "业务请求上必须已经带上刚换到的票")
@@ -178,7 +187,7 @@ final class RpcClientAuthTests: XCTestCase {
         _ = try await fetchSessions(client)
 
         let refresh = try XCTUnwrap(
-            ScriptedURLProtocol.snapshot().first { $0.op == "refresh" },
+            ScriptedURLProtocol.snapshot().first { $0.op == "mobile/refresh" },
             "先确认真的换过票 —— 否则这一条守着空气"
         )
         XCTAssertNil(refresh.authorization,
@@ -192,7 +201,7 @@ final class RpcClientAuthTests: XCTestCase {
         Self.script(ticket: Self.ticket("second"))
         _ = try await fetchSessions(client)
 
-        XCTAssertEqual(ScriptedURLProtocol.snapshot().map(\.op), ["list-sessions"],
+        XCTAssertEqual(ScriptedURLProtocol.snapshot().map(\.op), ["mobile/listSessions"],
                        "票还在就不该再换一张")
     }
 
@@ -205,7 +214,7 @@ final class RpcClientAuthTests: XCTestCase {
         _ = try await fetchSessions(client)
 
         let calls = ScriptedURLProtocol.snapshot()
-        XCTAssertEqual(calls.map(\.op), ["refresh", "list-sessions"],
+        XCTAssertEqual(calls.map(\.op), ["mobile/refresh", "mobile/listSessions"],
                        "过期的票等价于没有票")
         XCTAssertEqual(calls[1].authorization, "Bearer second")
     }
@@ -255,7 +264,7 @@ final class RpcClientAuthTests: XCTestCase {
     /// 一句带轮换凭证的续期应答。
     private static func rotatedTicket(_ deviceToken: String) -> ScriptedURLProtocol.Reply {
         .init(status: 200,
-              body: #"{"v":2,"ok":true,"accessToken":"fresh","expiresAt":9999999999999,"deviceToken":"\#(deviceToken)"}"#)
+              body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accessToken":"fresh","expiresAt":9999999999999,"deviceToken":"\#(deviceToken)"}}}"#)
     }
 
     /// 续期回包里带轮换后的设备凭证时，**必须存下来**。

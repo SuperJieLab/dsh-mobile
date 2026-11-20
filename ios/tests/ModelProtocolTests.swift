@@ -79,14 +79,14 @@ final class ModelProtocolTests: XCTestCase {
 
     private func decodeOpening() {
         let withModel = try? decoder.decode(SnapshotResponse.self, from: Data("""
-        {"v":2,"ok":true,"asOfSeq":128,"hasMore":false,"events":[],
+        {"asOfSeq":128,"hasMore":false,"events":[],
          "model":{"provider":"deepseek","model":"v3.2","reasoningEffort":"high"}}
         """.utf8))
         XCTAssertTrue(withModel?.model?.model == "v3.2" && withModel?.model?.reasoningEffort == "high",
                       "D3a opening 带 model 基线时解码落地")
 
         let withoutModel = try? decoder.decode(SnapshotResponse.self, from: Data("""
-        {"v":2,"ok":true,"asOfSeq":128,"hasMore":false,"events":[]}
+        {"asOfSeq":128,"hasMore":false,"events":[]}
         """.utf8))
         XCTAssertTrue(withoutModel?.model == nil, "D3b opening 不带 model = 服务端不知道，字段缺省不是故障")
     }

@@ -12,14 +12,13 @@ import Foundation
 enum RpcClientError: Error {
     /// 请求压根没发出去或没回来 —— 网络层的事，不是协议层的事。
     case transport(url: URL, underlying: Error)
-    /// 回来了，但 HTTP 状态不是 200（协议下 400 = body 不是 JSON，413 = body 过大）。
+    /// 回来了，但 HTTP 状态不是 200（协议下 400 = body 不是 JSON，413 = body 过大，
+    /// **404 = 路径上那个端点不在网关的表里**）。
     case badStatus(Int)
     /// 回来了、200，但不是我们能读的报文。`detail` 写**缺了哪个字段** —— 那是协议词汇，
     /// 不随产品措辞变；句子由 `FailureText` 拼。
     /// **`ok: true` 却缺载荷，绝不能填默认值盖过去**：那会把一次应答异常显示成「本来就没有」
     case malformedResponse(detail: String)
-    /// 响应的 `v` 不是本客户端认识的版本。
-    case versionMismatch(Int)
     /// 服务端按信封拒绝了。这是**协议内的**结果，不是故障。
     case refused(GatewayFailure)
     /// 没有可用身份：未配对，或设备凭证已被服务端撤销。
@@ -42,25 +41,8 @@ extension RpcClientError {
         case .transport: return "transport"
         case .badStatus(let status): return "bad-status-\(status)"
         case .malformedResponse: return "malformed-response"
-        case .versionMismatch: return "version-mismatch"
         case .unauthenticated: return GatewayErrorCode.unauthenticated.rawValue
         case .notActivated: return "not-activated"
-        }
-    }
-}
-
-/// 回包的信封校验 —— 请求语义：它抛的正是本文件的词汇（版本不符、协议内拒绝），
-/// 与词汇同处；形状目录只声明 `GatewayResponse`，不判成败。
-extension GatewayResponse {
-    func validate() throws {
-        guard v == gatewayProtocolVersion else {
-            throw RpcClientError.versionMismatch(v)
-        }
-        guard ok else {
-            throw RpcClientError.refused(
-                error ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue,
-                                        message: "")
-            )
         }
     }
 }

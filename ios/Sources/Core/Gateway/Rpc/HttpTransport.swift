@@ -1,10 +1,39 @@
 /**
- * 一元调用的**裸发层**：发一次、读回包、判成败。**它不认识票。**
+ * 一元调用的**裸发层**：拼信封、发一次、拆信封、判成败。**它不认识票。**
  *
  * 「带不带票」是调用方给不给 `authorization` —— 于是免票那条路（换票自己）结构上拿不到票，
  * 不可能回头去问票层（那是「等自己那一趟」的死锁）。只认识三件事：往哪打、一段字节、怎么算失败。
+ *
+ * **信封只在这一层出现**：`{type, rpcId, method, payload:{args}}` 与
+ * `{type, rpcId, result:{ok, value|error}}` 是「怎么出门」的知识，业务类型不该知道。
+ * 这也是为什么 `RpcMessages.swift` 里的请求只有端点名与参数、应答只有业务字段。
  */
 import Foundation
+
+/// 客户端发出去的外壳。三格固定，加一格就是改协议。
+private struct ClientEnvelope<Args: Encodable>: Encodable {
+    let type = "client-request"
+    let rpcId: String
+    let method: String
+    let payload: Payload
+
+    struct Payload: Encodable {
+        let args: Args
+    }
+}
+
+/// 服务端回来的外壳。`ok` 与 `error` 住在这里 —— 业务类型不再各带一份。
+private struct ServerEnvelope<Value: Decodable>: Decodable {
+    struct Result: Decodable {
+        let ok: Bool
+        let value: Value?
+        let error: GatewayFailure?
+    }
+
+    let type: String
+    let rpcId: String
+    let result: Result
+}
 
 @MainActor
 final class HttpTransport {
@@ -19,13 +48,10 @@ final class HttpTransport {
         self.baseURLProvider = baseURL
     }
 
-    /// 唯一端点 —— 所有 op 都打这一个地址，靠信封里的 `op` 分派。
-    nonisolated static let rpcPath = "/rpc"
-
     /// 请求超时。局域网直连正常是毫秒级，10 秒只用来兜住「地址写错」这种情况。
     nonisolated static let timeout: TimeInterval = 10
 
-    /// 发一次，不解身份语义，并在解码后校验信封。
+    /// 发一次，不解身份语义，并在拆信封时判成败。
     ///
     /// 返回 `nil` 只表示**业务请求被 401 拒了**（换票再来一次的号）。配对与换票的 401 是
     /// **定论**，必须读出信封里的原因上抛：配对码不对就要说配对码不对。
@@ -36,7 +62,9 @@ final class HttpTransport {
         treat401AsRefusal: Bool
     ) async throws -> Response? {
         guard let baseURL = baseURLProvider() else { throw RpcClientError.notActivated }
-        var urlRequest = URLRequest(url: baseURL.appendingPathComponent(Self.rpcPath))
+        // 端点名既是路径也是信封里的 `method` —— 两处必须同值，网关会核这一致性。
+        let endpoint = Request.endpoint
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("api/\(endpoint)"))
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // 身份只走传输头，不进消息体：消息体的每一个字段都是协议的一部分，
@@ -44,15 +72,15 @@ final class HttpTransport {
         if let authorization {
             urlRequest.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
         }
-        // 关联标记走头而不走消息体：它是传输层的事，不是协议形状的一部分 ——
-        // 放进消息体就得改契约、也会让「同一件事有两个地方描述」。
-        // 显式收参而不是在这里读 `RpcTrace.requestId`：让「这一发属于哪次请求」在签名上
-        // 看得见，也让换票那条自造 id 的路径能决定带不带。
+        // 关联标记走头而不走消息体：它是传输层的事，不是协议形状的一部分。
+        // 与体里的 `rpcId` 分工不同 —— 那个是应用层的「这次调用」，这个是传输层的追踪。
         if let requestId {
             urlRequest.setValue(requestId, forHTTPHeaderField: RpcTrace.headerName)
         }
         urlRequest.timeoutInterval = Self.timeout
-        urlRequest.httpBody = try JSONEncoder().encode(request)
+        urlRequest.httpBody = try JSONEncoder().encode(
+            ClientEnvelope(rpcId: requestId ?? "", method: endpoint, payload: .init(args: request))
+        )
 
         let payload: Data
         let urlResponse: URLResponse
@@ -62,7 +90,7 @@ final class HttpTransport {
             // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
             Log.warn(
                 Log.Module.gateway,
-                "transport: \(request.op) — \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
+                "transport: \(endpoint) — \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
             )
             throw RpcClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }
@@ -72,14 +100,14 @@ final class HttpTransport {
                 // 业务请求的 401 是「换个票再来」的信号，返回 nil 交外层换票重试；鉴权请求
                 // 的 401 自带语义，必须读出信封上抛。
                 guard treat401AsRefusal else {
-                    Log.debug(Log.Module.gateway, "401 on business op — renewing ticket")
+                    Log.debug(Log.Module.gateway, "401 on business endpoint — renewing ticket")
                     return nil
                 }
                 if let failure = envelopeFailure(in: payload) {
                     if failure.code == GatewayErrorCode.unauthenticated.rawValue {
                         Log.info(
                             Log.Module.gateway,
-                            "auth op refused: \(request.op) — \(failure.code) — \(failure.message)"
+                            "auth endpoint refused: \(endpoint) — \(failure.code) — \(failure.message)"
                         )
                         throw RpcClientError.unauthenticated
                     }
@@ -89,57 +117,53 @@ final class HttpTransport {
             }
             if http.statusCode != 200 {
                 Log.warn(Log.Module.gateway,
-                         "HTTP \(http.statusCode) on \(request.op) from \(baseURL.host ?? "?")")
+                         "HTTP \(http.statusCode) on \(endpoint) from \(baseURL.host ?? "?")")
                 throw RpcClientError.badStatus(http.statusCode)
             }
         }
 
-        let response: Response
+        let envelope: ServerEnvelope<Response>
         do {
-            response = try JSONDecoder().decode(Response.self, from: payload)
+            envelope = try JSONDecoder().decode(ServerEnvelope<Response>.self, from: payload)
         } catch {
             // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
             // 比解码器的报错信息有用得多。
             if let failure = envelopeFailure(in: payload) {
                 Log.warn(Log.Module.gateway,
-                         "\(request.op) refused: \(failure.code) — \(failure.message)")
+                         "\(endpoint) refused: \(failure.code) — \(failure.message)")
                 throw RpcClientError.refused(failure)
             }
-            // 解不出来**且**报文声明的版本与我们不同 → 真正的原因是版本不一致，不是报文畸形。
-            // 这两种的补救完全不同：一个要升级，一个要查代码。不先探这一眼的话，
-            // 「网关升级了」会被报成「报文畸形」，人就去翻解码器了。
-            if let version = versionProbe(in: payload), version != gatewayProtocolVersion {
-                Log.warn(Log.Module.gateway,
-                         "\(request.op) came back as protocol v\(version), we speak v\(gatewayProtocolVersion)")
-                throw RpcClientError.versionMismatch(version)
-            }
             Log.warn(Log.Module.gateway,
-                     "\(request.op) returned a malformed response: \(String(describing: error))")
+                     "\(endpoint) returned a malformed response: \(String(describing: error))")
             throw RpcClientError.malformedResponse(detail: String(describing: error))
         }
-        try response.validate()
-        return response
+
+        guard envelope.result.ok else {
+            throw RpcClientError.refused(
+                envelope.result.error
+                    ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue, message: "", details: [:])
+            )
+        }
+        if let value = envelope.result.value { return value }
+        // `ok: true` 而 `value` 整格缺席：协议上说「没有内容可回」时给 `{}`，
+        // 所以按空对象再解一次。全可选的应答类型解得开，其余在这里暴露成畸形。
+        guard let empty = try? JSONDecoder().decode(Response.self, from: Data("{}".utf8)) else {
+            throw RpcClientError.malformedResponse(detail: "\(endpoint): ok without a value")
+        }
+        return empty
     }
 }
 
 /// 只用来在解码失败时兜出信封里的错误。
 private struct FailureEnvelope: Decodable {
-    let error: GatewayFailure?
+    struct Result: Decodable {
+        let error: GatewayFailure?
+    }
+
+    let result: Result?
 }
 
 /// 信封里的 error（没有就 nil）。
 private func envelopeFailure(in payload: Data) -> GatewayFailure? {
-    (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.error
-}
-
-/// 只用来在解码失败时读出信封声明的版本。
-///
-/// `v` 声明成可选：读不出就返回 `nil`，那时确实分不清是畸形还是版本不同，
-/// 按畸形报 —— 不猜。
-private struct VersionProbe: Decodable {
-    let v: Int?
-}
-
-private func versionProbe(in payload: Data) -> Int? {
-    (try? JSONDecoder().decode(VersionProbe.self, from: payload))?.v
+    (try? JSONDecoder().decode(FailureEnvelope.self, from: payload))?.result?.error
 }

@@ -31,10 +31,10 @@ final class ApprovalAnswererTests: XCTestCase {
     /// 脚本：换票 + 一条 ok 的应答。
     private func script() {
         ScriptedURLProtocol.reset(replies: [
-            "refresh": .init(status: 200,
-                             body: #"{"v":2,"ok":true,"accessToken":"fresh","expiresAt":9999999999999}"#),
-            "approval-answer": .init(status: 200,
-                                     body: #"{"v":2,"ok":true,"eventId":"e7"}"#),
+            "mobile/refresh": .init(status: 200,
+                                    body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accessToken":"fresh","expiresAt":9999999999999,"deviceToken":"d"}}}"#),
+            "mobile/approvalAnswer": .init(status: 200,
+                                           body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"eventId":"e7"}}}"#),
         ])
     }
 
@@ -47,13 +47,16 @@ final class ApprovalAnswererTests: XCTestCase {
         try await answerer.answer(eventId: "e7", allow: true, answerId: "answer-1")
         try await answerer.answer(eventId: "e7", allow: false, answerId: "answer-2")
 
-        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["approval-answer"],
-                                 "这一发没到达 approval-answer —— 先看 op 名")
+        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["mobile/approvalAnswer"],
+                                 "这一发没到达 mobile/approvalAnswer —— 先看端点名")
         XCTAssertEqual(sent.count, 2)
-        XCTAssertEqual(sent[0]["decision"] as? String, "allow")
-        XCTAssertEqual(sent[1]["decision"] as? String, "deny", "用户按的是拒绝，发出去的必须是拒绝")
-        XCTAssertEqual(sent.map { $0["eventId"] as? String }, ["e7", "e7"])
-        XCTAssertEqual(sent.map { $0["answerId"] as? String }, ["answer-1", "answer-2"],
+        // 参数在 `payload.args` 这一格容器里；体顶层只有信封的三格。
+        let args = sent.compactMap { ($0["payload"] as? [String: Any])?["args"] as? [String: Any] }
+        XCTAssertEqual(args.count, 2, "两发都该带 args")
+        XCTAssertEqual(args[0]["decision"] as? String, "allow")
+        XCTAssertEqual(args[1]["decision"] as? String, "deny", "用户按的是拒绝，发出去的必须是拒绝")
+        XCTAssertEqual(args.map { $0["eventId"] as? String }, ["e7", "e7"])
+        XCTAssertEqual(args.map { $0["answerId"] as? String }, ["answer-1", "answer-2"],
                        "幂等键由调用方给，这一层不得另造一个")
     }
 }
