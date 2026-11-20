@@ -10,35 +10,15 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { formatLogFields } from './log.ts';
+import { formatLogFields } from './log.ts'
+import type { RemoteResult } from './wire/unary.ts';
 import { logTimestamp } from './timestamp.ts';
 
 
-/**
- * 写 op 的清单 —— **唯一真源**。
- *
- * 新增写 op 必须进这里：`handle` 按它决定记不记审计，判据按它对照 `rpc.ts` 的 case 语句
- * （`tests/audit.test.ts`）。少了这一步，新 op 会静默地没有审计记录 —— 而「静默少了」
- * 正是审计最不能有的失败方式。
- */
-export const WRITE_OPS = [
-  'session-prompt',
-  'approval-answer',
-  'command-execute',
-  'permission-select',
-  'model-select',
-  'session-create',
-  'workspace-create',
-  'workspace-delete',
-] as const;
-
-export type WriteOp = (typeof WRITE_OPS)[number];
-
-const WRITE_OP_SET: ReadonlySet<string> = new Set(WRITE_OPS);
-
-export function isWriteOp(op: string): op is WriteOp {
-  return WRITE_OP_SET.has(op);
-}
+// 写不写审计由端点表的 `write` 标记决定（`protocol/unary-endpoints.ts`）。
+// 这里曾经存过一份 `WRITE_OPS` 清单，与那个标记互为副本；信封统一之后只有一处判定，
+// 副本就成了「忘了同步也不会红」的第二真源 —— 删掉，判据在
+// `tests/remote/http-auth.test.ts`（每个写端点各记一条）。
 
 /** 一条审计记录。 */
 export interface AuditEntry {
@@ -189,16 +169,16 @@ export function defaultAuditDirectory(): string {
 export function auditEntryOf(
   op: string,
   message: Record<string, unknown>,
-  // 只取「成不成」与拒绝码两格 —— 旧信封（`{v, ok, error?}`）与新结果
-  // （`{ok, value}` / `{ok, error}`）都满足这个形状，过渡期两条路径共用一份。
-  answer: { readonly ok: boolean; readonly error?: { readonly code: string } },
+  // 只取「成不成」与拒绝码两格：`RemoteResult` 的其余格（`value` / `details`）
+  // 与审计无关 —— 审计回答「谁改了什么、成没成」，不复制应答内容。
+  answer: RemoteResult,
   requestId?: string,
 ): Omit<AuditEntry, 'at'> {
   const base = { op, target: auditTargetOf(op, message), request: requestId };
   return answer.ok
     ? { ...base, result: 'ok' }
-    // 拒绝时错误一定在：两条路径的失败形状都带 `error`，`??` 只为类型收窄。
-    : { ...base, result: 'refused', code: answer.error?.code ?? 'unknown' };
+    // 拒绝时 `error` 一定在（类型上由判别联合保证），这里不必再兜。
+    : { ...base, result: 'refused', code: answer.error.code };
 }
 
 /**

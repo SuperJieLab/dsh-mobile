@@ -4,6 +4,9 @@
  * 不算的一律 404 **纯文本** —— 它还没成为一条消息，没有 `rpcId` 可用，包不出信封。
  * 这条分界与流通道那条同源：归不到一条流/一个端点上的东西，是传输层的事。
  *
+ * 还有一条收口判据（T9b）：旧的 `POST /rpc` **必须**已经不在 —— 两条路径并存是过渡态，
+ * 留着它就成了永久的两套形状。
+ *
  * Run: node --test tests/remote/http-routing.test.ts
  */
 import { test } from 'node:test'
@@ -77,5 +80,14 @@ test('合法的两段路径不是 404 —— 正控，防止「全都 404」蒙�
   await withListener(async (post) => {
     const response = await post('/api/mobile/listSessions')
     assert.notEqual(response.status, 404, '这条路真的在表里，必须走到处理器那一层')
+  })
+})
+
+test('旧的 POST /rpc 已经不存在 —— 它返回 404 纯文本，不是信封', async () => {
+  await withListener(async (post) => {
+    const response = await post('/rpc')
+    assert.equal(response.status, 404, '旧入口必须已经删掉：并存的过渡态不该变成永久')
+    assert.match(response.headers.get('content-type') ?? '', /text\/plain/)
+    assert.equal(await response.text(), 'not found\n')
   })
 })

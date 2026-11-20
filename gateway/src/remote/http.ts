@@ -2,25 +2,23 @@
  * 面向手机的 HTTP 传输：路由一条请求、执行传输层守卫、把守身份 ——
  * socket 层调用方欠协议的一切，只要不是协议本身。
  *
- * 状态码不是协议 —— 结果由信封携带，协议层拒绝也是 HTTP 200。`/rpc`
- * 承载协议消息；其余只帮人区分「监听器活着」与「什么都没在听」。
+ * 状态码不是协议 —— 结果由信封携带，端点归上了、但业务没成，仍是 HTTP 200。
+ * 401 只有一个意思：打一条要票的端点却没票（客户端据此续期）。`/api/<命名空间>/<方法>`
+ * 承载一元调用；其余路径只帮人区分「监听器活着」与「什么都没在听」。
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
-import { failure, handle, type Limits } from '../protocol/rpc.ts'
+import type { Limits } from '../protocol/rpc.ts'
 import { invokeEndpoint, unaryEndpointOf } from '../protocol/unary-endpoints.ts'
-import { handleAuthOp } from '../protocol/auth-ops.ts'
-import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { CommandPort } from '../ports/command.ts'
 import type { PermissionPort } from '../ports/permission.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
-import { auditEntryOf, isWriteOp, type AuditLog } from '../audit.ts'
+import { auditEntryOf, type AuditLog } from '../audit.ts'
 import type { Metrics } from '../metrics.ts'
 import { CredentialVault } from './credentials.ts'
-import type { PairResponse, RefreshResponse } from '../wire/auth.ts'
 import { encodeServerResponse, parseClientRequest, type ClientRequest, type RemoteResult } from '../wire/unary.ts'
 import { createLogger, LogModule, currentRequestId, mintRequestId, runWithRequestId } from '../log.ts'
 
@@ -31,16 +29,20 @@ const log = createLogger(LogModule.http)
 const MAX_BODY_BYTES = 1_048_576
 
 /**
- * 拒绝时**不**留痕的 op —— 判定方向取「默认留痕」，这张表只装例外。
+ * 拒绝时**不**留痕的三条读端点 —— 判定方向取「默认留痕」，这张表只装例外。
  *
- * 三条都是纯读 op：它们的失败在手机上有明确落点（列表的失败横幅、详情的失败态），
- * 服务端再记一条只是把噪声翻倍。方向不能反过来列一张「要留痕的 op」名单 ——
- * 白名单漏掉一个新 op 是**静默**的（那个 op 失败之后无处归因），而黑名单漏掉只是多一条日志。
+ * 它们都是纯读：失败在手机上有明确落点（列表的失败横幅、详情的失败态），服务端再记
+ * 一条只是把噪声翻倍。方向不能反过来列一张「要留痕的端点」名单 —— 白名单漏掉一个新
+ * 端点之后**静默**（它失败时无处归因），而黑名单漏掉只是多一条日志。
  *
- * 表里的名字必须是 `handle` 真的认得的 op：改名或删 op 之后留下的死条目意味着这一条
- * 既没有日志、也没人知道它本该静默。
+ * 表里的名字必须是端点表真登记了的名字：改名或删端点之后留下的死条目意味着这一条
+ * 既没有日志、也没人知道它本该静默（`tests/structure.test.ts` 守这一条）。
  */
-export const SILENT_REFUSALS: ReadonlySet<string> = new Set(['list-sessions', 'snapshot', 'page'])
+export const SILENT_REFUSALS: ReadonlySet<string> = new Set([
+  'mobile/listSessions',
+  'mobile/snapshot',
+  'mobile/page',
+])
 
 /**
  * 这次请求的关联 id：客户端给的那个，没有就现铸一个。
@@ -105,7 +107,7 @@ async function respond(
   }
 
   if (path.startsWith('/api/')) {
-    // 一元调用的新路径：`/api/<命名空间>/<方法>`。端点名进路径是照上游的形状，
+    // 一元调用：`/api/<命名空间>/<方法>`。端点名进路径是照上游的形状，
     // 判它算不算一条端点、由谁处理，见 {@link respondToEndpoint}。
     if (request.method !== 'POST') {
       response.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'POST' })
@@ -116,26 +118,12 @@ async function respond(
     return
   }
 
-  if (path !== '/rpc') {
-    // 存活探测，以及任何未知路径的回答。纯传输层：不涉协议消息，
-    // 也不涉信封。版本号取常量而非硬编码 —— 它能升，这句话不能跟着说谎。
-    response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
-    response.end(path === '/'
-      ? `dsh-mobile-gateway alive — protocol v${PROTOCOL_VERSION}, POST /rpc for the protocol\n`
-      : 'not found\n')
-    return
-  }
-
-  if (request.method !== 'POST') {
-    response.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'POST' })
-    response.end('use POST /rpc\n')
-    return
-  }
-
-  // 整条链路都在这个作用域里：读体、鉴权、分派、拒绝时的留痕。任何一步的行都属于
-  // 同一次请求，所以标记要在这里设、而不是等到 `handle` 那一步 —— 否则「401 被拒」
-  // 那种最需要归因的行反而不带标记。
-  await runWithRequestId(requestIdOf(request.headers), () => respondInScope(request, response, deps))
+  // 存活探测，以及任何未知路径的回答。纯传输层：不涉协议消息，也不涉信封。
+  // 那句话要指向真正承载协议的地方 —— 指向一个已删掉的路径会让排障的人找错地方。
+  response.writeHead(path === '/' ? 200 : 404, { 'content-type': 'text/plain; charset=utf-8' })
+  response.end(path === '/'
+    ? 'dsh-mobile-gateway alive — POST /api/<namespace>/<method> for the protocol\n'
+    : 'not found\n')
 }
 
 /**
@@ -252,85 +240,23 @@ async function answerEndpoint(
       auditEntryOf(endpoint.legacyOp, parsed.payload.args, result, currentRequestId()),
     )
   }
+  // 每个端点一次计数，成败各一 —— 审计只记写端点，而「哪个读端点在失败」同样要能回答。
+  // 标签沿用旧 op 名：`/metrics` 的历史曲线按它累积，换名字会让曲线断掉。
   deps.metrics?.count('dsh_rpc_requests_total', {
     op: endpoint.legacyOp,
     result: result.ok ? 'ok' : 'refused',
   })
+  if (endpoint.unauthenticated === true) {
+    // 免票的两条各有自己的说法（配对成功是「关系建立了」的锚点，续期被拒是关系被掐断
+    // 的唯一时刻），所以它们由 `logAuthEndpoint` 记，不再叠一条通用的拒绝行。
+    logAuthEndpoint(endpointName, result)
+  } else if (!result.ok && !SILENT_REFUSALS.has(endpointName)) {
+    // 拒绝在服务端留证据：手机对一次失败只显示一行状态，归因要回到网关日志。
+    // 静默的例外见 {@link SILENT_REFUSALS}。
+    log.error('endpoint refused', { endpoint: endpointName, error: JSON.stringify(result.error) })
+  }
 
   return { status: 200, result }
-}
-
-/** `respond` 的 `/rpc` POST 分支，已带请求标记。 */
-async function respondInScope(
-  request: IncomingMessage,
-  response: ServerResponse,
-  deps: RpcListenerDeps,
-): Promise<void> {
-
-  let body: string
-  try {
-    body = await readBody(request)
-  } catch (error) {
-    // 根本不是消息，按传输失败拒绝，而不是用带着无意义码的协议信封作答。
-    response.writeHead(error instanceof TooLargeError ? 413 : 400, { 'content-type': 'text/plain; charset=utf-8' })
-    response.end(`malformed request: ${String(error)}\n`)
-    return
-  }
-
-  let message: unknown
-  try {
-    message = JSON.parse(body)
-  } catch (error) {
-    response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
-    response.end(`malformed request: ${String(error)}\n`)
-    return
-  }
-
-  // 身份：auth op 的凭据放在体内，其余 op 都需要有效的 access token；
-  // 被拒时以 HTTP 401 附协议信封。
-  const op = (message as { op?: unknown } | null)?.op
-  if (op === 'pair' || op === 'refresh') {
-    const answer = handleAuthOp(op, message, deps.vault)
-    // 留痕在这里而不是判定里：判定是纯的，日志是传输层的事。
-    logAuthOp(op, answer)
-    // 「没成」就是 401 —— 这一层不需要再判一次为什么失败。
-    response.writeHead(answer.ok ? 200 : 401, { 'content-type': 'application/json; charset=utf-8' })
-    response.end(`${JSON.stringify(answer)}\n`)
-    return
-  }
-
-  if (!deps.vault.authenticate(request.headers.authorization)) {
-    // info 而非 warn：票过期后的这次 401 是续期编排的正常一环，客户端拿到 401 会
-    // 静默换票重试；warn 留给 refresh 本身被拒（关系被掐）。
-    log.info('op refused: no live access token', { op: String(op) })
-    response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    response.end(`${JSON.stringify(failure('unauthenticated', 'missing or expired access token — pair first, then refresh'))}\n`)
-    return
-  }
-
-  const answer = await handle(message, { session: deps.sessionPort, write: deps.writePort, model: deps.modelPort, command: deps.commandPort, workspace: deps.workspacePort, permission: deps.permissionPort }, Date.now, deps.limits)
-  // 每个 op 一次计数，成败各一。这里记的是**所有** op —— 审计只记写 op，
-  // 而「哪个读 op 在失败」同样要能回答。
-  if (typeof op === 'string') {
-    deps.metrics?.count('dsh_rpc_requests_total', {
-      op,
-      result: answer.ok ? 'ok' : 'refused',
-    })
-  }
-  // 写 op 一条对应一条，记**结果**不记意图。读 op 不记 —— 审计回答「谁改了什么」，
-  // 而读不改变任何东西。
-  if (typeof op === 'string' && isWriteOp(op)) {
-    deps.auditLog?.append(
-      auditEntryOf(op, message as Record<string, unknown>, answer, currentRequestId()),
-    )
-  }
-  // 拒绝在服务端留证据：手机对一次失败的写 op 只显示一行状态，对一次失败的读 op
-  // 只在它自己那一屏留个提示 —— 归因要回到网关日志。静默的例外见 {@link SILENT_REFUSALS}。
-  if (!answer.ok && typeof op === 'string' && !SILENT_REFUSALS.has(op)) {
-    log.error('op refused', { op: String(op), error: JSON.stringify(answer.error) })
-  }
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-  response.end(`${JSON.stringify(answer)}\n`)
 }
 
 /**
@@ -338,20 +264,19 @@ async function respondInScope(
  *
  * 三条各有各的读者：配对成功是「关系建立了」的锚点（之后列表还 401 就先看它）；
  * 配对失败要能区分「码错了」与「码过期了」；续期被拒是服务端**掐断关系**的唯一时刻。
+ *
+ * 它挂在**端点名**上：网关这一侧只认端点名，旧 op 名只留给审计与指标的历史词汇。
  */
-function logAuthOp(
-  op: 'pair' | 'refresh',
-  answer: PairResponse | RefreshResponse,
-): void {
-  if (op === 'pair') {
-    if (answer.ok) {
+function logAuthEndpoint(endpoint: string, result: RemoteResult): void {
+  if (endpoint === 'mobile/pair') {
+    if (result.ok) {
       log.info('pair accepted — device relationship established')
     } else {
-      log.warn('pair refused', { error: answer.error?.message ?? 'unknown' })
+      log.warn('pair refused', { error: result.error.message })
     }
     return
   }
-  if (!answer.ok) {
+  if (!result.ok) {
     log.warn('refresh refused: unknown device token — relationship severed')
   }
 }

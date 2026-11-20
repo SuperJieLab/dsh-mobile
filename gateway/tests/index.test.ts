@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, inject } from '../src/index.ts'
 import { CredentialVault } from '../src/remote/credentials.ts'
-import { PROTOCOL_VERSION } from '../src/wire/rpc.ts'
+import { call, type UnaryAnswer } from './helpers/http.ts'
 
 /** Random high port: two tests must not race each other or anything real. */
 function freshPort(base: number): number {
@@ -188,13 +188,8 @@ async function untilUp(port: number, request: () => Promise<Response>): Promise<
 
 /** Walk the real auth path: device token → `refresh` op → live access token. */
 async function accessTokenFor(port: number): Promise<string> {
-  const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ v: 2, op: 'refresh', deviceToken: DEVICE_TOKEN }),
-  })
-  assert.equal(response.status, 200)
-  const body = await response.json() as { ok: boolean; accessToken?: string }
+  const body = await call(port, 'mobile/refresh', { deviceToken: DEVICE_TOKEN }) as UnaryAnswer & { ok: boolean; accessToken?: string }
+  assert.equal(body.status, 200)
   assert.equal(body.ok, true)
   assert.match(body.accessToken ?? '', /^\S+$/)
   return body.accessToken!
@@ -214,8 +209,8 @@ function streamWithToken(port: number, access: string): WebSocket {
 
 test('the pair op answers with a full envelope and issues a device token', async () => {
   // 这条路径此前没有判据：`pair` 的四条拒绝理由由 `protocol/auth.test.ts` 覆盖，
-  // 而**回包长什么样**只在这里能看到 —— 两条成功应答现在由 `success()` 构造，
-  // 少了这条断言，构造方式变了也没人知道。
+  // 而**回包长什么样**只在这里能看到 —— 应答信封由 `wire/unary.ts` 的
+  // `encodeServerResponse` 构造，少了这条断言，构造方式变了也没人知道。
   const port = freshPort(39_100)
   const credentialsPath = tempCredentialsPath()
   const { teardown } = install('127.0.0.1', port, credentialsPath)
@@ -226,28 +221,20 @@ test('the pair op answers with a full envelope and issues a device token', async
     // 而不是去解析控制台输出。
     const code = new CredentialVault(credentialsPath).pairingCode()
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ v: PROTOCOL_VERSION, op: 'pair', code }),
-    })
-
-    assert.equal(response.status, 200)
-    const body = await response.json() as { v?: number; ok?: boolean; deviceToken?: string }
-    assert.deepEqual({ v: body.v, ok: body.ok }, { v: PROTOCOL_VERSION, ok: true },
-      'the success envelope carries the same two fixed fields as a refusal')
+    const body = await call(port, 'mobile/pair', { code }) as UnaryAnswer & { deviceToken?: string }
+    assert.equal(body.status, 200)
+    assert.equal(body.ok, true)
+    // 新信封没有 `v`：版本闸门退役了（见契约 §七）。这一条顺带守住「别把 v 悄悄加回来」。
+    assert.equal('v' in body, false, 'the endpoint envelope carries no version field')
     assert.match(body.deviceToken ?? '', /^\S+$/)
 
     // 同一枚码只能用一次 —— 顺带证明这一条打的是真规则，不是某个假分支。
-    const again = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ v: PROTOCOL_VERSION, op: 'pair', code }),
-    })
-    assert.equal(again.status, 401)
-    const refused = await again.json() as { v?: number; ok?: boolean; error?: { code: string } }
-    assert.deepEqual({ v: refused.v, ok: refused.ok, code: refused.error?.code },
-      { v: PROTOCOL_VERSION, ok: false, code: 'invalid-pairing-code' })
+    const refused = await call(port, 'mobile/pair', { code }) as UnaryAnswer & { error?: { code: string } }
+    // 配对失败从前是 401。现在它是一条**归到了端点的**调用，业务失败用信封表达，
+    // 状态码 200；401 留给「打普通端点却没票」。手机侧据此的分别见判据 9。
+    assert.equal(refused.status, 200)
+    assert.equal(refused.ok, false)
+    assert.equal(refused.error?.code, 'invalid-pairing-code')
   } finally {
     teardown()
   }
@@ -265,8 +252,9 @@ test('the assembled plugin answers a real request on a real port', async () => {
     assert.match(body, /dsh-mobile-gateway alive/)
     // 版本号取常量作期望值：写死 `v2` 的断言与写死 `v2` 的实现一起过期，
     // 于是那句话可以静默说谎（升到 v3 时报的仍是 2）。
-    assert.ok(body.includes(`protocol v${PROTOCOL_VERSION},`),
-      `the liveness line must report the running protocol version: ${body.trim()}`)
+    // 存活那行要说出协议在哪：`/rpc` 已经不存在了，指向它的句子会让排障的人找错地方。
+    assert.ok(body.includes('POST /api/'),
+      `the liveness line must name the endpoint path: ${body.trim()}`)
   } finally {
     teardown()
   }
@@ -281,14 +269,8 @@ test('a protocol message is answered with an envelope even when nothing is behin
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
-    })
-
-    assert.equal(response.status, 200)
-    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'mobile/listSessions', {}, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    assert.equal(body.status, 200)
     // The fake context has no services, so the read fails — and must fail as a
     // readable refusal, never as a dead connection.
     assert.equal(body.ok, false)
@@ -340,20 +322,14 @@ test('model-catalog is answered with the host catalog over real HTTP when the co
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'model-catalog' }),
-    })
-
-    assert.equal(response.status, 200)
-    const body = await response.json() as {
+    const body = await call(port, 'session/modelCatalog', {}, access) as UnaryAnswer & {
       ok: boolean
       default?: { provider: string; model: string }
       groups?: unknown[]
       failures?: unknown[]
       routableProviders?: unknown
     }
+    assert.equal(body.status, 200)
     assert.equal(body.ok, true)
     assert.deepEqual(body.default, { provider: 'deepseek', model: 'v3.2' })
     assert.equal(body.groups?.length, 1)
@@ -377,14 +353,8 @@ test('model-select reaches the controller and answers the normalized selection',
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'model-select', sessionId: 's1', provider: 'deepseek', model: 'v3.2' }),
-    })
-
-    assert.equal(response.status, 200)
-    const body = await response.json() as { ok: boolean; selected?: unknown }
+    const body = await call(port, 'session/selectModel', { sessionId: 's1', provider: 'deepseek', model: 'v3.2' }, access) as UnaryAnswer & { ok: boolean; selected?: unknown }
+    assert.equal(body.status, 200)
     assert.equal(body.ok, true)
     // Upstream's answer is the normalized pair — relayed, not re-derived (决定 3).
     assert.deepEqual(body.selected, { provider: 'deepseek', model: 'v3.2' })
@@ -403,14 +373,8 @@ test('model ops are answered with an envelope even when no controller is behind 
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'model-catalog' }),
-    })
-
-    assert.equal(response.status, 200)
-    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'session/modelCatalog', {}, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    assert.equal(body.status, 200)
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'internal-error')
   } finally {
@@ -455,21 +419,17 @@ test('the command channel picks up a service it never injected, and reaches it o
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const send = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
-      const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-        body: JSON.stringify(body),
-      })
-      assert.equal(response.status, 200)
-      return await response.json() as Record<string, unknown>
+    const send = async (endpoint: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const answer = await call(port, endpoint, args, access)
+      assert.equal(answer.status, 200)
+      return answer
     }
 
-    const catalog = await send({ v: 2, op: 'command-catalog', sessionId: 's1' })
+    const catalog = await send('commands/list', { sessionId: 's1' })
     assert.equal(catalog.ok, true, `the lazy resolve must reach the host service: ${JSON.stringify(catalog.error)}`)
     assert.deepEqual((catalog.commands as { name: string }[]).map(row => row.name), ['compact', 'permission'])
 
-    const executed = await send({ v: 2, op: 'command-execute', sessionId: 's1', line: '/permission read-only' })
+    const executed = await send('commands/execute', { sessionId: 's1', line: '/permission read-only' })
     assert.equal(executed.ok, true)
     assert.deepEqual(commands.executed, ['/permission read-only'], '整行原样交给宿主，网关不拆参数')
   } finally {
@@ -486,14 +446,8 @@ test('command ops are refused as an envelope when the command service is absent'
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'command-catalog', sessionId: 's1' }),
-    })
-
-    assert.equal(response.status, 200)
-    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'commands/list', { sessionId: 's1' }, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    assert.equal(body.status, 200)
     // 缺席发生在调用时，兑现成同一枚拒绝码 —— 手机不能把「本应拒答」看成死连接。
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'internal-error')
@@ -538,14 +492,8 @@ test('a business request without credentials is refused as 401 unauthenticated',
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
-    })
-
-    assert.equal(response.status, 401)
-    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'mobile/listSessions', {}) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    assert.equal(body.status, 401)
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
@@ -561,14 +509,8 @@ test('a bad access token is refused exactly like a missing one', async () => {
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-token-we-issued' },
-      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
-    })
-
-    assert.equal(response.status, 401)
-    const body = await response.json() as { error?: { code: string } }
+    const body = await call(port, 'mobile/listSessions', {}, 'not-a-token-we-issued') as UnaryAnswer & { error?: { code: string } }
+    assert.equal(body.status, 401)
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()
@@ -583,14 +525,11 @@ test('a wrong device token cannot mint an access token', async () => {
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
 
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ v: 2, op: 'refresh', deviceToken: 'not-the-paired-token' }),
-    })
-
-    assert.equal(response.status, 401)
-    const body = await response.json() as { error?: { code: string } }
+    const body = await call(port, 'mobile/refresh', { deviceToken: 'not-the-paired-token' }) as UnaryAnswer & { error?: { code: string } }
+    // 免票端点上的失败是**业务失败**：200 + 信封里的 `unauthenticated`。
+    // 401 现在只有一个意思 —— 打普通端点时没有有效票。两者必须分开：客户端拿 401
+    // 会去续期，而「续期被拒」若也是 401，它就原地打转。
+    assert.equal(body.status, 200)
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()
@@ -685,27 +624,21 @@ test('a real HTTP approval-answer settles a held waterfall frame; the consumed q
     })
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    const send = async (body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> => {
-      const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-        body: JSON.stringify(body),
-      })
-      return { status: response.status, body: await response.json() as Record<string, unknown> }
-    }
+    const send = (args: Record<string, unknown>): Promise<UnaryAnswer> =>
+      call(port, 'mobile/approvalAnswer', args, access)
 
-    const first = await send({ v: 2, op: 'approval-answer', eventId: 'wire-1', decision: 'allow', answerId: 'a1' })
+    const first = await send({ eventId: 'wire-1', decision: 'allow', answerId: 'a1' })
     assert.equal(first.status, 200)
-    assert.equal(first.body.ok, true)
+    assert.equal(first.ok, true)
     assert.deepEqual(gateway.results, [{
       clientId: 'fake-client',
       eventId: 'wire-1',
       outcome: { kind: 'result', value: 'allowed-once' },
     }], 'the outcome must reach the gateway result door in the upstream vocabulary')
 
-    const consumed = await send({ v: 2, op: 'approval-answer', eventId: 'wire-1', decision: 'deny', answerId: 'a2' })
-    assert.equal(consumed.body.ok, false)
-    assert.equal((consumed.body.error as { code?: string }).code, 'unknown-approval')
+    const consumed = await send({ eventId: 'wire-1', decision: 'deny', answerId: 'a2' })
+    assert.equal(consumed.ok, false)
+    assert.equal(consumed.error?.code, 'unknown-approval')
   } finally {
     teardown()
   }
@@ -822,13 +755,8 @@ test('a write op without an access token is refused exactly like a read', { time
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ v: 2, op: 'session-prompt', sessionId: 's', text: 'hi', promptId: 'p' }),
-    })
-    assert.equal(response.status, 401)
-    const body = await response.json() as { error?: { code?: string } }
+    const body = await call(port, 'session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }) as UnaryAnswer & { error?: { code?: string } }
+    assert.equal(body.status, 401)
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
     teardown()
@@ -843,13 +771,8 @@ test('session-prompt without a controller behind the port fails as an envelope, 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'session-prompt', sessionId: 's', text: 'hi', promptId: 'p' }),
-    })
-    assert.equal(response.status, 200)
-    const body = await response.json() as { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    assert.equal(body.status, 200)
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'internal-error')
   } finally {
@@ -1113,17 +1036,12 @@ test('the list works against the runtime cache face that dropped inheritedEventC
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
-    })
-    assert.equal(response.status, 200)
-    const body = await response.json() as {
+    const body = await call(port, 'mobile/listSessions', {}, access) as UnaryAnswer & {
       ok: boolean
       error?: { code: string; message: string }
       sessions?: { id: string; title?: string; updatedAt: number; running: boolean }[]
     }
+    assert.equal(body.status, 200)
     assert.equal(body.ok, true, `the list must not fail on the cache face: ${JSON.stringify(body.error)}`)
     // Newest first: the live session's `lastPromptAt` is absent, so it falls
     // back to its (later) creation time.
@@ -1161,17 +1079,12 @@ test('one row whose projection read throws still lists — without its cells', {
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
-    const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-      body: JSON.stringify({ v: 2, op: 'list-sessions' }),
-    })
-    assert.equal(response.status, 200)
-    const body = await response.json() as {
+    const body = await call(port, 'mobile/listSessions', {}, access) as UnaryAnswer & {
       ok: boolean
       error?: { code: string }
       sessions?: { id: string; title?: string; updatedAt: number }[]
     }
+    assert.equal(body.status, 200)
     assert.equal(body.ok, true, `a hint must not fail the list: ${JSON.stringify(body.error)}`)
     assert.deepEqual(body.sessions?.map(row => [row.id, row.title]), [
       ['broken-1', undefined],

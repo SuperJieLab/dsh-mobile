@@ -128,7 +128,7 @@ export interface ModelSelectionSource {
 
 /**
  * 基于宿主服务构建会话端口：`persistence` 读日志（供 `snapshot` 和 `page`），
- * `listing` 供给列表路径的原料，返回的端口即 `handle()` 读取的入口。
+ * `listing` 供给列表路径的原料，返回的端口即端点表里那几条读处理器读取的入口。
  * `modelSelection` 可选：缺席意味着每个分片都不带基线发出，对没有投影的组装
  * 而言这就是最诚实的答案。
  */

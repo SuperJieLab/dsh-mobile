@@ -170,7 +170,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     const metrics = new Metrics()
     const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
 
-    // 流通道与监听器共享：同端口，`POST /rpc` 走单向调用，`/rpc/stream`
+    // 流通道与监听器共享：同端口，`POST /api/<命名空间>/<方法>` 走一元调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
     const streamHandler = attachStreamHandler(server, streamSourceOver(ctx), vault, {
       // 打开帧的字节上界与 HTTP 路径的上限同源（同一个 `limits`）—— 两端各自

@@ -16,9 +16,6 @@
 
 import type { ModelSelection } from './model.ts'
 
-/** 本构建唯一使用的协议版本。 */
-export const PROTOCOL_VERSION = 2
-
 /**
  * 线上的一条会话事件：DSH 事件对象原样，未知字段一并保留。协议承诺下列
  * 字段存在，不承诺排他，客户端必须容忍未知字段。
@@ -107,27 +104,3 @@ export interface SessionSlice {
    */
   model?: ModelSelection
 }
-
-/** 拒绝。`code` 是一个稳定的语义码（客户端按它决定重连、重翻还是放弃），
- * 不是给人看的句子 —— 句子在 `message` 里。 */
-export interface WireError {
-  code: string
-  message: string
-}
-
-/** 任一成功应答。额外字段按 op 而定。 */
-export interface OkResponse {
-  v: typeof PROTOCOL_VERSION
-  ok: true
-  [field: string]: unknown
-}
-
-/** 任一被拒的应答。 */
-export interface ErrorResponse {
-  v: typeof PROTOCOL_VERSION
-  ok: false
-  error: WireError
-}
-
-/** 一条应答，成功或被拒。 */
-export type Response = OkResponse | ErrorResponse

@@ -28,6 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 
 import type { MuxServerFrame, StreamId } from '../src/wire/mux.ts'
+import { registeredEndpointNames } from '../src/protocol/unary-endpoints.ts'
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../src')
 
@@ -584,21 +585,28 @@ function topLevelKeysOf(body: string): string[] {
   return keys
 }
 
-test('transport does not build protocol envelopes by hand', () => {
-  // 为什么需要这一条：「判定值只有一个家」那张表只列 `protocol/` 的导出，而
-  // 第二份构造器是 `remote/` 里的私有函数 —— 表看不见它。R15 期3 之前
-  // `remote/http.ts` 就有一份 `refusal()`，与 `failure()` 逐字同义；版本号或
-  // 信封字段升一次，两份就会分叉，而手机端只认其中一份。
-  const offenders = filesUnder(join(SRC, 'remote')).flatMap(file =>
-    envelopeLiteralsIn(readFileSync(file, 'utf8')).map(literal => `${where(file)}: ${literal}`))
-  assert.deepEqual(offenders, [],
-    `the envelope has two fixed fields and one home (protocol/rpc.ts 的 failure / success):\n${offenders.join('\n')}`)
+test('the endpoint envelope has exactly one home, and transport does not build it', () => {
+  // 信封（`type` / `rpcId` / `result` 那三格）只在 `wire/unary.ts` 的
+  // `encodeServerResponse` / `parseClientRequest` 里出现。为什么值得一条判据：
+  // 「判定值只有一个家」那张表只列导出，第二份构造器若是 `remote/` 里的私有函数，
+  // 表看不见它 —— R15 期3 之前 `remote/http.ts` 就有一份 `refusal()`，与 `failure()`
+  // 逐字同义，升一次字段就分叉，而手机端只认其中一份。
+  const literals = (text: string): number =>
+    [...text.matchAll(/type:\s*'(server-response|client-request)'/g)].length
 
-  // 活性断言：扫描器自己得看得见信封。拿判定层那个真构造器作正控 ——
-  // 少了这一条，扫描器瞎了与「没人手写」长得一样（F2 记的那类缺陷）。
-  const control = envelopeLiteralsIn(readFileSync(join(SRC, 'protocol', 'rpc.ts'), 'utf8'))
-  assert.ok(control.length >= 2,
-    `the scanner must see the real constructors in protocol/rpc.ts — found ${control.length}`)
+  const home = join(SRC, 'wire', 'unary.ts')
+  const offenders = [...filesUnder(SRC)]
+    .filter(file => file !== home)
+    .map(file => [file, literals(stripComments(readFileSync(file, 'utf8')))] as const)
+    .filter(([, count]) => count > 0)
+    .map(([file]) => relative(SRC, file))
+  assert.deepEqual(offenders, [],
+    `信封的字面量只该在 wire/unary.ts 里出现，这些文件自己拼了一份：${offenders.join(', ')}`)
+
+  // 活性断言：扫描器得看得见信封。少了这一条，扫描器瞎了与「没人手写」长得一样。
+  const control = literals(stripComments(readFileSync(home, 'utf8')))
+  assert.ok(control >= 2,
+    `the scanner must see the envelope literal in wire/unary.ts — found ${control}`)
 })
 
 /**
@@ -1282,8 +1290,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   {
     home: 'protocol/rpc.ts',
     values: [
-      'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'handle', 'positiveOrDefault',
-      'failure', 'success', 'refused', 'unwrap',
+      'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'positiveOrDefault', 'refused',
       'listSessionsOf', 'snapshotOf', 'pageOf', 'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
       'modelSelectOf', 'commandExecuteOf', 'permissionSelectOf', 'sessionCreateOf',
       'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'sessionPromptValue',
@@ -1292,7 +1299,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   {
     home: 'protocol/unary-endpoints.ts',
-    values: ['unaryEndpointOf', 'registeredEndpointNames', 'isWriteEndpoint', 'writeEndpointLegacyOps', 'invokeEndpoint'],
+    values: ['unaryEndpointOf', 'registeredEndpointNames', 'isWriteEndpoint', 'invokeEndpoint'],
     types: ['UnaryContext', 'UnaryEndpoint', 'UnaryAuthPort'],
   },
   {
@@ -1308,7 +1315,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   {
     home: 'protocol/auth-ops.ts',
-    values: ['handleAuthOp', 'pairOf', 'refreshOf'],
+    values: ['pairOf', 'refreshOf'],
     types: ['AuthPort'],
   },
   {
@@ -1468,83 +1475,31 @@ export function declarationScopeOf(source: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// V11：凭据类 op 的形状有唯一出处
+// V11（已退役）：凭据类 op 的形状有唯一出处
 // ---------------------------------------------------------------------------
-
-test('the credential ops\' shapes have one declaration and at least one consumer', () => {
-  // 这两条 op 绕过统一入口，形状曾经只写在传输层的函数体里 —— 手机端另有一份
-  // Swift 声明，两边靠人对齐。现在它们与其余 op 一样住在 wire/。
-  //
-  // 两条判据缺一不可，因为失败有两种形态：
-  //   ① **声明被复制**一份到别处 → 两边各自演进；
-  //   ② 声明还留着、但**没人用它**（形状被内联成匿名对象类型）→ 那份声明变成纯文档，
-  //      改它不会让任何地方编译失败。只查①会漏掉②，而那正是本期的失败模式。
-  const home = join(SRC, 'wire', 'auth.ts')
-  const expected = ['PairRequest', 'RefreshRequest', 'PairResponse', 'RefreshResponse']
-
-  const declaredAt = new Map<string, string[]>()
-  const mentionedIn = new Map<string, string[]>()
-  for (const file of filesUnder(SRC)) {
-    const source = readFileSync(file, 'utf8')
-    const scope = declarationScopeOf(source)
-    const relativePath = relative(SRC, file)
-    for (const name of expected) {
-      // 类型的声明形态是闭集：`interface X` / `type X` / `class X`，关键字紧邻名字
-      // （不管前面挂什么修饰符）。不按「行首有没有 export」判 —— 那是开放集。
-      if (new RegExp(`(?:^|[^A-Za-z0-9_$])(?:interface|type|class)\\s+${name}\\b`).test(scope)) {
-        declaredAt.set(name, [...(declaredAt.get(name) ?? []), relativePath])
-      }
-      // 「提到过」用完整源码（含 import）：`import type { X }` 就是一次消费。
-      if (new RegExp(`\\b${name}\\b`).test(stripComments(source))) {
-        mentionedIn.set(name, [...(mentionedIn.get(name) ?? []), relativePath])
-      }
-    }
-  }
-
-  const complaints = expected.flatMap(name => {
-    const places = declaredAt.get(name) ?? []
-    const out: string[] = []
-    if (places.length === 0) out.push(`${name}: not declared anywhere — renamed?`)
-    else if (places.length > 1) out.push(`${name}: declared in ${places.join(', ')} — a second source will drift`)
-    else if (places[0] !== 'wire/auth.ts') out.push(`${name}: declared in ${String(places[0])}, expected wire/auth.ts`)
-    // 消费者：home 之外至少一个文件提到它。
-    const consumers = (mentionedIn.get(name) ?? []).filter(file => file !== 'wire/auth.ts')
-    if (consumers.length === 0) out.push(`${name}: nobody uses it — an inline anonymous type is the same split`)
-    return out
-  })
-  assert.deepEqual(complaints, [],
-    'each credential shape needs one declaration in wire/auth.ts **and** a consumer that would fail to compile if it changed')
-
-  // 正控：`wire/auth.ts` 的导出面恰好是这四个，多一个就红（防止形状悄悄长出来）。
-  assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).shapes.sort(), [...expected].sort(),
-    'and nothing else is declared there')
-
-  // 它们没有编解码器：解析与校验在别的层（见该文件的头注释），所以其函数面必须为空。
-  assert.deepEqual(exportSurfaceOf(readFileSync(home, 'utf8')).functions, [],
-    'no codec here — validating a pairing code is a rule, not a shape')
-})
+//
+// 原判据守的是 `wire/auth.ts` 里 `PairRequest` / `RefreshRequest` / `PairResponse` /
+// `RefreshResponse` 四个型：一处声明、至少一个消费者。那四个型随旧信封一起删掉了——
+// 两条凭据端点现在与其余端点同形：入参在 `payload.args` 里各一格（`code` /
+// `deviceToken`），应答在 `result.value` 里，形状由 `wire/unary.ts` 统一承载，
+// 没有第二份声明可漂。
+//
+// 留下来的那半（「这两条免票」）由 `tests/remote/http-auth.test.ts` 的两条行为判据守着，
+// 比静态扫描更能证伪：去掉 `unauthenticated` 标记，那条判据会红（已实测）。
 
 // ---------------------------------------------------------------------------
 // V12：拒绝留痕的豁免表与真实 op 对得上
 // ---------------------------------------------------------------------------
 
-/**
- * `handle` 的 switch 认得哪些 op。闭集取自**分派本身**，不是另抄一份名单 ——
- * 第二份名单与第一份一起漂，正是这条判据要防的东西。
- */
-function dispatchedOps(): string[] {
-  const source = stripComments(readFileSync(join(SRC, 'protocol/rpc.ts'), 'utf8'))
-  return [...source.matchAll(/case '([a-z0-9-]+)':/g)].map(match => match[1]!)
-}
-
-test('the silent-refusal list only names ops the protocol actually dispatches', async () => {
+test('the silent-refusal list only names endpoints the table actually registers', async () => {
   // 留痕的默认方向是「失败就记」，所以豁免表是唯一需要人维护的那张。写错的形态很安静：
-  // 一个改了名或已删除的 op 留在表里，那一条 op 的失败从此既没有日志、也没人知道它本该静默。
-  const ops = dispatchedOps()
-  // 活性锚：扫描器若因为正则或路径失效而读空，下面的差集会「通过」。
-  for (const op of ['session-prompt', 'command-execute', 'command-catalog', 'model-catalog']) {
-    assert.ok(ops.includes(op), `the op scan did not even see "${op}" — it is reading nothing`)
-  }
+  // 一个改了名或已删除的端点留在表里，那一条的失败从此既没有日志、也没人知道它本该静默。
+  //
+  // 闭集取自**端点表本身**（`registeredEndpointNames()`），不是另抄一份名单 ——
+  // 第二份名单与第一份一起漂，正是这条判据要防的东西。
+  const known = new Set(registeredEndpointNames())
+  // 活性锚：表读空时下面的差集会「通过」。
+  assert.ok(known.size >= 16, `端点表只读到 ${known.size} 个名字 —— 先怀疑这里，别信差集`)
 
   const module = await import(pathToFileURL(join(SRC, 'remote/http.ts')).href) as {
     SILENT_REFUSALS?: ReadonlySet<string>
@@ -1552,8 +1507,8 @@ test('the silent-refusal list only names ops the protocol actually dispatches', 
   const silent = module.SILENT_REFUSALS
   assert.ok(silent instanceof Set, 'SILENT_REFUSALS must be an exported Set — otherwise this judge reads nothing')
 
-  assert.deepEqual([...silent].filter(op => !ops.includes(op)), [],
-    'a silent-refusal entry that names no dispatched op protects nothing and hides the next drift')
+  assert.deepEqual([...silent].filter(name => !known.has(name)), [],
+    'a silent-refusal entry that names no registered endpoint protects nothing and hides the next drift')
 })
 
 // ---------------------------------------------------------------------------
@@ -1664,17 +1619,21 @@ test('L2: broadcast is gone and clientCount survived it', () => {
  * 有两个入口，而两个入口的失败处置至今不同（一元 op 有错误回包，流里没有）。
  */
 test('L6: approval answers never travel on a stream', () => {
+  // 一条审批应答是**一元调用**（`mobile/approvalAnswer`），不是流的货物。流上只走
+  // 「问题来了」与「问题撤了」，答案从另一条路回去 —— 混在一起会让「谁在等这个答案」
+  // 有两个来源。
+  const endpoint = 'mobile/approvalAnswer'
   const streamFiles = filesUnder(join(SRC, 'remote'))
   assert.ok(streamFiles.length >= 3, `only scanned ${streamFiles.length} transport files`)
   for (const file of streamFiles) {
     const code = stripComments(readFileSync(file, 'utf8'))
-    assert.equal(code.includes('approval-answer'), false,
-      `${where(file)} carries the answer op — answers are one-way ops, not stream cargo`)
+    assert.equal(code.includes(endpoint), false,
+      `${where(file)} carries the answer endpoint — answers are one-way ops, not stream cargo`)
   }
-  // 活性锚：应答确实还在 HTTP 分派那一侧 —— 两边都没有，说明这个名字改了。
-  const dispatch = stripComments(readFileSync(join(SRC, 'protocol/rpc.ts'), 'utf8'))
-  assert.ok(dispatch.includes("case 'approval-answer'"),
-    'the dispatcher no longer owns approval-answer — the judge is looking at the wrong name')
+  // 活性锚：这条端点确实还在表里 —— 两边都没有，说明名字改了而这判据在看空气。
+  const table = stripComments(readFileSync(join(SRC, 'protocol/unary-endpoints.ts'), 'utf8'))
+  assert.ok(table.includes(endpoint),
+    `the endpoint table no longer owns ${endpoint} — the judge is looking at the wrong name`)
 })
 
 // ---------------------------------------------------------------------------
@@ -1751,15 +1710,16 @@ test('the http transport holds no pairing rules', () => {
   // 传输层不会让任何行为判据变红，只会让「协议是消息，不是 URL」这句话变成一句口号。
   const source = readFileSync(join(SRC, 'remote', 'http.ts'), 'utf8')
 
-  // 活性锚：先确认它真的调了那个判定。少了这一条，一个被清空的 http.ts 也能过。
-  assert.ok(source.includes('handleAuthOp'),
-    '传输层没有调用协议层的判定 —— 这条判据此刻在测一个不存在的分支')
+  // 活性锚：传输层确实按「免票」这个标记放行过。少了这一条，一个被清空的 http.ts 也能过。
+  // 它现在能知道的**只有这一格标记** —— 怎么配对、失败怎么说，全在 `protocol/auth-ops.ts`。
+  assert.ok(source.includes('.unauthenticated'),
+    '传输层没有读免票标记 —— 这条判据此刻在测一个不存在的分支')
 
   // 判据守的是**判定**，不是日志文案：`unknown device token` 这几个字在「关系被掐断」
   // 那条 warn 里出现是正当的（它说的是发生了什么），而 `— pair again` 是回给客户端的
   // 那句话，只该由判定给出。
   const forbidden = ['invalid-pairing-code', 'unknown device token — pair again',
-                     'attemptPairing', 'vault.pair(', 'vault.refresh(']
+                     'attemptPairing', 'vault.pair(', 'vault.refresh(', 'pairOf(', 'refreshOf(']
   for (const needle of forbidden) {
     assert.equal(source.includes(needle), false,
       `remote/http.ts 不该出现「${needle}」—— 配对规则住在 protocol/auth-ops.ts`)

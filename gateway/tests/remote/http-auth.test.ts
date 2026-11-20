@@ -17,8 +17,7 @@ import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
 import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
-import { WRITE_OPS } from '../../src/audit.ts'
-import { writeEndpointLegacyOps } from '../../src/protocol/unary-endpoints.ts'
+import { isWriteEndpoint, registeredEndpointNames } from '../../src/protocol/unary-endpoints.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
 import type { AuditEntry } from '../../src/audit.ts'
@@ -130,9 +129,30 @@ test('写端点在新路径上进审计，且记的是旧 op 名', async () => {
   })
 })
 
-test('端点表的写标记与 audit 的旧清单不许漂', async () => {
-  // 过渡期两张清单并存：新路径读端点表的 `write`，旧路径读 `WRITE_OPS`。
-  // 漂了的症状是「同一个写操作在一条路径上被记、另一条没记」，而它静默。
-  assert.deepEqual([...writeEndpointLegacyOps()].sort(), [...WRITE_OPS].sort(),
-    '端点表里标了写的端点，其旧 op 名必须与 audit.ts 的清单一致')
+test('端点表里每个写端点各留一条审计，读端点一条不留', async () => {
+  // 这条替代了「两份写清单不许漂」：`WRITE_OPS` 删掉之后只剩端点表一处判定，
+  // 于是要守的变成「那处判定真的被审计路径用上了」。**逐个端点跑**，不是抽查 ——
+  // 抽一个的话，新加一个写端点忘了标记不会被任何判据看见，而漏记是静默的。
+  const names = [...registeredEndpointNames()]
+  const writes = names.filter(isWriteEndpoint)
+  const reads = names.filter(name => !isWriteEndpoint(name))
+
+  // 活性锚：标记全塌成 false 时上面两个数组会退化成「零写、全读」，下面的循环照样绿。
+  assert.equal(writes.length, 8, `写端点认出 ${writes.length} 个，期望 8 —— 先怀疑写标记`);
+  assert.equal(writes.length + reads.length, names.length);
+
+  await withListener(async (post) => {
+    for (const name of writes) {
+      const before = records.length
+      // 参数留空：多数端点会拒（缺必填），但**拒绝也要记** —— 审计记的是结果。
+      await post(`/api/${name}`, {})
+      assert.equal(records.length, before + 1, `${name} 是写端点，一次调用必须恰好一条审计`)
+    }
+
+    const afterWrites = records.length
+    for (const name of reads) {
+      await post(`/api/${name}`, {})
+      assert.equal(records.length, afterWrites, `${name} 是读端点，不该留审计`)
+    }
+  })
 })

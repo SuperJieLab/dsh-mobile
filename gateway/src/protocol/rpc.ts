@@ -1,37 +1,30 @@
 /**
- * 协议契约：一条线上消息进，一条线上消息出。
+ * 协议判定：一条端点调用进，一个 `RemoteResult` 出。
  *
- * `handle` 是注入数据源的普通 async 函数：无 HTTP、无 socket、无 DSH 运行时、
- * 无会话存储。所有传输原样复用它 —— 协议是消息，不是 URL。水位：两个边界
- * 均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没有」）；
- * `asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或
- * 重取。两种不重叠的读取：`snapshot` 自 cursor 前向，`page` 反向取一个
- * 用于打开的窗口。
+ * 注入数据源的普通 async 函数：无 HTTP、无 socket、无 DSH 运行时、无会话存储。
+ * 传输层（`remote/http.ts`）与测试辅助都经 `protocol/unary-endpoints.ts` 的表找到
+ * 这里 —— **本文件不认识 URL**，也不认识信封，它只回答「这次调用成没成、值是什么」。
  *
- * 应答上限：单条应答 ≤ `maxDeltaEvents` 条事件，软性再受 `maxDeltaBytes`
- * 约束；提前截停用 `hasMore` 说明。上限约束的是单条应答，从不是序列的累计。
+ * 水位：两个边界均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没有」）；
+ * `asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或重取。
+ * 两种不重叠的读取：`snapshot` 自 cursor 前向，`page` 反向取一个用于打开的窗口。
+ *
+ * 应答上限：单条应答 ≤ `maxDeltaEvents` 条事件，软性再受 `maxDeltaBytes` 约束；
+ * 提前截停用 `hasMore` 说明。上限约束的是单条应答，从不是序列的累计。
  */
 
-import { readErrorOf } from './error-codes.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { CommandPort } from '../ports/command.ts'
 import type { PermissionPort } from '../ports/permission.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
-import { PROTOCOL_VERSION } from '../wire/rpc.ts'
 import type { RemoteResult } from '../wire/unary.ts'
-import type {
-  WireEvent,
-  SessionRow,
-  ErrorResponse,
-  OkResponse,
-  Response,
-} from '../wire/rpc.ts'
+import type { WireEvent, SessionRow } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
 import { permissionSelectRequestOf } from '../wire/permission.ts'
-import { approvalAnswerOf, sessionCreateTargetOf, sessionPromptOf, type SessionCreateTarget } from '../wire/write.ts'
+import { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
@@ -85,103 +78,12 @@ export interface Ports {
 }
 
 /**
- * 应答一条消息。
- *
- * @param message - 解析后的 JSON 主体，构造上形状未知。
- * @param ports - 数据源；所有读都经它。缺席的端口对应的 op 一律拒答（见各分支）。
- * @param now - `serverTime` 用的时钟，可注入以保测试确定性。
- * @param limits - 应答上限；无意义值回退到 {@link DEFAULT_LIMITS}，
- *   绝不产生客户端永远无法读完的应答。
- * @returns 应答信封。从不抛错：敌意或卡死的数据源会变成拒绝
- *   （「进程不得崩溃」是判定过的判据）。
- */
-export async function handle(
-  message: unknown,
-  ports: Ports,
-  now: () => number = Date.now,
-  limits: Limits = DEFAULT_LIMITS,
-): Promise<Response> {
-  const { session: port, write, model, command, workspace, permission } = ports
-  const envelope = asRecord(message)
-  if (envelope === undefined || envelope.v !== PROTOCOL_VERSION) {
-    // 文案带方向：「版本不一致」本身不可行动，而两个方向要做的补救完全不同。
-    return failure('unsupported-version', versionRefusalOf(envelope?.v))
-  }
-
-  const op = envelope.op
-  if (typeof op !== 'string') return failure('unknown-op', 'request has no op')
-
-  try {
-    switch (op) {
-      case 'list-sessions':
-        return await listSessions(port, workspace, now)
-      case 'snapshot':
-        return await snapshot(envelope, port, normalizeLimits(limits))
-      case 'page':
-        return await page(envelope, port)
-      case 'model-catalog':
-        // 读 op。端口缺席的判断在 `modelCatalogOf` 里 —— 新路径也要那一条，放两处会漂。
-        return await modelCatalog(model)
-      case 'model-select':
-        // 写 op。端口缺席的判断在 `modelSelectOf` 里，与新路径共用一份。
-        return await modelSelect(envelope, model)
-      case 'command-catalog':
-        // 端口缺席的判断在 `commandCatalogOf` 里，与新路径共用一份。
-        return await commandCatalog(envelope, command)
-      case 'command-execute':
-        // 写 op：整行原样交给宿主，但「是不是一条命令行」在 `commandExecuteOf` 里先判。
-        return await commandExecute(envelope, command)
-      case 'permission-catalog':
-        // 端口缺席的判断在 `permissionCatalogOf` 里，与新路径共用一份。
-        return await permissionCatalog(envelope, permission)
-      case 'permission-select':
-        // 写 op：线上只收预设名，拼命令与目录校验都在适配层。
-        return await permissionSelect(envelope, permission)
-      case 'session-create': {
-        // 写 op（建实体）。载荷只有一格：落在哪个工作空间；不带就交给宿主当前目录。
-        return await sessionCreate(write, sessionCreateTargetOf(envelope))
-      }
-      case 'workspace-create':
-        // 写 op（造目录 + 注册）。名字不合法时**一个文件系统调用都不发生**。
-        return await workspaceCreate(envelope, workspace)
-      case 'workspace-delete':
-        // 写 op（解注册）。只删注册 —— 目录与会话日志都由宿主留着。
-        return await workspaceDelete(envelope, workspace)
-      case 'approval-answer':
-      case 'session-prompt':
-        // 写 op。端口缺席的判断在两个取值函数里，与新路径共用一份。
-        return op === 'approval-answer'
-          ? await approvalAnswer(envelope, write)
-          : await sessionPrompt(envelope, write)
-      default:
-        return failure('unknown-op', `unsupported op "${op}"`)
-    }
-  } catch (error) {
-    // 两种拒绝，客户端应对不同：本运行时不解读的日志是「无法展示的会话」，
-    // 其余是我们的错。规则本身在 `./error-codes.ts` —— 与流通道那份并列，不合并。
-    const refusal = readErrorOf(error)
-    return failure(refusal.code, refusal.message)
-  }
-}
-
-/**
  * 建一个空会话。`ok` 意为**宿主建出来或复用了**一个空会话，`sessionId` 是它给的那个 ——
  * 网关不造 id、也不缓存：列表是会话的真相，这里只负责把这一次创建的结果答回去。
  *
- * 宿主失败**不在这里折**：`handle` 的 catch 用 `readErrorOf` 统一折成 `internal-error`
- * 并把上游的话带进 message。本层不记日志（与其余 op 一致），排障看宿主侧。
+ * 宿主失败**不在这里折**：`invokeEndpoint` 的 catch 用 `readErrorOf` 统一折成
+ * `internal-error` 并把上游的话带进 message。本层不记日志，排障看宿主侧。
  */
-async function sessionCreate(
-  write: WritePort | undefined,
-  target: SessionCreateTarget,
-): Promise<Response> {
-  // 载荷形状的判断留在这里：它属于「这条请求的语义」，不属于「端口有没有接」。
-  if (target.kind === 'invalid') {
-    return failure('invalid-request', 'session-create accepts a non-empty workspaceId or none')
-  }
-  return unwrap(await sessionCreateOf(write, target.kind === 'workspace' ? target.workspaceId : undefined))
-}
-
 export async function sessionCreateOf(
   write: WritePort | undefined,
   workspaceId: string | undefined,
@@ -197,13 +99,6 @@ export async function sessionCreateOf(
  * 名字不合法时在这里就拒，**不碰文件系统** —— 形状与语义合成一次判断，因为对客户端
  * 而言两者的补救动作相同（改字重发）。
  */
-async function workspaceCreate(
-  envelope: Record<string, unknown>,
-  workspace: WorkspacePort | undefined,
-): Promise<Response> {
-  return unwrap(await workspaceCreateOf(envelope, workspace))
-}
-
 export async function workspaceCreateOf(
   args: Record<string, unknown>,
   workspace: WorkspacePort | undefined,
@@ -229,13 +124,6 @@ export async function workspaceCreateOf(
  * 宿主失败**不在这里折**：`handle` 的 catch 用 `readErrorOf` 统一折成 `internal-error`。
  * 「删一个已经不在的算成功」那条住在适配层（`deleteWorkspaceIn`），它认得 not-found。
  */
-async function workspaceDelete(
-  envelope: Record<string, unknown>,
-  workspace: WorkspacePort | undefined,
-): Promise<Response> {
-  return unwrap(await workspaceDeleteOf(envelope, workspace))
-}
-
 export async function workspaceDeleteOf(
   args: Record<string, unknown>,
   workspace: WorkspacePort | undefined,
@@ -253,13 +141,6 @@ export async function workspaceDeleteOf(
  * 投递一条 approval 应答。`ok` 意为*已投递给挂起的问题* —— 权威结论
  * 是客户端从流中对账的 `approval/decided` 审计事件。
  */
-async function approvalAnswer(
-  envelope: Record<string, unknown>,
-  write: WritePort | undefined,
-): Promise<Response> {
-  return unwrap(await approvalAnswerValue(envelope, write))
-}
-
 export async function approvalAnswerValue(
   args: Record<string, unknown>,
   write: WritePort | undefined,
@@ -284,13 +165,6 @@ export async function approvalAnswerValue(
 /**
  * 收纳一条 prompt。`ok` 意为*已接受进收件箱* —— 回复本体经流到达。
  */
-async function sessionPrompt(
-  envelope: Record<string, unknown>,
-  write: WritePort | undefined,
-): Promise<Response> {
-  return unwrap(await sessionPromptValue(envelope, write))
-}
-
 export async function sessionPromptValue(
   args: Record<string, unknown>,
   write: WritePort | undefined,
@@ -313,13 +187,6 @@ export async function sessionPromptValue(
  * 上游的拒绝保留自己的码：`session/model-unavailable` 说模型不可路由，
  * 与畸形请求是不同的补救。
  */
-async function modelSelect(
-  envelope: Record<string, unknown>,
-  model: ModelPort | undefined,
-): Promise<Response> {
-  return unwrap(await modelSelectOf(envelope, model))
-}
-
 export async function modelSelectOf(
   args: Record<string, unknown>,
   model: ModelPort | undefined,
@@ -335,10 +202,6 @@ export async function modelSelectOf(
 }
 
 /** 模型目录路径：宿主目录原样，去掉客户端用不上的字段。 */
-async function modelCatalog(model: ModelPort | undefined): Promise<Response> {
-  return unwrap(await modelCatalogOf(model))
-}
-
 /**
  * 模型目录的业务字段。端口缺席是装配层宣布过的事实（`faces.ts` 在宿主没有模型切面时
  * 返回 `undefined` 并留痕），所以这一支在生产也可达 —— 拒答而不是崩。
@@ -362,13 +225,6 @@ export async function modelCatalogOf(model: ModelPort | undefined): Promise<Remo
  * 会话不在 → `unknown-session`（不是空列表）：没有 agent 就没有 per-agent 的命令集，
  * 空列表会让客户端把「这个会话没了」误读成「这个会话没有命令」。
  */
-async function commandCatalog(
-  envelope: Record<string, unknown>,
-  command: CommandPort | undefined,
-): Promise<Response> {
-  return unwrap(await commandCatalogOf(envelope, command))
-}
-
 export async function commandCatalogOf(
   args: Record<string, unknown>,
   command: CommandPort | undefined,
@@ -392,13 +248,6 @@ export async function commandCatalogOf(
  * 两类拒绝保留自己的码：`unknown-command` 说那一行解析不出已注册的命令（客户端改字），
  * 与「这条命令执行失败」（流里的那一行）是不同的补救。
  */
-async function commandExecute(
-  envelope: Record<string, unknown>,
-  command: CommandPort | undefined,
-): Promise<Response> {
-  return unwrap(await commandExecuteOf(envelope, command))
-}
-
 export async function commandExecuteOf(
   args: Record<string, unknown>,
   command: CommandPort | undefined,
@@ -420,13 +269,6 @@ export async function commandExecuteOf(
  * 权限服务，客户端据此不画那一格；`current` 缺席 = 宿主不知道，客户端显示 `--`。
  * 两者都不补默认值：补出来的档位会与 Web UI 显示的那个不一致。
  */
-async function permissionCatalog(
-  envelope: Record<string, unknown>,
-  permission: PermissionPort | undefined,
-): Promise<Response> {
-  return unwrap(await permissionCatalogOf(envelope, permission))
-}
-
 export async function permissionCatalogOf(
   args: Record<string, unknown>,
   permission: PermissionPort | undefined,
@@ -455,13 +297,6 @@ export async function permissionCatalogOf(
  * 两类拒绝保留自己的码：`unknown-preset` 说这个名字不在宿主目录里（客户端重拉目录再选），
  * `unknown-session` 说会话没有活着的 agent（切不了）。
  */
-async function permissionSelect(
-  envelope: Record<string, unknown>,
-  permission: PermissionPort | undefined,
-): Promise<Response> {
-  return unwrap(await permissionSelectOf(envelope, permission))
-}
-
 export async function permissionSelectOf(
   args: Record<string, unknown>,
   permission: PermissionPort | undefined,
@@ -489,14 +324,6 @@ export async function permissionSelectOf(
  * 分组能力」，与「宿主里没有工作空间」（空数组）是两件事，客户端两种都按
  * 「没有组」处理，但线上不能混成一种。
  */
-async function listSessions(
-  port: SessionPort,
-  workspace: WorkspacePort | undefined,
-  now: () => number,
-): Promise<Response> {
-  return { v: PROTOCOL_VERSION, ok: true, ...await listSessionsOf(port, workspace, now) }
-}
-
 /**
  * 列表应答的**业务字段**（不含信封）。
  *
@@ -542,10 +369,6 @@ function toWireSummary(row: SessionRow, workspaceId: string | undefined): Record
 }
 
 /** 读路径：一个会话自客户端水位之后的事件。 */
-async function snapshot(envelope: Record<string, unknown>, port: SessionPort, limits: Limits): Promise<Response> {
-  return unwrap(await snapshotOf(envelope, port, limits))
-}
-
 export async function snapshotOf(
   args: Record<string, unknown>,
   port: SessionPort,
@@ -586,10 +409,6 @@ export async function snapshotOf(
  * 反向窗口：最新 `maxMessages` 条消息，或恰好终止于 `beforeSeq` 之前的
  * 一轮 —— 边界规则见 `./window.ts` 的 `pageWindow`。
  */
-async function page(envelope: Record<string, unknown>, port: SessionPort): Promise<Response> {
-  return unwrap(await pageOf(envelope, port))
-}
-
 export async function pageOf(
   args: Record<string, unknown>,
   port: SessionPort,
@@ -672,14 +491,6 @@ export function positiveOrDefault(value: number | undefined, fallback: number): 
  * 三条上限各自归一化。无意义的值绝不产生任何客户端都读不完的应答 ——
  * 在流通道上后果更重：一个非正的上界会让每一次打开都被判成「装不下」。
  */
-function normalizeLimits(limits: Limits): Limits {
-  return {
-    maxDeltaEvents: positiveOrDefault(limits.maxDeltaEvents, DEFAULT_LIMITS.maxDeltaEvents),
-    maxDeltaBytes: positiveOrDefault(limits.maxDeltaBytes, DEFAULT_LIMITS.maxDeltaBytes),
-    maxOpeningBytes: positiveOrDefault(limits.maxOpeningBytes, DEFAULT_LIMITS.maxOpeningBytes),
-  }
-}
-
 /**
  * 缺失或无意义的 `since` 读作 `0` —— 「把一切发我」—— 而非新错误码：
  * 客户端按 `seq` 去重，宽容的代价只是冗余载荷，绝不是错误视图。
@@ -689,12 +500,6 @@ function normalizeSince(value: unknown): number {
 }
 
 /** 纯对象，区别于数组、null 或原始值。 */
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined
-}
-
 /**
  * 版本不匹配的拒绝文案。**带方向**。
  *
@@ -704,21 +509,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * 客户端那一侧不解析这句话（它拿应答的 `v` 自己判方向，文案在 `FailureText`）；
  * 这里的句子是给日志与手工 curl 用的，所以用英文，与其余协议 message 一致。
  */
-function versionRefusalOf(sent: unknown): string {
-  if (typeof sent !== 'number') {
-    return `expected an object with v: ${PROTOCOL_VERSION}`
-  }
-  if (sent < PROTOCOL_VERSION) {
-    return `this gateway speaks protocol v${PROTOCOL_VERSION}, the request said v${sent} — upgrade the client`
-  }
-  return `this gateway speaks protocol v${PROTOCOL_VERSION}, the request said v${sent} — upgrade the gateway`
-}
-
 /**
- * 一次失败的新形状（三格，`details` 恒为对象）。
+ * 一次失败的形状（三格，`details` 恒为对象）。
  *
- * 过渡期两条路径共用同一份取值函数，所以失败也共用一份构造：新路径直接用，
- * 旧路径经 {@link unwrap} 剥掉 `details` —— 旧信封只有两格，多一格会让既有断言红。
+ * 全仓唯一的失败构造点：处理器在判定不下去时用它，`invokeEndpoint` 折异常时也用它 ——
+ * 于是「失败恒三键」这件事只有一个出处，而不是每个端点各拼一次。
  */
 export function refused(
   code: string,
@@ -728,35 +523,3 @@ export function refused(
   return { ok: false, error: { code, message, details } }
 }
 
-/**
- * 新结果 → 旧信封。**这是过渡期唯一的翻译点**：两条路径的行为差异只可能出在这里，
- * 而它只有四个分支（成功 / 失败），比让每个 op 各写一遍薄得多。
- */
-export function unwrap(result: RemoteResult): Response {
-  if (result.ok) {
-    return { v: PROTOCOL_VERSION, ok: true, ...(result.value as Record<string, unknown>) }
-  }
-  return failure(result.error.code, result.error.message)
-}
-
-/**
- * 构造拒绝。每条拒绝都带 `v`，与成功应答完全一致。
- *
- * **导出是为了让传输层用它，而不是自己再写一份**：`pair` / `refresh` 绕过
- * `handle`（凭据在体内），所以 `remote/http.ts` 也要作答；它只能引用这里，
- * 不能手写 `{ v, ok: false, error }` —— 那样版本号与字段集就各有一份活法。
- */
-export function failure(code: string, message: string): ErrorResponse {
-  return { v: PROTOCOL_VERSION, ok: false, error: { code, message } }
-}
-
-/**
- * 构造成功应答。与 {@link failure} 成对：信封的两个固定字段（`v` / `ok`）
- * 只在这两个函数里出现，其余地方只交出各自 op 的字段。
- *
- * 泛型保留调用方给的字段，所以 `success({ deviceToken })` 的类型里仍有
- * `deviceToken`，能直接填进 `PairResponse`。
- */
-export function success<T extends Record<string, unknown>>(fields: T): OkResponse & T {
-  return { v: PROTOCOL_VERSION, ok: true, ...fields }
-}

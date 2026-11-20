@@ -5,8 +5,10 @@
  * 分开放的理由：`wire/` 不许认识处理器（`structure.test.ts` 的「wire/ does not reach
  * outside itself」会拦住）。
  *
- * 过渡期：旧的一元路径（`POST /rpc` + `{v, op}`）还在，两边共用同一个取值函数
- * （例如 `listSessionsOf`），所以同一个功能不会有两份装配。旧路径在最后一轮删除。
+ * 表里除了「谁处理」还记着两件事：这条是不是写操作（审计据此决定记不记），以及
+ * 它的**旧 op 名**（审计与 `/metrics` 的历史词汇 —— 换名字会让已写下的文件与累积的
+ * 曲线对不上）。名字与旧 op 不是一一对应（`mobile/listSessions` ↔ `list-sessions`），
+ * 所以映射写在表里，不另建一张。
  */
 import { readErrorOf } from './error-codes.ts'
 import type { Limits, Ports } from './rpc.ts'
@@ -49,9 +51,11 @@ export interface UnaryEndpoint {
    */
   readonly unauthenticated?: boolean
   /**
-   * 过渡期用的旧 op 名。旧路径（`POST /rpc`）按它记审计与指标；两条路径的名字
-   * 不是一一对应（`mobile/listSessions` ↔ `list-sessions`），所以映射写在表里，
-   * 不另建一张。旧路径删掉之后这一格随之消失。
+   * 审计与指标沿用的旧 op 名。
+   *
+   * 它们不是「过渡期的残留」而是**历史词汇**：审计文件按 `op=` 写、`/metrics` 按
+   * `op=` 累积，换一个名字等于让同一件事在历史里有两个写法。端点名是给线上协议用的，
+   * 这一格是给运维用的。
    */
   readonly legacyOp: string
   invoke(args: Readonly<Record<string, unknown>>, ctx: UnaryContext): Promise<RemoteResult>
@@ -206,7 +210,7 @@ export function unaryEndpointOf(name: string): UnaryEndpoint | undefined {
  * 断成未处理的 rejection」—— 而后者在 HTTP 上表现为连接被掐，客户端看到的是传输失败。
  *
  * 折法沿用 `readErrorOf` 的两档：不可解读的日志是 `unreadable-session`，其余
- * `internal-error`。与旧路径逐字相同 —— 迁移换的是信封，不是故障词汇。
+ * `internal-error`。与迁移前逐字相同 —— 换的是信封，不是故障词汇。
  */
 export async function invokeEndpoint(
   name: string,
@@ -230,19 +234,7 @@ export function registeredEndpointNames(): readonly string[] {
   return Object.keys(ENDPOINTS)
 }
 
-/** 这条端点是不是写操作。新路径的审计按它判，不再读请求体里的旧 `op`。 */
+/** 这条端点是不是写操作。审计按它判 —— 表是唯一的判定处。 */
 export function isWriteEndpoint(name: string): boolean {
   return ENDPOINTS[name as UnaryEndpointName]?.write === true
-}
-
-/**
- * 写端点的旧 op 名 —— 给旧路径的审计对账用。
- *
- * 存在的理由：过渡期两条路径各记各的审计，若两份清单能漂，「同一个写操作在新旧两条
- * 路径上一条被记、一条没记」就没有任何东西看得见。这条函数让漂移可断言。
- */
-export function writeEndpointLegacyOps(): readonly string[] {
-  return Object.values(ENDPOINTS)
-    .filter(endpoint => endpoint.write)
-    .map(endpoint => endpoint.legacyOp)
 }

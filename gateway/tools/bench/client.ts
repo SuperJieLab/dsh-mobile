@@ -40,17 +40,32 @@ export interface BenchClientOptions {
   host?: string
 }
 
-/** 走真 HTTP 认证门换 access token（与 iPhone 同一条路：`refresh` op）。 */
+/**
+ * 走真 HTTP 认证门换 access token（与 iPhone 同一条路：`mobile/refresh` 端点）。
+ *
+ * 信封照契约手写而不是复用 `wire/unary.ts`：这个脚本刻意**不 import 网关的内部模块**，
+ * 它扮演的是外部客户端 —— 内部形状变了而契约没变时，这里该照契约继续工作；若
+ * 跟着内部一起改，测出来的曲线与真机就不是一回事。
+ */
 export async function benchAccessToken(port: number, deviceToken: string, host = '127.0.0.1'): Promise<string> {
-  const response = await fetch(`http://${host}:${port}/rpc`, {
+  const endpoint = 'mobile/refresh'
+  const response = await fetch(`http://${host}:${port}/api/${endpoint}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ v: 2, op: 'refresh', deviceToken }),
+    body: JSON.stringify({
+      type: 'client-request',
+      rpcId: randomUUID(),
+      method: endpoint,
+      payload: { args: { deviceToken } },
+    }),
   })
   if (!response.ok) throw new Error(`refresh refused: HTTP ${response.status}`)
-  const body = await response.json() as { ok: boolean; accessToken?: string }
-  if (!body.ok || body.accessToken === undefined) throw new Error('refresh did not mint an access token')
-  return body.accessToken
+  const body = await response.json() as {
+    result?: { ok?: boolean; value?: { accessToken?: string } }
+  }
+  const token = body.result?.ok === true ? body.result.value?.accessToken : undefined
+  if (token === undefined) throw new Error('refresh did not mint an access token')
+  return token
 }
 
 interface Waiter {

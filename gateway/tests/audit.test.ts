@@ -1,8 +1,9 @@
 /**
- * 审计的判据：一次写 op 一条记录，且「哪些 op 是写」只有一处定义。
+ * 审计的判据：一次写 op 一条记录。
  *
- * 最要紧的是第一条 —— 它守的是「新加一个写 op 却忘了进 `WRITE_OPS`」。那种漏法不会让
- * 任何行为判据变红：请求照常成功，只是事后查不到。审计最不能有的失败方式就是静默地少记。
+ * 「哪些端点是写」现在只有一处定义 —— 端点表的 `write` 标记。守它的判据在
+ * `tests/remote/http-auth.test.ts`（每个写端点各记一条、读端点一条不记），
+ * 不在这里：这里只有 `AuditLog` 自己与 `auditEntryOf` 的映射。
  *
  * Run: node --test tests/audit.test.ts
  */
@@ -10,96 +11,37 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { readFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 import {
   AuditLog,
-  WRITE_OPS,
   auditEntryOf,
   fileNameOf,
   formatAuditEntry,
   parseAuditEntry,
 } from '../src/audit.ts'
-import { DEFAULT_LIMITS, failure, success } from '../src/protocol/rpc.ts'
+import { DEFAULT_LIMITS } from '../src/protocol/rpc.ts'
 import { createRpcListener } from '../src/remote/http.ts'
 import type { CredentialVault } from '../src/remote/credentials.ts'
-import { PROTOCOL_VERSION } from '../src/wire/rpc.ts'
-
-const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
+import { call } from './helpers/http.ts'
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'dsh-audit-'))
 }
 
-// ── 清单与协议层一一对应 ──────────────────────────────────────────────
-
-/**
- * `rpc.ts` 里标了「写 op」的分支。
- *
- * 扫的是**注释标记**而不是语义 —— 静态分不出「哪个分支会改东西」。这是判据的固有局限，
- * 所以下面带活性锚：注释格式一变，扫到的数量会掉，判据自己会红，而不是静默放行。
- *
- * 两个相邻 `case` 共用一个注释（`approval-answer` / `session-prompt`）时，靠「中间没有
- * 别的代码行」把它们归成一组。
- */
-function writeOpsMarkedIn(source: string): string[] {
-  const found: string[] = []
-  let pending: string[] = []
-
-  for (const line of source.split('\n')) {
-    const trimmed = line.trim()
-
-    const opened = /^case '([^']+)':\s*\{?$/.exec(trimmed)
-    if (opened !== null) {
-      pending.push(opened[1])
-      continue
-    }
-
-    if (pending.length > 0 && /^\/\/\s*写 op/.test(trimmed)) {
-      found.push(...pending)
-      pending = []
-      continue
-    }
-
-    // 任何别的代码行都结束 pending：那个 case 分支不是写 op。
-    if (trimmed !== '' && !trimmed.startsWith('//')) pending = []
-  }
-  return found
-}
-
-test('every write op marked in rpc.ts is declared in WRITE_OPS', () => {
-  const source = readFileSync(join(SRC, 'protocol', 'rpc.ts'), 'utf8')
-  const declared = writeOpsMarkedIn(source)
-
-  // 活性锚：扫到的太少说明注释格式变了 —— 那时「两边一致」只是因为两边都空。
-  assert.ok(
-    declared.length >= 5,
-    `只扫到 ${declared.length} 个写 op 标记 —— 先怀疑扫法，别信这条判据`,
-  )
-
-  assert.deepEqual(
-    [...declared].sort(),
-    [...WRITE_OPS].sort(),
-    'rpc.ts 里标了「写 op」的分支与 audit.ts 的 WRITE_OPS 必须一一对应 —— '
-      + '少一个，那个 op 就静默地没有审计记录',
-  )
-})
-
 // ── 记的是结果，不是意图 ─────────────────────────────────────────────
 
 test('the result comes from the answer, the target from the request', () => {
-  const accepted = auditEntryOf('session-prompt', { sessionId: 's-1' }, success({}))
+  const accepted = auditEntryOf('session-prompt', { sessionId: 's-1' }, { ok: true, value: {} })
   assert.equal(accepted.result, 'ok')
   assert.equal(accepted.target, 's-1')
 
   const refused = auditEntryOf(
     'session-prompt',
     { sessionId: 's-1' },
-    failure('unknown-session', 'no stored session'),
+    { ok: false, error: { code: 'unknown-session', message: 'no stored session', details: {} } },
   )
   assert.equal(refused.result, 'refused')
   assert.equal(refused.code, 'unknown-session')
@@ -111,7 +53,7 @@ test('the result comes from the answer, the target from the request', () => {
 
 test('a request without a target records a dash, not a blank', () => {
   // 空值会让「这次没带目标」与「解析坏了」看起来一样，而它们要查的地方不同。
-  const entry = auditEntryOf('workspace-delete', {}, success({}))
+  const entry = auditEntryOf('workspace-delete', {}, { ok: true, value: {} })
   assert.equal(entry.target, '-')
 })
 
@@ -127,7 +69,7 @@ test('each write op maps to its own target field', () => {
     ['session-create', { workspaceId: 'w-2' }, 'w-2'],
   ]
   for (const [op, message, expected] of cases) {
-    assert.equal(auditEntryOf(op, message, success({})).target, expected, `${op} 的目标取错了`)
+    assert.equal(auditEntryOf(op, message, { ok: true, value: {} }).target, expected, `${op} 的目标取错了`)
   }
 })
 
@@ -261,12 +203,8 @@ test('a real request through the listener leaves a record', { timeout: 10_000 },
   try {
     await once(server, 'listening')
     const address = server.address() as AddressInfo
-    const response = await fetch(`http://127.0.0.1:${address.port}/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer test-token' },
-      body: JSON.stringify({ v: PROTOCOL_VERSION, op: 'workspace-delete', workspaceId: 'w-1' }),
-    })
-    assert.equal(response.status, 200)
+    const answer = await call(address.port, 'workspace/delete', { workspaceId: 'w-1' }, 'test-token')
+    assert.equal(answer.status, 200)
 
     const entries = audit.recent(5)
     assert.equal(entries.length, 1, '一次写 op 必须恰好一条记录')

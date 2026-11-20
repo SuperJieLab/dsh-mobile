@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { apply, inject, name } from '../src/index.ts'
+import { call } from './helpers/http.ts'
 
 /** 装配时种下的设备令牌；下面用它走真实的鉴权路取一枚访问令牌。 */
 const DEVICE_TOKEN = 'assembly-test-device-token-0123456789'
@@ -33,28 +34,12 @@ async function untilUp(port: number): Promise<void> {
   assert.fail('the listener never came up')
 }
 
-/** 设备令牌 → `refresh` → 访问令牌。 */
+/** 设备令牌 → `mobile/refresh` → 访问令牌。 */
 async function deviceAccess(port: number): Promise<string> {
   await untilUp(port)
-  const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ v: 2, op: 'refresh', deviceToken: DEVICE_TOKEN }),
-  })
-  const body = await response.json() as { ok?: boolean; accessToken?: string }
-  assert.equal(body.ok, true)
-  return body.accessToken!
-}
-
-/** 带票发一次业务请求。 */
-async function rpc(port: number, access: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await fetch(`http://127.0.0.1:${port}/rpc`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
-    body: JSON.stringify({ v: 2, ...body }),
-  })
-  assert.equal(response.status, 200)
-  return await response.json() as Record<string, unknown>
+  const answer = await call(port, 'mobile/refresh', { deviceToken: DEVICE_TOKEN })
+  assert.equal(answer.ok, true)
+  return answer.accessToken as string
 }
 
 /**
@@ -139,8 +124,8 @@ test('the plugin starts on a real cordis context and never reads a service it di
     // 两个方向都要：缺席 → 拒答（不足为证，`reflect` 本身不可读也会折成同一个码），
     // 补上服务 → 真的列出来。只有正向那一半能证明那条取数路是通的。
     const access = await deviceAccess(port)
-    const absent = await rpc(port, access, { op: 'command-catalog', sessionId: 's' })
-    assert.equal((absent['error'] as { code?: string } | undefined)?.code, 'internal-error',
+    const absent = await call(port, 'commands/list', { sessionId: 's' }, access)
+    assert.equal(absent.error?.code, 'internal-error',
       'no command service yet: a refusal, not a dead connection')
 
     root.provide('commands', {
@@ -155,9 +140,9 @@ test('the plugin starts on a real cordis context and never reads a service it di
     })
 
     // 命令插件晚到（真实启动顺序里就是如此）：下一次调用自己接上，不必重启网关。
-    const present = await rpc(port, access, { op: 'command-catalog', sessionId: 's' })
-    assert.equal(present['ok'], true,
-      `the channel must pick up a service that arrives after assembly: ${JSON.stringify(present['error'])}`)
+    const present = await call(port, 'commands/list', { sessionId: 's' }, access)
+    assert.equal(present.ok, true,
+      `the channel must pick up a service that arrives after assembly: ${JSON.stringify(present.error)}`)
     assert.deepEqual((present['commands'] as { name: string }[]).map(row => row.name), ['compact'])
   } finally {
     fiber.dispose?.()

@@ -15,7 +15,7 @@ import { Metrics } from '../src/metrics.ts'
 import { DEFAULT_LIMITS } from '../src/protocol/rpc.ts'
 import { createRpcListener } from '../src/remote/http.ts'
 import type { CredentialVault } from '../src/remote/credentials.ts'
-import { PROTOCOL_VERSION } from '../src/wire/rpc.ts'
+import { postEndpoint } from './helpers/http.ts'
 
 const sample = {
   loopLagP50: 0.004,
@@ -113,12 +113,9 @@ async function withListener(
   }
 }
 
-async function post(base: string, body: unknown): Promise<Response> {
-  return fetch(`${base}/rpc`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer secret-token' },
-    body: JSON.stringify(body),
-  })
+/** 发一条一元调用。指标标签按 `legacyOp` 记，所以端点名要挑与断言那几个对得上的。 */
+async function post(base: string, endpoint: string, args: Record<string, unknown> = {}): Promise<Response> {
+  return postEndpoint(base, endpoint, args, 'secret-token')
 }
 
 test('GET /metrics answers with the Prometheus content type', async () => {
@@ -132,8 +129,8 @@ test('GET /metrics answers with the Prometheus content type', async () => {
 test('a request increments the counter', async () => {
   // **这条才是接线判据**：上面那些只证明 `Metrics` 自己会渲染。
   await withListener(async (base, metrics) => {
-    await post(base, { v: PROTOCOL_VERSION, op: 'list-sessions' })
-    await post(base, { v: PROTOCOL_VERSION, op: 'list-sessions' })
+    await post(base, 'mobile/listSessions')
+    await post(base, 'mobile/listSessions')
 
     const rows = metrics.render().split('\n')
       .filter((line) => line.startsWith('dsh_rpc_requests_total'))
@@ -144,7 +141,7 @@ test('a request increments the counter', async () => {
 test('a refused request is counted as refused', async () => {
   // 失败率是这三个指标里最有用的一个 —— 它得真的分开记。
   await withListener(async (base, metrics) => {
-    await post(base, { v: PROTOCOL_VERSION, op: 'workspace-delete', workspaceId: '' })
+    await post(base, 'workspace/delete', { workspaceId: '' })
 
     const text = metrics.render()
     assert.match(text, /dsh_rpc_requests_total\{op="workspace-delete",result="refused"\} 1/)
@@ -154,7 +151,7 @@ test('a refused request is counted as refused', async () => {
 test('the metrics page never carries a credential', async () => {
   // 匿名可读的页面：只要有一个字段把请求头带进来，凭据就漏了。
   await withListener(async (base) => {
-    await post(base, { v: PROTOCOL_VERSION, op: 'list-sessions' })
+    await post(base, 'mobile/listSessions')
     const body = await (await fetch(`${base}/metrics`)).text()
 
     assert.equal(body.includes('secret-token'), false, '指标页里出现了凭据')
