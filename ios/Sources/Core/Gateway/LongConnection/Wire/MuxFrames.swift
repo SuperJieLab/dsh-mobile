@@ -94,10 +94,15 @@ struct MuxCancelFrame: Encodable {
     }
 }
 
-/// 把一帧编成线上文本。`.sortedKeys` 不是风格问题：不排序时键序随哈希，同一输入两次编码不同字节。
+/// 把一帧编成线上文本。
+///
+/// `.sortedKeys` 不是风格问题：不排序时键序随哈希，同一输入两次编码不同字节。
+/// `.withoutEscapingSlashes` 也不是：默认编码器会把 `session/follow` 写成 `session\/follow`，
+/// 而共守样本（两端各有一条判据读它）钉的是**不转义**的字节。两种写法 JSON 解析等价，
+/// 但字节不一致会让「两端编的是不是同一帧」这条判据失去意义。
 private func muxText<Frame: Encodable>(of frame: Frame) throws -> String {
     let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys]
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     return String(decoding: try encoder.encode(frame), as: UTF8.self)
 }
 

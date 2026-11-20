@@ -267,6 +267,12 @@ final class RpcClientAuthTests: XCTestCase {
               body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accessToken":"fresh","expiresAt":9999999999999,"deviceToken":"\#(deviceToken)"}}}"#)
     }
 
+    /// 回包里**没有** `deviceToken` 那一格：用来守「没有新值」不是「清空」。
+    private static func ticketWithoutRotation(_ token: String) -> ScriptedURLProtocol.Reply {
+        .init(status: 200,
+              body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accessToken":"\#(token)","expiresAt":9999999999999}}}"#)
+    }
+
     /// 续期回包里带轮换后的设备凭证时，**必须存下来**。
     ///
     /// 服务端每次续期都换一枚：丢掉它不会立刻坏（旧的在宽限期内还能用一次），但下一次
@@ -298,6 +304,8 @@ final class RpcClientAuthTests: XCTestCase {
     /// 这一条守的是一种很容易写出来的错法：把可选字段当成「服务端说没有了」，
     /// 于是每续一次期就把关系删掉一次。
     func testARefreshWithoutARotatedTokenKeepsTheDeviceToken() async throws {
+        // 剧本要真的**没有**那一格 —— 默认剧本带 `deviceToken`，用它测这条等于测了个寂寞。
+        Self.script(ticket: Self.ticketWithoutRotation("fresh"))
         var stored: String? = "device-token"
         let store = CredentialStore(storage: .init(
             read: { stored },

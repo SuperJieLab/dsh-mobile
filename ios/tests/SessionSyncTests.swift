@@ -65,7 +65,9 @@ final class SessionSyncTests: XCTestCase {
                 ]),
             ]))
         ))))
-        XCTAssertEqual(sync.usage, opening)
+        // 打开帧的占用**取自 `projections`**（第 1 期把 usage 收进投影）—— 窗口里那格
+        // `opening` 只是基线之前的值，不该赢过同帧带来的投影。
+        XCTAssertEqual(sync.usage, UsagePayload(usedTokens: 50, contextWindow: 100))
 
         // 水位推进了就该采用；没推进的（乱序或重放）要丢 —— 与 `UsageState` 同一条规则。
         sync.applyOpeningProjections(ProjectionBlock(asOfSeq: 20, values: .object([
