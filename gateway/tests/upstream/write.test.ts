@@ -143,12 +143,12 @@ test('relay: wire answer reaches the result door with the one-shot outcome; seco
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
 
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k' }), 'delivered')
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k', clientId: 'c-test' }), 'delivered')
     assert.deepEqual(results, [{ clientId: 'client-1', eventId: 'e1', outcome: { kind: 'result', value: 'rejected' } }],
       'the answer carries the source’s identity — the relay does not mint one')
 
     // One-shot: the question is gone; a different answer meets unknown-approval.
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2' }), 'unknown-approval')
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2', clientId: 'c-test' }), 'unknown-approval')
   } finally {
     stop()
   }
@@ -160,8 +160,8 @@ test('relay: a retried answerId replays the first outcome without a second deliv
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
 
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'same' }), 'delivered')
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'same' }), 'delivered',
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'same', clientId: 'c-test' }), 'delivered')
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'same', clientId: 'c-test' }), 'delivered',
       'the first outcome is what a retry must see')
     assert.equal(results.length, 1)
   } finally {
@@ -180,13 +180,13 @@ test('relay: a refused answer is not reported as delivered, and the question sta
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
 
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k' }), 'undelivered')
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k', clientId: 'c-test' }), 'undelivered')
     assert.equal(results.length, 1, 'the answer still goes out exactly once')
     assert.deepEqual(relay.held().map(held => held.eventId), ['e1'],
       'the question is still open upstream — dropping it here would leave the phone with no way to retry')
 
     // A second attempt is a second delivery attempt, not a replay of a success.
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2' }), 'undelivered')
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2', clientId: 'c-test' }), 'undelivered')
   } finally {
     stop()
   }
@@ -212,7 +212,7 @@ test('relay: a cancel frame clears the question; late answer meets unknown-appro
     await until(() => sink.changes.length === 2, 'the cancel is announced')
 
     assert.deepEqual(sink.changes.at(-1), { type: 'cancel', eventId: 'e1' })
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval')
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k', clientId: 'c-test' }), 'unknown-approval')
   } finally {
     stop()
   }
@@ -248,7 +248,7 @@ test('relay: the source dying drops held questions, and the next generation star
     feed.end()
     await until(() => !events.ready, 'the source is gone')
     assert.deepEqual(relay.held(), [], 'the previous identity’s questions are not carried over')
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k' }), 'unknown-approval',
+    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k', clientId: 'c-test' }), 'unknown-approval',
       'and an answer that arrives afterwards cannot be delivered to an identity that is gone')
   } finally {
     stop()

@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { invoke } from '../helpers/unary.ts'
+import { invoke, TEST_CLIENT_ID } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WritePort } from '../../src/ports/write.ts'
 import type { ApprovalAnswerMessage, SessionPromptMessage } from '../../src/wire/write.ts'
@@ -40,13 +40,13 @@ function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; promp
 
 test('handle dispatches approval-answer to the write port and answers delivered', async () => {
   const { port } = fakeWrite()
-  const answer = await invoke('mobile/approvalAnswer', { eventId: 'a', decision: 'allow', answerId: 'k' }, { session: PORT, write: port })
+  const answer = await invoke('mobile/approvalAnswer', { eventId: 'a', decision: 'allow', answerId: 'k', clientId: TEST_CLIENT_ID }, { session: PORT, write: port })
   assert.deepEqual(answer, { ok: true, value: { eventId: 'a'} })
 })
 
 test('handle: unknown-approval and invalid-request come back as protocol refusals', async () => {
   const { port } = fakeWrite()
-  const unknown = await invoke('mobile/approvalAnswer', { eventId: 'gone', decision: 'allow', answerId: 'k' }, { session: PORT, write: { ...port, async answerApproval() { return 'unknown-approval' } } })
+  const unknown = await invoke('mobile/approvalAnswer', { eventId: 'gone', decision: 'allow', answerId: 'k', clientId: TEST_CLIENT_ID }, { session: PORT, write: { ...port, async answerApproval() { return 'unknown-approval' } } })
   assert.equal(unknown.ok, false)
   assert.equal(unknown.ok ? '' : unknown.error.code, 'unknown-approval')
 

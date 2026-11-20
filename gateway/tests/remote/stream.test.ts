@@ -27,7 +27,7 @@ test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 
     { type: 'event', event: event(4) },
   ])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -66,7 +66,7 @@ test('the follow request asks the host to activate the session — the same as t
   // 没有它，于是手机上一切正常，一发消息 / 敲一条命令 / 切一次权限就得到「会话不在」。
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -95,7 +95,7 @@ test('S1 at the adapter: the WS opening equals the HTTP page window', { timeout:
   const log = Array.from({ length: 57 }, (_, index) => event(index))
   const source = fakeSource([snapshotFrame(log, 50)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -125,7 +125,7 @@ test('a transient frame passes through verbatim and cursor-less', { timeout: 10_
     transient,
   ])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -156,7 +156,7 @@ test('a source that skips a seq is refused loudly, not rendered', { timeout: 10_
       { type: 'event', event: event(5) }, // skipped 3
     ])
     const server = createServer()
-    attachStreamHandler(server, source, { authenticate: () => true })
+    attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
     server.listen(0)
     try {
       await once(server, 'listening')
@@ -181,7 +181,7 @@ test('a source that skips a seq is refused loudly, not rendered', { timeout: 10_
 test('a hostile source still answers with an error frame — the process does not crash', { timeout: 10_000 }, async () => {
   const source = fakeSource([], { failWith: Object.assign(new Error('boom'), { isDSHRemoteError: true, code: 'session/not-found' }) })
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -203,7 +203,7 @@ test('an unreadable-session failure maps to its own code, like the HTTP path', {
   const failure = Object.assign(new Error('zstd says no'), { name: 'SessionPersistenceCorruptionError' })
   const source = fakeSource([], { failWith: failure })
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -222,7 +222,7 @@ test('an unreadable-session failure maps to its own code, like the HTTP path', {
 test('the opening asks upstream for a window that starts on a turn boundary', { timeout: 10_000 }, async () => {
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
 
   const socket = await connect(server)
@@ -253,7 +253,7 @@ test('an explicit maxMessages reaches upstream as its own target, not the defaul
   // 默认窗口切，而客户端拿到的首屏比它要的更宽 —— 无报错、只是多了。
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
 
   const socket = await connect(server)
@@ -289,7 +289,7 @@ test('cancel stops the stream; the pump yields no further frames for it', { time
     },
   }
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -316,7 +316,11 @@ test('the opening carries the model baseline when the source knows it, absent ot
     modelOf: (sessionId: string) => sessionId === 's1' ? { provider: 'p', model: 'A' } : undefined,
   }
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  // 这条会连两次：一个身份只许一条 socket（本期），所以每次升级给一个新身份。
+  let identitySeq = 0
+  attachStreamHandler(server, source, {
+    authenticate: () => ({ id: `test-${(identitySeq += 1)}`, canAnswer: true }),
+  })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -354,7 +358,7 @@ test('pump: one perf record per forwarded frame — opening and events alike', {
     { type: 'event', event: event(4) },
   ])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
 
   const records: Record<string, unknown>[] = []
@@ -424,7 +428,7 @@ test('opening narrowing: cut on a turn boundary, kept under the byte cap', { tim
   const log = [turn(0), filler(1, 300), turn(2), filler(3, 300)]
   const source = fakeSource([snapshotFrame(log, 4)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 700 })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -454,7 +458,7 @@ test('opening narrowing: a single turn over the cap is refused, not truncated', 
   const log = [turn(0), filler(1, 5_000)]
   const source = fakeSource([snapshotFrame(log, 2)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 700 })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -478,7 +482,7 @@ test('opening narrowing: a nonsensical cap falls back to the default instead of 
   const log = [turn(0), filler(1, 100)]
   const source = fakeSource([snapshotFrame(log, 2)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 0 })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 0 })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -520,7 +524,7 @@ test('pump: a narrowed opening records how much it cut', { timeout: 10_000 }, as
   const log = [turn(0), filler(1, 300), turn(2), filler(3, 300)]
   const source = fakeSource([snapshotFrame(log, 4)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 700 })
   server.listen(0)
   try {
     const records = await collectPerf(async () => {
@@ -549,7 +553,7 @@ test('pump: a refused opening is recorded with its reason', { timeout: 10_000 },
   const log = [turn(0), filler(1, 5_000)]
   const source = fakeSource([snapshotFrame(log, 2)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true }, { openingCapBytes: 700 })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 700 })
   server.listen(0)
   try {
     const records = await collectPerf(async () => {
@@ -590,7 +594,7 @@ test('one stream failing leaves the other stream on the same connection alive', 
     },
   }
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -670,7 +674,7 @@ function waitForClose(socket: WebSocket, timeoutMs = 5_000): Promise<number> {
 test('U1: cancel then reopen under a fresh id — the second stream really runs', { timeout: 10_000 }, async () => {
   const source = lingeringSource()
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -698,7 +702,7 @@ test('U1: cancel then reopen under a fresh id — the second stream really runs'
 test('U2: a second open under the same id is a protocol violation — the connection closes', { timeout: 10_000 }, async () => {
   const source = lingeringSource()
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -723,7 +727,7 @@ test('U2: a second open under the same id is a protocol violation — the connec
 test('U3: two streams on one connection — cancelling one leaves the other alive', { timeout: 10_000 }, async () => {
   const source = lingeringSource()
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -759,7 +763,7 @@ test('U4: cancel for an id whose pump already finished is not a violation', { ti
   // 照样发 `cancel`。判成违规的话，每次正常关闭都会把整条连接打断。
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -824,7 +828,7 @@ test('U5: a stream that ends by itself reclaims its id — the table does not gr
   // 表随会话切换次数单调增长，而客户端永不复用编号，没有任何别的东西会回收它。
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -856,7 +860,7 @@ test('U6: cancel does not drop the entry while the pump is still winding down', 
   // 那条流从此关不掉。这个窗口只有让源慢一点退才观测得到。
   const source = gatedSource()
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -884,7 +888,7 @@ test('E1a: an open naming no known endpoint is refused on that stream alone', { 
   // 分界是**编号在不在手**：这一帧读得出 `e2`，所以坏的是内容、不是这条连接。
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -915,7 +919,7 @@ test('E1a: an open naming no known endpoint is refused on that stream alone', { 
 test('E1b: a frame that cannot be attributed to any stream closes the connection', { timeout: 10_000 }, async () => {
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -944,7 +948,7 @@ test('opening 不再带占用 —— 占用量走 control 流', { timeout: 10_00
   })
   const source = fakeSource([frame])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')

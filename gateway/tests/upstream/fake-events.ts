@@ -15,7 +15,7 @@ import type { UpstreamWireFrame } from '../../src/ports/events.ts'
  * `failFirstOpen` 让第一次开流直接抛：那是「宿主拒了我们」这条路径，退避之后下一代
  * 正常服务。
  */
-export function fakeEventStream(options: { failFirstOpen?: boolean } = {}) {
+export function fakeEventStream(options: { failFirstOpen?: boolean; host?: { home: string } } = {}) {
   const channels: ((frame: UpstreamWireFrame) => void)[] = []
   const breakers: (() => void)[] = []
   // 构造 `started` 的 executor 是同步跑的，所以任何调用方拿到 `feed` 之前它已经赋值 ——
@@ -39,7 +39,8 @@ export function fakeEventStream(options: { failFirstOpen?: boolean } = {}) {
       let broken = false
       breakers.push(() => { broken = true })
       announce()
-      yield { type: 'ready', clientId: `client-${opened}` }
+      // 上游的 `host` 是可选的：给了就原样带出去，不给这一格就缺席（判据 4）。
+      yield { type: 'ready', clientId: `client-${opened}`, ...(options.host === undefined ? {} : { host: options.host }) }
       while (!signal.aborted && !broken) {
         while (queue.length > 0) yield queue.shift()!
         await new Promise<void>((resolve) => setTimeout(resolve, 5))

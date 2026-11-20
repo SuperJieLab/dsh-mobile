@@ -57,3 +57,50 @@ test('失败形状的三格在契约里写明，且与流通道同一个说法',
   const mentions = text.match(/details/g)?.length ?? 0
   assert.ok(mentions >= 3, `「details」只出现 ${mentions} 次 —— 请求/应答/流通道三处都该提到`)
 })
+
+/**
+ * 判据 10：三个形状按**节**对账。
+ *
+ * 按整份文档 grep 是不够的：`clientId` 在 §4.4 也有，`host` 在别处也会出现 ——
+ * 整份搜一遍，把某一节漏改的情况一起放过去。所以每一格都在它该在的那一节里找。
+ */
+function sectionBetween(title: string, next: string): string | undefined {
+  const text = read()
+  if (text === undefined) return undefined
+  const start = text.indexOf(title)
+  if (start < 0) return undefined
+  const end = text.indexOf(next, start + title.length)
+  return end < 0 ? text.slice(start) : text.slice(start, end)
+}
+
+test('判据 10：§4.6 的应答载荷有 clientId', () => {
+  const section = sectionBetween('### 4.6', '### 4.7')
+  if (section === undefined) {
+    console.log('dev/contract/protocol.md 不存在（干净 clone），跳过')
+    return
+  }
+  assert.ok(section.includes('"clientId"'), '§4.6 的 approvalAnswer 载荷必须写明 clientId —— 客户端照它发')
+  assert.ok(/clientId[^\n]*必填|必填[^\n]*clientId/.test(section),
+    '光出现这个名字不够：要说明它是必填，否则读文档的人会当成可选')
+})
+
+test('判据 10：§4.4 的 ready 示例带 host', () => {
+  const section = sectionBetween('### 4.4', '### 4.5')
+  if (section === undefined) {
+    console.log('dev/contract/protocol.md 不存在（干净 clone），跳过')
+    return
+  }
+  const ready = section.split('\n').find(line => line.includes('"type": "ready"'))
+  assert.ok(ready !== undefined, '§4.4 里应当有一条 ready 的示例')
+  assert.ok(ready.includes('host'), `ready 的示例要带 host；实际：${ready.trim()}`)
+  assert.ok(section.includes('换代不变'), 'clientId 的寿命要写明（换代不变）—— 否则客户端会在重连时换 id')
+})
+
+test('判据 10：§六 有 not-owner 一行', () => {
+  const section = sectionBetween('## 六、错误码', '## 七、')
+  if (section === undefined) {
+    console.log('dev/contract/protocol.md 不存在（干净 clone），跳过')
+    return
+  }
+  assert.ok(section.includes('`not-owner`'), '错误码表里必须有 not-owner —— 否则客户端会把一个新码当成未知')
+})

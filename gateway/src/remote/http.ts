@@ -20,6 +20,7 @@ import type { WorkspacePort } from '../ports/workspace.ts'
 import { auditEntryOf, type AuditLog } from '../audit.ts'
 import type { Metrics } from '../metrics.ts'
 import { CredentialVault } from './credentials.ts'
+import type { IdentityRegistry } from './identity-registry.ts'
 import { encodeServerResponse, parseClientRequest, type ClientRequest, type RemoteResult } from '../wire/unary.ts'
 import { createLogger, LogModule, currentRequestId, mintRequestId, runWithRequestId } from '../log.ts'
 
@@ -65,6 +66,13 @@ export interface RpcListenerDeps {
   sessionPort: SessionPort
   limits: Limits
   vault: CredentialVault
+  /**
+   * 流归属的查询口 —— 审批应答要判「这条流是不是你的」。
+   *
+   * **必须与 `attachStreamHandler` 收到的是同一个实例**（`index.ts` 一处 new、两处交）。
+   * 分开 new 不会报错，只会让每一次应答都判成越权。
+   */
+  registry: IdentityRegistry
   writePort: WritePort
   modelPort: ModelPort | undefined
   commandPort: CommandPort | undefined
@@ -197,7 +205,8 @@ async function answerEndpoint(
   // 都不该说。顺序反了的话，一条无票的畸形请求会拿到 200，而契约说这种请求是 401。
   //
   // 免票的那两条是「拿票」的端点 —— 要求它们先有票是死锁。
-  if (endpoint.unauthenticated !== true && !deps.vault.authenticate(authorization)) {
+  const identity = endpoint.unauthenticated === true ? undefined : deps.vault.authenticate(authorization)
+  if (endpoint.unauthenticated !== true && identity === undefined) {
     // info 而非 warn：票过期后的这次 401 是续期编排的正常一环，客户端会静默换票重试。
     log.info('endpoint refused: no live access token', { endpoint: endpointName })
     return {
@@ -237,6 +246,9 @@ async function answerEndpoint(
     now: Date.now,
     limits: deps.limits,
     auth: deps.vault,
+    // 身份与归属：判定在 `protocol/rpc.ts`，这里只把两者递进去。
+    caller: identity,
+    owners: deps.registry,
   })
 
   if (endpoint.write) {
@@ -257,7 +269,21 @@ async function answerEndpoint(
   } else if (!result.ok && !SILENT_REFUSALS.has(endpointName)) {
     // 拒绝在服务端留证据：手机对一次失败只显示一行状态，归因要回到网关日志。
     // 静默的例外见 {@link SILENT_REFUSALS}。
-    log.error('endpoint refused', { endpoint: endpointName, error: JSON.stringify(result.error) })
+    //
+    // `not-owner` 走 warn 而不是 error，且**不记第二行**：判定层手上有两个身份与
+    // clientId，它把事实装在 `details` 里交出来（它自己不许碰日志，见结构判据 V2b），
+    // 这一层负责写成人读得懂的句子。
+    if (result.error.code === 'not-owner') {
+      log.warn('approval answer refused: not this stream\'s owner', {
+        endpoint: endpointName,
+        caller: textField(result.error.details, 'caller'),
+        owner: textField(result.error.details, 'owner'),
+        client: textField(result.error.details, 'client'),
+        event: textField(result.error.details, 'event'),
+      })
+    } else {
+      log.error('endpoint refused', { endpoint: endpointName, error: JSON.stringify(result.error) })
+    }
   }
 
   // 免票端点的两种失败（配对码不对 / 关系被撤销）是**身份断言**，不是业务结果：
@@ -265,6 +291,18 @@ async function answerEndpoint(
   // 那条分支走不到，撤销之后只会无限重试。其余端点一律 200，连拒绝也是。
   const status = endpoint.unauthenticated === true && !result.ok ? 401 : 200
   return { status, result }
+}
+
+/**
+ * `details` 里的一格，取成日志字段。
+ *
+ * `details` 的形状是 `Record<string, unknown>`（它要装各种拒绝各自的事实），而日志
+ * 字段只收标量。缺失时给 `none` 而不是空串：空值在日志里既可能是「没有」也可能是
+ * 「拼错了 key」，这两件事排障时不该长得一样。
+ */
+function textField(details: Record<string, unknown>, key: string): string {
+  const value = details[key]
+  return typeof value === 'string' && value !== '' ? value : 'none'
 }
 
 /**

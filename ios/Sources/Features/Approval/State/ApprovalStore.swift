@@ -7,9 +7,12 @@
 import Foundation
 
 /// 发一次应答。收成一行是为了三种结局能被分别注入。
+///
+/// `clientId` 是「这条审批是在哪条流上看到的」—— 网关据此判这次应答是不是那条流的主人在答。
+/// 它由 `ApprovalStore` 从流上读出来传进来，本协议不负责取。
 @MainActor
 protocol ApprovalAnswering {
-    func answer(eventId: String, allow: Bool, answerId: String) async throws
+    func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws
 }
 
 /// 生产实现：走既有的一次 HTTP 应答。
@@ -18,10 +21,11 @@ protocol ApprovalAnswering {
 struct GatewayApprovalAnswerer: ApprovalAnswering {
     let client: RpcClient
 
-    func answer(eventId: String, allow: Bool, answerId: String) async throws {
+    func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws {
         let _: ApprovalAnswerResponse = try await client.perform(
             ApprovalAnswerRequest(
-                eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId
+                eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId,
+                clientId: clientId
             )
         )
         // 「批了但对面没动」是这一屏最典型的投诉形状，而它的两种成因（没投递出去 /
@@ -41,6 +45,12 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 /// 不是这个口该有的形状。本域的消费者确实与进程同寿（`attach` 里丢弃 token），所以它现在不退。
 @MainActor
 protocol ApprovalEventSink {
+    /// 这条流在网关那里的登记键；还没有过 `ready`（或流已经收起）时为 `nil`。
+    ///
+    /// 应答必须把它带上 —— 网关按它判「这条审批是不是你的」。没有它就只能不发：
+    /// 一次注定被拒的请求会让卡片停在「网关拒绝了」那种状态上，而那说的不是事实。
+    var clientId: String? { get }
+
     @discardableResult
     func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
     @discardableResult
@@ -59,7 +69,9 @@ final class ApprovalStore {
     enum AnswerState: Equatable {
         /// 请求已发出、回包还没到。
         case sending
-        /// 已发出但结果未知（传输失败）—— 卡留着，等上游结算。
+        /// 结果未知 —— 卡留着，等上游结算。两种来路：**发出去了但传输失败**，
+        /// 以及**根本没发**（这条流还没就绪，没有归属的键）。两者对用户说的是同一件事：
+        /// 现在不知道结果，别按第二次。
         case unknown
         /// 服务端拒了这次投递，附人话说明 —— 那个问题仍挂在网关的暂存里。
         case refused(String)
@@ -77,6 +89,10 @@ final class ApprovalStore {
     /// 已经挂过听众没有。**不是给视图看的状态**，是一次性闸的存放处。
     /// 闸是永久的：全仓只有一个 `EventsStream` 实例，换实例的场景不存在；真出现时再加 detach。
     @ObservationIgnored private var attached = false
+
+    /// 挂上的那一条流。**留着它是为了读 `clientId`** —— 应答要把它带上，而 id 只在流上。
+    /// 不存的话每次应答都得从头再找一个入口，而那个入口不唯一。
+    @ObservationIgnored private var sink: (any ApprovalEventSink)?
 
     init(answerer: any ApprovalAnswering) {
         self.answerer = answerer
@@ -102,6 +118,8 @@ final class ApprovalStore {
     func attach(sink: any ApprovalEventSink) {
         guard !attached else { return }
         attached = true
+        // 留住它：应答时要读 `clientId`（见 `answer`）。
+        self.sink = sink
         sink.onWaterfall { [weak self] payload in self?.receive(payload) }
         // 撤回的解释在这里：`eventId` 是唯一的寻址信息。没有它删不掉任何东西 —— 留着这张卡
         // 比误删别人的强。
@@ -143,20 +161,37 @@ final class ApprovalStore {
     /// 应答一张卡。守卫只看「有没有状态」—— 在途、未知、被拒的那一张都不再发第二次。
     func answer(_ entry: ApprovalTable.Entry, allow: Bool) async {
         guard states[entry.eventId] == nil else { return }
+        // 归属的键只有流能给。流还没就绪（或刚收起）时不发：这一发网关一定会拒，
+        // 而「网关拒绝了」对用户说的是另一件事。卡留着 —— 等 `ready` 之后它还在表里。
+        guard let clientId = sink?.clientId else {
+            // 正文固定、动态值走字段（留痕纪律第一条）：这条日志要能按事件检索。
+            Log.warn(Log.Module.session,
+                     "approval-answer not sent: the events stream has no clientId yet",
+                     ["event": entry.eventId])
+            states[entry.eventId] = .unknown
+            // 这一支也是一个出口：等待期间卡可能已被 `cancel` 撤掉，那就别留一条看不见的状态。
+            pruneStates()
+            return
+        }
         // 发出之前就置位：写在回包之后的话，等待期间守卫是空的，连点两次会发两次。
         states[entry.eventId] = .sending
-        // 收尾统一在这一处：三个出口都要清掉已不在表里的状态行，早退的那两个
-        // 漏掉时，下一张同身份的卡会因为「已经有状态」而按不动。
+        // 收尾统一在这一处：**每个出口**都要清掉已不在表里的状态行 —— 漏掉的那个，
+        // 下一张同身份的卡会因为「已经有状态」而按不动。
         defer { pruneStates() }
         do {
             try await answerer.answer(
-                eventId: entry.eventId, allow: allow, answerId: UUID().uuidString
+                eventId: entry.eventId, allow: allow, answerId: UUID().uuidString, clientId: clientId
             )
             // 上游先摘掉自己的投递再广播取消 —— 应答者收不到自己的收口帧，等就是永远等。
             settle(entry, notice: ApprovalStore.deliveredNote(allow: allow))
         } catch RpcClientError.refused(let failure)
             where failure.code == GatewayErrorCode.unknownApproval.rawValue {
             // 这条已经不在了：留着就是一张永远按不动的卡。
+            settle(entry, notice: failure.readableDescription)
+        } catch RpcClientError.refused(let failure)
+            where failure.code == GatewayErrorCode.notOwner.rawValue {
+            // 这条审批不是当前这条流的（换了连接、或它在另一台设备上）：同一处置 ——
+            // 撤卡。网关在重连时会重发仍未答的问题，撤掉不会丢。
             settle(entry, notice: failure.readableDescription)
         } catch RpcClientError.refused(let failure) {
             // 服务端拒了这次投递，问题仍挂着 —— 卡留着并写明原因。

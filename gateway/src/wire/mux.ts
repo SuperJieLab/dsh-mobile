@@ -111,7 +111,19 @@ export interface MuxApprovalCancel {
  * 与 `event` 名做。合并的代价是「审批源未就绪，整条流开不起来」，见泵上的注释。
  */
 export type EventsValue =
-  | { type: 'ready'; clientId: string }
+  | {
+    type: 'ready'
+    /**
+     * 这条流在本进程里的名字 —— 应答审批时要把它带回去，网关据此判「这条流是谁的」。
+     * 每条流现造一个，**换代不变**（换代不换流）：换 id 只会让重连那一瞬的在途应答白丢。
+     */
+    clientId: string
+    /**
+     * 宿主的工作目录，**原样透传**上游 `ready` 的 `host`。上游不给时这一格缺席（不是空串）。
+     * 客户端本期不读它 —— 兑现的是「线上下发」这件事。
+     */
+    host?: { home: string }
+  }
   | { type: 'emit'; event: string; args: readonly unknown[] }
   | MuxApprovalWaterfall
   | MuxApprovalCancel

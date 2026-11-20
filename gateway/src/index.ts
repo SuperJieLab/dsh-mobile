@@ -25,6 +25,7 @@ import { createSessionPort, type PersistenceLike } from './upstream/sessions.ts'
 import { attachStreamHandler } from './remote/server.ts'
 import { createRpcListener } from './remote/http.ts'
 import { CredentialVault, DEFAULT_CREDENTIALS_PATH } from './remote/credentials.ts'
+import { IdentityRegistry } from './remote/identity-registry.ts'
 import { AuditLog, defaultAuditDirectory } from './audit.ts'
 import { Metrics } from './metrics.ts'
 import { checkHostVersion, hostVersionOf } from './host-version.ts'
@@ -168,11 +169,15 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     // 指标表：常驻计数器，读在 `GET /metrics`。与 `perf` 的分工是读的时机 ——
     // 那个要事先开 debug，这个随时能拉。
     const metrics = new Metrics()
-    const server = createRpcListener({ sessionPort, limits, vault, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
+    // 登记表**只 new 一次**，交给两条路：WS 升级（占名额）与一元闸门（判归属）。
+    // 两处各 new 一个就永远 409 不到、也永远判不出主人 —— 判据 2 与 7 在真端口上钉住它。
+    const registry = new IdentityRegistry()
+    const server = createRpcListener({ sessionPort, limits, vault, registry, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
 
     // 流通道与监听器共享：同端口，`POST /api/<命名空间>/<方法>` 走一元调用，`/rpc/stream`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
     const streamHandler = attachStreamHandler(server, streamSourceOver(ctx), vault, {
+      registry,
       // 打开帧的字节上界与 HTTP 路径的上限同源（同一个 `limits`）—— 两端各自
       // 记一个数才是口径不一致的来源。
       openingCapBytes: limits.maxOpeningBytes,

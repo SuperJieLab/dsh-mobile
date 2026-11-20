@@ -24,11 +24,23 @@ import type { WireEvent, SessionRow } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
 import { permissionSelectRequestOf } from '../wire/permission.ts'
-import { approvalAnswerOf, sessionPromptOf } from '../wire/write.ts'
+import { approvalAnswerOf, sessionPromptOf, type ApprovalAnswerMessage } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
 import type { PageWindow } from '../wire/window.ts'
+import type { Identity } from './auth.ts'
+
+/**
+ * 流归属的查询口 —— 判定侧要看的**唯一一面**。
+ *
+ * 机制（谁占着 socket、哪条流是谁的）在 `remote/identity-registry.ts`；这里只要
+ * 「这条 clientId 的主人是谁」。接口归消费方：`approvalAnswerValue` 是唯一的消费者。
+ */
+export interface StreamOwners {
+  /** 这条流的主人（身份 id）；没有这条流时为 `undefined`。 */
+  ownerOf(clientId: string): string | undefined
+}
 
 /**
  * 一条 `snapshot` 应答可能有多大；只约束单条应答，从不是客户端的视图。
@@ -138,17 +150,69 @@ export async function workspaceDeleteOf(
 }
 
 /**
+ * 越权应答的拒绝 —— **把留痕要用的四个事实装进 `details`**。
+ *
+ * 为什么不在这里记日志：`protocol/` 只许认识 `wire/` 与 `ports/`
+ * （`tests/structure.test.ts` 的 V2b），而日志出口在顶层 `log.ts`。所以判定层交出
+ * 事实，由传输层（`remote/http.ts`）写成那一条 warn —— 判与记各归各家，事实不在
+ * 中途被字符串化成一个只有人读得懂的句子。
+ */
+function notOwner(
+  caller: Identity,
+  answer: ApprovalAnswerMessage,
+  owner: string | undefined,
+  message: string,
+): RemoteResult {
+  return {
+    ok: false,
+    error: {
+      code: 'not-owner',
+      message,
+      details: {
+        caller: caller.id,
+        client: answer.clientId,
+        event: answer.eventId,
+        ...(owner === undefined ? {} : { owner }),
+      },
+    },
+  }
+}
+
+/**
  * 投递一条 approval 应答。`ok` 意为*已投递给挂起的问题* —— 权威结论
  * 是客户端从流中对账的 `approval/decided` 审计事件。
  */
 export async function approvalAnswerValue(
   args: Record<string, unknown>,
   write: WritePort | undefined,
+  caller: Identity | undefined,
+  owners: StreamOwners,
 ): Promise<RemoteResult> {
   if (write === undefined) return refused('internal-error', 'write channel not wired for "approval-answer"')
   const answer = approvalAnswerOf(args)
   if (answer === undefined) {
-    return refused('invalid-request', 'approval-answer needs eventId, decision ("allow" | "deny"), and answerId')
+    return refused('invalid-request', 'approval-answer needs eventId, decision ("allow" | "deny"), answerId and clientId')
+  }
+  // ① 没有身份：生产上到不了这里（401 闸门在 `remote/http.ts`）。所以这是**装配错误**，
+  //    不是身份失败 —— 回 `unauthenticated` 会让它变成一条 200 的「没身份」，而契约
+  //    §六 说那个码总是 401（那是闸门的形状，不是判定层的）。
+  if (caller === undefined) {
+    return refused('internal-error', 'approval-answer reached the judge without an identity — the auth gate is misassembled')
+  }
+  // ② 身份在，但它不是「能答审批」的那一类。
+  if (!caller.canAnswer) {
+    return notOwner(caller, answer, undefined, 'this identity may not answer approvals')
+  }
+  // ③ 这条流不在（从未下发、已换代、或连接已断）。它与「你在答别人的流」结局相同：
+  //    客户端要做的事一样（重开流或放弃），所以同一个码。
+  const owner = owners.ownerOf(answer.clientId)
+  if (owner === undefined) {
+    return notOwner(caller, answer, undefined,
+      `no open stream called "${answer.clientId}" — it was never offered, or it has been replaced`)
+  }
+  // ④ 流在，但不是你的。
+  if (owner !== caller.id) {
+    return notOwner(caller, answer, owner, 'that stream belongs to another identity')
   }
   const outcome = await write.answerApproval(answer)
   if (outcome === 'unknown-approval') {

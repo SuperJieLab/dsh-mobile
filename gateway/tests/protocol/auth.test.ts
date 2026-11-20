@@ -30,7 +30,7 @@ function seededRandom(values: number[]): () => number {
 /** A file with a live pairing code, issued at `t0`. */
 function fileWithPairing(t0: number, randomValues: number[] = [0.424242]): { file: StoredCredentials; code: string } {
   const code = newPairingCode(seededRandom(randomValues))
-  return { file: { version: 1, pairing: { code, expiresAt: t0 + PAIRING_TTL_MS, attempts: 0 } }, code }
+  return { file: { version: 2, pairing: { code, expiresAt: t0 + PAIRING_TTL_MS, attempts: 0 } }, code }
 }
 
 // MARK: - tokens & codes
@@ -152,7 +152,7 @@ test('only the hash-matching device token can mint an access token', () => {
 test('an access token lives exactly ACCESS_TTL_MS and is judged by the server clock', () => {
   const t0 = 2_000_000
   const device = newToken(seededRandom([0.7]))
-  const file: StoredCredentials = { version: 1, deviceTokenHash: sha256Hex(device) }
+  const file: StoredCredentials = { version: 2, deviceTokenHash: sha256Hex(device) }
 
   const issued = issueAccess(file, device, t0, seededRandom([0.9]))
   if (issued.status !== 'ok') return assert.fail('issuance should succeed')

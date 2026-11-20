@@ -26,12 +26,16 @@ export function fakeFeed(): ForwardedSource & {
   push(frame: UpstreamWireFrame): void
   /** 换代次；`undefined` = 源失效。 */
   setGeneration(generation: number | undefined): void
+  /** 这一代的宿主工作目录（判据 4 的第一半用它）。 */
+  setHost(host: { home: string } | undefined): void
   subscribers(): number
 } {
   const sinks = new Set<ForwardedSink>()
   let current: number | undefined
+  let host: { home: string } | undefined
   return {
     get generation() { return current },
+    host: () => host,
     subscribe(sink) {
       sinks.add(sink)
       return () => { sinks.delete(sink) }
@@ -39,6 +43,9 @@ export function fakeFeed(): ForwardedSource & {
     setGeneration(generation) {
       current = generation
       for (const sink of sinks) sink.generation(generation)
+    },
+    setHost(next) {
+      host = next
     },
     emit(event, args: readonly unknown[]) {
       for (const sink of sinks) sink.frame({ type: 'emit', event, args })

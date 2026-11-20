@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, rmSync, unlinkSync, utimesSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CredentialVault } from '../../src/remote/credentials.ts'
@@ -31,11 +31,11 @@ test('deleting the credentials file revokes the live ticket immediately', () => 
     assert.equal(issued.ok, true)
     const ticket = issued.ok ? issued.accessToken : ''
     // 正控：票本来是有效的。少了这一条，「删文件后失效」在票本来就无效时也绿。
-    assert.equal(vault.authenticate(`Bearer ${ticket}`), true, '前置：刚换到的票应当有效')
+    assert.ok(vault.authenticate(`Bearer ${ticket}`) !== undefined, '前置：刚换到的票应当有效')
 
     unlinkSync(path)
 
-    assert.equal(vault.authenticate(`Bearer ${ticket}`), false,
+    assert.equal(vault.authenticate(`Bearer ${ticket}`), undefined,
       '删掉凭据文件必须让手里的票立刻失效 —— 这是唯一的撤销手段')
     assert.deepEqual(vault.refresh('device-1'), { ok: false },
       '关系已经不存在，换票也要被拒')
@@ -77,7 +77,7 @@ test('writing the file ourselves does not drop live tickets', () => {
     // `pairingCode()` 会在没有有效码时签发并落盘 —— 这是**自己写**的那一次。
     vault.pairingCode()
 
-    assert.equal(vault.authenticate(`Bearer ${ticket}`), true,
+    assert.ok(vault.authenticate(`Bearer ${ticket}`) !== undefined,
       '自己刚写的文件不该被当成「别人改的」而清掉票 —— 那会让每次配对码刷新踢掉在线客户端')
   } finally {
     done()
@@ -125,7 +125,7 @@ test('the replaced token is accepted exactly once inside the grace window', () =
 
 test('the grace window is a boundary, not a mood', () => {
   const file: StoredCredentials = {
-    version: 1,
+    version: 2,
     deviceTokenHash: sha256Hex('current'),
     previous: { hash: sha256Hex('previous'), until: 5_000 },
   }
@@ -144,12 +144,83 @@ test('rotating does not invalidate tickets already in hand', () => {
     vault.seedDeviceToken('device-1')
     const first = vault.refresh('device-1')
     const ticket = first.ok ? first.accessToken : ''
-    assert.equal(vault.authenticate(`Bearer ${ticket}`), true, '前置：票是有效的')
+    assert.ok(vault.authenticate(`Bearer ${ticket}`) !== undefined, '前置：票是有效的')
 
     if (first.ok) vault.refresh(first.deviceToken)
 
-    assert.equal(vault.authenticate(`Bearer ${ticket}`), true,
+    assert.ok(vault.authenticate(`Bearer ${ticket}`) !== undefined,
       '换的是设备凭证，不是手里那张没到期的票 —— 作废它等于每 15 分钟踢一次在线客户端')
+  } finally {
+    done()
+  }
+})
+
+// MARK: - 身份（判据 1）
+
+test('判据 1：换两次票、重开一次保险库，解析出的身份仍是同一个', () => {
+  const { path, done } = sandbox()
+  try {
+    const vault = new CredentialVault(path)
+    vault.seedDeviceToken('device-1')
+
+    const first = vault.refresh('device-1')
+    assert.equal(first.ok, true)
+    const firstIdentity = first.ok ? vault.authenticate(`Bearer ${first.accessToken}`) : undefined
+    assert.ok(firstIdentity !== undefined, '前置：第一枚票能解析出身份')
+    assert.equal(firstIdentity.canAnswer, true, '配对出来的设备是 owner')
+
+    // 第二次用**轮换后**的 token 换票：身份跟着关系走，不跟着 token 走。
+    const second = first.ok ? vault.refresh(first.deviceToken) : undefined
+    const secondIdentity = second?.ok ? vault.authenticate(`Bearer ${second.accessToken}`) : undefined
+    assert.equal(secondIdentity?.id, firstIdentity.id, '换票不得换身份 —— 否则 409 永远不成立')
+
+    // 重开一个保险库读同一个文件：身份不能只活在内存里。用**最新**那枚 device token ——
+    // 两次轮换已经把最初那枚挤出了宽限。
+    const currentToken = second?.ok ? second.deviceToken : ''
+    const reopened = new CredentialVault(path)
+    const third = reopened.refresh(currentToken)
+    const thirdIdentity = third.ok ? reopened.authenticate(`Bearer ${third.accessToken}`) : undefined
+    assert.equal(thirdIdentity?.id, firstIdentity.id, '重启之后身份还是它')
+    assert.equal(thirdIdentity?.canAnswer, true)
+  } finally {
+    done()
+  }
+})
+
+test('a live ticket whose file names no identity is refused (fail closed)', () => {
+  const { path, done } = sandbox()
+  try {
+    const vault = new CredentialVault(path)
+    vault.seedDeviceToken('device-1')
+    const issued = vault.refresh('device-1')
+    assert.ok(issued.ok, '前置：配对出来的关系能换票')
+    const original = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    const identityId = original['identityId']
+    assert.equal(typeof identityId, 'string', '前置：配对写出了身份')
+
+    // 手工抹掉身份：票还活着，但文件答不出「谁」。
+    const stripped = { ...original }
+    delete stripped['identityId']
+    writeFileSync(path, JSON.stringify(stripped))
+    const later = new Date(Date.now() + 1_000)
+    utimesSync(path, later, later)
+
+    // **换一张新票再验**。这一步是判据的关键：改文件会触发 `reloadIfChanged`，
+    // 它连带清掉 access 表（撤销语义），于是刚才那张票已经失活 —— 直接拿它断言
+    // 「被拒」时，红的可能是「票失效」而不是「说不出身份」，这条判据就白写了。
+    const fresh = vault.refresh('device-1')
+    assert.ok(fresh.ok, '前置：文件变了，但关系还在 —— 新票该拿到')
+    const ticket = fresh.ok ? fresh.accessToken : ''
+    assert.equal(vault.authenticate(`Bearer ${ticket}`), undefined,
+      '说不出是谁的票不该被当成一个身份 —— fail closed')
+
+    // 正控：把身份写回去，同一张票就认得出人。少了这一条，上面那句在「票根本无效」时也绿。
+    writeFileSync(path, JSON.stringify({ ...stripped, identityId }))
+    const later2 = new Date(Date.now() + 2_000)
+    utimesSync(path, later2, later2)
+    const again = vault.refresh('device-1')
+    const restored = again.ok ? vault.authenticate(`Bearer ${again.accessToken}`) : undefined
+    assert.equal(restored?.id, identityId, '身份回来之后，同一段关系又认得出人了')
   } finally {
     done()
   }

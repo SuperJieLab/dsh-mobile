@@ -109,7 +109,7 @@ async function baselineOverHttp(view: unknown): Promise<unknown> {
 async function baselineOverStream(view: unknown): Promise<{ model: unknown; present: boolean }> {
   const source: FollowSource = streamSourceOver(fakeHost(view))
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')

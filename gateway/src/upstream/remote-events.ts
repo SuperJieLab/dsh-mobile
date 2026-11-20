@@ -37,6 +37,20 @@ export interface RemoteEventStreamLike {
   ): AsyncIterable<UpstreamWireFrame> | Promise<AsyncIterable<UpstreamWireFrame>>
 }
 
+/**
+ * 上游 `ready.host` 的四种来路：缺席、不是对象、`home` 不是非空字符串、或者就是个好的。
+ *
+ * 不合形状时**丢掉并说一声**，不猜、也不塞一个空串：一个 `{ home: '' }` 上线之后，
+ * 客户端看到的是「宿主在空路径上」，而真相是「这一代上游没告诉我们」。
+ */
+function hostOf(value: unknown): { home: string } | undefined {
+  if (value === undefined) return undefined
+  const home = typeof value === 'object' && value !== null ? (value as { home?: unknown }).home : undefined
+  if (typeof home === 'string' && home !== '') return { home }
+  log.warn('upstream ready carried an unusable host — dropped', { host: JSON.stringify(value) })
+  return undefined
+}
+
 /** `$events` 流的重连退避，形状与 follow 客户端相同。 */
 const RECONNECT_MIN_MS = 500
 const RECONNECT_MAX_MS = 10_000
@@ -45,6 +59,8 @@ export class ForwardedEvents implements ForwardedSource {
   readonly #stream: RemoteEventStreamLike
   readonly #sinks = new Set<ForwardedSink>()
   #clientId: string | undefined
+  /** 这一代的宿主工作目录。与 `#clientId` 同进同出：身份没了，它说的那台机器也就无从谈起。 */
+  #host: { home: string } | undefined
   /** 上游一共建立过几次源。代次只增不减：重连后从下一个数继续，跳过的那几代是真的发生过。 */
   #established = 0
   #abort: AbortController | undefined
@@ -82,6 +98,11 @@ export class ForwardedEvents implements ForwardedSource {
     return this.#clientId === undefined ? undefined : this.#established
   }
 
+  /** 宿主的工作目录；这一代没给、或此刻没有代次时为 `undefined`。 */
+  host(): { home: string } | undefined {
+    return this.#host
+  }
+
   /**
    * 订阅源的一切通知；返回退订函数。
    *
@@ -106,6 +127,7 @@ export class ForwardedEvents implements ForwardedSource {
           if (signal.aborted) return
           if (frame.type === 'ready') {
             this.#clientId = frame.clientId
+            this.#host = hostOf(frame.host)
             this.#established += 1
             backoff = RECONNECT_MIN_MS
             log.info('$events ready', { client: frame.clientId, generation: this.#established })
@@ -135,6 +157,7 @@ export class ForwardedEvents implements ForwardedSource {
    */
   #loseSource(): void {
     this.#clientId = undefined
+    this.#host = undefined
     this.#announceGeneration()
   }
 

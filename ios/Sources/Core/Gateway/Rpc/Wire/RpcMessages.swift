@@ -137,7 +137,11 @@ struct ApprovalAnswerRequest: GatewayRequest {
     static let endpoint = "mobile/approvalAnswer"
     let eventId: String
     let decision: String
+    /// 幂等键：同键重试，网关回放第一次的结论。
     let answerId: String
+    /// 这条审批是在哪条流上看到的 —— 网关按它判「是不是你」。
+    /// 取自最近一次 `ready` 的 `clientId`，由 `ApprovalStore` 从流上读出来。
+    let clientId: String
 }
 
 /// 下发指令：`promptId` 是幂等键，服务端按它去重重复投递。

@@ -37,5 +37,12 @@ export interface ForwardedSink {
  */
 export interface ForwardedSource {
   readonly generation: number | undefined
+  /**
+   * 宿主的工作目录（上游 `ready` 的 `host`）。没有活的代次、或上游没给时为 `undefined`。
+   *
+   * 读的是**当下**那一代的值，与 {@link generation} 同一时机：开流时读一次、每代 `ready`
+   * 之后再读。做成方法而不是订阅通知，理由同 `generation` —— 那是状态，不是事件。
+   */
+  host(): { home: string } | undefined
   subscribe(sink: ForwardedSink): () => void
 }

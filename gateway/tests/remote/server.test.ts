@@ -33,7 +33,12 @@ test('a closed client is dropped from the set, the survivor stays counted', { ti
   // 三个故障域里最容易被忽略的一条：**一个已消失的客户端不该让其余的记账错位**。
   // 客户端关掉 App 是常态；计数多了，资源采样就在给一个不存在的连接记账。
   const server = createServer()
-  const handler = attachStreamHandler(server, fakeSource([]), { authenticate: () => true })
+  // 两个并发连接要**两个身份**：本期起一个身份只许一条 socket，同 id 的第二个会回 409。
+  // 这条判据问的是「计数」，不是「409」——那是 index.test.ts 的事。
+  let identitySeq = 0
+  const handler = attachStreamHandler(server, fakeSource([]), {
+    authenticate: () => ({ id: `test-${(identitySeq += 1)}`, canAnswer: true }),
+  })
   server.listen(0)
   try {
     await once(server, 'listening')

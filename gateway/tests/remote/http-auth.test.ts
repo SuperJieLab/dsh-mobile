@@ -20,6 +20,7 @@ import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { isWriteEndpoint, registeredEndpointNames } from '../../src/protocol/unary-endpoints.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
+import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
 import type { AuditEntry } from '../../src/audit.ts'
 
 const records: Omit<AuditEntry, 'at'>[] = []
@@ -32,7 +33,7 @@ const deps = (): RpcListenerDeps => ({
   },
   limits: DEFAULT_LIMITS,
   vault: {
-    authenticate: (header: string | undefined) => header === 'Bearer good',
+    authenticate: (header: string | undefined) => (header === 'Bearer good' ? { id: 'test-identity', canAnswer: true } : undefined),
     pair: (code: unknown) => (code === '123456'
       ? { ok: true, deviceToken: 'd-1' }
       : { ok: false, reason: '配对码不对' }),
@@ -40,6 +41,7 @@ const deps = (): RpcListenerDeps => ({
       ? { ok: true, accessToken: 'a-1', expiresAt: 1, deviceToken: 'd-1' }
       : { ok: false }),
   } as unknown as CredentialVault,
+  registry: new IdentityRegistry(),
   writePort: {
     createSession: async () => 's-new',
     promptSession: async () => 'accepted',

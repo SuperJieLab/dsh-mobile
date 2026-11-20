@@ -24,6 +24,12 @@ final class EventsStream {
     /// 一条上游事件：名字与参数原样。
     private let emitListeners = ListenerTable<(String, JSONValue)>()
 
+    /// 这条流在网关那里的登记键，来自最近一次 `ready`。应答审批要把它带回去。
+    ///
+    /// **换代不变**：换的是上游那条流，不是这一条。清空的时机只有「这条流真的没了」
+    /// （`end` 或终态拒绝）—— 那时网关也已经把登记删了，留着它只会换来一次 not-owner。
+    private(set) var clientId: String?
+
     /// 这条流本身。`close()` / `restart()` 都在它上面 —— 连接级动作一个都不在这里。
     private var stream: LogicalStream?
 
@@ -70,7 +76,8 @@ final class EventsStream {
                 return StreamReply()
             }
             switch payload {
-            case .events(.ready):
+            case .events(.ready(let id)):
+                clientId = id
                 readyListeners.fire(())
                 return StreamReply(establishes: true)
             case .events(.waterfall(let value)):
@@ -98,10 +105,14 @@ final class EventsStream {
                      ["error": failure.code, "reason": failure.message])
             if !failure.isRetryable {
                 detached = true
+                // 终态拒绝：这条流不会再有 `ready` 了，手里的 id 也就无处可用。
+                clientId = nil
             }
             return StreamReply(next: failure.isRetryable ? .retry : .stop)
 
         case "end":
+            // 对端收起了这条流，它的登记也就没了；重开之后由新的 `ready` 换一个新 id。
+            clientId = nil
             return StreamReply(next: .reopen)
 
         default:

@@ -1248,7 +1248,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
       'modelSelectOf', 'commandExecuteOf', 'permissionSelectOf', 'sessionCreateOf',
       'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'sessionPromptValue',
     ],
-    types: ['Limits', 'Ports'],
+    types: ['Limits', 'Ports', 'StreamOwners'],
   },
   {
     home: 'protocol/unary-endpoints.ts',
@@ -1275,11 +1275,11 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
     home: 'protocol/auth.ts',
     values: [
       'ACCESS_TTL_MS', 'PAIRING_TTL_MS', 'PAIRING_MAX_ATTEMPTS', 'DEVICE_ROTATION_GRACE_MS',
-      'emptyCredentials', 'sha256Hex',
+      'emptyCredentials', 'sha256Hex', 'identityIdOf',
       'newPairingCode', 'newToken', 'bearerTokenOf', 'isPlausiblePairingCode', 'attemptPairing',
       'issueAccess', 'isLiveAccess', 'rotateDeviceToken',
     ],
-    types: ['StoredCredentials', 'PairingOutcome'],
+    types: ['StoredCredentials', 'PairingOutcome', 'Identity'],
   },
 ]
 
@@ -1401,10 +1401,10 @@ test('the RFC framing implementation is reached only from the transport', () => 
 test('the transport is split by lifetime, and the old single file is gone', () => {
   const directory = join(SRC, 'remote')
   const names = filesUnder(directory).map(file => relative(directory, file)).sort()
-  // 三份生命周期各一文件 + 共享出口 + 成帧 + 一元调用 + 凭据保管。
+  // 三份生命周期各一文件 + 共享出口 + 成帧 + 一元调用 + 凭据保管 + 归属登记。
   const expected = [
     'connection.ts', 'credentials.ts', 'egress.ts', 'frames.ts',
-    'http.ts', 'server.ts', 'stream.ts',
+    'http.ts', 'identity-registry.ts', 'server.ts', 'stream.ts',
   ]
   assert.deepEqual(names, expected,
     'ws.ts must be gone: one file cannot show three lifetimes')

@@ -44,8 +44,8 @@ final class ApprovalAnswererTests: XCTestCase {
         script()
         let answerer = GatewayApprovalAnswerer(client: client())
 
-        try await answerer.answer(eventId: "e7", allow: true, answerId: "answer-1")
-        try await answerer.answer(eventId: "e7", allow: false, answerId: "answer-2")
+        try await answerer.answer(eventId: "e7", allow: true, answerId: "answer-1", clientId: "c-9")
+        try await answerer.answer(eventId: "e7", allow: false, answerId: "answer-2", clientId: "c-9")
 
         let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["mobile/approvalAnswer"],
                                  "这一发没到达 mobile/approvalAnswer —— 先看端点名")
@@ -58,5 +58,7 @@ final class ApprovalAnswererTests: XCTestCase {
         XCTAssertEqual(args.map { $0["eventId"] as? String }, ["e7", "e7"])
         XCTAssertEqual(args.map { $0["answerId"] as? String }, ["answer-1", "answer-2"],
                        "幂等键由调用方给，这一层不得另造一个")
+        XCTAssertEqual(args.map { $0["clientId"] as? String }, ["c-9", "c-9"],
+                       "归属的键必须出现在线上 —— 丢了它网关只会回 not-owner")
     }
 }

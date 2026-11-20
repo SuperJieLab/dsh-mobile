@@ -53,6 +53,7 @@ import type { FollowSource, ProjectionBaseline } from '../ports/follow.ts'
 import type { ForwardedSource } from '../ports/events.ts'
 import type { Duplex } from 'node:stream'
 import { encodeTextFrame } from './frames.ts'
+import type { IdentityRegistry } from './identity-registry.ts'
 import { gwRecord, send, type PerfContext } from './egress.ts'
 import { createLogger, LogModule, perfNow, perfRecord } from '../log.ts'
 
@@ -92,6 +93,7 @@ export function onClientText(
   source: FollowSource,
   feed: ForwardedSource | undefined,
   approvals: ApprovalSource | undefined,
+  registry: IdentityRegistry,
   streams: Map<StreamId, { abort: AbortController }>,
   text: string,
   openingCapBytes: number,
@@ -142,7 +144,7 @@ export function onClientText(
     if (feed === undefined || approvals === undefined) {
       return refuse('this gateway has no forwarded-event or approval source')
     }
-    pumpEvents(socket, feed, approvals, frame.streamId, abort.signal, done)
+    pumpEvents(socket, feed, approvals, registry, frame.streamId, abort.signal, done)
     return { ok: true }
   }
   if (request.kind === 'control') {
@@ -339,6 +341,7 @@ function pumpEvents(
   socket: Duplex,
   feed: ForwardedSource,
   approvals: ApprovalSource,
+  registry: IdentityRegistry,
   streamId: StreamId,
   signal: AbortSignal,
   done: () => void,
@@ -356,10 +359,24 @@ function pumpEvents(
     return
   }
 
+  // **每条流一个、换代不变**：换代换的是上游那条流，不是这一条（客户端也只关了上游那条）。
+  // 换 id 会让重连那一瞬到达的应答变成越权。
   const clientId = randomUUID()
 
+  // 登记**只做一次**，放在 `announce` 外面：换代只换上游那条流，这条流的 id 与 socket 都没变，
+  // 重写那一格没有意义 —— 而 `openStream` 把重入当成「同一 clientId 被两条流复用」并留一条
+  // warn，那是给真异常准备的信号，不该被每一代重连灌成噪音（复核 L1）。
+  // 先登记、再发 `ready`，两句之间没有 `await`：中间有窗口的话，那段时间里回来的应答
+  // 就是「不知道谁答的」。
+  registry.openStream(clientId, socket)
+
   const announce = (): void => {
-    send(socket, { type: 'item', streamId, value: { type: 'ready', clientId } satisfies EventsValue })
+    const host = feed.host()
+    send(socket, {
+      type: 'item',
+      streamId,
+      value: { type: 'ready', clientId, ...(host === undefined ? {} : { host }) } satisfies EventsValue,
+    })
     // 每一条 `ready` 后面紧跟一份当前集合 —— 「从这一刻起你看到的都是新的」，
     // 客户端据此把表重建一次，不需要一条单独的「清空」帧。
     for (const held of approvals.held()) {
@@ -390,6 +407,9 @@ function pumpEvents(
     unsubscribe()
     offHeld()
     offCancelled()
+    // 流关掉，它的 clientId 从此答不了任何问题。与 `openStream` 成对：只登记不注销，
+    // 一个已经不在的 clientId 会永远指向一个主人。
+    registry.closeStream(clientId)
     done()
   }, { once: true })
 }

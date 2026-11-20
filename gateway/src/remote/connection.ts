@@ -11,6 +11,8 @@
 import type { Duplex } from 'node:stream'
 import type { IncomingMessage } from 'node:http'
 import type { StreamId } from '../wire/mux.ts'
+import type { Identity } from '../protocol/auth.ts'
+import type { IdentityRegistry } from './identity-registry.ts'
 import type { ApprovalSource } from '../ports/approval.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../protocol/rpc.ts'
 import { describeError } from '../ports/errors.ts'
@@ -162,6 +164,13 @@ export interface StreamOptions {
    * 同一条理由。缺省即 {@link PING_INTERVAL_MS} / {@link MISSED_PONG_LIMIT}。
    */
   heartbeat?: { intervalMs?: number; missedPongLimit?: number }
+  /**
+   * 「谁连着、哪条流是谁的」那一张表。**装配层传进来的是同一个实例**，
+   * 一元调用的闸门（`remote/http.ts`）拿它判归属 —— 两处各 new 一个的话，
+   * `$events` 流登记在一个表里，应答却去另一个表里查，于是所有应答都是 `not-owner`。
+   * 缺省 new 一个只服务于「普通流测试不关心归属」这一档。
+   */
+  registry?: IdentityRegistry
 }
 
 export async function handleUpgrade(
@@ -169,8 +178,8 @@ export async function handleUpgrade(
   socket: Duplex,
   head: Buffer,
   source: FollowSource,
-  gate: { authenticate(authorizationHeader: string | undefined): boolean },
-  clients: Set<Duplex>,
+  gate: { authenticate(authorizationHeader: string | undefined): Identity | undefined },
+  registry: IdentityRegistry,
   options: StreamOptions,
 ): Promise<void> {
   const path = new URL(request.url ?? '/', 'http://gateway').pathname
@@ -182,7 +191,9 @@ export async function handleUpgrade(
     return
   }
 
-  if (!gate.authenticate(request.headers.authorization)) {
+  // 身份先于一切：没有票就没有「谁」，也就谈不上「这个身份已经有一条了」。
+  const identity = gate.authenticate(request.headers.authorization)
+  if (identity === undefined) {
     log.info('upgrade refused: no valid access token')
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
     socket.destroy()
@@ -197,16 +208,34 @@ export async function handleUpgrade(
     return
   }
 
-  log.info('upgrade accepted → 101')
+  // 一个身份只许一条 socket（S5）。**唯一判定处**：名额的占用与释放都在登记表里，
+  // 这里只看结论 —— 两处各判一半时，只要有一处漏了就会同时存在两条同一身份的 socket。
+  if (!registry.claim(identity, socket)) {
+    // 留痕带上身份：排障时「哪一台上不去」就靠这一个字段。客户端读不到这个 409
+    // （`URLSessionWebSocketTask` 只给一个 URLError），所以它同时也是唯一的证据。
+    log.info('upgrade refused: this identity already holds a socket', {
+      identity: identity.id,
+      clients: registry.size,
+    })
+    socket.write('HTTP/1.1 409 Conflict\r\n\r\n')
+    socket.destroy()
+    return
+  }
+
+  log.info('upgrade accepted → 101', { identity: identity.id })
   socket.write(handshakeResponse(accept))
-  clients.add(socket)
   perfRecord(LogModule.ws, { seg: 'gw', t: Date.now(), conn: 'upgrade-accepted' })
-  socket.on('close', () => clients.delete(socket))
-  runSocket(socket, source, head, options)
+  runSocket(socket, source, head, options, registry)
 }
 
 /** 每连接的状态与循环。 */
-function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: StreamOptions): void {
+function runSocket(
+  socket: Duplex,
+  source: FollowSource,
+  head: Buffer,
+  options: StreamOptions,
+  registry: IdentityRegistry,
+): void {
   const openedAt = Date.now()
   const parser = new WsFrameParser()
   // 非正的上界会让每次打开都被判成「装不下」—— 归一化规则与 HTTP 路径共享
@@ -252,7 +281,7 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
           socket.end()
           break
         case 'text': {
-          const outcome = onClientText(socket, source, options.events, options.approvals, streams, frame.text, openingCapBytes)
+          const outcome = onClientText(socket, source, options.events, options.approvals, registry, streams, frame.text, openingCapBytes)
           if (outcome.ok) break
           // 两档都在这里关连接，但原因不同，日志必须分得开：
           //   重复编号 —— 客户端坏了，这条连接上的一切都不再可信；
@@ -289,6 +318,8 @@ function runSocket(socket: Duplex, source: FollowSource, head: Buffer, options: 
       seconds: Math.round((Date.now() - openedAt) / 1000),
     })
     closeAll()
+    // 名额与流一起还：登记表清掉这条 socket 名下的全部归属（见 `release`）。
+    registry.release(socket)
   }
   socket.on('close', finish)
   socket.on('error', (error) => {

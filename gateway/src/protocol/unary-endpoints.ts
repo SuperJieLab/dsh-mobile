@@ -11,10 +11,11 @@
  * 所以映射写在表里，不另建一张。
  */
 import { readErrorOf } from './error-codes.ts'
-import { refused, type Limits, type Ports } from './rpc.ts'
+import { refused, type Limits, type Ports, type StreamOwners } from './rpc.ts'
 import { pairOf, refreshOf } from './auth-ops.ts'
 import { sessionCreateTargetOf } from '../wire/write.ts'
 import type { AuthPort } from './auth-ops.ts'
+import type { Identity } from './auth.ts'
 import {
   approvalAnswerValue,
   commandCatalogOf,
@@ -40,6 +41,14 @@ export interface UnaryContext {
   readonly limits: Limits
   /** 两条免票端点要它；其余端点用不到，但它们共用同一个上下文。 */
   readonly auth: AuthPort
+  /**
+   * 这次调用是谁发的。免票端点（`pair` / `refresh`）上**没有** —— 它们的作用就是拿票。
+   * 其余端点走到这里时它一定在（401 闸门在 `remote/http.ts`），类型上仍留 `undefined`
+   * 是因为两条免票端点共用同一个上下文。
+   */
+  readonly caller: Identity | undefined
+  /** 流归属的查询口 —— 只有审批应答读它。 */
+  readonly owners: StreamOwners
 }
 
 /** 一条端点：是不是写操作、要不要票、以及收到 `args` 之后做什么。 */
@@ -164,7 +173,7 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
     legacyOp: 'approval-answer',
     write: true,
     invoke(args, ctx) {
-      return approvalAnswerValue(args, ctx.ports.write)
+      return approvalAnswerValue(args, ctx.ports.write, ctx.caller, ctx.owners)
     },
   },
   'session/prompt': {

@@ -17,6 +17,7 @@ import type { AddressInfo } from 'node:net'
 import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
+import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
 
 const unused = async (): Promise<never> => {
   throw new Error('not used by this test')
@@ -47,7 +48,8 @@ const deps = (): RpcListenerDeps => ({
     readAll: async (id) => (id === 's-1' ? events : undefined),
   },
   limits: DEFAULT_LIMITS,
-  vault: { authenticate: () => true } as unknown as CredentialVault,
+  vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
+  registry: new IdentityRegistry(),
   writePort: { createSession: unused, promptSession: unused, answerApproval: unused },
   modelPort: {
     catalog: async () => ({ groups: [], failures: [] }) as never,

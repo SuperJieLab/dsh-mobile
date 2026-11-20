@@ -22,8 +22,11 @@ final class ApprovalStoreTests: XCTestCase {
         private var waiter: CheckedContinuation<Void, Never>?
         private var held = false
 
-        func answer(eventId: String, allow: Bool, answerId: String) async throws {
+        private(set) var clients: [String] = []
+
+        func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws {
             calls.append(eventId)
+            clients.append(clientId)
             if holdsFirstCall, !held {
                 held = true
                 await withCheckedContinuation { self.waiter = $0 }
@@ -40,6 +43,28 @@ final class ApprovalStoreTests: XCTestCase {
     /// 一条待答调用的载荷 —— 上游 waterfall 的四个字段原样，网关只搬不改。
     ///
     /// `callId` 与 `eventId` 可以不同值 —— 那是「按错字段建键」唯一能被看见的形状。
+
+    /// 一条**只有 clientId** 的流：不推任何货物，只回答「我叫什么」。
+    ///
+    /// 应答需要它，而它只从流上来（`ready` 之后由 `EventsStream` 记住）。用它把
+    /// 「id 从哪来」与「应答带上它」这两件事分开：这里要测的是后者。
+    @MainActor
+    private final class ReadySink: ApprovalEventSink {
+        var clientId: String?
+
+        init(clientId: String?) { self.clientId = clientId }
+
+        func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onReady(_ handler: @escaping () -> Void) -> () -> Void { {} }
+    }
+
+    /// 一个已经挂上就绪流的 store —— 应答的路径需要 `clientId`。
+    private func readyStore(_ answerer: any ApprovalAnswering, clientId: String? = "c1") -> ApprovalStore {
+        let store = ApprovalStore(answerer: answerer)
+        store.attach(sink: ReadySink(clientId: clientId))
+        return store
+    }
 
     /// 一条 `waterfall` 货物帧。
     private func waterfallFrame() throws -> InboundFrame {
@@ -115,7 +140,7 @@ final class ApprovalStoreTests: XCTestCase {
 
     /// 成功即移除，不等任何回流帧：上游先摘掉自己的投递再广播取消，应答者收不到自己的收口帧。
     func testASuccessfulAnswerRemovesTheEntryWithoutWaitingForAFrame() async {
-        let store = ApprovalStore(answerer: FakeAnswerer())
+        let store = readyStore(FakeAnswerer())
         store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
@@ -130,7 +155,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testAnAlreadyGoneApprovalIsRemovedWithAnExplanation() async {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(refused("unknown-approval"))
-        let store = ApprovalStore(answerer: answerer)
+        let store = readyStore(answerer)
         store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: false)
@@ -147,7 +172,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testATransportFailureLeavesTheCardAndMarksItUnknown() async {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(RpcClientError.notActivated)
-        let store = ApprovalStore(answerer: answerer)
+        let store = readyStore(answerer)
         store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
@@ -160,7 +185,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testARefusalByTheGatewayKeepsTheCardWithItsReason() async {
         let answerer = FakeAnswerer()
         answerer.outcome = .failure(refused("internal-error"))
-        let store = ApprovalStore(answerer: answerer)
+        let store = readyStore(answerer)
         store.receive(waterfall())
 
         await store.answer(store.pending(in: "s1")[0], allow: true)
@@ -178,7 +203,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testASecondTapWhileTheFirstIsInFlightDoesNothing() async {
         let answerer = FakeAnswerer()
         answerer.holdsFirstCall = true
-        let store = ApprovalStore(answerer: answerer)
+        let store = readyStore(answerer)
         store.receive(waterfall())
         let entry = store.pending(in: "s1")[0]
 
@@ -208,6 +233,7 @@ final class ApprovalStoreTests: XCTestCase {
     @MainActor
     private final class SpySink: ApprovalEventSink {
         private(set) var registrations: [String] = []
+        var clientId: String? = "c1"
 
         func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void {
             registrations.append("waterfall")
@@ -308,7 +334,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testACancelWhileTheAnswerIsInFlightLeavesNoNotice() async {
         let answerer = FakeAnswerer()
         answerer.holdsFirstCall = true
-        let store = ApprovalStore(answerer: answerer)
+        let store = readyStore(answerer)
         store.receive(waterfall())
         let entry = store.pending(in: "s1")[0]
 
@@ -335,7 +361,7 @@ final class ApprovalStoreTests: XCTestCase {
     /// 造非空的三条路各走一次：成功应答写通知、传输失败留状态、卡本身在表里。
     func testClearDropsEveryEntryAndEveryState() async {
         let answerer = FakeAnswerer()
-        let store = ApprovalStore(answerer: answerer)
+        let store = readyStore(answerer)
         store.receive(waterfall(session: "s1", eventId: "e1"))
         store.receive(waterfall(session: "s2", eventId: "e2"))
 
@@ -360,5 +386,111 @@ final class ApprovalStoreTests: XCTestCase {
         XCTAssertTrue(store.pending(in: "s2").isEmpty)
         XCTAssertNil(store.state(for: "e2"), "状态行不留看不见的旧值")
         XCTAssertNil(store.notice(for: "s1"), "上一代的说明也过时了")
+    }
+}
+
+// MARK: - 归属（判据 9 的后两段）
+
+@MainActor
+final class ApprovalOwnershipTests: XCTestCase {
+
+    /// 假门之外的另一半：`clientId` 从流上取出来、原样交给作答门。
+    ///
+    /// 这条补的是 `EventsStream` 与 `ApprovalStore` 之间的那一跳 —— 两端各自有判据时，
+    /// 「解出来又丢掉」正是不编译失败、也没有任何一条红的形状（本期之前它就是丢掉的）。
+    func testTheAnswerCarriesTheClientIdFromTheStream() async throws {
+        let events = EventsStream()
+        let answerer = RecordingAnswerer()
+        let store = ApprovalStore(answerer: answerer)
+        store.attach(sink: events)
+
+        // 先给一条 ready：id 从此住在流上。
+        _ = events.handle(try frame(#"{"type":"item","streamId":"e1","value":{"type":"ready","clientId":"c-42"}}"#))
+        XCTAssertEqual(events.clientId, "c-42", "流要记住它 —— 这是全仓唯一的来源")
+
+        store.receive(waterfall())
+        await store.answer(store.pending(in: "s1")[0], allow: true)
+
+        XCTAssertEqual(answerer.clients, ["c-42"], "应答要带上最近一次 ready 的那个 id")
+        XCTAssertTrue(store.pending(in: "s1").isEmpty, "前置：这一发是成功的")
+    }
+
+    /// 流还没就绪（或刚收起）：不发请求，卡转「结果未知」。
+    ///
+    /// 发出去的一发网关一定会拒（`not-owner`），而那对用户说的是「这条审批不是你的」——
+    /// 一件不是事实的事。
+    func testWithNoClientIdTheAnswerIsNotSent() async {
+        let answerer = RecordingAnswerer()
+        let store = ApprovalStore(answerer: answerer)
+        store.attach(sink: EmptySink())
+
+        store.receive(waterfall())
+        await store.answer(store.pending(in: "s1")[0], allow: true)
+
+        XCTAssertTrue(answerer.clients.isEmpty, "没有归属的键就不发 —— 这一发注定被拒")
+        XCTAssertEqual(store.pending(in: "s1").count, 1, "卡留着：等 ready 之后它还能答")
+        XCTAssertEqual(store.state(for: "e1"), .unknown, "状态如实说「不知道」，不是「被拒」")
+    }
+
+    /// `not-owner` 与 `unknown-approval` 同一处置：撤卡。
+    ///
+    /// 留着一张永远答不动的卡比撤掉更坏 —— 网关在重连时会重发仍未答的问题，撤掉不会丢。
+    func testANotOwnerRefusalRemovesTheCardWithAnExplanation() async {
+        let answerer = RecordingAnswerer()
+        answerer.outcome = .failure(RpcClientError.refused(GatewayFailure(code: "not-owner", message: "gateway said so")))
+        let store = ApprovalStore(answerer: answerer)
+        store.attach(sink: ReadySink(clientId: "c-1"))
+
+        store.receive(waterfall())
+        await store.answer(store.pending(in: "s1")[0], allow: true)
+
+        XCTAssertTrue(store.pending(in: "s1").isEmpty, "撤卡")
+        XCTAssertNil(store.state(for: "e1"))
+        XCTAssertEqual(store.notice(for: "s1"),
+                       GatewayFailure(code: "not-owner", message: "").readableDescription)
+    }
+
+    // MARK: - 夹具
+
+    @MainActor
+    private final class RecordingAnswerer: ApprovalAnswering {
+        private(set) var clients: [String] = []
+        var outcome: Result<Void, Error> = .success(())
+
+        func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws {
+            clients.append(clientId)
+            try outcome.get()
+        }
+    }
+
+    /// 一条永远没就绪过的流。
+    @MainActor
+    private final class EmptySink: ApprovalEventSink {
+        var clientId: String? { nil }
+        func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onReady(_ handler: @escaping () -> Void) -> () -> Void { {} }
+    }
+
+    @MainActor
+    private final class ReadySink: ApprovalEventSink {
+        var clientId: String?
+        init(clientId: String?) { self.clientId = clientId }
+        func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onReady(_ handler: @escaping () -> Void) -> () -> Void { {} }
+    }
+
+    private func frame(_ json: String) throws -> InboundFrame {
+        try XCTUnwrap(InboundFrame.decode(Data(json.utf8)))
+    }
+
+    private func waterfall(session: String = "s1", eventId: String = "e1") -> JSONValue {
+        .object([
+            "event": .string("approval/request"),
+            "eventId": .string(eventId),
+            "agentId": .string(session),
+            "request": .object(["toolName": .string("bash")]),
+        ])
     }
 }

@@ -40,7 +40,7 @@ async function harness() {
   events.start(AbortSignal.timeout(20_000))
 
   const server = createServer()
-  attachStreamHandler(server, fakeSource([]), { authenticate: () => true }, {
+  attachStreamHandler(server, fakeSource([]), { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, {
     // 审批的投递通道只有这一条：待答项随 `$events` 流走。
     events,
     approvals: relay,
@@ -120,7 +120,7 @@ function fakeApprovals(options: { ready: boolean; held?: HeldApproval[] }): Appr
 /** 起一个只有事件流的网关：`events` 与 `approvals` 由调用方给。 */
 async function eventsOnlyServer(events: ReturnType<typeof fakeFeed>, approvals: ApprovalSource) {
   const server = createServer()
-  attachStreamHandler(server, fakeSource([]), { authenticate: () => true }, { events, approvals })
+  attachStreamHandler(server, fakeSource([]), { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { events, approvals })
   server.listen(0)
   await once(server, 'listening')
   return server

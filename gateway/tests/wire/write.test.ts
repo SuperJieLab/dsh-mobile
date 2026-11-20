@@ -14,8 +14,8 @@ import { approvalAnswerOf, sessionPromptOf } from '../../src/wire/write.ts'
 
 test('approval-answer: well-formed payload parses', () => {
   assert.deepEqual(
-    approvalAnswerOf({ eventId: 'a', decision: 'allow', answerId: 'k' }),
-    { eventId: 'a', decision: 'allow', answerId: 'k' },
+    approvalAnswerOf({ eventId: 'a', decision: 'allow', answerId: 'k', clientId: 'c-1' }),
+    { eventId: 'a', decision: 'allow', answerId: 'k', clientId: 'c-1' },
   )
 })
 
@@ -23,9 +23,13 @@ test('approval-answer: malformed payloads are refused, not normalized', () => {
   for (const bad of [
     {},
     { eventId: 'a', decision: 'allow' },
-    { eventId: 'a', decision: 'ALLOW', answerId: 'k' },
-    { eventId: '', decision: 'allow', answerId: 'k' },
-    { eventId: 'a', decision: 'allow', answerId: 7 },
+    { eventId: 'a', decision: 'ALLOW', answerId: 'k', clientId: 'c-1' },
+    { eventId: '', decision: 'allow', answerId: 'k', clientId: 'c-1' },
+    { eventId: 'a', decision: 'allow', answerId: 7, clientId: 'c-1' },
+    // 归属的键：缺了它不是「当没带」，是整条不合格（B4 逐格严格）。
+    { eventId: 'a', decision: 'allow', answerId: 'k' },
+    { eventId: 'a', decision: 'allow', answerId: 'k', clientId: '' },
+    { eventId: 'a', decision: 'allow', answerId: 'k', clientId: 9 },
   ]) {
     assert.equal(approvalAnswerOf(bad as Record<string, unknown>), undefined, JSON.stringify(bad))
   }

@@ -38,11 +38,30 @@ export const PAIRING_MAX_ATTEMPTS = 5
  */
 export const DEVICE_ROTATION_GRACE_MS = 24 * 60 * 60 * 1000
 
-/** 凭据文件的内容。吊销即重置为 `{ version: 1 }`。 */
+/**
+ * 凭据文件的内容。吊销即重置为 `{ version: 2 }`。
+ *
+ * **v2 加了身份**（F1 第 3 期）：`identityId` 回答「这层关系是谁」。身份与关系同寿，
+ * 与 access token 的轮换无关 —— 换票只改 `deviceTokenHash`，这一格不动。它是
+ * 「一个身份只许一条 socket」那条判定的键（`remote/identity-registry.ts`）。
+ */
 export interface StoredCredentials {
-  version: 1
+  version: 2
   /** device token 的 SHA-256 十六进制。未配对时缺省。 */
   deviceTokenHash?: string
+  /**
+   * 这层关系的身份。**未配对的文件没有它** —— 与 `deviceTokenHash` 同进同出。
+   *
+   * 可选而不是必填：`emptyCredentials()` 是一份「没有关系」的文件，铸一个假 id 进去
+   * 会让「没有身份」与「有一个不认识的身份」变得无法区分，而那正是 fail-closed 的
+   * 依据（`CredentialVault.authenticate` 见不到 id 就回 `undefined`）。
+   */
+  identityId?: string
+  /**
+   * 这个身份能不能应答审批。缺省即**不可以** —— 与 `Unauthorized` 同理，
+   * 权限的缺省值是「没有」。
+   */
+  canAnswer?: boolean
   /**
    * 上一枚 device token 的哈希与它失效的时刻 —— 轮换的回头路。
    *
@@ -60,9 +79,33 @@ export interface StoredCredentials {
   }
 }
 
+/**
+ * 一枚访问凭证解析出的**身份** —— 凭据库的读侧只答这一个形状。
+ *
+ * 它比一个布尔多两件事：**是谁**（`id`，409 与归属判定要用），以及**能不能答审批**
+ * （`canAnswer`，上游的 `interactions` 那一格的对偶）。放在这里而不是 `remote/`：
+ * 它是凭证形状的一部分，与 `StoredCredentials` 同处一张文件才看得见「身份随关系走」。
+ */
+export interface Identity {
+  readonly id: string
+  readonly canAnswer: boolean
+}
+
+/**
+ * 从 device token 哈希派生身份 id。
+ *
+ * 派生而不是随机：迁移函数是纯函数（`CREDENTIAL_MIGRATIONS` 那一族），不给它注入随机源。
+ * 配对时也用它 —— 同一处定义，两个调用点（配对与迁移）不会各铸一种格式。
+ *
+ * 前缀 `i-` 是为了让日志里一眼分得出「这是身份」而不是「一枚凭证」：两者都是十六进制。
+ */
+export function identityIdOf(deviceTokenHash: string): string {
+  return `i-${deviceTokenHash.slice(0, 16)}`
+}
+
 /** 空文件 —— 吊销后回到的状态。 */
 export function emptyCredentials(): StoredCredentials {
-  return { version: 1 }
+  return { version: 2 }
 }
 
 /** 文本的 SHA-256 十六进制。确定性计算，无需注入随机源。 */
@@ -134,12 +177,17 @@ export function attemptPairing(
   }
 
   const deviceToken = newToken(random)
+  const deviceTokenHash = sha256Hex(deviceToken)
   return {
     status: 'paired',
     deviceToken,
     file: {
-      version: 1,
-      deviceTokenHash: sha256Hex(deviceToken),
+      version: 2,
+      deviceTokenHash,
+      // 身份与关系同一次写入铸出：分两次写会让「关系在、身份没了」成为一个可达状态。
+      identityId: identityIdOf(deviceTokenHash),
+      // 配对出来的设备就是 owner —— 我们没有第二种身份的来源（见 F1 第 3 期方案第一节）。
+      canAnswer: true,
       // 已消费：一次性属性靠移除来强制。
     },
   }
@@ -160,8 +208,12 @@ function countAttempt(file: StoredCredentials): PairingOutcome {
 
 function withoutPairing(file: StoredCredentials): StoredCredentials {
   return {
-    version: 1,
+    version: 2,
     ...(file.deviceTokenHash === undefined ? {} : { deviceTokenHash: file.deviceTokenHash }),
+    // 身份跟着关系走：配对码作废不是关系结束，把 id 丢掉会让在线的那台在下一次
+    // 换票时换一个人。
+    ...(file.identityId === undefined ? {} : { identityId: file.identityId }),
+    ...(file.canAnswer === undefined ? {} : { canAnswer: file.canAnswer }),
     ...(file.previous === undefined ? {} : { previous: file.previous }),
   }
 }

@@ -17,7 +17,7 @@ import { connect, event, fakeSource, snapshotFrame } from './harness.ts'
 test('an unknown upgrade path is declined without speaking WebSocket', { timeout: 10_000 }, async () => {
   const source = fakeSource([])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
@@ -144,7 +144,7 @@ test('heartbeat: a peer that keeps sending frames is alive even though it never 
   // 那门自动应答恰好会遮住要测的东西），心跳节拍压到 20ms（3 拍即判死）。
   const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => true }, {
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, {
     heartbeat: { intervalMs: 20, missedPongLimit: 1 },
   })
   server.listen(0)
@@ -230,7 +230,7 @@ test('a connection that breaks framing does not take the listener down with it',
   // 「抛到监听器」，一个坏客户端就能让所有人的流断掉。这条用一个真坏的字节流
   // 撞它，然后确认服务端仍在接受新连接。
   const server = createServer()
-  attachStreamHandler(server, fakeSource([]), { authenticate: () => true })
+  attachStreamHandler(server, fakeSource([]), { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')

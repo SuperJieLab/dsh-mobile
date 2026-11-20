@@ -19,6 +19,7 @@ import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.http)
 import {
+  identityIdOf,
   attemptPairing,
   bearerTokenOf,
   emptyCredentials,
@@ -28,6 +29,7 @@ import {
   PAIRING_TTL_MS,
   rotateDeviceToken,
   sha256Hex,
+  type Identity,
   type StoredCredentials,
 } from '../protocol/auth.ts'
 
@@ -37,8 +39,10 @@ export const DEFAULT_CREDENTIALS_PATH = join(homedir(), '.dsh', 'dsh-mobile', 'c
 /**
  * 凭据文件的载荷版本。**加字段就加一**，并在 {@link CREDENTIAL_MIGRATIONS} 里补一步。
  * 必须与 `StoredCredentials.version` 的字面量一致。
+ *
+ * v2 加了 `identityId` / `canAnswer`（F1 第 3 期）：老文件走一步迁移，不要求重新配对。
  */
-export const CREDENTIALS_VERSION = 1
+export const CREDENTIALS_VERSION = 2
 
 /** 一步迁移：把来源版本的文件变成下一版。迁不动返回 `undefined`。 */
 export type CredentialMigration = (
@@ -48,10 +52,22 @@ export type CredentialMigration = (
 /**
  * 每一步把**来源版本**的文件变成下一版。键是来源版本。
  *
- * 现在是空的 —— 凭据只有一版。空表不是「没有迁移」，是「还没发生过迁移」：
- * 加 v2 时往这里补一步，老用户就不用重新配对。
+ * `version` 必须由这一步自己写上去。`migrateCredentials` 的循环靠自己的计数器推进
+ * （`version += 1`），**不读**这一步返回的 `version` —— 所以漏写的后果不是多跑一轮，
+ * 而是交出去的文件仍然标着旧版本：下次读盘会**再迁一次**，而那时 `deviceTokenHash`
+ * 可能已经轮换过，`identityIdOf` 派生出来的就是**另一个身份**了。身份在重启后变一次，
+ * 409 的键也跟着变。
  */
-export const CREDENTIAL_MIGRATIONS: Record<number, CredentialMigration> = {}
+export const CREDENTIAL_MIGRATIONS: Record<number, CredentialMigration> = {
+  1: (file) => {
+    const next = { ...file, version: 2 }
+    const hash = file.deviceTokenHash
+    // 未配对的 v1 文件只有版本号：没有关系，也就没有身份。补一个假 id 会让
+    // 「没有关系」看起来像「有一个不认识的身份」。
+    if (typeof hash !== 'string') return next
+    return { ...next, identityId: identityIdOf(hash), canAnswer: true }
+  },
+}
 
 /**
  * 把文件迁到 `target`（默认当前版本）。
@@ -100,8 +116,8 @@ export class CredentialVault {
 
   /**
    * 读文件时用的迁移链。默认是当前版本那一套；可注入是为了让「接线对不对」能被断言 ——
-   * 迁移表在生产里现在是空的（凭据只有一版），不注入的话循环体永远跑不到，
-   * 「接没接上」这件事没有任何判据看得见。
+   * 注入的那一条把来源哈希**换掉**，于是「走了链」与「绕过链硬读」在同一个 v1 文件上
+   * 给出不同答案；不注入的话，两种情况都是一份能用的凭据，判据就分不开它们。
    */
   private readonly migrations: { steps: Record<number, CredentialMigration>; target: number }
 
@@ -204,7 +220,13 @@ export class CredentialVault {
     const outcome = attemptPairing(this.file, code, this.now(), this.random)
     this.file = outcome.file
     this.persist()
-    if (outcome.status === 'paired') return { ok: true, deviceToken: outcome.deviceToken }
+    if (outcome.status === 'paired') {
+      // **清票**：access 表里的每一枚都属于**上一段**关系，而关系已经换了人。
+      // 不清的话，旧票在它剩下的 15 分钟里还能用，而它现在解析出的是**新**身份 ——
+      // 于是一枚发给了旧设备的票，被判成了新设备的（F1 第 3 期方案修正记录 ⑥）。
+      this.access.clear()
+      return { ok: true, deviceToken: outcome.deviceToken }
+    }
     const reasons: Record<Exclude<typeof outcome.status, 'paired'>, string> = {
       'invalid-code': '配对码不对。',
       'code-expired': '配对码已过期 —— 在 Mac 上取一个新的。',
@@ -251,20 +273,39 @@ export class CredentialVault {
     }
   }
 
-  /** HTTP/WS 闸门：该 `Authorization` 头是否指向一枚活跃的 access token？ */
-  authenticate(authorizationHeader: string | undefined): boolean {
+  /**
+   * HTTP/WS 闸门：该 `Authorization` 头指向**哪个身份**？没有票、票过期、或票活着
+   * 但文件说不出是谁，都回 `undefined`。
+   *
+   * 返回身份而不是布尔（F1 第 3 期）：S5 要求「谁在答这条审批」可判定，而布尔答不出
+   * 「是谁」。这也是全仓唯一一处把票解析成身份的地方 —— 此后任何「按身份决定行为」
+   * 的能力都只读这里。
+   *
+   * 票活着却没有 `identityId` 是 fail-closed 的一档：凭据形状上这两格可选（未配对的
+   * 文件没有关系），而一枚活着的票必然来自已配对的文件 —— 走到这里说明文件被手工改过。
+   */
+  authenticate(authorizationHeader: string | undefined): Identity | undefined {
     this.reloadIfChanged()
     const token = bearerTokenOf(authorizationHeader)
-    if (token === undefined) return false
-    return isLiveAccess(this.access.get(sha256Hex(token)), this.now())
+    if (token === undefined) return undefined
+    if (!isLiveAccess(this.access.get(sha256Hex(token)), this.now())) return undefined
+    const id = this.file.identityId
+    if (id === undefined) {
+      log.warn('a live access token resolves to no identity — refusing (fail closed)')
+      return undefined
+    }
+    return { id, canAnswer: this.file.canAnswer === true }
   }
 
   /**
    * 不经配对码预配对 —— 仅装配测试。生产配对走 `pairingCode()` + `pair()`；
    * 本方法直接写入关系，测试因此能持有原始 token 而不必解析控制台输出。
+   *
+   * 与 `pair()` 同一形状：身份与哈希同一次写入，`canAnswer` 为真。
    */
   seedDeviceToken(deviceToken: string): void {
-    this.file = { version: 1, deviceTokenHash: sha256Hex(deviceToken) }
+    const deviceTokenHash = sha256Hex(deviceToken)
+    this.file = { version: 2, deviceTokenHash, identityId: identityIdOf(deviceTokenHash), canAnswer: true }
     this.access.clear()
     this.persist()
   }

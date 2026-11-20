@@ -15,8 +15,10 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { connect as netConnect } from 'node:net'
 import { apply, inject } from '../src/index.ts'
 import { CredentialVault } from '../src/remote/credentials.ts'
+import { setLogSink } from '../src/log.ts'
 import { call, type UnaryAnswer } from './helpers/http.ts'
 
 /** Random high port: two tests must not race each other or anything real. */
@@ -207,6 +209,47 @@ function streamWithToken(port: number, access: string): WebSocket {
   return new WebSocket(url, { headers: { authorization: `Bearer ${access}` } } as unknown as string[])
 }
 
+/**
+ * 一次裸 HTTP Upgrade，返回状态行（`101 Switching Protocols` / `409 Conflict` …）。
+ *
+ * **为什么不用 `WebSocket` 客户端**：它在握手失败时只给一个 `URLError`，
+ * 状态码与原因行都读不到 —— 而 409 的判据只能从状态行上看。这条路径发的是一条
+ * 合法的升级请求（`Sec-WebSocket-Key` 与版本都对），所以拿到的拒绝是**规则**的，
+ * 不是「报文坏了」。
+ */
+function rawUpgrade(port: number, access: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = netConnect(port, '127.0.0.1', () => {
+      socket.write([
+        'GET /rpc/stream HTTP/1.1',
+        `Host: 127.0.0.1:${port}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version: 13',
+        `Authorization: Bearer ${access}`,
+        '', '',
+      ].join('\r\n'))
+    })
+    let received = ''
+    let settled = false
+    const finish = (line: string): void => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve(line)
+    }
+    socket.on('data', chunk => {
+      received += chunk.toString('utf8')
+      const end = received.indexOf('\r\n')
+      if (end < 0) return
+      finish(received.slice(0, end))
+    })
+    socket.on('error', (error) => { if (!settled) { settled = true; reject(error) } })
+    setTimeout(() => { if (!settled) { settled = true; socket.destroy(); reject(new Error(`no status line; got ${JSON.stringify(received)}`)) } }, 3_000)
+  })
+}
+
 test('the pair op answers with a full envelope and issues a device token', async () => {
   // 这条路径此前没有判据：`pair` 的四条拒绝理由由 `protocol/auth.test.ts` 覆盖，
   // 而**回包长什么样**只在这里能看到 —— 应答信封由 `wire/unary.ts` 的
@@ -235,6 +278,53 @@ test('the pair op answers with a full envelope and issues a device token', async
     assert.equal(refused.status, 401)
     assert.equal(refused.ok, false)
     assert.equal(refused.error?.code, 'invalid-pairing-code')
+  } finally {
+    teardown()
+  }
+})
+
+test('判据 2：同一身份的第二条 WS 回 409，关掉第一条之后能再连', { timeout: 15_000 }, async () => {
+  const port = freshPort(38_600)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    // 第一条走真 WebSocket：它要能 101，也要能收发 —— 只断状态行的话，
+    // 一个「回了 101 但没把 socket 交出去」的实现同样全绿。
+    const first = streamWithToken(port, access)
+    const frames: Record<string, unknown>[] = []
+    await new Promise<void>((resolve, reject) => {
+      first.addEventListener('open', () => resolve(), { once: true })
+      first.addEventListener('error', () => { reject(new Error('the first upgrade failed')) }, { once: true })
+      setTimeout(() => { reject(new Error('the first upgrade timed out')) }, 5_000)
+    })
+    first.addEventListener('message', event => {
+      frames.push(JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>)
+    })
+    first.send(JSON.stringify({ type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } }))
+    for (let attempt = 0; attempt < 100 && frames.length === 0; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal((frames[0]?.value as Record<string, unknown> | undefined)?.['type'], 'ready',
+      '前置：第一条连接真的在用（能开流、能收帧）')
+
+    // 第二条：同一枚 access token → 同一个身份 → 409。
+    assert.equal(await rawUpgrade(port, access), 'HTTP/1.1 409 Conflict',
+      '一个身份只许一条 socket —— 第二条必须被拒，而且要拒在状态行上')
+
+    // 关掉第一条 → 名额让出来。轮询是因为 release 挂在 socket 的 close 上。
+    first.close()
+    let status = ''
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      status = await rawUpgrade(port, access)
+      if (status.startsWith('HTTP/1.1 101')) break
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    assert.equal(status, 'HTTP/1.1 101 Switching Protocols',
+      '拒绝之后名额必须真的还回来 —— 否则一次断连就让这台设备永远连不上')
   } finally {
     teardown()
   }
@@ -604,10 +694,45 @@ test('an upgrade without an access token is refused before the handshake', { tim
 
 // MARK: - the write channel (M5 W5)
 
-test('a real HTTP approval-answer settles a held waterfall frame; the consumed question then refuses', { timeout: 10_000 }, async () => {
+/**
+ * 开一条 `$events` 流并从 `ready` 里取出 `clientId`。
+ *
+ * 本期起审批应答必须带它（归属判定的键），而它只从线上来 —— 客户端拿到的是网关在
+ * `ready` 里下发的那一个。把它写在一处，是为了让「谁发的 id」在判据里一眼可见。
+ */
+async function openEventsStream(
+  port: number,
+  access: string,
+): Promise<{ socket: WebSocket; clientId: string; items: Record<string, unknown>[] }> {
+  const socket = streamWithToken(port, access)
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener('open', () => resolve(), { once: true })
+    socket.addEventListener('error', () => { reject(new Error('upgrade failed')) }, { once: true })
+    setTimeout(() => { reject(new Error('upgrade timed out')) }, 5_000)
+  })
+  const items: Record<string, unknown>[] = []
+  const clientId = await new Promise<string>((resolve, reject) => {
+    socket.addEventListener('message', event => {
+      const frame = JSON.parse(String((event as { data: unknown }).data)) as { type?: string; value?: Record<string, unknown> }
+      if (frame.type !== 'item' || frame.value === undefined) return
+      items.push(frame.value)
+      if (frame.value['type'] === 'ready' && typeof frame.value['clientId'] === 'string') {
+        resolve(frame.value['clientId'])
+      }
+    })
+    socket.send(JSON.stringify({ type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } }))
+    setTimeout(() => { reject(new Error(`no ready frame; got ${JSON.stringify(items)}`)) }, 5_000)
+  })
+  return { socket, clientId, items }
+}
+
+test('判据 7：别人的 clientId 答不了审批，自己的可以；越权留一条 warn', { timeout: 10_000 }, async () => {
   const port = freshPort(43_000)
   const credentialsPath = tempCredentialsPath()
   const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
+  // 留痕是被测的一半（S6 的「可见」）：拒绝只在手机上说一行，归因要回到网关日志。
+  const lines: string[] = []
+  const previousSink = setLogSink((level, module, line) => { lines.push(`${level}|${module}|${line}`) })
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
@@ -623,22 +748,41 @@ test('a real HTTP approval-answer settles a held waterfall frame; the consumed q
     })
     await new Promise((resolve) => setTimeout(resolve, 50))
 
+    const stream = await openEventsStream(port, access)
     const send = (args: Record<string, unknown>): Promise<UnaryAnswer> =>
       call(port, 'mobile/approvalAnswer', args, access)
 
-    const first = await send({ eventId: 'wire-1', decision: 'allow', answerId: 'a1' })
-    assert.equal(first.status, 200)
-    assert.equal(first.ok, true)
+    // ① 一个从未下发过的 clientId：这条流不存在，所以答不了。
+    const stranger = await send({ eventId: 'wire-1', decision: 'allow', answerId: 'a0', clientId: 'c-never-issued' })
+    assert.equal(stranger.status, 200, '业务拒绝是 200 —— 身份没问题，只是这条审批不是你的')
+    assert.equal(stranger.ok, false)
+    assert.equal(stranger.error?.code, 'not-owner')
+    assert.deepEqual(gateway.results, [], '越权应答一个字节都不该到上游')
+    assert.ok(
+      lines.some(line => line.startsWith('warn|') && line.includes('c-never-issued')),
+      `越权应答要留一条带 clientId 的 warn；实际日志：${lines.join(' / ')}`,
+    )
+
+    // ② 自己流上的 clientId：放行，问题被消费。
+    const own = await send({ eventId: 'wire-1', decision: 'allow', answerId: 'a1', clientId: stream.clientId })
+    assert.equal(own.status, 200)
+    assert.equal(own.ok, true)
     assert.deepEqual(gateway.results, [{
       clientId: 'fake-client',
       eventId: 'wire-1',
       outcome: { kind: 'result', value: 'allowed-once' },
     }], 'the outcome must reach the gateway result door in the upstream vocabulary')
 
-    const consumed = await send({ eventId: 'wire-1', decision: 'deny', answerId: 'a2' })
+    // ③ 归属判定先于「这条问题还在不在」：同一 clientId 再答一次，得到的是
+    //    unknown-approval（它已经过去了），而不是 not-owner（你不是主人）。
+    const consumed = await send({ eventId: 'wire-1', decision: 'deny', answerId: 'a2', clientId: stream.clientId })
     assert.equal(consumed.ok, false)
     assert.equal(consumed.error?.code, 'unknown-approval')
+
+    stream.socket.close()
+    await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
+    setLogSink(previousSink)
     teardown()
   }
 })

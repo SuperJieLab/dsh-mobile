@@ -11,7 +11,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -103,11 +103,11 @@ test('a vault reads a file at the current version', () => {
   }
 })
 
-/// 接线：`load()` 真的把文件交给了迁移链，而不是绕过它自己硬读。
+/// 这是**迁移接线**的判据，不是迁移规则本身的判据。
 ///
-/// 这一条必须存在 —— 迁移表在生产里是空的（凭据只有一版），循环体永远跑不到。
-/// 不注入一份两步的链，「接没接上」没有任何判据看得见：硬读与走链在 v1 / v99 上
-/// 给出同一个答案。
+/// 它必须存在：迁移表在生产里只有一步 1→2，而这一步在任何 v1 文件上都会成功 ——
+/// 「走了链」与「绕过链直接按当前形状读」因此会给出同一个答案，接线断了也看不出来。
+/// 注入一条**换掉哈希**的步骤，两条路才会分家（换了哈希就不再认老 token）。
 test('the vault actually runs the file through the chain', () => {
   const { path, done } = sandbox()
   try {
@@ -138,6 +138,36 @@ test('the same file stays unpaired when the needed step is missing', () => {
     const vault = new CredentialVault(path, Math.random, Date.now, { steps: {}, target: 2 })
 
     assert.equal(vault.refresh('device-1').ok, false, '缺一步就该当未配对 —— 不猜')
+  } finally {
+    done()
+  }
+})
+
+// ── 判据 11：v1 → v2 的那一步 ──────────────────────────────────────
+
+test('判据 11：一份 v1 文件迁到 v2，身份派生出来且重启后不变', () => {
+  const { path, done } = sandbox()
+  try {
+    // 一份真实的老文件：只有哈希，没有身份。
+    writeFileSync(path, JSON.stringify({ version: 1, deviceTokenHash: sha256Hex('device-1') }))
+
+    const vault = new CredentialVault(path)
+    const issued = vault.refresh('device-1')
+    assert.equal(issued.ok, true, '老关系不该被踢回去重新配对')
+
+    const migrated = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    assert.equal(migrated['version'], 2, '迁移必须自己写 version —— 漏了它会在重启后再派生出另一个身份')
+    assert.equal(migrated['canAnswer'], true, '迁上来的是 owner')
+    assert.equal(typeof migrated['identityId'], 'string')
+
+    const identity = issued.ok ? vault.authenticate(`Bearer ${issued.accessToken}`) : undefined
+    assert.equal(identity?.id, migrated['identityId'])
+
+    // 再读一次：`version: 2` 让循环体不再跑，id 因此是**存下来的**那一个，不是重算的。
+    const reopened = new CredentialVault(path)
+    const again = reopened.refresh('device-1')
+    const againIdentity = again.ok ? reopened.authenticate(`Bearer ${again.accessToken}`) : undefined
+    assert.equal(againIdentity?.id, identity?.id, '第二次读盘不得换身份')
   } finally {
     done()
   }

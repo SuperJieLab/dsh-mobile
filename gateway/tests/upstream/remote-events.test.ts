@@ -80,6 +80,35 @@ test('a live subscription hears a new generation, and only once', async () => {
   }
 })
 
+test('判据 4：上游 ready 的 host 被保存下来，并与身份一起作废', async () => {
+  // 这一半**只能在源这一层测**：泵会把 `feed.host()` 原样搬进 `ready`，所以只测泵的话，
+  // 「上游把这个字段丢了」这件事在任何帧上都看不出来 —— 客户端只会看到 host 永远缺席。
+  const feed = fakeEventStream({ host: { home: '/Users/someone/proj' } })
+  const events = new ForwardedEvents(feed.source)
+  events.start(AbortSignal.timeout(10_000))
+  await feed.started
+  await until(() => events.ready, 'the source is ready')
+  // 记录每一次代次通知时 host 是什么：两格必须同进同出。
+  const seen: { generation: number | undefined; host: string | undefined }[] = []
+  events.subscribe({
+    generation(generation) { seen.push({ generation, host: events.host()?.home }) },
+    frame() {},
+  })
+  try {
+    assert.deepEqual(events.host(), { home: '/Users/someone/proj' }, '这一代的 host 是上游说的那一个')
+
+    feed.end()
+    await until(() => seen.length >= 2, 'lost, then rebuilt')
+
+    assert.deepEqual(seen[0], { generation: undefined, host: undefined },
+      '身份没了，host 也就无从谈起 —— 留着它会让客户端把一个不存在的源当成还在说')
+    assert.deepEqual(seen[1], { generation: 2, host: '/Users/someone/proj' },
+      '下一代重新给：host 属于每一代的 ready，不是一次性的初始化参数')
+  } finally {
+    events.stop()
+  }
+})
+
 test('an identity that dies takes its generation with it', async () => {
   const { feed, events, stop } = await liveSource()
   try {

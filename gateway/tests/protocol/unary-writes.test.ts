@@ -12,11 +12,28 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
+import { approvalAnswerValue, DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
+import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
+import type { Duplex } from 'node:stream'
 
 const events = [{ type: 'user/message', seq: 0, time: 1, data: {} }]
+
+/**
+ * 一条已经登记好的流：本文件的「自己的流」就是它。
+ *
+ * 本期起审批应答要带 clientId，而归属判定读的是登记表 —— 只给一个字符串不够，
+ * 那条流必须真的在表里、并且属于这个身份。
+ */
+const OWN_CLIENT_ID = 'c-own'
+function registryWithOwnStream(): IdentityRegistry {
+  const registry = new IdentityRegistry()
+  const socket = {} as Duplex
+  registry.claim({ id: 'test-identity', canAnswer: true }, socket)
+  registry.openStream(OWN_CLIENT_ID, socket)
+  return registry
+}
 
 const deps = (): RpcListenerDeps => ({
   sessionPort: {
@@ -25,7 +42,8 @@ const deps = (): RpcListenerDeps => ({
     readAll: async (id) => (id === 's-1' ? events : undefined),
   },
   limits: DEFAULT_LIMITS,
-  vault: { authenticate: () => true } as unknown as CredentialVault,
+  vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
+  registry: registryWithOwnStream(),
   writePort: {
     createSession: async () => 's-new',
     promptSession: async (prompt) => (prompt.sessionId === 's-1' ? 'accepted' : 'unknown-session'),
@@ -102,7 +120,7 @@ test('八个写端点各发一次合法请求全部 ok，且 value 带着这次�
     ['/api/session/create', {}, { sessionId: 's-new' }],
     ['/api/mobile/workspaceCreate', { name: 'proj' }, { workspaceId: 'w-proj', title: 'proj', created: true }],
     ['/api/workspace/delete', { workspaceId: 'w-1' }, {}],
-    ['/api/mobile/approvalAnswer', { eventId: 'e-1', decision: 'allow', answerId: 'a-1' }, { eventId: 'e-1' }],
+    ['/api/mobile/approvalAnswer', { eventId: 'e-1', decision: 'allow', answerId: 'a-1', clientId: OWN_CLIENT_ID }, { eventId: 'e-1' }],
     ['/api/session/prompt', { sessionId: 's-1', promptId: 'p-1', text: 'hi' }, { sessionId: 's-1' }],
   ]
   await withListener(async (post) => {
@@ -127,7 +145,7 @@ test('每个写端点的拒绝码与旧路径一致 —— 拒了就不能说 ok
       ['/api/mobile/permissionSelect', {}, 'invalid-request'],
       ['/api/mobile/workspaceCreate', { name: ' ' }, 'invalid-request'],
       ['/api/workspace/delete', {}, 'invalid-request'],
-      ['/api/mobile/approvalAnswer', { eventId: 'e-9', decision: 'allow', answerId: 'a-1' }, 'unknown-approval'],
+      ['/api/mobile/approvalAnswer', { eventId: 'e-9', decision: 'allow', answerId: 'a-1', clientId: OWN_CLIENT_ID }, 'unknown-approval'],
       ['/api/mobile/approvalAnswer', {}, 'invalid-request'],
       ['/api/session/prompt', { sessionId: 's-9', promptId: 'p-1', text: 'hi' }, 'unknown-session'],
       ['/api/session/prompt', {}, 'invalid-request'],
@@ -156,4 +174,35 @@ test('判据 8：未知键不被拒，`promptId` 不改名', async () => {
     assert.equal(withRequestId.ok, false, '照上游改名会让旧客户端全挂 —— 这一格不许被当成 promptId')
     assert.equal((withRequestId.error as Record<string, unknown>).code, 'invalid-request')
   })
+})
+
+test('判据 8：可应答标记被读 —— canAnswer 为假的身份答不了审批', async () => {
+  // 身份由**参数**构造：生产里没有第二种身份的来源（配对出来的都是 owner），
+  // 所以这一支只能在判定层上造出来。见方案「不解决的边界」第 1 条。
+  const delivered: string[] = []
+  const write = {
+    createSession: async () => 's-unused',
+    promptSession: async () => 'accepted' as const,
+    answerApproval: async (answer: { eventId: string }) => {
+      delivered.push(answer.eventId)
+      return 'delivered' as const
+    },
+  }
+  const owners = { ownerOf: () => 'i-owner' }
+  const args = { eventId: 'e-1', decision: 'allow', answerId: 'a-1', clientId: 'c-1' }
+
+  const muted = await approvalAnswerValue(args, write, { id: 'i-owner', canAnswer: false }, owners)
+  assert.equal(muted.ok, false)
+  assert.equal(muted.ok ? '' : muted.error.code, 'not-owner')
+  assert.deepEqual(delivered, [], '不可应答的身份一个字节都不该投递')
+
+  const allowed = await approvalAnswerValue(args, write, { id: 'i-owner', canAnswer: true }, owners)
+  assert.equal(allowed.ok, true)
+  assert.deepEqual(delivered, ['e-1'])
+
+  // 同一条流、另一个身份：流在，但不是你的（真端口上的版本是判据 7）。
+  const intruder = await approvalAnswerValue(args, write, { id: 'i-other', canAnswer: true }, owners)
+  assert.equal(intruder.ok, false)
+  assert.equal(intruder.ok ? '' : intruder.error.code, 'not-owner')
+  assert.deepEqual(delivered, ['e-1'], '越权那次也没到上游')
 })

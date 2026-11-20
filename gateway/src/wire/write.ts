@@ -26,6 +26,13 @@ export interface ApprovalAnswerMessage {
   decision: 'allow' | 'deny'
   /** 客户端铸造的幂等键。同键重试重放第一次的结果。 */
   answerId: string
+  /**
+   * 这条审批是**在哪条流上看到的** —— 网关据此判「这次应答是不是这条流的主人在答」。
+   *
+   * 必填而不是可选：缺一格就无法归属，而「缺了当没带」会让归属判定静默失效 ——
+   * 宁可整条 `invalid-request`，也不要一条没有主人的应答。
+   */
+  clientId: string
 }
 
 /**
@@ -36,8 +43,11 @@ export function approvalAnswerOf(message: Record<string, unknown>): ApprovalAnsw
   const eventId = nonEmptyString(message.eventId)
   const decision = message.decision === 'allow' || message.decision === 'deny' ? message.decision : undefined
   const answerId = nonEmptyString(message.answerId)
-  if (eventId === undefined || decision === undefined || answerId === undefined) return undefined
-  return { eventId, decision, answerId }
+  const clientId = nonEmptyString(message.clientId)
+  if (eventId === undefined || decision === undefined || answerId === undefined || clientId === undefined) {
+    return undefined
+  }
+  return { eventId, decision, answerId, clientId }
 }
 
 /** 校验通过的 `session-prompt` 消息。 */
