@@ -39,8 +39,8 @@ export interface Limits {
   /** 单条应答 `events` 序列化尺寸的软上限。 */
   maxDeltaBytes: number
   /**
-   * follow 打开那一帧的字节上界（R9 期1）。它与上面两个不同：**不经由本文件的
-   * `handle`，而且是硬上限** —— 装不下就按轮边界收窄，连一轮都装不下则拒绝。
+   * follow 打开那一帧的字节上界（R9 期1）。它与上面两个不同：**不经过一元端点，
+   * 而且是硬上限** —— 装不下就按轮边界收窄，连一轮都装不下则拒绝。
    * HTTP 路径的软上限允许首条事件独自超限放行（否则客户端无法前进），那条规则
    * 在这里等于必然断连，不能照搬。
    */
@@ -121,7 +121,7 @@ export async function workspaceCreateOf(
  * `ok` 意为**它已经不在列表里了** —— 是真删掉的、还是本来就没有，客户端不需要知道
  * （两种结局要做的事完全一样：关掉确认框、重拉一次）。所以应答里没有 `deleted`。
  *
- * 宿主失败**不在这里折**：`handle` 的 catch 用 `readErrorOf` 统一折成 `internal-error`。
+ * 宿主失败**不在这里折**：`invokeEndpoint` 的 catch 用 `readErrorOf` 统一折成 `internal-error`。
  * 「删一个已经不在的算成功」那条住在适配层（`deleteWorkspaceIn`），它认得 not-found。
  */
 export async function workspaceDeleteOf(
@@ -500,15 +500,6 @@ function normalizeSince(value: unknown): number {
 }
 
 /** 纯对象，区别于数组、null 或原始值。 */
-/**
- * 版本不匹配的拒绝文案。**带方向**。
- *
- * 「两端版本不一致」这句话本身不可行动：客户端看到它不知道该升级自己还是升级网关。
- * 方向从版本号大小就能读出来 —— 客户端说的比自己小，是客户端旧；比自己的大，是自己旧。
- *
- * 客户端那一侧不解析这句话（它拿应答的 `v` 自己判方向，文案在 `FailureText`）；
- * 这里的句子是给日志与手工 curl 用的，所以用英文，与其余协议 message 一致。
- */
 /**
  * 一次失败的形状（三格，`details` 恒为对象）。
  *
