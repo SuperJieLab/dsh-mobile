@@ -169,6 +169,122 @@ test('relay: a retried answerId replays the first outcome without a second deliv
   }
 })
 
+function questionFrame(eventId: string, agentId = 'agent-1') {
+  return {
+    type: 'waterfall' as const, event: 'user-questions/request', eventId, agentId,
+    request: {
+      questions: [
+        { id: 'q-1', question: '用哪条？', options: [{ label: 'A' }, { label: 'B' }] },
+        { id: 'q-2', question: '同时改测试吗？', options: [{ label: '要' }], multiSelect: true },
+      ],
+    },
+  }
+}
+
+test('relay: 问题应答编码成上游的 answers 形状 —— 不借用审批的结论词汇', async () => {
+  const { feed, relay, results, stop } = await liveRelay()
+  try {
+    feed.push(questionFrame('q1'))
+    await until(() => relay.held().length === 1, '问题被收下')
+
+    const outcome = await relay.answerQuestion({
+      eventId: 'q1', answerId: 'k1', clientId: 'c-test',
+      answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: [], custom: '要' }],
+    })
+
+    assert.equal(outcome, 'delivered')
+    assert.deepEqual(results[0]?.outcome, {
+      kind: 'result',
+      value: { answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: [], custom: '要' }] },
+    })
+  } finally {
+    stop()
+  }
+})
+
+test('relay: 答案没覆盖卡上全部问题就不投递，且这次拒收不占用幂等键', async () => {
+  const { feed, relay, results, stop } = await liveRelay()
+  try {
+    feed.push(questionFrame('q1'))
+    await until(() => relay.held().length === 1, '问题被收下')
+
+    const missing = await relay.answerQuestion({
+      eventId: 'q1', answerId: 'k1', clientId: 'c-test', answers: [{ id: 'q-1', selected: ['A'] }],
+    })
+    assert.equal(missing, 'invalid-answers', '半张卡不投 —— 上游会把它当成整批的答案')
+    assert.equal(results.length, 0, '一次都不该投')
+
+    const extra = await relay.answerQuestion({
+      eventId: 'q1', answerId: 'k2', clientId: 'c-test',
+      answers: [
+        { id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: ['要'] }, { id: 'q-3', selected: ['X'] },
+      ],
+    })
+    assert.equal(extra, 'invalid-answers', '多一项同样不算覆盖 —— 一个不缺、一个不多')
+    assert.equal(results.length, 0, '也不该投')
+
+    const fixed = await relay.answerQuestion({
+      eventId: 'q1', answerId: 'k1', clientId: 'c-test',
+      answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: ['要'] }],
+    })
+    assert.equal(fixed, 'delivered', '改对之后用同一个 answerId 必须投得上去 —— 拒收不该占住这个键')
+    assert.equal(results.length, 1)
+  } finally {
+    stop()
+  }
+})
+
+test('relay: 用错端点回 invalid-answers，且不往上投 —— 静默编错词汇比拒绝更坏', async () => {
+  const { feed, relay, results, stop } = await liveRelay()
+  try {
+    feed.push(questionFrame('q1'))
+    await until(() => relay.held().length === 1, '问题被收下')
+
+    const wrong = await relay.answerApproval({ eventId: 'q1', decision: 'allow', answerId: 'k9', clientId: 'c-test' })
+    assert.equal(wrong, 'invalid-answers', '拿审批的 decision 去答一条问题，上游会拒；那说的不是事实')
+    assert.equal(results.length, 0)
+  } finally {
+    stop()
+  }
+})
+
+test('relay: 两类共用同一张重放表 —— 同一个 answerId 跨类只投一次', async () => {
+  const { feed, relay, results, stop } = await liveRelay()
+  try {
+    feed.push(waterfallFrame('a1'))
+    feed.push(questionFrame('q1'))
+    await until(() => relay.held().length === 2, '两类都在表里')
+
+    assert.equal(await relay.answerApproval({ eventId: 'a1', decision: 'allow', answerId: 'k', clientId: 'c-test' }), 'delivered')
+    // 同一个键答另一条 —— 拿到的是第一次的结局，不是第二次投递。
+    assert.equal(await relay.answerQuestion({
+      eventId: 'q1', answerId: 'k', clientId: 'c-test',
+      answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: ['要'] }],
+    }), 'delivered')
+    assert.equal(results.length, 1, '两张独立的表会让这里变成 2 —— 那正是这条要排除的形态')
+  } finally {
+    stop()
+  }
+})
+
+test('relay: 答得太早得到的 unknown-approval 会被重放 —— 同一 answerId 不再投第二次', async () => {
+  const { feed, relay, results, stop } = await liveRelay()
+  try {
+    // 客户端在挂起项到达之前就答了：这是一种真实交错（重连后先发后收）。
+    const early = await relay.answerApproval({ eventId: 'e-late', decision: 'allow', answerId: 'k', clientId: 'c-test' })
+    assert.equal(early, 'unknown-approval')
+
+    feed.push(waterfallFrame('e-late'))
+    await until(() => relay.held().length === 1, '那条之后到了')
+
+    const retried = await relay.answerApproval({ eventId: 'e-late', decision: 'allow', answerId: 'k', clientId: 'c-test' })
+    assert.equal(retried, 'unknown-approval', '同一 answerId 重放第一次的结局 —— 契约只豁免 invalid-answers')
+    assert.equal(results.length, 0, '重放不是交付：一次都不该投')
+  } finally {
+    stop()
+  }
+})
+
 test('relay: a refused answer is not reported as delivered, and the question stays held', async () => {
   // What the runtime does now (`dsh-api-gateway/lib/index.js:961-977` at 0.2.1-alpha.3):
   // the `$events/result` door validates the Peer, so a mismatch comes back as a value,
@@ -218,18 +334,66 @@ test('relay: a cancel frame clears the question; late answer meets unknown-appro
   }
 })
 
-test('relay: only approval/request waterfalls are announced — the request body is not interpreted', async () => {
+test('relay: 第二类挂起项也被收下 —— 上游提问不再静默消失', async () => {
+  const { feed, sink, relay, stop } = await liveRelay()
+  try {
+    feed.push({
+      type: 'waterfall', event: 'user-questions/request', eventId: 'q1', agentId: 'agent-1',
+      request: { questions: [{ id: 'q-1', question: '用哪条？' }] },
+    })
+    await until(() => relay.held().length === 1, '问题被收下')
+    assert.equal(sink.changes.length, 1, '它还要被通知一次 —— 否则 ready 之后的重放里没有它')
+    assert.equal(relay.held()[0].event, 'user-questions/request', '类别由 event 那一格带着')
+  } finally {
+    stop()
+  }
+})
+
+test('relay: 两类混排时按到达顺序留在表里 —— 重放的顺序就是到达的顺序', async () => {
+  const { feed, relay, stop } = await liveRelay()
+  try {
+    feed.push(waterfallFrame('a1'))
+    feed.push({ type: 'waterfall', event: 'user-questions/request', eventId: 'q1', agentId: 'agent-1', request: { questions: [] } })
+    feed.push(waterfallFrame('a2'))
+    await until(() => relay.held().length === 3, '三条都收下')
+
+    assert.deepEqual(relay.held().map(item => item.eventId), ['a1', 'q1', 'a2'],
+      '两类进同一张表，顺序即到达顺序 —— 分两张表就没有这个顺序可言')
+  } finally {
+    stop()
+  }
+})
+
+test('relay: 不认得的 waterfall 类别不进表，但留一条带事件名的痕', async () => {
+  const { feed, relay, sink, stop } = await liveRelay()
+  try {
+    const lines = await captureLogs(async () => {
+      feed.push({ type: 'waterfall', event: 'third/thing', eventId: 'x1', agentId: 'a', request: {} })
+      await new Promise<void>((resolve) => setTimeout(resolve, 80))
+    })
+
+    assert.deepEqual(relay.held(), [], '没有定义过「该怎么存」的类别不猜')
+    assert.deepEqual(sink.changes, [], '也不通知任何人')
+    assert.ok(lines.some(line => line.includes('unseen kind') && line.includes('third/thing')),
+      `丢弃必须留痕，且带事件名 —— 否则「上游加了新挂起项」在日志里看不出来。实际：${JSON.stringify(lines)}`)
+  } finally {
+    stop()
+  }
+})
+
+test('relay: 两类待答调用都进表，其余 waterfall 与 emit 不进 —— 载荷内部不归中继解释', async () => {
   const { feed, sink, stop } = await liveRelay()
   try {
     feed.push({ type: 'waterfall', event: 'user-questions/request', eventId: 'u1', agentId: 'a', request: { question: 'q' } })
     feed.push({ type: 'waterfall', event: 'approval/request', eventId: 'u2', agentId: 'a', request: {} })
+    feed.push({ type: 'waterfall', event: 'third/thing', eventId: 'u3', agentId: 'a', request: {} })
     feed.push({ type: 'emit', event: 'api-session/status', args: [] })
-    // 让这三帧走完一整个扇出，再断言 —— 先断言会与上一轮的帧赛跑。
+    // 让这几帧走完一整个扇出，再断言 —— 先断言会与上一轮的帧赛跑。
     await new Promise<void>((resolve) => setTimeout(resolve, 50))
     assert.deepEqual(
       sink.changes.map(change => change.type === 'waterfall' ? change.held.eventId : 'cancel'),
-      ['u2'],
-      '按事件名筛选：别的 waterfall 与 emit 不进来；而空 request 照收 —— 载荷的内部字段不归中继解释',
+      ['u1', 'u2'],
+      '两类都收、按到达顺序；第三种 waterfall 与 emit 不进来；空 request 照收 —— 载荷的内部字段不归中继解释',
     )
   } finally {
     stop()

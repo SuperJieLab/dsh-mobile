@@ -282,6 +282,7 @@ test('判据 5：换代不换 clientId，登记仍指着同一个身份', { time
           delivered.push(message.eventId)
           return 'delivered' as const
         },
+        answerQuestion: async () => 'delivered' as const,
       },
       { id: 'i-1', canAnswer: true },
       handler.registry,

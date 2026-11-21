@@ -24,7 +24,7 @@ import type { WireEvent, SessionRow } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
 import { permissionSelectRequestOf } from '../wire/permission.ts'
-import { approvalAnswerOf, sessionPromptOf, type ApprovalAnswerMessage } from '../wire/write.ts'
+import { approvalAnswerOf, questionAnswerOf, sessionPromptOf, type QuestionAnswerMessage } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
@@ -159,7 +159,7 @@ export async function workspaceDeleteOf(
  */
 function notOwner(
   caller: Identity,
-  answer: ApprovalAnswerMessage,
+  target: { readonly clientId: string; readonly eventId: string },
   owner: string | undefined,
   message: string,
 ): RemoteResult {
@@ -170,12 +170,64 @@ function notOwner(
       message,
       details: {
         caller: caller.id,
-        client: answer.clientId,
-        event: answer.eventId,
+        client: target.clientId,
+        event: target.eventId,
         ...(owner === undefined ? {} : { owner }),
       },
     },
   }
+}
+
+/**
+ * 归属的四步判定 —— **与「这是哪一类待答调用」无关，所以两个端点共用这一份**。
+ *
+ * 复制一份的症状是两处会在 `not-owner` 的 `details` 或文案上分家，而客户端只看码，
+ * 分家时没有任何一处会报错。
+ *
+ * 四步的顺序是契约的一部分：没有身份先说装配错（不是身份失败），能答与不能答先于
+ * 「这条流在不在」—— 否则一个不能答的身份拿别人的 `clientId` 会得到 `not-owner`，
+ * 而它该得到的是同一个码，只是理由不同（两者码相同，`details` 与文案不同）。
+ */
+export function ownedAnswerOf(
+  target: { readonly clientId: string; readonly eventId: string },
+  caller: Identity | undefined,
+  owners: StreamOwners,
+): { readonly ok: true } | { readonly ok: false; readonly refusal: RemoteResult } {
+  // ① 没有身份：生产上到不了这里（401 闸门在 `remote/http.ts`）。所以这是**装配错误**，
+  //    不是身份失败 —— 回 `unauthenticated` 会让它变成一条 200 的「没身份」，而契约
+  //    说那个码总是 401（那是闸门的形状，不是判定层的）。
+  if (caller === undefined) {
+    return {
+      ok: false,
+      refusal: refused('internal-error',
+        'an answer reached the judge without an identity — the auth gate is misassembled'),
+    }
+  }
+  // ② 身份在，但它不是「能答挂起项」的那一类。
+  if (!caller.canAnswer) {
+    return {
+      ok: false,
+      refusal: notOwner(caller, target, undefined, 'this identity may not answer pending requests'),
+    }
+  }
+  // ③ 这条流不在（从未下发、已换代、或连接已断）。它与「你在答别人的流」结局相同：
+  //    客户端要做的事一样（重开流或放弃），所以同一个码。
+  const owner = owners.ownerOf(target.clientId)
+  if (owner === undefined) {
+    return {
+      ok: false,
+      refusal: notOwner(caller, target, undefined,
+        `no open stream called "${target.clientId}" — it was never offered, or it has been replaced`),
+    }
+  }
+  // ④ 流在，但不是你的。
+  if (owner !== caller.id) {
+    return {
+      ok: false,
+      refusal: notOwner(caller, target, owner, 'that stream belongs to another identity'),
+    }
+  }
+  return { ok: true }
 }
 
 /**
@@ -193,28 +245,13 @@ export async function approvalAnswerValue(
   if (answer === undefined) {
     return refused('invalid-request', 'approval-answer needs eventId, decision ("allow" | "deny"), answerId and clientId')
   }
-  // ① 没有身份：生产上到不了这里（401 闸门在 `remote/http.ts`）。所以这是**装配错误**，
-  //    不是身份失败 —— 回 `unauthenticated` 会让它变成一条 200 的「没身份」，而契约
-  //    §六 说那个码总是 401（那是闸门的形状，不是判定层的）。
-  if (caller === undefined) {
-    return refused('internal-error', 'approval-answer reached the judge without an identity — the auth gate is misassembled')
-  }
-  // ② 身份在，但它不是「能答审批」的那一类。
-  if (!caller.canAnswer) {
-    return notOwner(caller, answer, undefined, 'this identity may not answer approvals')
-  }
-  // ③ 这条流不在（从未下发、已换代、或连接已断）。它与「你在答别人的流」结局相同：
-  //    客户端要做的事一样（重开流或放弃），所以同一个码。
-  const owner = owners.ownerOf(answer.clientId)
-  if (owner === undefined) {
-    return notOwner(caller, answer, undefined,
-      `no open stream called "${answer.clientId}" — it was never offered, or it has been replaced`)
-  }
-  // ④ 流在，但不是你的。
-  if (owner !== caller.id) {
-    return notOwner(caller, answer, owner, 'that stream belongs to another identity')
-  }
+  const ownership = ownedAnswerOf(answer, caller, owners)
+  if (!ownership.ok) return ownership.refusal
+
   const outcome = await write.answerApproval(answer)
+  if (outcome === 'invalid-answers') {
+    return refused('invalid-request', `"${answer.eventId}" is not a pending approval — it may be a question`)
+  }
   if (outcome === 'unknown-approval') {
     return refused('unknown-approval', `no pending approval answers to "${answer.eventId}" — already decided, cancelled, or never asked`)
   }
@@ -222,6 +259,43 @@ export async function approvalAnswerValue(
     // 上游拒了这条回答：问题仍挂在它那里等着，所以这里不能说 `ok`（`ok` 意为
     // 「已投递给挂起的问题」）。原因在上游的 code 里，网关日志已记。
     return refused('internal-error', `the gateway refused the answer for "${answer.eventId}" — see the gateway log for its code`)
+  }
+  return { ok: true, value: { eventId: answer.eventId } }
+}
+
+/**
+ * 一张卡的整批答案。与审批共用归属判定，载荷与结局词汇各走各的。
+ *
+ * `invalid-answers` 有两个来路（中继里判的：答案与卡不匹配、或这条挂起项不是问题），
+ * 都翻成 `invalid-request` —— 对客户端是同一件事：你发的这个请求不对。
+ */
+export async function questionAnswerValue(
+  args: Record<string, unknown>,
+  write: WritePort | undefined,
+  caller: Identity | undefined,
+  owners: StreamOwners,
+): Promise<RemoteResult> {
+  if (write === undefined) return refused('internal-error', 'write channel not wired for "question-answer"')
+  const answer: QuestionAnswerMessage | undefined = questionAnswerOf(args)
+  if (answer === undefined) {
+    return refused('invalid-request',
+      'question-answer needs eventId, answers (each with an id and a selected list or custom text), answerId and clientId')
+  }
+  const ownership = ownedAnswerOf(answer, caller, owners)
+  if (!ownership.ok) return ownership.refusal
+
+  const outcome = await write.answerQuestion(answer)
+  if (outcome === 'invalid-answers') {
+    return refused('invalid-request',
+      `the answers do not match the pending question "${answer.eventId}" — or it is not a question`)
+  }
+  if (outcome === 'unknown-approval') {
+    return refused('unknown-approval',
+      `no pending question answers to "${answer.eventId}" — already answered, cancelled, or never asked`)
+  }
+  if (outcome === 'undelivered') {
+    return refused('internal-error',
+      `the gateway refused the answer for "${answer.eventId}" — see the gateway log for its code`)
   }
   return { ok: true, value: { eventId: answer.eventId } }
 }

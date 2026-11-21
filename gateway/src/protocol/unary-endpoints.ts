@@ -26,6 +26,7 @@ import {
   pageOf,
   permissionCatalogOf,
   permissionSelectOf,
+  questionAnswerValue,
   sessionCreateOf,
   sessionPromptValue,
   snapshotOf,
@@ -174,6 +175,13 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
     write: true,
     invoke(args, ctx) {
       return approvalAnswerValue(args, ctx.ports.write, ctx.caller, ctx.owners)
+    },
+  },
+  'mobile/questionAnswer': {
+    legacyOp: 'question-answer',
+    write: true,
+    invoke(args, ctx) {
+      return questionAnswerValue(args, ctx.ports.write, ctx.caller, ctx.owners)
     },
   },
   'session/prompt': {

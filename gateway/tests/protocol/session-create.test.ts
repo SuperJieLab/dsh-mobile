@@ -18,6 +18,7 @@ const PORT: SessionPort = { list: async () => [], read: async () => undefined, r
 function writeReturning(make: () => Promise<string>): WritePort {
   return {
     answerApproval: async () => 'delivered',
+    answerQuestion: async () => 'delivered',
     promptSession: async () => 'accepted',
     createSession: make,
   }
@@ -64,6 +65,7 @@ function writeRecording(): { port: WritePort; targets: (string | undefined)[] } 
     targets,
     port: {
       answerApproval: async () => 'delivered',
+      answerQuestion: async () => 'delivered',
       promptSession: async () => 'accepted',
       createSession: async (workspaceId) => {
         targets.push(workspaceId)

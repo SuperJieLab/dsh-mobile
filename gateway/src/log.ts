@@ -98,7 +98,7 @@ export function createLogger(module: string): Logger {
  * 创建为什么失败」要靠时间接近去猜 —— 并发两件事就分不开。有了它，同一个 id 的若干行
  * 就是同一次请求，且客户端那侧记的是同一个 id。
  *
- * 用 `AsyncLocalStorage` 而不是显式传参：`handle` 往下有五六层（端口、适配器、控制器），
+ * 用 `AsyncLocalStorage` 而不是显式传参：`invokeEndpoint` 往下有五六层（端口、适配器、控制器），
  * 为传一个日志标记而改每一层的签名，代价远大于收益，而且每一处都可能漏传。
  *
  * 没设上下文时 `currentRequestId()` 是 `undefined`，行格式与从前完全一致 —— 启动期、

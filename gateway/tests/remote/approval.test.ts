@@ -152,6 +152,63 @@ test('approval: a live request reaches the socket as a stream item', { timeout: 
   }
 })
 
+test('approval: 第二类挂起项经同一条流到达另一端 —— 载荷原样，不解释', { timeout: 20_000 }, async () => {
+  const h = await harness()
+  try {
+    const socket = await connect(h.server)
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
+    const ready = await receive(socket)
+    assert.equal((ready.value as { type?: string }).type, 'ready')
+
+    h.feed.push({
+      type: 'waterfall', event: 'user-questions/request', eventId: 'q1', agentId: 'session-7',
+      request: { questions: [{ id: 'q-1', question: '用哪条？' }] },
+    })
+
+    const frame = await receive(socket)
+    assert.deepEqual(frame, {
+      type: 'item',
+      streamId: 'ev',
+      value: {
+        type: 'waterfall', event: 'user-questions/request', eventId: 'q1', agentId: 'session-7',
+        request: { questions: [{ id: 'q-1', question: '用哪条？' }] },
+      },
+    }, '单元级只证明「进了表」，这一条证明它经流泵组帧后真的到了另一端')
+    socket.close()
+  } finally {
+    h.close()
+  }
+})
+
+test('approval: 两类混排的重放按到达顺序到达另一端', { timeout: 20_000 }, async () => {
+  const h = await harness()
+  try {
+    // 先挂上三条（两类混排），再让客户端开流 —— 重放要走同一份集合、同一套顺序。
+    h.feed.push(approvalRequest('e2', 'session-7'))
+    h.feed.push({
+      type: 'waterfall', event: 'user-questions/request', eventId: 'q1', agentId: 'session-7',
+      request: { questions: [{ id: 'q-1', question: '用哪条？' }] },
+    })
+    h.feed.push(approvalRequest('e1', 'session-7'))
+    await until(() => h.relay.held().length === 3, '三条都在表里')
+
+    const socket = await connect(h.server)
+    send(socket, { type: 'open', streamId: 'ev', endpoint: '$events', payload: { args: {} } })
+    const ready = await receive(socket)
+    assert.equal((ready.value as { type?: string }).type, 'ready')
+
+    const order: string[] = []
+    for (let index = 0; index < 3; index += 1) {
+      const frame = await receive(socket)
+      order.push((frame.value as { eventId?: string }).eventId ?? '?')
+    }
+    assert.deepEqual(order, ['e2', 'q1', 'e1'], '重放顺序即到达顺序 —— 两类共用一张待答表才有这个顺序')
+    socket.close()
+  } finally {
+    h.close()
+  }
+})
+
 test('approval: a client that opens later gets the question with the opening baseline', { timeout: 20_000 }, async () => {
   const h = await harness()
   try {

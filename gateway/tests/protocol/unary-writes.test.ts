@@ -53,6 +53,8 @@ const deps = (): RpcListenerDeps => ({
       if (answer.eventId === 'e-reject') return 'undelivered'
       return 'unknown-approval'
     },
+    answerQuestion: async (answer) => (answer.eventId === 'q-1' ? 'delivered'
+      : answer.eventId === 'q-bad' ? 'invalid-answers' : 'unknown-approval'),
   },
   modelPort: {
     catalog: async () => ({ groups: [], failures: [] }) as never,
@@ -111,6 +113,43 @@ function resultOf(envelope: Record<string, unknown>): Record<string, unknown> {
   assert.equal(envelope.type, 'server-response')
   return envelope.result as Record<string, unknown>
 }
+
+test('questionAnswer：形状、越权、没这条、与卡不匹配各回各的码，成功时回 eventId', async () => {
+  await withListener(async (post) => {
+    const good = { id: 'q-1-1', selected: ['A'] }
+    const ok = resultOf(await post('/api/mobile/questionAnswer', {
+      eventId: 'q-1', answerId: 'a-1', clientId: OWN_CLIENT_ID, answers: [good],
+    }))
+    assert.deepEqual(ok, { ok: true, value: { eventId: 'q-1' } })
+
+    const emptyList = resultOf(await post('/api/mobile/questionAnswer', {
+      eventId: 'q-1', answerId: 'a-2', clientId: OWN_CLIENT_ID, answers: [],
+    }))
+    assert.equal((emptyList.error as { code: string }).code, 'invalid-request', '空数组不是一批答案')
+
+    const unanswered = resultOf(await post('/api/mobile/questionAnswer', {
+      eventId: 'q-1', answerId: 'a-3', clientId: OWN_CLIENT_ID, answers: [{ id: 'q-1-1', selected: [] }],
+    }))
+    assert.equal((unanswered.error as { code: string }).code, 'invalid-request', '既没选也没填的一项不算作答')
+
+    const intruder = resultOf(await post('/api/mobile/questionAnswer', {
+      eventId: 'q-1', answerId: 'a-4', clientId: 'c-someone-else', answers: [good],
+    }))
+    assert.equal((intruder.error as { code: string }).code, 'not-owner',
+      '与审批同一处判定 —— 别人的流答不了')
+
+    const gone = resultOf(await post('/api/mobile/questionAnswer', {
+      eventId: 'q-gone', answerId: 'a-5', clientId: OWN_CLIENT_ID, answers: [good],
+    }))
+    assert.equal((gone.error as { code: string }).code, 'unknown-approval', '沿用既有码，不为问题新造')
+
+    const mismatch = resultOf(await post('/api/mobile/questionAnswer', {
+      eventId: 'q-bad', answerId: 'a-6', clientId: OWN_CLIENT_ID, answers: [good],
+    }))
+    assert.equal((mismatch.error as { code: string }).code, 'invalid-request',
+      '「答案与卡不匹配」对客户端说的与「载荷形状不对」是同一件事')
+  })
+})
 
 test('八个写端点各发一次合法请求全部 ok，且 value 带着这次的标识', async () => {
   const calls: [string, unknown, Record<string, unknown>][] = [
@@ -187,6 +226,7 @@ test('判据 8：可应答标记被读 —— canAnswer 为假的身份答不了
       delivered.push(answer.eventId)
       return 'delivered' as const
     },
+    answerQuestion: async () => 'delivered' as const,
   }
   const owners = { ownerOf: () => 'i-owner' }
   const args = { eventId: 'e-1', decision: 'allow', answerId: 'a-1', clientId: 'c-1' }

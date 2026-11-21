@@ -50,6 +50,79 @@ export function approvalAnswerOf(message: Record<string, unknown>): ApprovalAnsw
   return { eventId, decision, answerId, clientId }
 }
 
+/** 一个问题的一道答案。`selected` 可为空数组（只填了自定义文本）。 */
+export interface QuestionAnswerItem {
+  /** 对应 `question.id`。 */
+  readonly id: string
+  /** 选中的选项 label；多选时可多项。 */
+  readonly selected: readonly string[]
+  /** 「其它」的自由文本，可与选项并存。 */
+  readonly custom?: string
+}
+
+/**
+ * 校验通过的问题应答消息。
+ *
+ * 与审批的载荷**不共用一格**：`decision` 在问题场景没有对应物，`answers` 在审批场景也没有。
+ * 塞进一个载荷就得让校验为另一套放行，那是两处判断、一处漏洞。
+ */
+export interface QuestionAnswerMessage {
+  /** 本回答针对的 `$events` waterfall 帧 `eventId`。 */
+  readonly eventId: string
+  /** 一张卡的整批答案 —— 键是卡，不是单个问题。 */
+  readonly answers: readonly QuestionAnswerItem[]
+  /** 客户端铸造的幂等键。同键重试重放第一次的结果。 */
+  readonly answerId: string
+  /** 这条问题是在哪条流上看到的 —— 归属判定用。 */
+  readonly clientId: string
+}
+
+function questionAnswerItemOf(raw: unknown): QuestionAnswerItem | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const id = nonEmptyString(record.id)
+  if (id === undefined) return undefined
+  if (!Array.isArray(record.selected)) return undefined
+  const selected: string[] = []
+  for (const entry of record.selected) {
+    if (typeof entry !== 'string') return undefined
+    // 空白串不是 label —— 与 `custom` 用同一条规则（那里也 trim），两处宽严不一会让
+    // 「只填了空格」在两个字段上一个算答过、一个不算。
+    if (entry.trim() === '') return undefined
+    selected.push(entry)
+  }
+  let custom: string | undefined
+  if ('custom' in record) {
+    if (typeof record.custom !== 'string') return undefined
+    custom = record.custom.trim() === '' ? undefined : record.custom
+  }
+  // 一项既没选任何选项、也没填自定义文本 —— 它不是一次作答。
+  if (selected.length === 0 && custom === undefined) return undefined
+  return custom === undefined ? { id, selected } : { id, selected, custom }
+}
+
+/**
+ * 解析并校验一条 `question-answer` 载荷，完全不像回答时返回 `undefined`。
+ *
+ * 从严的理由与审批相同：畸形决定被静默执行等于凭猜测答了一个问题。**只判形状** ——
+ * 「答案有没有覆盖卡上全部问题」需要卡的内容，那在中继那层判。
+ */
+export function questionAnswerOf(message: Record<string, unknown>): QuestionAnswerMessage | undefined {
+  const eventId = nonEmptyString(message.eventId)
+  const answerId = nonEmptyString(message.answerId)
+  const clientId = nonEmptyString(message.clientId)
+  if (eventId === undefined || answerId === undefined || clientId === undefined) return undefined
+  if (!Array.isArray(message.answers) || message.answers.length === 0) return undefined
+
+  const answers: QuestionAnswerItem[] = []
+  for (const raw of message.answers) {
+    const item = questionAnswerItemOf(raw)
+    if (item === undefined) return undefined
+    answers.push(item)
+  }
+  return { eventId, answers, answerId, clientId }
+}
+
 /** 校验通过的 `session-prompt` 消息。 */
 export interface SessionPromptMessage {
   /** 目标会话。 */

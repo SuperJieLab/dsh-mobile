@@ -742,6 +742,7 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'command.ts', name: 'commandExecuteRequestOf', shape: 'CommandExecuteMessage' },
   { file: 'permission.ts', name: 'permissionSelectRequestOf', shape: 'PermissionSelectMessage' },
   { file: 'write.ts', name: 'approvalAnswerOf', shape: 'ApprovalAnswerMessage' },
+  { file: 'write.ts', name: 'questionAnswerOf', shape: 'QuestionAnswerMessage' },
   { file: 'write.ts', name: 'sessionPromptOf', shape: 'SessionPromptMessage' },
   { file: 'write.ts', name: 'sessionCreateTargetOf', shape: 'SessionCreateTarget' },
   { file: 'workspace.ts', name: 'workspaceNameOf', shape: 'WorkspaceCreatePayload' },
@@ -1246,7 +1247,8 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
       'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'positiveOrDefault', 'refused',
       'listSessionsOf', 'snapshotOf', 'pageOf', 'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
       'modelSelectOf', 'commandExecuteOf', 'permissionSelectOf', 'sessionCreateOf',
-      'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'sessionPromptValue',
+      'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'questionAnswerValue',
+      'ownedAnswerOf', 'sessionPromptValue',
     ],
     types: ['Limits', 'Ports', 'StreamOwners'],
   },
@@ -1683,5 +1685,19 @@ test('log bodies carry no interpolation', () => {
   }
 
   assert.deepEqual(hits, [], `这些日志的正文里还有插值（改成字段）：${hits.join(', ')}`)
+})
+
+test('retired type names stay gone: the endpoint kind and the command acceptance', () => {
+  // 这两个类型零引用后被删（F2 第 2 期）。删掉的东西长回来是常见回退，而它们的回归
+  // 不会让任何行为判据变红 —— 只有这一条会。
+  const retired = ['EndpointKind', 'CommandAcceptance']
+  const hits: string[] = []
+  for (const file of filesUnder(SRC)) {
+    const code = stripComments(readFileSync(file, 'utf8'))
+    for (const name of retired) {
+      if (new RegExp(`\\b${name}\\b`).test(code)) hits.push(`${relative(SRC, file)}: ${name}`)
+    }
+  }
+  assert.deepEqual(hits, [], `这些名字已删且零引用：${hits.join(', ')}`)
 })
 

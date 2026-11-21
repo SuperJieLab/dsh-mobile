@@ -102,7 +102,7 @@ export class AuditLog {
    * 追加一条。时间戳由这里补，调用方不必知道格式。
    *
    * @param fields - 除时间戳外的全部字段。
-   * @param at - 时刻；可注入以保测试确定性（与 `handle` 的 `now` 同一个理由）。
+   * @param at - 时刻；可注入以保测试确定性（与 `invokeEndpoint` 的 `now` 同一个理由）。
    */
   append(fields: Omit<AuditEntry, 'at'>, at: Date = new Date()): void {
     const entry: AuditEntry = { at: logTimestamp(at), ...fields };

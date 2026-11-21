@@ -46,6 +46,7 @@ const deps = (): RpcListenerDeps => ({
     createSession: async () => 's-new',
     promptSession: async () => 'accepted',
     answerApproval: async () => 'delivered',
+    answerQuestion: async () => 'delivered',
   },
   modelPort: undefined,
   commandPort: undefined,
@@ -154,6 +155,7 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
     'mobile/workspaceCreate',
     'workspace/delete',
     'mobile/approvalAnswer',
+    'mobile/questionAnswer',
     'session/prompt',
   ]
   assert.deepEqual([...writes].sort(), [...expectedWrites].sort(),
@@ -167,6 +169,12 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
       await post(`/api/${name}`, {})
       assert.equal(records.length, before + 1, `${name} 是写端点，一次调用必须恰好一条审计`)
     }
+
+    // 新端点专用的那一条：**审计的 op 是旧名**（`question-answer`），不是端点名 ——
+    // 换名会让同一件事在历史审计与 `/metrics` 曲线里有两个写法。
+    const answerRecord = records.find(record => record.op === 'question-answer')
+    assert.ok(answerRecord !== undefined, '一次 questionAnswer 调用必须记成 op=question-answer')
+    assert.equal(answerRecord.result, 'refused', '参数留空会被拒，但拒绝也要记')
 
     const afterWrites = records.length
     for (const name of reads) {

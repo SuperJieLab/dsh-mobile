@@ -21,6 +21,7 @@ const PORT: SessionPort = { list: async () => [], read: async () => undefined, r
 /** A write port the model tests never expect to be called (write wiring is T3's concern). */
 const fakeWritePort = (): import('../../src/ports/write.ts').WritePort => ({
   answerApproval: () => Promise.reject(new Error('model tests must not touch the write channel')),
+  answerQuestion: () => Promise.reject(new Error('model tests must not touch the write channel')),
   promptSession: () => Promise.reject(new Error('model tests must not touch the write channel')),
   createSession: () => Promise.reject(new Error('model tests must not touch the write channel')),
 })

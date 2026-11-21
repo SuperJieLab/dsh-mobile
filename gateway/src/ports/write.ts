@@ -5,7 +5,7 @@
  * 手机端只看到 `ok` 或协议错误码，从来看不见 `delivered` / `undelivered`。
  */
 
-import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
+import type { ApprovalAnswerMessage, QuestionAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
 
 /**
  * 一条 approval 应答的三个结局，见 {@link WritePort.answerApproval}。
@@ -14,6 +14,15 @@ import type { ApprovalAnswerMessage, SessionPromptMessage } from '../wire/write.
  * 手抄一遍就多一处会漂的地方（漏掉一个值不会报错，只会在某个分支上静默走错）。
  */
 export type ApprovalOutcome = 'delivered' | 'unknown-approval' | 'undelivered'
+
+/**
+ * 一条问题应答的结局 = 审批那三个 + 一种它独有的失败。
+ *
+ * `invalid-answers` 是「答案与卡不匹配」或「用错端点」：它发生在中继里（只有那里有
+ * `request.questions`，也只有那里知道这条挂起项是哪一类），对客户端说的与「载荷形状不对」
+ * 是同一件事，所以协议层把它翻成 `invalid-request`。
+ */
+export type QuestionOutcome = ApprovalOutcome | 'invalid-answers'
 
 /** 两条写 op 所依赖的数据源 —— 写契约的唯一依赖。 */
 export interface WritePort {
@@ -25,7 +34,15 @@ export interface WritePort {
    * 拒了这条回答**（身份、准入或形状不合适）—— 此时问题仍挂在上游等着，客户端该看到
    * 一个失败而不是 `ok`。
    */
-  answerApproval(answer: ApprovalAnswerMessage): Promise<ApprovalOutcome>
+  answerApproval(answer: ApprovalAnswerMessage): Promise<QuestionOutcome>
+  /**
+   * 把一张卡的整批答案投递给挂起的问题。
+   *
+   * 比审批多一种结局：`invalid-answers` —— 答案与卡不匹配（少一项、多一项、或没有与
+   * `request.questions` 对齐），或者这条挂起项根本不是问题（用错端点）。此时**不投递**，
+   * 也不占用幂等键：客户端改对之后可以用同一个 `answerId` 重发。
+   */
+  answerQuestion(answer: QuestionAnswerMessage): Promise<QuestionOutcome>
   /**
    * 把一条 prompt 收进会话的 agent 收件箱；会话不存在时报告之。
    * 其余上游失败归调用方的 `internal-error`。

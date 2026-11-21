@@ -15,8 +15,6 @@
 
 import { isPositiveInteger, nonEmptyString } from './fields.ts'
 
-/** 三个端点名对应的泵。`events` 就是上游的 `$events`。 */
-export type EndpointKind = 'follow' | 'events' | 'control'
 
 /** 解析结果：认下来了（带泵种类与请求），或两种拒绝之一。 */
 export type EndpointResolution =

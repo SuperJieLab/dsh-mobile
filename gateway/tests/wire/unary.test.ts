@@ -118,9 +118,10 @@ test('应答：成功与失败各是 server-response 的三格', () => {
   )
 })
 
-test('端点名表：十六个，无重复，都带命名空间', () => {
-  assert.equal(UNARY_ENDPOINT_NAMES.length, 16, '十四个业务端点 + pair / refresh')
-  assert.equal(new Set(UNARY_ENDPOINT_NAMES).size, 16, '重名会让表在后一个上静默覆盖')
+test('端点名表：十七个，无重复，都带命名空间', () => {
+  // 数字随端点增减改这一处；它守的是「表里没有多出来的空号」而不是某个具体数量。
+  assert.equal(UNARY_ENDPOINT_NAMES.length, 17, '十五个业务端点 + pair / refresh')
+  assert.equal(new Set(UNARY_ENDPOINT_NAMES).size, 17, '重名会让表在后一个上静默覆盖')
   for (const name of UNARY_ENDPOINT_NAMES) {
     assert.match(name, /^[a-z$][\w$]*\/[A-Za-z][\w]*$/, `「${name}」不是两段的端点名`)
   }

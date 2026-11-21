@@ -22,10 +22,6 @@ const log = createLogger(LogModule.permission)
 /** 「对不上任何预设」的显示态。宿主与客户端各有一份同名判定，这里只用来过滤。 */
 const CUSTOM_PRESET = 'custom'
 
-/** 一次命令受理的形状 —— 只要那个号，够写一行日志。 */
-export interface CommandAcceptance {
-  commandId: string
-}
 
 /** 一次命令调用的三种结局。`no-agent` 与 `unparsable` 的补救不同，所以不并成一档。 */
 export type CommandCall =

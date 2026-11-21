@@ -37,6 +37,7 @@ export type UnaryEndpointName =
   | 'mobile/permissionSelect'
   | 'mobile/workspaceCreate'
   | 'mobile/approvalAnswer'
+  | 'mobile/questionAnswer'
   | 'mobile/pair'
   | 'mobile/refresh'
 
@@ -56,6 +57,7 @@ export const UNARY_ENDPOINT_NAMES: readonly UnaryEndpointName[] = [
   'mobile/permissionSelect',
   'mobile/workspaceCreate',
   'mobile/approvalAnswer',
+  'mobile/questionAnswer',
   'mobile/pair',
   'mobile/refresh',
 ]

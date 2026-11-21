@@ -5,7 +5,7 @@
  * 这里有两个映射，规则**不同**，刻意不合并：
  *
  *   `streamErrorOf`  流通道：所读的一切都按会话寻址，所以 not-found 就是「会话不存在」
- *   `readErrorOf`    一元调用：`handle` 内部只区分「不可解读」与「其余」——
+ *   `readErrorOf`    一元调用：`invokeEndpoint` 内部只区分「不可解读」与「其余」——
  *                    会话是否存在由端口返回 `undefined` 来表达，不走异常
  *
  * 合并成一个带参数的函数会让「哪条路径按会话寻址」变成调用方的一个布尔开关，
@@ -36,7 +36,7 @@ export function streamErrorOf(error: unknown): ProtocolRefusal {
 }
 
 /**
- * 一元调用：`handle` 的 catch 用它。两档 —— 会话是否存在不在这里判断（端口用
+ * 一元调用：`answerEndpoint` 的 catch 用它。两档 —— 会话是否存在不在这里判断（端口用
  * `undefined` 表达，不走异常），所以没有 not-found 那一档。
  */
 export function readErrorOf(error: unknown): ProtocolRefusal {

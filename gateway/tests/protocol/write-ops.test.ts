@@ -27,6 +27,9 @@ function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; promp
         answers.push(answer)
         return answer.eventId === '' ? 'unknown-approval' : 'delivered'
       },
+      async answerQuestion(answer) {
+        return answer.eventId === '' ? 'unknown-approval' : 'delivered'
+      },
       async promptSession(prompt) {
         prompts.push(prompt)
         return prompt.sessionId === 'missing' ? 'unknown-session' : 'accepted'

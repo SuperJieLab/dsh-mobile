@@ -217,11 +217,12 @@ export function modelSelectionSourceOver(ctx: HostContext): ModelSelectionSource
  *
  * `approval-answer` 交给中继；`session-prompt` 走 controller 的 prompt 门，
  * `session/not-found` 折叠为 `unknown-session`，其他上游失败原样重抛，
- * 让 `handle` 回答 `internal-error`。
+ * 让 `invokeEndpoint` 回答 `internal-error`。
  */
 export function writePortOver(ctx: HostContext, relay: ApprovalRelay): WritePort {
   return {
     answerApproval: (answer) => relay.answerApproval(answer),
+    answerQuestion: (answer) => relay.answerQuestion(answer),
     promptSession: async (prompt) => pumpPrompt(promptControllerOver(ctx), prompt),
     createSession: (workspaceId) => createSession(ctx, workspaceId),
   }
