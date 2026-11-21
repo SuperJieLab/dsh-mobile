@@ -40,6 +40,22 @@ final class CommandDirectory {
     }
 
     /// 取一次。重试也走这里：先把面置回等待，避免「旧列表还挂着，看不出在重拉」。
+    private var reloadScheduled = false
+
+    /// 宿主说目录变了：**同步入口**，内部起一次重拉。
+    ///
+    /// 为什么不是直接 `await reload()`：调用它的是流里的通知（同步回调），而持有它的
+    /// 容器不许出现 `Task`。调度落在部件自己身上 —— 与 `PermissionState.noteLiveEvent` 同形。
+    /// 防重入：一次插件装卸会连着推几条，重拉一次就够。
+    func reloadSoon() {
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+        Task { [weak self] in
+            self?.reloadScheduled = false
+            await self?.reload()
+        }
+    }
+
     func reload() async {
         generation += 1
         let mine = generation
@@ -104,4 +120,7 @@ func runCommand(_ client: RpcClient, sessionId: String, line: String) async thro
     // 命令是这一屏唯一**不可撤回**的动作（可能改了文件、跑了测试）：发给谁、发了什么
     // 必须留痕，而回包只说受理 —— 之后没有别的机会补记这一刻的输入。
     Log.info(Log.Module.session, "command-execute", ["session": sessionId, "line": line])
+
+
+
 }

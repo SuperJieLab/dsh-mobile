@@ -51,7 +51,8 @@ struct GroupExpansion: Equatable {
         guard let stored = defaults.stringArray(forKey: defaultsKey) else {
             if defaults.object(forKey: defaultsKey) != nil {
                 Log.warn(Log.Module.workspace,
-                         "\(defaultsKey) is not a string array — falling back to all collapsed")
+                         "a defaults key is not a string array — falling back to all collapsed",
+                         ["key": defaultsKey])
             }
             return GroupExpansion()
         }

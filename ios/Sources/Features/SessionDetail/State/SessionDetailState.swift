@@ -23,6 +23,10 @@ final class SessionDetailState {
     let store: MeshStore
     /// App 级的待答表 —— 这一屏只读它按会话分出来的那一栏。
     let approvals: ApprovalStore
+    /// App 级的提问表 —— 与审批并列，同样是只读那一栏。
+    let questions: QuestionStore
+    /// 「登录已失效」的一次性提示 —— 只提示，不动凭证。
+    let loginExpired = LoginExpiredFlag()
 
     init(client: RpcClient,
          sessionId: String,
@@ -30,20 +34,38 @@ final class SessionDetailState {
          link: LongConnection,
          store: MeshStore,
          approvals: ApprovalStore,
+         questions: QuestionStore,
          control: ControlStream? = nil) {
         self.sessionId = sessionId
         self.title = title
         self.store = store
         self.approvals = approvals
+        self.questions = questions
         sync = SessionSync(client: client, sessionId: sessionId, link: link, control: control)
-        catalog = ModelCatalogState { try await fetchCatalog(client) }
-        commands = CommandDirectory { try await fetchCommands(client, sessionId: sessionId) }
+        // 先落成局部量：闭包的 `weak` 那一格只接受标识符。
+        let catalogState = ModelCatalogState { try await fetchCatalog(client) }
+        let directory = CommandDirectory { try await fetchCommands(client, sessionId: sessionId) }
         let permissionState = PermissionState(
             fetch: { try await fetchPermission(client, sessionId: sessionId) },
             select: { try await selectPermission(client, sessionId: sessionId, preset: $0) }
         )
+        catalog = catalogState
+        commands = directory
         permission = permissionState
         composer = ComposerState()
+        // 宿主通知的四条去路：三条目录各自刷一次、一条提示。判断在这里，动作在各部件里 ——
+        // 容器只造不取数，所以四个动作都是同步入口（内部各起一次重拉）。
+        questions.watchNotifications { [weak catalogState, weak directory, weak permissionState, weak loginExpired] name, _ in
+            switch UpstreamNotification.route(name) {
+            case .models: catalogState?.reloadSoon()
+            case .commands: directory?.reloadSoon()
+            case .permissions: permissionState?.noteCatalogChanged()
+            case .accountExpired: loginExpired?.note()
+            case .unhandled:
+                // 没人认领的名字也留痕：这是我们唯一会知道「宿主加了新通知」的地方。
+                Log.warn(Log.Module.gateway, "an upstream notification has no consumer", ["event": name])
+            }
+        }
         // 事件类型的转发接线：编排只负责「每来一条就叫一声」，判断哪几类算数归权限域。
         // 弱捕获：这一屏离屏后容器与部件一起走，闭包不该把它们吊住。
         sync.onLiveEventType = { [weak permissionState] type in
@@ -80,6 +102,12 @@ final class SessionDetailState {
 
     /// 本会话还挂着的卡。表按会话分组，这一屏只取这一栏。
     var pendingApprovals: [ApprovalTable.Entry] { approvals.pending(in: sessionId) }
+
+    /// 这一屏还挂着的问题，按到达顺序。
+    var pendingQuestions: [QuestionTable.Entry] { questions.pending(in: sessionId) }
+
+    /// 这一屏的问题提示（"已投递"这类），没有时是 nil。
+    var questionNotice: String? { questions.notice(for: sessionId) }
 
     /// 这一屏的审批提示（"已过期"这类），没有时是 nil。
     var notice: String? { approvals.notice(for: sessionId) }

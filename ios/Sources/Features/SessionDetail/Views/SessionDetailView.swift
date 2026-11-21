@@ -206,6 +206,7 @@ struct SessionDetailView: View {
     private var bottomBars: some View {
         VStack(spacing: 0) {
             approvalSection
+            questionSection
 
             if let notice = detail.sync.notice {
                 noticeRow(notice)
@@ -242,6 +243,35 @@ struct SessionDetailView: View {
         .modifier(ComposerSurface())
         .padding(.horizontal, 10)
         .padding(.bottom, 6)
+    }
+
+    /// 待答问题卡：与审批并列，排在它后面。同样只露第一张 —— 两张卡同屏会把输入框推得太高。
+    @ViewBuilder
+    private var questionSection: some View {
+        let pending = detail.pendingQuestions
+        if let first = pending.first {
+            QuestionCard(
+                model: QuestionCardModel(entry: first),
+                state: detail.questions.state(for: first.eventId)
+            ) { selections in
+                Task { await detail.questions.answer(first, selections: selections) }
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 6)
+
+            if pending.count > 1 {
+                Text("还有 \(pending.count - 1) 个问题等着回答")
+                    .font(.footnote)
+                    .padding(.bottom, 6)
+            }
+        }
+
+        if let notice = detail.questionNotice {
+            Text(notice)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 2)
+        }
     }
 
     /// 待批卡：只露第一张，其余折成一行计数。

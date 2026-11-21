@@ -115,9 +115,9 @@ final class WebSocketConnection: Channel {
                 guard Self.callbackApplies(generation: sentGeneration,
                                            current: self.generation,
                                            sameTask: self.task === sentTask) else {
-                    Log.debug(Log.Module.session,
-                              "stale send failure on g\(sentGeneration) ignored"
-                              + " (now g\(self.generation)): \(error)")
+                    Log.debug(Log.Module.session, "stale send failure ignored",
+                              ["generation": String(sentGeneration), "reason": "stale",
+                               "error": String(describing: error)])
                     return
                 }
                 // 握手没完成或连接已死时 send 会失败 —— 「发了开流内容却收不到帧」最常见的原因。
@@ -166,16 +166,16 @@ final class WebSocketConnection: Channel {
         guard Self.shouldReconnectOnForeground(
             phase: phase, lastEvidenceAt: lastEvidenceAt, now: Date(), grace: evidenceGrace
         ) else {
-            Log.info(Log.Module.session,
-                     "reconnect now (\(reason)) — still hearing from peer, staying")
+            Log.info(Log.Module.session, "reconnect now — still hearing from peer, staying",
+                     ["reason": reason])
             return
         }
         // 「跳过退避」的前提是有东西可跳：没有地址时什么都不做，等组网就绪那一刻再来。
         // 这条不能并进上面的 guard —— 组网就绪时 `phase` 正好是 `.awaitingMesh`，那里必须放行。
         // 缺了它，本方法会先 cancel 掉排着的定时器再连不上，那一拍退避被吃掉且不再重排。
         guard baseURLProvider() != nil else {
-            Log.info(Log.Module.session,
-                     "reconnect now (\(reason)) — no endpoint yet, still waiting for mesh")
+            Log.info(Log.Module.session, "reconnect now — no endpoint yet, still waiting for mesh",
+                     ["reason": reason])
             return
         }
         reconnectWorkItem?.cancel()
@@ -351,9 +351,9 @@ final class WebSocketConnection: Channel {
         guard pending.generation == generation else { return }
         inboundBacklog = max(0, inboundBacklog - 1)
         guard let frame else {
-            Log.warn(Log.Module.session,
-                     "g\(pending.generation) unparsable frame (first 120 chars): "
-                     + "\(pending.text.prefix(120))")
+            Log.warn(Log.Module.session, "unparsable frame — ignored",
+                     ["generation": String(pending.generation), "chars": "120",
+                      "detail": String(pending.text.prefix(120))])
             return // 解不了的帧不是消息，忽略
         }
         Log.debug(Log.Module.session, "frame",
@@ -389,9 +389,9 @@ final class WebSocketConnection: Channel {
                     }
                 case .dead:
                     // 半死连接：对面不再回 pong。必须留痕 —— 「谁掐的」在客户端侧的答案。
-                    Log.warn(Log.Module.session,
-                             "g\(current) heartbeat: silent for \(Int(self.livenessWindow))s"
-                             + " — closing")
+                    Log.warn(Log.Module.session, "heartbeat silent — closing",
+                             ["generation": String(current),
+                              "ms": String(Int(self.livenessWindow) * 1000)])
                     self.closeTask()
                     self.scheduleReconnect()
                     return
@@ -555,7 +555,7 @@ final class WebSocketCloseLog: NSObject, URLSessionWebSocketDelegate {
         reason: Data?
     ) {
         let text = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        Log.info(Log.Module.session,
-                 "ws closed by peer: code=\(closeCode.rawValue) reason=\(text.isEmpty ? "-" : text)")
+        Log.info(Log.Module.session, "ws closed by peer",
+                 ["code": String(closeCode.rawValue), "reason": text.isEmpty ? "-" : text])
     }
 }

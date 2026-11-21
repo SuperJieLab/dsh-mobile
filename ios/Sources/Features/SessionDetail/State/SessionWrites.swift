@@ -20,8 +20,8 @@ func promptSession(
         SessionPromptRequest(sessionId: sessionId, text: text, promptId: promptId)
     )
     // 正文长度而不是正文：内容属于会话，日志不该成为它的第二份副本。
-    Log.info(Log.Module.session,
-             "session-prompt \(sessionId) accepted (prompt=\(promptId), \(text.count) chars)")
+    Log.info(Log.Module.session, "session-prompt accepted",
+             ["session": sessionId, "request": promptId, "chars": String(text.count)])
 }
 
 /// 安装一次会话级选择。`ok` = **已安装给下一轮**，不是「已生效」——
@@ -45,7 +45,7 @@ func installModelSelection(
         throw RpcClientError.malformedResponse(detail: "selected")
     }
     // 记**服务端归一化之后**的那一份：用户点的是 A，宿主可能答回 B，日志要能看出这个替换。
-    Log.info(Log.Module.session,
-             "model-select \(sessionId) → \(selected.provider)/\(selected.model)")
+    Log.info(Log.Module.session, "model-select",
+             ["session": sessionId, "model": "\(selected.provider)/\(selected.model)"])
     return selected
 }

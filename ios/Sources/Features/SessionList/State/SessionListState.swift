@@ -128,8 +128,8 @@ final class SessionListState {
         // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。
         stream.onEmit { [weak self] event, args in
             guard let change = SessionListEvents.changeOf(event: event, args: args) else {
-                Log.warn(Log.Module.session,
-                         "dropped a session event this build does not know: \(event)")
+                Log.warn(Log.Module.session, "dropped a session event this build does not know",
+                         ["event": String(describing: event)])
                 return
             }
             self?.apply(change)

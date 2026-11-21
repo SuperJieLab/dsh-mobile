@@ -3251,30 +3251,76 @@ final class LayeringTests: XCTestCase {
     /// 第二个理由。这条守的是**写法**：字段拼错、值转错类型有别的判据抓，而「正文又
     /// 开始插值」不会让任何行为判据变红，只会让日志慢慢退回不可统计。
     func testLogBodiesCarryNoInterpolation() throws {
-        // 第二个参数是正文；`[^,]+` 是模块（`Log.Module.session` 不含逗号）。
-        let pattern = try NSRegularExpression(
-            pattern: #"Log\.(info|warn|error|debug)\([^,]+,\s*"([^"]*)""#
-        )
         var hits: [String] = []
         var scanned = 0
 
         for file in swiftFiles(under: sourcesRoot) {
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
-            for (number, code) in codeLines(in: try String(contentsOf: file, encoding: .utf8)) {
-                let range = NSRange(code.startIndex..<code.endIndex, in: code)
-                guard let match = pattern.firstMatch(in: code, range: range),
-                      let bodyRange = Range(match.range(at: 2), in: code)
-                else { continue }
+            for (line, body) in try logCallBodies(in: try String(contentsOf: file, encoding: .utf8)) {
                 scanned += 1
-                if code[bodyRange].contains("\\(") {
-                    hits.append("\(relative):\(number)")
+                if body.contains("\\(") {
+                    hits.append("\(relative):\(line)")
                 }
             }
         }
 
-        // 活性锚：一条都没匹配上说明正则或遍历坏了，那时 hits 为空只是因为没扫。
-        XCTAssertGreaterThan(scanned, 30, "只扫到 \(scanned) 条日志调用 —— 先怀疑正则")
+        // 活性锚：一条都没匹配上说明扫描坏了，那时 hits 为空只是因为没扫。
+        XCTAssertGreaterThan(scanned, 30, "只扫到 \(scanned) 条日志调用 —— 先怀疑抽取器")
         XCTAssertEqual(hits, [], "这些日志的正文里还有插值（改成字段）：\(hits)")
     }
-}
 
+    /// 抽出每一条日志调用的**正文**（第一个字符串字面量），支持跨行。
+    ///
+    /// 为什么不按行切：跨行插值正是这条判据要抓的主要形态 —— 正文写在一行、插值写在
+    /// 下一行时，按行匹配只看得到前半段，于是 `\\(` 永远不在被检查的那一行里。
+    ///
+    /// 只认第一个字符串：模块参数是 `Log.Module.x`（不含引号），所以第一个字面量必是正文。
+    private func logCallBodies(in text: String) throws -> [(line: Int, body: String)] {
+        let chars = Array(text)
+        var results: [(Int, String)] = []
+        var index = 0
+        var line = 1
+        let starters = ["Log.info(", "Log.warn(", "Log.error(", "Log.debug("]
+
+        while index < chars.count {
+            if chars[index] == "\n" { line += 1 }
+            // 是否从这里开始一次调用
+            if let starter = starters.first(where: { matches(chars, at: index, pattern: $0) }) {
+                let bodyStart = index + starter.count
+                if let open = chars[bodyStart...].firstIndex(of: "\"") {
+                    var cursor = open + 1
+                    var body = ""
+                    var escaped = false
+                    while cursor < chars.count {
+                        let char = chars[cursor]
+                        if char == "\n" { line += 1 }
+                        if escaped {
+                            body.append(char)
+                            escaped = false
+                        } else if char == "\\" {
+                            escaped = true
+                            body.append(char)
+                        } else if char == "\"" {
+                            break
+                        } else {
+                            body.append(char)
+                        }
+                        cursor += 1
+                    }
+                    results.append((line, body))
+                    index = cursor
+                    continue
+                }
+            }
+            index += 1
+        }
+        return results
+    }
+
+    private func matches(_ chars: [Character], at index: Int, pattern: String) -> Bool {
+        let needle = Array(pattern)
+        guard index + needle.count <= chars.count else { return false }
+        for offset in 0..<needle.count where chars[index + offset] != needle[offset] { return false }
+        return true
+    }
+}

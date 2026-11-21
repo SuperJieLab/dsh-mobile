@@ -24,6 +24,8 @@ struct AppServices {
     let controlStream: ControlStream
     /// 待答审批。不随任何一屏生死：停在会话列表时它照样在收。
     let approvals: ApprovalStore
+    /// 待答提问 —— 与审批并列的 App 级表（流是 App 级的，表也得是）。
+    let questions: QuestionStore
     /// 端上遥测的订阅者。造好但不注册 —— 注册发生在 `start()` 里，与其余启动动作同处。
     let telemetry: MetricKitReporter
     /// 日志的落盘口。诊断包读它取「上一次跑的尾巴」。
@@ -63,6 +65,7 @@ struct AppServices {
         let eventsStream = EventsStream()
         let controlStream = ControlStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
+        let questions = QuestionStore(answerer: GatewayQuestionAnswerer(client: client))
         let telemetryStore = TelemetryStore(directory: TelemetryStore.defaultDirectory())
         let telemetry = MetricKitReporter(store: telemetryStore)
 
@@ -73,6 +76,7 @@ struct AppServices {
         self.eventsStream = eventsStream
         self.controlStream = controlStream
         self.approvals = approvals
+        self.questions = questions
         self.telemetry = telemetry
         self.logFile = logFile
         self.telemetryStore = telemetryStore
@@ -152,7 +156,11 @@ struct AppServices {
         for step in steps {
             switch step {
             case .attachApprovals:
-                approvals.attach(sink: EventsApprovalSink(stream: eventsStream))
+                // 分派在 sink 内部按 `event` 做；两个域订阅同一个实例（问题域在第 3 期接上）。
+                // **一个 sink 实例给两个域**：分派在它内部按 `event` 做，各域只订阅自己那一类。
+                let sink = EventsPendingSink(stream: eventsStream)
+                approvals.attach(sink: sink)
+                questions.attach(sink: sink)
             case .activateLink:
                 link.activate()
             case .attachStreams:

@@ -49,12 +49,14 @@ final class ApprovalStoreTests: XCTestCase {
     /// 应答需要它，而它只从流上来（`ready` 之后由 `EventsStream` 记住）。用它把
     /// 「id 从哪来」与「应答带上它」这两件事分开：这里要测的是后者。
     @MainActor
-    private final class ReadySink: ApprovalEventSink {
+    private final class ReadySink: PendingEventSink {
         var clientId: String?
 
         init(clientId: String?) { self.clientId = clientId }
 
-        func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onApproval(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onQuestion(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onEmit(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void { {} }
         func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
         func onReady(_ handler: @escaping () -> Void) -> () -> Void { {} }
     }
@@ -231,14 +233,19 @@ final class ApprovalStoreTests: XCTestCase {
     /// 「注册了几次」，而这条契约正是「注册几次」。不数卡片：`ApprovalTable.absorb` 按
     /// `eventId` 覆盖，卡片数恒定，断言它会永远绿。
     @MainActor
-    private final class SpySink: ApprovalEventSink {
+    private final class SpySink: PendingEventSink {
         private(set) var registrations: [String] = []
         var clientId: String? = "c1"
 
-        func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void {
-            registrations.append("waterfall")
+        func onApproval(_ handler: @escaping (JSONValue) -> Void) -> () -> Void {
+            registrations.append("approval")
             return {}
         }
+
+        /// 审批只订阅自己那一类 —— 这里不登记，序列里因此不该出现它。
+        func onQuestion(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+
+        func onEmit(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void { {} }
 
         func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void {
             registrations.append("cancel")
@@ -261,11 +268,11 @@ final class ApprovalStoreTests: XCTestCase {
         let store = ApprovalStore(answerer: FakeAnswerer())
 
         store.attach(sink: sink)
-        XCTAssertEqual(sink.registrations, ["waterfall", "cancel", "ready"],
+        XCTAssertEqual(sink.registrations, ["approval", "cancel", "ready"],
                        "一次挂载注册两种货物 + 一个就绪听众")
 
         store.attach(sink: sink)
-        XCTAssertEqual(sink.registrations, ["waterfall", "cancel", "ready"], "第二次不该再注册")
+        XCTAssertEqual(sink.registrations, ["approval", "cancel", "ready"], "第二次不该再注册")
     }
 
     /// 三处接线一次断完：待答调用进表、撤回带走它、源失效清空。
@@ -274,7 +281,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testAttachWiresTheApprovalPathAndSourceLoss() throws {
         let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(sink: EventsApprovalSink(stream: events))
+        store.attach(sink: EventsPendingSink(stream: events))
 
         events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").count, 1, "货物从流里进来就成了一条")
@@ -295,7 +302,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testACancelWithoutAnEventIdKeepsTheCard() throws {
         let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(sink: EventsApprovalSink(stream: events))
+        store.attach(sink: EventsPendingSink(stream: events))
 
         events.handle(try waterfallFrame())
         XCTAssertEqual(store.pending(in: "s1").count, 1)
@@ -314,7 +321,7 @@ final class ApprovalStoreTests: XCTestCase {
     func testEveryReadyRebuildsTheTableFromTheReplay() throws {
         let events = EventsStream()
         let store = ApprovalStore(answerer: FakeAnswerer())
-        store.attach(sink: EventsApprovalSink(stream: events))
+        store.attach(sink: EventsPendingSink(stream: events))
 
         store.receive(waterfall(eventId: "e9"))
         XCTAssertEqual(store.pending(in: "s1").count, 1, "断线之前收到的那一条还在")
@@ -402,7 +409,7 @@ final class ApprovalOwnershipTests: XCTestCase {
         let events = EventsStream()
         let answerer = RecordingAnswerer()
         let store = ApprovalStore(answerer: answerer)
-        store.attach(sink: EventsApprovalSink(stream: events))
+        store.attach(sink: EventsPendingSink(stream: events))
 
         // 先给一条 ready：id 从此住在流上。
         _ = events.handle(try frame(#"{"type":"item","streamId":"e1","value":{"type":"ready","clientId":"c-42"}}"#))
@@ -465,18 +472,22 @@ final class ApprovalOwnershipTests: XCTestCase {
 
     /// 一条永远没就绪过的流。
     @MainActor
-    private final class EmptySink: ApprovalEventSink {
+    private final class EmptySink: PendingEventSink {
         var clientId: String? { nil }
-        func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onApproval(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onQuestion(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onEmit(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void { {} }
         func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
         func onReady(_ handler: @escaping () -> Void) -> () -> Void { {} }
     }
 
     @MainActor
-    private final class ReadySink: ApprovalEventSink {
+    private final class ReadySink: PendingEventSink {
         var clientId: String?
         init(clientId: String?) { self.clientId = clientId }
-        func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onApproval(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onQuestion(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
+        func onEmit(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void { {} }
         func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void { {} }
         func onReady(_ handler: @escaping () -> Void) -> () -> Void { {} }
     }

@@ -236,8 +236,8 @@ final class StreamMux {
             guard let self, self.channel?.attempt == token, self.byId[id] === stream,
                   stream.openInFlight, !self.established.contains(id) else { return }
             // 这一行是「这条流为什么没开成」的第一现场。只重开这一条：连接自有判死窗口兜着。
-            Log.warn(Log.Module.session,
-                     "[\(label)] opening timeout (\(Int(budget))s) — reopening this stream only")
+            Log.warn(Log.Module.session, "opening timeout — reopening this stream only",
+                     ["stream": label, "ms": String(Int(budget) * 1000)])
             self.scheduleRetry(stream)
         }
     }

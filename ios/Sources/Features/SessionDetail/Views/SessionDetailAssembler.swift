@@ -10,6 +10,7 @@ struct SessionDetailAssembler: View {
     private let link: LongConnection
     private let store: MeshStore
     private let approvals: ApprovalStore
+    private let questions: QuestionStore
     private let control: ControlStream?
 
     /// 首帧为 nil：容器在 `.task` 里现造。`@State` 的初值表达式每次视图重建都求值、
@@ -22,6 +23,7 @@ struct SessionDetailAssembler: View {
          link: LongConnection,
          store: MeshStore,
          approvals: ApprovalStore,
+         questions: QuestionStore,
          control: ControlStream? = nil) {
         self.sessionId = sessionId
         self.title = title
@@ -29,6 +31,7 @@ struct SessionDetailAssembler: View {
         self.link = link
         self.store = store
         self.approvals = approvals
+        self.questions = questions
         self.control = control
     }
 
@@ -53,6 +56,7 @@ struct SessionDetailAssembler: View {
                                             link: link,
                                             store: store,
                                             approvals: approvals,
+                                            questions: questions,
                                             control: control)
             }
             guard let created = detail else { return }

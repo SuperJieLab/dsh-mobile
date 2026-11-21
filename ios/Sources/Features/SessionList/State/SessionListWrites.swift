@@ -43,8 +43,9 @@ func makeWorkspace(_ client: RpcClient, name: String) async throws -> WorkspaceC
     }
     // 与网关那一侧同名的一格：界面据 `created` 说两句不同的话，日志里没有它，
     // 「我以为建了新的、其实命中旧的」这种投诉就查不出来。
-    Log.info(Log.Module.workspace,
-             "workspace-create \"\(name)\" → \(workspaceId) (\(created ? "created" : "already existed"))")
+    Log.info(Log.Module.workspace, "workspace-create",
+             ["workspace": workspaceId, "name": name,
+              "state": created ? "created" : "already existed"])
     return WorkspaceCreated(workspaceId: workspaceId, title: title, created: created)
 }
 
@@ -62,8 +63,8 @@ func createBlankSession(_ client: RpcClient, in workspaceId: String?) async thro
     }
     // 落在哪儿是这条 op 唯一的变量；不带工作空间那条老路径会落宿主的当前目录，
     // 而那个目录在手机上完全看不见 —— 将来「新建的会话不知道去哪了」时靠这一行。
-    Log.info(Log.Module.workspace,
-             "session-create in \(workspaceId ?? "<host default cwd>") → \(sessionId)")
+    Log.info(Log.Module.workspace, "session-create",
+             ["workspace": workspaceId ?? "<host default cwd>", "session": sessionId])
     return sessionId
 }
 

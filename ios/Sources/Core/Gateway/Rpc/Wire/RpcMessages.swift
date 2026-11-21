@@ -244,6 +244,9 @@ struct PageResponse: GatewayResponse {
 /// 审批应答回包：成功不带业务字段。
 struct ApprovalAnswerResponse: GatewayResponse {}
 
+/// 一张卡的答案回包：成功即已投递。结局由上游结算，客户端不推演。
+struct QuestionAnswerResponse: GatewayResponse {}
+
 /// 下发指令回包：成功即已受理。
 struct SessionPromptResponse: GatewayResponse {}
 

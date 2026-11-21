@@ -119,6 +119,20 @@ final class PermissionState {
 
     /// 流里到了一条事件。**只认三类**：一次切档会连着写 `permission/preset` 与两个 knob，
     /// 任一到达都说明「宿主那边的当前值可能变了」—— 重读，不推导。
+    /// 宿主的预设目录变了（`permission-presets/catalog-changed`）。
+    ///
+    /// 与 `noteLiveEvent` 分开：那个只认「会话里切了档」的三类事件，而目录变更是全局的、
+    /// 与当前会话无关。两者都要「重读一次」，所以共用同一个防重入闸。
+    func noteCatalogChanged() {
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+        Task { [weak self] in
+            guard let self else { return }
+            self.reloadScheduled = false
+            await self.reload()
+        }
+    }
+
     func noteLiveEvent(type: String) {
         guard Self.affectsCurrent(type) else { return }
         guard !reloadScheduled else { return }

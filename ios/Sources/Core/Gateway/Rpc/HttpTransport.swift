@@ -90,7 +90,8 @@ final class HttpTransport {
             // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
             Log.warn(
                 Log.Module.gateway,
-                "transport: \(endpoint) — \(error.localizedDescription) (base=\(baseURL.host ?? "?"))"
+                "transport failed",
+                ["op": endpoint, "error": error.localizedDescription, "url": baseURL.host ?? "?"]
             )
             throw RpcClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }
@@ -107,7 +108,8 @@ final class HttpTransport {
                     if failure.code == GatewayErrorCode.unauthenticated.rawValue {
                         Log.info(
                             Log.Module.gateway,
-                            "auth endpoint refused: \(endpoint) — \(failure.code) — \(failure.message)"
+                            "auth endpoint refused",
+                            ["op": endpoint, "code": failure.code, "reason": failure.message]
                         )
                         throw RpcClientError.unauthenticated
                     }
@@ -116,8 +118,8 @@ final class HttpTransport {
                 throw RpcClientError.unauthenticated
             }
             if http.statusCode != 200 {
-                Log.warn(Log.Module.gateway,
-                         "HTTP \(http.statusCode) on \(endpoint) from \(baseURL.host ?? "?")")
+                Log.warn(Log.Module.gateway, "bad status",
+                         ["code": String(http.statusCode), "op": endpoint, "url": baseURL.host ?? "?"])
                 throw RpcClientError.badStatus(http.statusCode)
             }
         }
@@ -129,12 +131,12 @@ final class HttpTransport {
             // 解不出来时先看看能不能读出信封里的 error —— 服务端的拒绝
             // 比解码器的报错信息有用得多。
             if let failure = envelopeFailure(in: payload) {
-                Log.warn(Log.Module.gateway,
-                         "\(endpoint) refused: \(failure.code) — \(failure.message)")
+                Log.warn(Log.Module.gateway, "refused",
+                         ["op": endpoint, "code": failure.code, "reason": failure.message])
                 throw RpcClientError.refused(failure)
             }
-            Log.warn(Log.Module.gateway,
-                     "\(endpoint) returned a malformed response: \(String(describing: error))")
+            Log.warn(Log.Module.gateway, "malformed response",
+                     ["op": endpoint, "error": String(describing: error)])
             throw RpcClientError.malformedResponse(detail: String(describing: error))
         }
 

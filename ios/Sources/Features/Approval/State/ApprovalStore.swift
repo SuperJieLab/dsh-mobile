@@ -30,8 +30,8 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
         )
         // 「批了但对面没动」是这一屏最典型的投诉形状，而它的两种成因（没投递出去 /
         // 投递了但上游没接）在界面上完全一样。这一行钉住的是**已经投递**这一半。
-        Log.info(Log.Module.session,
-                 "approval-answer \(eventId) delivered: \(allow ? "allow" : "deny")")
+        Log.info(Log.Module.session, "approval-answer delivered",
+                 ["approval": eventId, "decision": allow ? "allow" : "deny"])
     }
 }
 
@@ -44,19 +44,31 @@ struct GatewayApprovalAnswerer: ApprovalAnswering {
 /// 三个口都给退订 token：多读者必须能退订，而「消费者都是 App 级」是当下的处境，
 /// 不是这个口该有的形状。本域的消费者确实与进程同寿（`attach` 里丢弃 token），所以它现在不退。
 @MainActor
-protocol ApprovalEventSink {
+/// `$events` 的两类待答调用与宿主通知 —— 由 `EventsPendingSink` 从通信域适配而来。
+///
+/// **分派归实现方**：`onApproval` 与 `onQuestion` 各自只送自己那一类，调用方不必再判
+/// `event`。两个域订阅同一个 sink 实例，于是「哪条货物属于谁」只有一处判断。
+protocol PendingEventSink {
     /// 这条流在网关那里的登记键；还没有过 `ready`（或流已经收起）时为 `nil`。
     ///
     /// 应答必须把它带上 —— 网关按它判「这条审批是不是你的」。没有它就只能不发：
     /// 一次注定被拒的请求会让卡片停在「网关拒绝了」那种状态上，而那说的不是事实。
     var clientId: String? { get }
 
+    /// 一条工具审批。
     @discardableResult
-    func onWaterfall(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    func onApproval(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    /// 一条上游提问。
+    @discardableResult
+    func onQuestion(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
+    /// 一条撤回 —— 两类共用，只带 `eventId`。
     @discardableResult
     func onCancel(_ handler: @escaping (JSONValue) -> Void) -> () -> Void
     @discardableResult
     func onReady(_ handler: @escaping () -> Void) -> () -> Void
+    /// 一条宿主通知（名字与参数原样）。
+    @discardableResult
+    func onEmit(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void
 }
 
 @MainActor
@@ -64,16 +76,11 @@ protocol ApprovalEventSink {
 final class ApprovalStore {
 
     /// 一张卡的应答进展。没有这一项 = 还没动过（也就可以按）。
-    enum AnswerState: Equatable {
-        /// 请求已发出、回包还没到。
-        case sending
-        /// 结果未知 —— 卡留着，等上游结算。两种来路：**发出去了但传输失败**，
-        /// 以及**根本没发**（这条流还没就绪，没有归属的键）。两者对用户说的是同一件事：
-        /// 现在不知道结果，别按第二次。
-        case unknown
-        /// 服务端拒了这次投递，附人话说明 —— 那个问题仍挂在网关的暂存里。
-        case refused(String)
-    }
+    /// 三态的定义在 `AnswerProgress`（提问那一侧读的是同一份）。
+    ///
+    /// 留这个别名不动调用方：`ApprovalCard` 与既有测试都写的是 `AnswerState`，
+    /// 为名词统一去改三个视图与两个测试文件，收益不抵改动面。
+    typealias AnswerState = AnswerProgress
 
     /// 表本身发布出去：它一变，读它的视图就重算。不另存一份镜像 ——
     /// 两份数据会有「谁先更新」的问题，而这里没有第二个写者。
@@ -90,7 +97,7 @@ final class ApprovalStore {
 
     /// 挂上的那一条流。**留着它是为了读 `clientId`** —— 应答要把它带上，而 id 只在流上。
     /// 不存的话每次应答都得从头再找一个入口，而那个入口不唯一。
-    @ObservationIgnored private var sink: (any ApprovalEventSink)?
+    @ObservationIgnored private var sink: (any PendingEventSink)?
 
     init(answerer: any ApprovalAnswering) {
         self.answerer = answerer
@@ -113,12 +120,12 @@ final class ApprovalStore {
     /// **每一条 `ready` 都清空**（网关随后重放当前集合，两帧相邻，界面看不到中间态）⇒
     /// 表没有跨代状态。
     /// **只生效一次**：入口不唯一而注册本身不幂等；闸在发起注册的人身上，不在订阅面上。
-    func attach(sink: any ApprovalEventSink) {
+    func attach(sink: any PendingEventSink) {
         guard !attached else { return }
         attached = true
         // 留住它：应答时要读 `clientId`（见 `answer`）。
         self.sink = sink
-        sink.onWaterfall { [weak self] payload in self?.receive(payload) }
+        sink.onApproval { [weak self] payload in self?.receive(payload) }
         // 撤回的解释在这里：`eventId` 是唯一的寻址信息。没有它删不掉任何东西 —— 留着这张卡
         // 比误删别人的强。
         sink.onCancel { [weak self] payload in

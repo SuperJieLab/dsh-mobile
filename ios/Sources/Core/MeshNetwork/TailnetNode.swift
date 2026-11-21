@@ -82,10 +82,12 @@ final class TailnetNode {
         SecretFile.delete(Self.legacyTicketFile)
         let identity = identityProbe()
         let sameControlPlane = ControlPlaneRecord.matches(config.controlURL)
-        Log.info(Log.Module.mesh,
-                 "launch: identity=\(identity) controlPlaneMatches=\(sameControlPlane)"
-                 + " controlURL=\(config.controlURL?.absoluteString ?? "<invalid>")"
-                 + " gateway=\(config.gatewayURLString)")
+        // 只记一个地址：`gateway` 与 `controlURL` 同源（一个给我们、一个给 Tailscale），
+        // 记两个会让「按 url 分组」出现两条同义条目。
+        Log.info(Log.Module.mesh, "launch",
+                 ["identity": identity ? "present" : "absent",
+                  "state": sameControlPlane ? "matched" : "mismatched",
+                  "url": config.controlURL?.absoluteString ?? "<invalid>"])
         // 换了控制面：目录里那份身份属于上一家，留着只会让新节点「连上但通不了」。
         // 只在这条路上清 —— 目录读不了（半份本地文件）不清，上游自己会重建。
         if identity, !sameControlPlane {
@@ -371,8 +373,8 @@ final class TailnetNode {
         while true {
             // 被取代：立刻收场，一个字段都不写。
             guard current == generation else {
-                Log.info(Log.Module.mesh,
-                         "up: generation \(current) superseded — discarding this attempt")
+                Log.info(Log.Module.mesh, "up: generation superseded — discarding this attempt",
+                         ["generation": String(current)])
                 return
             }
             attempt += 1
@@ -405,17 +407,17 @@ final class TailnetNode {
             case .retryable(let failure):
                 guard attempt < Self.upAttemptLimit else {
                     guard current == generation else { return }
-                    Log.info(Log.Module.mesh,
-                             "up: giving up after \(attempt) attempts (\(failure))")
+                    Log.info(Log.Module.mesh, "up: giving up",
+                             ["count": String(attempt), "reason": String(describing: failure)])
                     finishFailed(failure)
                     return
                 }
                 let delay = max(Self.upRetryFloorMs,
                                 Backoff.delayMs(attempt: attempt,
                                                 random: Double.random(in: 0..<1)))
-                Log.info(Log.Module.mesh,
-                         "up: attempt \(attempt)/\(Self.upAttemptLimit) failed (\(failure))"
-                         + " — retrying in \(delay)ms")
+                Log.info(Log.Module.mesh, "up: attempt failed — retrying",
+                         ["count": String(attempt), "limit": String(Self.upAttemptLimit),
+                          "reason": String(describing: failure), "ms": String(delay)])
                 try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
             }
         }
@@ -435,9 +437,8 @@ final class TailnetNode {
             Log.info(Log.Module.mesh, "up: config incomplete → unreachable")
             return .fatal(.unreachable)
         }
-        Log.info(Log.Module.mesh,
-                 "up: start hostname=dsh-iphone controlURL=\(controlURL.absoluteString)"
-                 + " ticket=\(Self.ticketHint(ticket))")
+        Log.info(Log.Module.mesh, "up: start",
+                 ["url": controlURL.absoluteString, "key": Self.ticketHint(ticket)])
 
         let node: any TailnetBackend
         do {
@@ -459,9 +460,8 @@ final class TailnetNode {
 
         switch await Self.runUp(node) {
         case .timedOut:
-            Log.info(Log.Module.mesh,
-                     "up: no answer in \(Int(Self.upTimeoutSeconds))s"
-                     + " — closing this node (upstream has no timeout of its own)")
+            Log.info(Log.Module.mesh, "up: no answer — closing this node",
+                     ["ms": String(Int(Self.upTimeoutSeconds) * 1000)])
             // `close` 是上游指定的取消手段：它让卡住的 `up()` 收尾，不留一条还在跑的 Go 侧节点。
             // 它关的是**这一次尝试造的**那个，与代际无关，所以无条件关。
             try? await node.close()
@@ -485,16 +485,16 @@ final class TailnetNode {
             // 闭合信号：up() 返回 ≠ 注册完成（停在 NeedsLogin 时它也返回）。
             // 判据只看上游报告的状态，不再拿「有没有票」去猜。
             let backendNow = await Self.settleBackendState(node)
-            Log.info(Log.Module.mesh,
-                     "up: returned, BackendState=\(backendNow ?? "<unreadable>")")
+            Log.info(Log.Module.mesh, "up: returned",
+                     ["state": backendNow ?? "<unreadable>"])
             if backendNow == "Running" {
                 Log.info(Log.Module.mesh, "up: verified Running")
                 do {
                     // 产物交给调用方收 —— 写入口集中在 `up`，代际判据也就只在那里判一次。
                     return .ready(try await node.makeGatewaySession())
                 } catch {
-                    Log.info(Log.Module.mesh,
-                             "up: session build threw \(String(describing: error))")
+                    Log.info(Log.Module.mesh, "up: session build threw",
+                             ["error": String(describing: error)])
                     self.node = nil
                     return .retryable(.unreachable)
                 }
@@ -644,8 +644,8 @@ final class TailnetNode {
                      ["reason": reason])
         } catch {
             // 删不掉就照旧起：坏结果只是「可能连上但通不了」，而这是原本就有的行为。
-            Log.warn(Log.Module.mesh,
-                     "node state could not be discarded (\(reason)): \(String(describing: error))")
+            Log.warn(Log.Module.mesh, "node state could not be discarded",
+                     ["reason": reason, "error": String(describing: error)])
         }
     }
 }

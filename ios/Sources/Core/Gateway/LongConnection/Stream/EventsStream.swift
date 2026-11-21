@@ -14,8 +14,8 @@ import Foundation
 @MainActor
 final class EventsStream {
 
-    // 四张听众表**只给表，不给具名的订阅口**：`onWaterfall` / `onCancel` 那一族住在业务侧
-    // 的适配器里（`Features/Approval/State/EventsApprovalSink.swift`）。理由不是洁癖 ——
+    // 四张听众表**只给表，不给具名的订阅口**：`onApproval` / `onQuestion` 那一族住在业务侧
+    // 的适配器里（`Features/Approval/State/EventsPendingSink.swift`）。理由不是洁癖 ——
     // 通信域的承诺是「不认识业务」，具名口一旦长在这里，加一种货物就要改通信域，
     // 而那条承诺没有任何编译期保证（`ios/judges` 的 `testCoreHasNoBusinessSubscriptions` 守它）。
 

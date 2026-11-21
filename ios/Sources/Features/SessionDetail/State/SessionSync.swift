@@ -277,8 +277,8 @@ final class SessionSync {
     func loadOlder() async {
         guard !syncInFlight, mirror.hasOlder else { return }
         // 翻页低频，打 info：真机上要能对照「我没点它却加载了」。
-        Log.info(Log.Module.session,
-                 "loadOlder fromSeq=\(mirror.pageStart) events=\(mirror.events.count)")
+        Log.info(Log.Module.session, "loadOlder",
+                 ["seq": String(mirror.pageStart), "count": String(mirror.events.count)])
         syncInFlight = true
         isPagingOlder = true
         defer {
