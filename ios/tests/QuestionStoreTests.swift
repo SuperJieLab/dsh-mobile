@@ -117,7 +117,8 @@ final class QuestionStoreTests: XCTestCase {
 
         XCTAssertEqual(store.pending(in: "s1").count, 1, "被拒不是作废 —— 卡留着")
         if case .refused(let reason)? = store.state(for: "q1") {
-            XCTAssertTrue(reason.contains("不匹配"), "原因要写明：\(reason)")
+            // 只验「有话说」，不钉死措辞 —— 文案归 Display，测试钉它会让改文案就红。
+            XCTAssertFalse(reason.isEmpty, "被拒要给一句人话")
         } else {
             XCTFail("该落在 .refused，实际 \(String(describing: store.state(for: "q1")))")
         }
