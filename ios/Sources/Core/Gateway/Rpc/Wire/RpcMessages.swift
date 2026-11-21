@@ -144,6 +144,31 @@ struct ApprovalAnswerRequest: GatewayRequest {
     let clientId: String
 }
 
+/// 一个问题的一道答案 —— 字段与网关 `QuestionAnswerMessage` 的 `answers` 元素逐字相同。
+///
+/// `custom` 缺席时整个键不出现（合成的 `Encodable` 对 Optional 用 `encodeIfPresent`），
+/// 与网关那侧「缺席 ≠ 空串」一致。
+struct QuestionAnswerItem: Encodable {
+    let id: String
+    /// 选中的选项 label；只填自由文本时是空数组。
+    let selected: [String]
+    /// 「其它」的自由文本，可与选项并存。
+    let custom: String?
+}
+
+/// 一张卡的整批答案。**`answerId` 的主键是卡**，不是单个问题 —— 一卡一次提交。
+///
+/// 答案必须覆盖卡上全部 `id`（一个不缺、一个不多），否则网关回 `invalid-request`
+/// 且不投递。这条约束在这里表达不出来，客户端提交前自己保证。
+struct QuestionAnswerRequest: GatewayRequest {
+    static let endpoint = "mobile/questionAnswer"
+    let eventId: String
+    let answers: [QuestionAnswerItem]
+    let answerId: String
+    /// 这条提问是在哪条流上看到的 —— 与审批应答同一条归属判定。
+    let clientId: String
+}
+
 /// 下发指令：`promptId` 是幂等键，服务端按它去重重复投递。
 ///
 /// ⚠️ 上游把这一格叫 `requestId`，我们仍叫 `promptId` —— 改 wire 名是行为变更，

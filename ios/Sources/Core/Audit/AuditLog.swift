@@ -166,6 +166,10 @@ extension ApprovalAnswerRequest: AuditableRequest {
     var auditTarget: String { eventId }
 }
 
+extension QuestionAnswerRequest: AuditableRequest {
+    var auditTarget: String { eventId }
+}
+
 extension CommandExecuteRequest: AuditableRequest {
     var auditTarget: String { sessionId }
 }
