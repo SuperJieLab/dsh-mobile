@@ -48,6 +48,20 @@ struct QuestionTable {
         let questions: [Question]
 
         var id: String { eventId }
+
+        /// 要显示的题。`intent` 的分派点**在这里**：卡片与「答全」判定都读它，
+        /// 所以「藏起某一问」不会变成「按钮可点、点了没反应」。
+        ///
+        /// 用户裁决：`plan-review` 的正文先不展示。留判别点是为了将来只加一个分支 ——
+        /// 不写空 `case`，它会被读成「已处理」。
+        var visibleQuestions: [Question] {
+            questions.filter { question in
+                switch question.intent {
+                default:
+                    return true
+                }
+            }
+        }
     }
 
     /// 按到达顺序 —— 与审批同一份集合语义，重放时顺序即到达顺序。
@@ -118,7 +132,7 @@ enum QuestionAnswers {
 
     /// 每一问都答过了才算能交。**唯一谓词**：卡片按钮与 Store 的守卫都读它。
     static func isComplete(_ entry: QuestionTable.Entry, selections: [String: QuestionSelection]) -> Bool {
-        isComplete(entry.questions, selections: selections)
+        isComplete(entry.visibleQuestions, selections: selections)
     }
 
     /// 按题目列表判 —— 卡片读的是 `visibleQuestions`（将来可能比 `entry.questions` 少），
@@ -133,7 +147,7 @@ enum QuestionAnswers {
 
     /// 把选择收成线上形状。调用前必须已经 `isComplete`。
     static func payload(_ entry: QuestionTable.Entry, selections: [String: QuestionSelection]) -> [QuestionAnswerItem] {
-        entry.questions.compactMap { question in
+        entry.visibleQuestions.compactMap { question in
             guard let selection = selections[question.id] else { return nil }
             let custom = selection.custom.trimmingCharacters(in: .whitespacesAndNewlines)
             return QuestionAnswerItem(

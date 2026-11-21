@@ -172,7 +172,7 @@ final class ApprovalStore {
             // 正文固定、动态值走字段（留痕纪律第一条）：这条日志要能按事件检索。
             Log.warn(Log.Module.session,
                      "approval-answer not sent: the events stream has no clientId yet",
-                     ["event": entry.eventId])
+                     ["request": entry.eventId])
             states[entry.eventId] = .unknown
             // 这一支也是一个出口：等待期间卡可能已被 `cancel` 撤掉，那就别留一条看不见的状态。
             pruneStates()
