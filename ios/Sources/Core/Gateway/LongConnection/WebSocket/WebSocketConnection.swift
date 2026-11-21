@@ -117,7 +117,7 @@ final class WebSocketConnection: Channel {
                                            sameTask: self.task === sentTask) else {
                     Log.debug(Log.Module.session, "stale send failure ignored",
                               ["generation": String(sentGeneration), "reason": "stale",
-                               "error": String(describing: error)])
+                               "detail": String(describing: error)])
                     return
                 }
                 // 握手没完成或连接已死时 send 会失败 —— 「发了开流内容却收不到帧」最常见的原因。

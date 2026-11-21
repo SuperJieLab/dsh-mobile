@@ -78,7 +78,7 @@ final class ApprovalStore {
     /// 一张卡的应答进展。没有这一项 = 还没动过（也就可以按）。
     /// 三态的定义在 `AnswerProgress`（提问那一侧读的是同一份）。
     ///
-    /// 留这个别名不动调用方：`ApprovalCard` 与既有测试都写的是 `AnswerState`，
+    /// 留这个别名不动调用方：卡片视图与既有测试都写的是 `AnswerState`，
     /// 为名词统一去改三个视图与两个测试文件，收益不抵改动面。
     typealias AnswerState = AnswerProgress
 

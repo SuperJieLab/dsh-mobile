@@ -120,7 +120,7 @@ final class QuestionStore {
                 answerId: UUID().uuidString,
                 clientId: clientId
             )
-            settle(entry, notice: "已投递")
+            settle(entry, notice: QuestionText.deliveredNote)
         } catch RpcClientError.refused(let failure) where Self.meansGone(failure.code) {
             // 这条已经不在了（别人答了 / 撤回了 / 换代了）：留着就是一张永远按不动的卡。
             settle(entry, notice: failure.readableDescription)
