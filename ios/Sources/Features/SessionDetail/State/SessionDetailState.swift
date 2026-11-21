@@ -28,6 +28,9 @@ final class SessionDetailState {
     /// 「登录已失效」的一次性提示 —— 只提示，不动凭证。
     let loginExpired = LoginExpiredFlag()
 
+    /// 宿主通知的退订句柄 —— 这一屏离屏时要还回去，否则每开一次就多一个永久听众。
+    @ObservationIgnored private var stopWatching: (() -> Void)?
+
     init(client: RpcClient,
          sessionId: String,
          title: String?,
@@ -55,7 +58,7 @@ final class SessionDetailState {
         composer = ComposerState()
         // 宿主通知的四条去路：三条目录各自刷一次、一条提示。判断在这里，动作在各部件里 ——
         // 容器只造不取数，所以四个动作都是同步入口（内部各起一次重拉）。
-        questions.watchNotifications { [weak catalogState, weak directory, weak permissionState, weak loginExpired] name, _ in
+        stopWatching = questions.watchNotifications { [weak catalogState, weak directory, weak permissionState, weak loginExpired] name, _ in
             switch UpstreamNotification.route(name) {
             case .models: catalogState?.reloadSoon()
             case .commands: directory?.reloadSoon()
@@ -108,6 +111,12 @@ final class SessionDetailState {
 
     /// 这一屏的问题提示（"已投递"这类），没有时是 nil。
     var questionNotice: String? { questions.notice(for: sessionId) }
+
+    /// 离屏时还回那个听众。由视图的 `onDisappear` 调 —— 容器自己没有生命周期钩子。
+    func stopWatchingUpstream() {
+        stopWatching?()
+        stopWatching = nil
+    }
 
     /// 这一屏的审批提示（"已过期"这类），没有时是 nil。
     var notice: String? { approvals.notice(for: sessionId) }

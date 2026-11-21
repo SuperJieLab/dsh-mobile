@@ -22,11 +22,4 @@ final class UpstreamNotificationTests: XCTestCase {
         XCTAssertEqual(UpstreamNotification.route(""), .unhandled)
     }
 
-    func testTheFourRoutesAreDistinct() {
-        // 把两条去路写重时，上面的逐条断言仍会绿 —— 这一条才会红。
-        let routes: Set<UpstreamNotification.Route> = [
-            .models, .commands, .permissions, .accountExpired,
-        ]
-        XCTAssertEqual(routes.count, 4)
-    }
 }

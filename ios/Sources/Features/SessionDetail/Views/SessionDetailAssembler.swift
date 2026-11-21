@@ -69,6 +69,10 @@ struct SessionDetailAssembler: View {
             // `detail` 还是 nil，那条流就没人关 —— 关一次是幂等的，这里补上。
             if Task.isCancelled { created.sync.stopFollowing() }
         }
-        .onDisappear { detail?.sync.stopFollowing() }
+        .onDisappear {
+            detail?.sync.stopFollowing()
+            // 宿主通知的听众也还回去：它是 App 级的表，不退就每开一次多一个。
+            detail?.stopWatchingUpstream()
+        }
     }
 }

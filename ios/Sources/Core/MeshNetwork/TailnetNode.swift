@@ -85,8 +85,8 @@ final class TailnetNode {
         // 只记一个地址：`gateway` 与 `controlURL` 同源（一个给我们、一个给 Tailscale），
         // 记两个会让「按 url 分组」出现两条同义条目。
         Log.info(Log.Module.mesh, "launch",
-                 ["identity": identity ? "present" : "absent",
-                  "state": sameControlPlane ? "matched" : "mismatched",
+                 ["state": identity ? "identity present" : "identity absent",
+                  "reason": sameControlPlane ? "control plane matched" : "control plane mismatched",
                   "url": config.controlURL?.absoluteString ?? "<invalid>"])
         // 换了控制面：目录里那份身份属于上一家，留着只会让新节点「连上但通不了」。
         // 只在这条路上清 —— 目录读不了（半份本地文件）不清，上游自己会重建。

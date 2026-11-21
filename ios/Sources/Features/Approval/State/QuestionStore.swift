@@ -24,7 +24,7 @@ struct GatewayQuestionAnswerer: QuestionAnswering {
         let _: QuestionAnswerResponse = try await client.perform(
             QuestionAnswerRequest(eventId: eventId, answers: answers, answerId: answerId, clientId: clientId)
         )
-        Log.info(Log.Module.session, "question-answer delivered", ["event": eventId])
+        Log.info(Log.Module.session, "question-answer delivered", ["request": eventId])
     }
 }
 
@@ -69,8 +69,16 @@ final class QuestionStore {
     ///
     /// 分派仍在调用方（`SessionDetailState`）：它才认识「模型 / 命令 / 权限 / 账号」这四个
     /// 消费方，而 Store 只认识自己的表。
-    func watchNotifications(_ handler: @escaping (String, JSONValue) -> Void) {
-        sink?.onEmit(handler)
+    ///
+    /// **返回退订**：调用方是 per-screen 的容器，不退订的话每开一次详情页就多一个永久
+    /// 听众（`ListenerTable` 只靠 token 删）。
+    @discardableResult
+    func watchNotifications(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void {
+        guard let sink else {
+            Log.warn(Log.Module.session, "upstream notifications not watched: the events stream is not attached yet")
+            return {}
+        }
+        return sink.onEmit(handler)
     }
 
     /// 网关推来的一条提问。
@@ -106,7 +114,7 @@ final class QuestionStore {
         guard let clientId = sink?.clientId else {
             Log.warn(Log.Module.session,
                      "question-answer not sent: the events stream has no clientId yet",
-                     ["event": entry.eventId])
+                     ["request": entry.eventId])
             states[entry.eventId] = .unknown
             pruneStates()
             return

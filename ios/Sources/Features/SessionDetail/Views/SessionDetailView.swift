@@ -205,6 +205,7 @@ struct SessionDetailView: View {
     /// 命令候选贴近输入框：它是「当前这一行」的补充。
     private var bottomBars: some View {
         VStack(spacing: 0) {
+            loginExpiredBanner
             approvalSection
             questionSection
 
@@ -245,6 +246,21 @@ struct SessionDetailView: View {
         .padding(.bottom, 6)
     }
 
+    /// 账号过期的一次性横幅。**只提示**：不清凭证、不自动重连 —— 那两件事各有各的判断处。
+    @ViewBuilder
+    private var loginExpiredBanner: some View {
+        if detail.loginExpired.isShowing {
+            HStack(alignment: .top, spacing: 8) {
+                FailureBanner(text: SessionBannerText.loginExpired)
+                Button("知道了") { detail.loginExpired.dismiss() }
+                    .font(.footnote)
+                    .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 6)
+        }
+    }
+
     /// 待答问题卡：与审批并列，排在它后面。同样只露第一张 —— 两张卡同屏会把输入框推得太高。
     @ViewBuilder
     private var questionSection: some View {
@@ -256,6 +272,9 @@ struct SessionDetailView: View {
             ) { selections in
                 Task { await detail.questions.answer(first, selections: selections) }
             }
+            // 身份：换一张卡时 SwiftUI 会复用同一位置的 `@State`，而选择是按 `question.id`
+            // 作键的 —— 不给身份的话，上一张的答案会带进下一张。
+            .id(first.eventId)
             .padding(.horizontal, 4)
             .padding(.bottom, 6)
 

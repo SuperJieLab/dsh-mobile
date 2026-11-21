@@ -21,7 +21,7 @@ func promptSession(
     )
     // 正文长度而不是正文：内容属于会话，日志不该成为它的第二份副本。
     Log.info(Log.Module.session, "session-prompt accepted",
-             ["session": sessionId, "request": promptId, "chars": String(text.count)])
+             ["session": sessionId, "key": promptId, "chars": String(text.count)])
 }
 
 /// 安装一次会话级选择。`ok` = **已安装给下一轮**，不是「已生效」——

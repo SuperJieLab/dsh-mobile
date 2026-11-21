@@ -25,6 +25,8 @@ struct QuestionCardModel {
 
     /// 每一问都答过了才能交 —— 与 `QuestionStore` 的守卫读同一个谓词。
     func canSubmit(_ selections: [String: QuestionSelection]) -> Bool {
-        QuestionAnswers.isComplete(entry, selections: selections)
+        // 读 `visibleQuestions` 而不是 `entry.questions`：将来真有分支藏起某问时，
+        // 被藏起来的那一问不该继续挡住提交。
+        QuestionAnswers.isComplete(visibleQuestions, selections: selections)
     }
 }

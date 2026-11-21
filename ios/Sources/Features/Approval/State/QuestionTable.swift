@@ -118,7 +118,13 @@ enum QuestionAnswers {
 
     /// 每一问都答过了才算能交。**唯一谓词**：卡片按钮与 Store 的守卫都读它。
     static func isComplete(_ entry: QuestionTable.Entry, selections: [String: QuestionSelection]) -> Bool {
-        entry.questions.allSatisfy { question in
+        isComplete(entry.questions, selections: selections)
+    }
+
+    /// 按题目列表判 —— 卡片读的是 `visibleQuestions`（将来可能比 `entry.questions` 少），
+    /// 两处若各读各的，被藏起来的那一问会让卡**永远交不出去**。
+    static func isComplete(_ questions: [QuestionTable.Question], selections: [String: QuestionSelection]) -> Bool {
+        questions.allSatisfy { question in
             guard let selection = selections[question.id] else { return false }
             return !selection.selected.isEmpty
                 || !selection.custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

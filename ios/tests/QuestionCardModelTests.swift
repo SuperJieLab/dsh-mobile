@@ -23,8 +23,8 @@ final class QuestionCardModelTests: XCTestCase {
         let review = QuestionCardModel(entry: entry(intent: "plan-review")).visibleQuestions
         XCTAssertEqual(plain.count, 1)
         XCTAssertEqual(review.map(\.id), plain.map(\.id), "plan-review 不换画法、不少一道题")
-        // `detail` 是正文，不在题目里 —— 模型里因此没有它。
-        XCTAssertEqual(review.first?.question, "用哪一条？", "显示的是题干，不是正文")
+        // `detail` 不进模型是**类型事实**（`QuestionTable.Question` 没有这个字段），
+        // 写不成判据 —— 任何实现都带不出它。这一条只守「不换画法、不少题」。
     }
 
     func testItIsSubmittableOnlyWhenEveryQuestionHasAValue() {

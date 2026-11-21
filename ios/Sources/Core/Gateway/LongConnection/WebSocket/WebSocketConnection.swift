@@ -352,7 +352,7 @@ final class WebSocketConnection: Channel {
         inboundBacklog = max(0, inboundBacklog - 1)
         guard let frame else {
             Log.warn(Log.Module.session, "unparsable frame — ignored",
-                     ["generation": String(pending.generation), "chars": "120",
+                     ["generation": String(pending.generation), "chars": String(min(120, pending.text.count)),
                       "detail": String(pending.text.prefix(120))])
             return // 解不了的帧不是消息，忽略
         }
