@@ -51,11 +51,45 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
     streamId: 's-9',
     value: { type: 'snapshot', sessionId: 's-1', cursor: 3, pageStart: 1, hasOlder: false, events: [] },
   },
+  'item-events-question': {
+    type: 'item',
+    streamId: 'e-1',
+    // 第二条问题显式 `multiSelect`，第一条省略 —— 缺省是单选，两种都在一条样本里钉住。
+    value: {
+      type: 'waterfall', event: 'user-questions/request', eventId: 'ev-2', agentId: 's-1',
+      request: {
+        questions: [
+          {
+            id: 'q-1', header: '选择方案', question: '用哪一条？',
+            options: [{ label: 'A', description: '快' }, { label: 'B' }],
+          },
+          {
+            id: 'q-2', question: '同时改测试吗？',
+            options: [{ label: '要' }, { label: '不要' }],
+            multiSelect: true,
+          },
+        ],
+      },
+    },
+  },
+  'item-events-emit': {
+    type: 'item',
+    streamId: 'e-1',
+    // `commands/change` 的监听器签名是 `(): void`，转发时参数数组为空。
+    value: { type: 'emit', event: 'commands/change', args: [] },
+  },
+  'item-events-ready': {
+    type: 'item',
+    streamId: 'e-1',
+    // `clientId` 在这里是固定的：这一侧的语义是**手写**的，不走 `openStream` 那条现造 UUID 的路。
+    value: { type: 'ready', clientId: 'c-1', host: { home: '/Users/x/proj' } },
+  },
   'item-events-waterfall': {
     type: 'item',
     streamId: 'e-1',
     value: {
-      type: 'waterfall', event: 'permission', eventId: 'ev-1', agentId: 's-1', request: {},
+      type: 'waterfall', event: 'approval/request', eventId: 'ev-1', agentId: 's-1',
+      request: { toolName: 'Bash', reason: '需要读写工作区' },
     },
   },
   end: { type: 'end', streamId: 's-9' },
@@ -74,6 +108,14 @@ test('the fixture covers every stream kind and both server frame kinds', () => {
   }
   for (const sample of fixture.server) {
     assert.ok(sample.name in SERVER_FRAMES, `样本 ${sample.name} 在这一侧没有对应的构造`)
+  }
+  // 反方向：构造在、样本没了。只查上面那一个方向时，删掉一条样本这一侧全绿 ——
+  // 而「这条货物没人再验」恰恰是最该有人喊的时候。
+  for (const name of Object.keys(SERVER_FRAMES)) {
+    assert.ok(
+      fixture.server.some(sample => sample.name === name),
+      `SERVER_FRAMES 的 ${name} 在样本里没有对应 —— 样本被删了这一侧也要红`,
+    )
   }
 })
 

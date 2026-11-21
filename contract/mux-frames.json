@@ -3,8 +3,9 @@
     "两端共守的 mux 帧样本 —— 手机端与网关端各有一条判据读这一份。",
     "改这里的任何一行，两端都会红；只改一端自己的断言，另一端不会。",
     "client 段：字节由手机端编出，网关端解析。text 是精确字节（手机端按 .sortedKeys 编码，键序确定）。",
-    "server 段：网关端编出，手机端解析。这里钉的是语义而不是字节 —— 服务端用 JSON.stringify，",
-    "键序跟着对象字面量走，钉字节会把「加一个字段」变成一次无意义的红。",
+    "server 段：网关端编出，手机端只解析。**字节比对由产出侧做**：网关侧用手写的语义再编码，",
+    "与 text 逐字相等；所以新增样本的 text 必须照那份字面量的键序写（JSON.stringify 按插入顺序），",
+    "按字母序写必红。",
     "端点名与上游逐字一致：session/follow、session/control、$events（后两者无入参，args 为空对象）。"
   ],
   "client": [
@@ -45,8 +46,26 @@
       "streamId": "s-9"
     },
     {
+      "name": "item-events-question",
+      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"waterfall\",\"event\":\"user-questions/request\",\"eventId\":\"ev-2\",\"agentId\":\"s-1\",\"request\":{\"questions\":[{\"id\":\"q-1\",\"header\":\"选择方案\",\"question\":\"用哪一条？\",\"options\":[{\"label\":\"A\",\"description\":\"快\"},{\"label\":\"B\"}]},{\"id\":\"q-2\",\"question\":\"同时改测试吗？\",\"options\":[{\"label\":\"要\"},{\"label\":\"不要\"}],\"multiSelect\":true}]}}}",
+      "type": "item",
+      "streamId": "e-1"
+    },
+    {
+      "name": "item-events-emit",
+      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"emit\",\"event\":\"commands/change\",\"args\":[]}}",
+      "type": "item",
+      "streamId": "e-1"
+    },
+    {
+      "name": "item-events-ready",
+      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"ready\",\"clientId\":\"c-1\",\"host\":{\"home\":\"/Users/x/proj\"}}}",
+      "type": "item",
+      "streamId": "e-1"
+    },
+    {
       "name": "item-events-waterfall",
-      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"waterfall\",\"event\":\"permission\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{}}}",
+      "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"waterfall\",\"event\":\"approval/request\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{\"toolName\":\"Bash\",\"reason\":\"需要读写工作区\"}}}",
       "type": "item",
       "streamId": "e-1"
     },

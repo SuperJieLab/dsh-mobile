@@ -15,8 +15,9 @@ import XCTest
 
 final class MuxFrameFixtureTests: XCTestCase {
 
-    /// 共守样本随测试包一起分发：手机上读不到仓库路径，所以构建阶段把它复制进 bundle。
-    /// 唯一真源仍是仓库里的那一份，复制只是投递方式。
+    /// 共守样本随测试包一起分发：手机上读不到仓库路径，所以工程里以**资源引用**把它指进
+    /// 测试包的 Resources 阶段（`project.pbxproj` 里 `path = "../contract/mux-frames.json"`）。
+    /// 加一条样本不动工程文件 —— 投递的是整份文件，与条数无关。
     private static var fixtureURL: URL? {
         Bundle(for: MuxFrameFixtureTests.self).url(forResource: "mux-frames", withExtension: "json")
     }
@@ -39,7 +40,7 @@ final class MuxFrameFixtureTests: XCTestCase {
 
     private func loadFixture() throws -> (client: [ClientSample], server: [ServerSample]) {
         guard let url = Self.fixtureURL else {
-            XCTFail("测试包里没有 mux-frames.json —— 构建阶段的复制没生效")
+            XCTFail("测试包里没有 mux-frames.json —— 资源引用没进测试包")
             return ([], [])
         }
         let data = try Data(contentsOf: url)
@@ -72,6 +73,16 @@ final class MuxFrameFixtureTests: XCTestCase {
         let serverTypes = Set(fixture.server.map(\.type))
         for type in ["item", "end", "error"] {
             XCTAssertTrue(serverTypes.contains(type), "服务端帧缺 \(type) 的样本")
+        }
+    }
+
+    /// 货物级的覆盖：`item` 的 `type` 有三种是线上会发生、且我们要读的。
+    /// 只数信封种类的话，删掉一条货物样本，上面那条判据照样全绿。
+    func testFixtureCoversEveryServerCargo() throws {
+        let fixture = try loadFixture()
+        let names = Set(fixture.server.map(\.name))
+        for required in ["item-events-ready", "item-events-emit", "item-events-question"] {
+            XCTAssertTrue(names.contains(required), "server 段缺样本 \(required)")
         }
     }
 
@@ -108,6 +119,9 @@ final class MuxFrameFixtureTests: XCTestCase {
     }
 
     /// 网关编出的字节，手机端必须解得开 —— 这一半是「网关发的东西手机认」。
+    ///
+    /// **信封之外还要验载荷**：只验 `type` / `streamId` 的话，网关改一个字段、客户端解不开，
+    /// 两边的判据都还绿。分派按 `value.type`，与生产解码器同一张表 —— 这里不另写一套判别。
     func testEveryServerSampleIsWhatThePhoneCanRead() throws {
         let fixture = try loadFixture()
         XCTAssertFalse(fixture.server.isEmpty, "样本为空时下面的循环什么都不测")
@@ -117,6 +131,63 @@ final class MuxFrameFixtureTests: XCTestCase {
             let frame = try XCTUnwrap(InboundFrame.decode(data), "\(sample.name): 这一帧该解得开")
             XCTAssertEqual(frame.type, sample.type, "\(sample.name): 信封的 type")
             XCTAssertEqual(frame.streamId, sample.streamId, "\(sample.name): 编号")
+            // `end` / `error` 没有 `item` 载荷 —— 跳过，不是失败。
+            guard frame.type == "item" else { continue }
+            let payload = try XCTUnwrap(frame.payload, "\(sample.name): item 帧该有载荷")
+            guard case .item(let item) = payload else {
+                XCTFail("\(sample.name): item 帧的载荷该是 .item")
+                continue
+            }
+            assertCargo(item, sample: sample.name)
         }
+    }
+
+    /// 按货物支断言载荷 —— 每支只验客户端**真读**的那几格。
+    ///
+    /// `waterfall` 的载荷在客户端是裸 `JSONValue`（题目结构归第 3 期的问题卡解析），
+    /// 所以这里验的是「地址三格与工具名读得出来」，不是题目内部的字段。
+    /// `ready` 只验 `clientId` —— 客户端解不出 `host`（`EventsValue.ready` 里没有这一格），
+    /// 样本带 `host` 要证明的是「多一格也解得出」，不是「读到了」。
+    private func assertCargo(_ item: ItemPayload, sample: String) {
+        switch item {
+        case .events(.ready(let clientId)):
+            XCTAssertEqual(clientId, "c-1", "\(sample): ready 的 clientId 该是样本里那个固定值")
+        case .events(.waterfall(let value)):
+            let event = value["event"]?.string ?? ""
+            XCTAssertTrue(["approval/request", "user-questions/request"].contains(event),
+                          "\(sample): waterfall 的 event 该是上游事件名（读出来是 \(event)）")
+            XCTAssertNotNil(value["eventId"]?.string, "\(sample): eventId 可读")
+            XCTAssertNotNil(value["agentId"]?.string, "\(sample): agentId 可读")
+            if event == "user-questions/request" {
+                // 题目内部的结构归第 3 期的问题卡解析：现在只证明这一格在，不验它的字段。
+                XCTAssertNotNil(value["request"]?["questions"], "\(sample): request.questions 这一格在")
+            } else {
+                XCTAssertNotNil(value["request"]?["toolName"]?.string,
+                                "\(sample): request.toolName 可读 —— 客户端按它建卡")
+            }
+        case .events(.emit(let event, let args)):
+            XCTAssertEqual(event, "commands/change", "\(sample): emit 的 event")
+            // `args` 缺省解成 `.null` —— 所以这条能抓「网关这一格空了」，而不是恒真。
+            XCTAssertNotEqual(args, .null, "\(sample): emit 的 args 不该缺席")
+        case .unknown:
+            // 未知 `type` 也解得开（它落进 `.unknown`），所以 `XCTUnwrap` 那一步发现不了 ——
+            // 「样本的货物与解码器对不上」只能在这里喊。
+            XCTFail("\(sample): 货物落进了 .unknown —— 判别没认出来")
+        case .events, .follow, .control:
+            break
+        }
+    }
+
+    /// `host` 是可选的：上游不给时那一格缺席（不是空串、不是 `{"home":""}`）。
+    /// 样本里那一条带 `host`，这里补上不带的那一半 —— 缺席不等于解码失败。
+    func testReadyWithoutHostStillDecodes() throws {
+        let text = #"{"type":"item","streamId":"e-1","value":{"type":"ready","clientId":"c-1"}}"#
+        let data = try XCTUnwrap(text.data(using: .utf8))
+        let frame = try XCTUnwrap(InboundFrame.decode(data), "不带 host 的 ready 该解得开")
+        guard case .item(.events(.ready(let clientId)))? = frame.payload else {
+            XCTFail("不带 host 的 ready 该落在 .events(.ready)")
+            return
+        }
+        XCTAssertEqual(clientId, "c-1")
     }
 }
