@@ -3,6 +3,8 @@
  */
 import XCTest
 
+@testable import DshMobile
+
 final class QuestionTableTests: XCTestCase {
 
     private func frame(_ request: JSONValue, eventId: String = "q1", agentId: String = "s1") -> JSONValue {

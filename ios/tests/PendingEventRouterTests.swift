@@ -6,6 +6,8 @@
  */
 import XCTest
 
+@testable import DshMobile
+
 final class PendingEventRouterTests: XCTestCase {
 
     private func payload(_ event: String?) -> JSONValue {

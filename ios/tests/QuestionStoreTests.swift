@@ -6,6 +6,8 @@
  */
 import XCTest
 
+@testable import DshMobile
+
 @MainActor
 final class QuestionStoreTests: XCTestCase {
 

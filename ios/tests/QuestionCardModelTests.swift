@@ -3,6 +3,8 @@
  */
 import XCTest
 
+@testable import DshMobile
+
 final class QuestionCardModelTests: XCTestCase {
 
     private func entry(intent: String?) -> QuestionTable.Entry {

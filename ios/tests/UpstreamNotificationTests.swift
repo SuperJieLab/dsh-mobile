@@ -6,6 +6,8 @@
  */
 import XCTest
 
+@testable import DshMobile
+
 final class UpstreamNotificationTests: XCTestCase {
 
     func testEachKnownNameHasItsOwnRoute() {
