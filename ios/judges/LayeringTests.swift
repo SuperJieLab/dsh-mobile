@@ -259,7 +259,7 @@ final class LayeringTests: XCTestCase {
     /// 新增业务词汇时加一行。
     ///
     /// 拆流之后通信域里**一个 `on*` 注册口都不该有**：听众表只提供通用的 `add` / `fire`，
-    /// 带业务语义的订阅面（`onWaterfall` / `onChange`）全在各自的 Feature 里。所以这条判据
+    /// 带业务语义的订阅面（`onApproval` / `onQuestion` / `onChange`）全在各自的 Feature 里。所以这条判据
     /// 同时断言两件事 —— 词表零命中，且 `on*` 声明为零（后者是拆流之后新增的事实，
     /// 把「不在 Core」从「碰巧没有」变成「写了就红」）。
     ///
