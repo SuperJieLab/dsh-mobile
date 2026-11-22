@@ -276,12 +276,17 @@ test('an explicit maxMessages reaches upstream as its own target, not the defaul
 })
 
 test('cancel stops the stream; the pump yields no further frames for it', { timeout: 10_000 }, async () => {
-  // A source that would keep yielding forever unless aborted.
+  // A source that would keep yielding forever unless aborted. 把 signal 留下来：
+  // cancel 的**确定**证据是「上游收到了 abort」，不是「我们等一会儿没看到帧」。
+  let signal: AbortSignal | undefined
   const source: FollowSource = {
-    async *follow(_request, signal) {
+    async *follow(_request, abort) {
+      signal = abort
       yield snapshotFrame([event(0)], 1)
       let seq = 1
-      while (!signal.aborted) {
+      // 上界只为让**失败路径**能收场：cancel 没传到时，这个循环要自己结束，
+      // 否则断言失败之后还留着一条永久定时器，进程不退出（结论变成挂住而不是红）。
+      while (!abort.aborted && seq <= 100) {
         yield { type: 'event', event: event(seq) }
         seq += 1
         await new Promise(resolve => setTimeout(resolve, 5))
@@ -291,20 +296,35 @@ test('cancel stops the stream; the pump yields no further frames for it', { time
   const server = createServer()
   attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
+  // 客户端在 `finally` 里关：断言失败时它仍在 try 里，不关就会把进程留住，
+  // 一条本该报红的判据会变成「挂到超时」。
+  let socket: WebSocket | undefined
   try {
     await once(server, 'listening')
-    const socket = await connect(server)
+    socket = await connect(server)
     send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
 
     await receive(socket) // opening
     await receive(socket) // event 1
+
+    // 从这一刻起数帧：既证明 abort 传到了上游，也证明泵不再写这条流。
+    let afterCancel = 0
+    socket.addEventListener('message', () => { afterCancel += 1 })
     send(socket, { type: 'cancel', streamId: 's1' })
 
-    // Give any would-be further frame time to arrive; none should.
-    await new Promise(resolve => setTimeout(resolve, 60))
-    socket.close()
-    assert.ok(true, 'no error, no extra frame assertion — absence is the criterion')
+    for (let i = 0; i < 50 && signal?.aborted !== true; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(signal?.aborted, true, 'cancel 必须中止上游这条流')
+
+    // 先把可能在途的一帧收掉再取基线，然后要求「静默是持续的」—— 只等一次固定时长时，
+    // 慢机器上「没来得及发」会被读成「已经停了」。
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const settled = afterCancel
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal(afterCancel, settled, 'cancel 之后不该再有新帧（源每 5ms 还在产出）')
   } finally {
+    socket?.close()
     server.closeAllConnections()
     server.close()
   }

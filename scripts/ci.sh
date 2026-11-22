@@ -15,6 +15,7 @@
 #   DSH_MIN_GATEWAY  网关判据条数下限。低于它视为「扫描面缩水」，红。
 #   DSH_MIN_LINT     lint 扫描的文件数下限。同一用意：少扫了就是没守。
 #   DSH_MIN_IOS      iOS 判据条数下限。同上。
+#   DSH_MIN_JUDGES   源码级判据条数下限。同上 —— 判据文件掉出 target 时全绿，只能靠它发现。
 #   CI               由 CI 自己设。设了就不加本机沙箱补丁（见下）。
 #
 # 为什么结论要自己解析而不只看退出码：
@@ -180,20 +181,38 @@ run_judges() {
     -destination 'platform=macOS' \
     ${extra[@]+"${extra[@]}"} >"$log" 2>&1
 
-  if grep -q '\*\* TEST FAILED \*\*' "$log"; then
-    say "❌ 判据：有失败"
-    grep -E ': error: ' "$log" | head -20
-    FAILED=1
-    return
-  fi
-  if ! grep -q '\*\* TEST SUCCEEDED \*\*' "$log"; then
+  if ! grep -q '\*\* TEST FAILED \*\*' "$log" \
+     && ! grep -q '\*\* TEST SUCCEEDED \*\*' "$log"; then
     # 没跑出结论与「跑了且过」是两件事，不能都报成失败原因不明。
     say "❌ 判据：没跑出结论（日志尾部见下）"
     tail -20 "$log"
     FAILED=1
     return
   fi
-  say "判据：跑完，全部通过"
+
+  # 条数同样要自己解析：判据文件从 target 里掉出去时，剩下的照样全过、照样打
+  # `TEST SUCCEEDED` —— 少了的那一整批没有任何痕迹。下限守的就是这件事。
+  local total fail
+  total=$(grep -oE 'Executed [0-9]+ tests?, with [0-9]+ failures?' "$log" \
+          | sed -E 's/Executed ([0-9]+) tests?, with ([0-9]+).*/\1/' | sort -n | tail -1)
+  fail=$(grep -oE 'Executed [0-9]+ tests?, with [0-9]+ failures?' "$log" \
+         | sed -E 's/.*with ([0-9]+).*/\1/' | sort -n | tail -1)
+
+  if [[ -z "$total" ]]; then
+    say "❌ 判据：没解析出条数 —— 下限无法校验（日志尾部见下）"
+    tail -20 "$log"
+    FAILED=1
+    return
+  fi
+
+  say "判据：${total} 条，失败 ${fail:-?}"
+  summary_row 判据 "$total" "${fail:-1}" "${DSH_MIN_JUDGES:-0}"
+  if [[ "${fail:-1}" != "0" ]]; then
+    say "❌ 判据：有失败"
+    grep -E ': error: ' "$log" | head -20
+    FAILED=1
+  fi
+  check_floor 判据 "$total" "${DSH_MIN_JUDGES:-0}"
 }
 
 # ── 判据条数下限 ────────────────────────────────────────────────────────────

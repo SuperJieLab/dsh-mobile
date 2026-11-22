@@ -15,7 +15,7 @@ final class SignalShapeTests: XCTestCase {
 
     private var sourcesRoot: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // ios/tests/
+            .deletingLastPathComponent()   // ios/judges/
             .deletingLastPathComponent()   // ios/
             .appendingPathComponent("Sources")
     }

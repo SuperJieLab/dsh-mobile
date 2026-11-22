@@ -1579,24 +1579,27 @@ test('L6: approval answers never travel on a stream', () => {
 // ---------------------------------------------------------------------------
 
 /**
- * `api-session/` 是上游的词汇。它只允许出现在两处：适配层（`upstream/`，那里负责
- * 把它翻成我们的形状）与 `wire/` 的注释之外 —— 判据扫的是**字符串字面量**，
- * 所以注释里解释「上游叫什么」不会红。
+ * `api-session/` 是上游的词汇，网关里**一个文件都不许认识它** —— 解释权归客户端：
+ * `$events` 把 `emit` 原样转发，分派在客户端按 `event` 名做。
  *
- * 守的是「客户端与传输层都不认识上游事件名」这条立场：一旦 `remote/` 或 `protocol/`
- * 里出现它，就有人在第二个地方解释上游，而那一处我们控制不了上游的漂移。
+ * 一旦 `remote/` / `protocol/` / `upstream/` 里出现它，就有人在网关里第二次解释上游，
+ * 而那一处我们控制不了上游的漂移。扫的是**字符串字面量**（三种引号都认），
+ * 所以注释里解释「上游叫什么」不会红。
  */
 test('G3: 网关不认识上游事件名 —— 解释权归客户端', () => {
-  // 适配器（`upstream/session-events.ts`）已搬到 App：`$events` 把 `emit` 原样转发，
-  // 网关不再把 `api-session/*` 翻成自己的词汇。所以这里的期望从「只在一个文件」
-  // 变成「一个文件都没有」—— 网关一旦又认识这些名字，说明解释权被搬回来了。
+  // 零命中型判据必须有活性锚：路径或正则坏了时，下面的空集会被读成合规。
+  const files = filesUnder(SRC)
+  assert.ok(files.length > 20, `只扫到 ${files.length} 个源文件 —— 先怀疑路径`)
+  let lines = 0
   const homes = new Map<string, number>()
-  for (const file of filesUnder(SRC)) {
+  for (const file of files) {
     const code = stripComments(readFileSync(file, 'utf8'))
-    const hits = [...code.matchAll(/'api-session\/[a-z]+'/g)].length
+    lines += code.split('\n').length
+    const hits = [...code.matchAll(/['"`]api-session\/[a-z][a-z-]*['"`]/g)].length
     if (hits > 0) homes.set(where(file), hits)
   }
 
+  assert.ok(lines > 1_000, `只扫到 ${lines} 行 —— 先怀疑读取或切行`)
   assert.deepEqual([...homes.keys()], [],
     `gateway must not know upstream event names — got ${JSON.stringify([...homes.keys()])}`)
 })

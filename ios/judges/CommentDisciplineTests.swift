@@ -5,7 +5,7 @@
  * `ios/.swiftlint.yml`：那些规则要的是保存即报，放进测试永远慢一个量级。
  *
  * 留在这里的三类，都是要看相邻行或要数文件的：
- * 1. 同一条判断的展开处全仓只许一处 —— 得数文件；
+ * 1. 同一条判断的展开处全仓恰好一处（少了也算失守）—— 得数文件；
  * 2. 文件头注释的首段不超过六行 —— 得看相邻行；
  * 3. 注释行不超过一百显示列 —— 得按中日韩字宽折算，一个字符算两列。
  *
@@ -21,22 +21,28 @@ final class CommentDisciplineTests: XCTestCase {
 
     private var iosRoot: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // ios/tests/
+            .deletingLastPathComponent() // ios/judges/
             .deletingLastPathComponent() // ios/
     }
 
-    private func swiftFiles() -> [URL] {
+    /// 三处扫描面。`Sources` 是产品代码，另两处是判据自己 —— 短语在这三处都算「展开」。
+    private static let scanDirectories = ["Sources", "tests", "judges"]
+
+    private func swiftFiles(in root: URL) -> [URL] {
+        guard let walker = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { return [] }
         var result: [URL] = []
-        for sub in ["Sources", "tests", "judges"] {
-            let root = iosRoot.appendingPathComponent(sub)
-            guard let walker = FileManager.default.enumerator(
-                at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-            else { continue }
-            for case let url as URL in walker where url.pathExtension == "swift" {
-                result.append(url)
-            }
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            result.append(url)
         }
         return result.sorted { $0.path < $1.path }
+    }
+
+    private func swiftFiles() -> [URL] {
+        Self.scanDirectories
+            .flatMap { swiftFiles(in: iosRoot.appendingPathComponent($0)) }
+            .sorted { $0.path < $1.path }
     }
 
     private struct Phrase {
@@ -70,11 +76,29 @@ final class CommentDisciplineTests: XCTestCase {
     // MARK: - 扫描面
 
     /// 扫描面自己也得活着：路径写错、目录改名时，枚举会返回空，其余判据一起变绿。
-    func testScanSurfaceIsNotEmpty() {
-        let files = swiftFiles()
-        XCTAssertGreaterThanOrEqual(files.count, 50, "扫到的 .swift 太少，扫描面可能瞎了：\(files.count)")
-        let lineCount = files.reduce(0) { $0 + scannedLines(in: $1).count }
-        XCTAssertGreaterThanOrEqual(lineCount, 5000, "扫到的行太少：\(lineCount)")
+    ///
+    /// **按目录分别断，不按总数断**：`Sources/` 消失时，`tests` + `judges` 的 67 个文件、
+    /// 一万四千行仍能凑够「总数」阈值，于是三条判据全部失明而这条照样绿 —— 那正是它
+    /// 本该守的那种失效。所以每个目录各有一条下限，`Sources/` 单独一条存在性。
+    func testScanSurfaceIsNotEmpty() throws {
+        let minimums: [String: (files: Int, lines: Int)] = [
+            // 约取当前的 3/4：留出正常删减的余量，但少了整整一个目录必红。
+            "Sources": (120, 12000),
+            "tests": (45, 8000),
+            "judges": (5, 3000),
+        ]
+        for sub in Self.scanDirectories {
+            let root = iosRoot.appendingPathComponent(sub)
+            let expected = try XCTUnwrap(minimums[sub], "\(sub) 没有下限 —— 先补一行")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: root.path),
+                          "\(sub)/ 不在：\(root.path) —— 路径推算错了，三条判据会一起失明")
+            let files = swiftFiles(in: root)
+            XCTAssertGreaterThanOrEqual(files.count, expected.files,
+                                        "\(sub)/ 只扫到 \(files.count) 个 .swift（下限 \(expected.files)）")
+            let lineCount = files.reduce(0) { $0 + scannedLines(in: $1).count }
+            XCTAssertGreaterThanOrEqual(lineCount, expected.lines,
+                                        "\(sub)/ 只扫到 \(lineCount) 行（下限 \(expected.lines)）")
+        }
     }
 
     // MARK: - 头注释的分层
@@ -125,28 +149,42 @@ final class CommentDisciplineTests: XCTestCase {
 
     // MARK: - 同一条判断只展开一处
 
-    /// 短语表里每组的短语，全仓只许出现一次。
+    /// 短语表里每组的短语，全仓**恰好**出现一次。
     ///
     /// 数的是「出现过几行」，不是「出现过几次」：同一行里写两遍属于同一处展开。
-    func testEachJudgementIsExpandedOnce() throws {
+    ///
+    /// 为什么是「恰好」而不是「至多」：只断至多时，短语被改写、注释被删掉之后 **0 处也算
+    /// 合规** —— 表格还在，守的东西已经没了，而绿的是这条判据自己。所以 0 处必须红，
+    /// 处置是删掉表格里那一行（短语不再是那条判断的载体了）。
+    ///
+    /// 计数按**短语文本**归并，不按判断名：一个判断名可以对应多句短语（分处展开），
+    /// 按名字归并会把它们合并成一处「两处展开」的假红。
+    func testEachJudgementIsExpandedExactlyOnce() throws {
         let phrases = try readPhrases()
         XCTAssertFalse(phrases.isEmpty, "短语表是空的")
+        // 同一句短语登记两次：两行争同一处命中，表格自己就说不清哪一行算数。
+        XCTAssertEqual(Set(phrases.map(\.text)).count, phrases.count,
+                       "短语表里有重复的短语：\(phrases.map(\.text))")
+
         let files = swiftFiles()
-        var counts: [String: [String]] = [:]
+        var found: [String: [String]] = [:]
         for phrase in phrases {
             for swiftFile in files {
-                for (number, line) in scannedLines(in: swiftFile) {
-                    guard line.contains(phrase.text) else { continue }
+                for (number, line) in scannedLines(in: swiftFile) where line.contains(phrase.text) {
                     let relative = swiftFile.path
                         .replacingOccurrences(of: iosRoot.path + "/", with: "")
-                    counts[phrase.name, default: []].append("\(relative):\(number)  \(phrase.text)")
+                    found[phrase.text, default: []].append("\(relative):\(number)")
                 }
             }
         }
-        for (name, found) in counts {
-            XCTAssertLessThanOrEqual(found.count, 1, """
-                「\(name)」这条判断展开了 \(found.count) 处，只该有一处：
-                \(found.joined(separator: "\n"))
+        for phrase in phrases {
+            let sites = found[phrase.text] ?? []
+            let repair = sites.isEmpty
+                ? "\n—— 短语已不在源码里：删掉表格这一行，表格不能替不存在的判断作证"
+                : ""
+            XCTAssertEqual(sites.count, 1, """
+                「\(phrase.name)」这条判断出现了 \(sites.count) 处（应恰好一处）：
+                \(sites.joined(separator: "\n"))\(repair)
                 """)
         }
     }

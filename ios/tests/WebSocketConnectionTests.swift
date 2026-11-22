@@ -376,16 +376,24 @@ final class WebSocketConnectionTests: XCTestCase {
     /// 连不上时：阶段按 `connecting → waiting(ms) → connecting` 循环，每一代都重新来一遍。
     /// 判据盯的是**观察到两次以上 `.connecting`** —— 每一代握手都置它一次，
     /// 于是「代次在递增」有了一个不依赖内部字段的观测点。
+    ///
+    /// 退避注入成 10ms：这条要证明的是「每一代都置 connecting」，与「250–500ms 到没到」
+    /// 无关。按**状态**轮询并设上限，不用一次固定 sleep 去猜机器快慢 —— 900ms 对着
+    /// 250–500ms 的退避只有两倍余量，慢一拍的 CI 上会假红。
     func testAFailingEndpointKeepsCyclingPhaseWithoutLeavingIdle() async throws {
         let transport = transport()
+        transport.reconnectDelay = { _ in 10 }
         var phases: [ConnectionPhase] = []
         transport.onPhaseChanged = { _, new in phases.append(new) }
 
         transport.activate()
         XCTAssertEqual(phases, [.connecting], "一发起就离开 idle")
 
-        // 第一次退避 250–500ms，等够两拍。
-        try await Task.sleep(nanoseconds: 900_000_000)
+        var waited = 0
+        while waited < 100 && phases.filter({ $0 == .connecting }).count < 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            waited += 1
+        }
 
         let connectingCount = phases.filter { $0 == .connecting }.count
         XCTAssertGreaterThanOrEqual(connectingCount, 2, "每一代握手都置 connecting：\(phases)")

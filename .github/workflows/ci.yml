@@ -121,6 +121,10 @@ jobs:
       # 放在 iOS 之前 —— 十几秒就有结论，不必等整编。
       - name: 跑判据
         run: ./scripts/ci.sh judges
+        env:
+          # 下限只能往上调。判据文件从 target 里掉出去时，剩下的照样全过 —— 少了一整批
+          # 判据而 CI 全绿，只有条数能把这件事变成可见的。当前 106，留一点余量。
+          DSH_MIN_JUDGES: '100'
 
       - name: 跑闸门
         run: ./scripts/ci.sh ios

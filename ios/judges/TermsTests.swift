@@ -13,10 +13,10 @@ import XCTest
 /// 未闭合会让余下全文静默失明，所以每个文件扫完都会单独报一次并指出 `:start` 所在行。
 /// 豁免了什么会被打印出来：豁免应当可见，否则散文里写一句就能静默关掉一行。
 final class TermsTests: XCTestCase {
-    /// 仓库根：`<repo>/ios/tests/TermsTests.swift` 向上三级。
+    /// 仓库根：`<repo>/ios/judges/TermsTests.swift` 向上三级。
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // ios/tests/
+            .deletingLastPathComponent()   // ios/judges/
             .deletingLastPathComponent()   // ios/
             .deletingLastPathComponent()   // <repo>
     }

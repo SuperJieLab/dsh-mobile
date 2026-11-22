@@ -8,8 +8,9 @@
  * 扫描面与放行：
  * - 扫**整个 `Sources/`**（含 `Wire/`）：取值重写不挑目录，线上形状里也出现过
  *   `code: "internal-error"` 这样的兜底拷贝。
- * - 唯一放行的是**枚举定义行**（`case internalError = "internal-error"`）—— 那是取值的出处。
- *   放行按行的形状判，不按目录判。
+ * - 唯一放行的是**枚举定义行**（`case internalError = "internal-error"`），且只在
+ *   `GatewayFailure.swift` 里放行 —— 那是取值的唯一出处。别处再写一行同形状的 `case x = "y"`
+ *   不享有豁免：另一个枚举装着同一批线上取值，就是第二份定义，两端漂移时没人会发现。
  * - **不扫 `tests/`**：假件按上游原样写取值，让它引用我们的枚举反而会掩盖上游改动。
  * - 认双引号字面量整串相等，不是子串匹配 —— 否则 `"resync-required: …"` 这类拼接文案会被
  *   误报成取值重复。
@@ -36,11 +37,14 @@ final class ErrorCodeLiteralTests: XCTestCase {
         XCTAssertGreaterThan(codes.count, 5, "枚举交出的取值太少 —— 先怀疑解析")
 
         var scannedLines = 0
+        let definitionSite = enumFile.standardizedFileURL.path
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
+            let isEnumFile = file.standardizedFileURL.path == definitionSite
             for (line, code) in codeLines(in: text) {
                 scannedLines += 1
-                if Self.isEnumDefinitionLine(code) { continue }
+                // 豁免只给这个文件里的定义行：别的枚举写着同一批线上取值，是第二份定义。
+                if isEnumFile, Self.isEnumDefinitionLine(code) { continue }
                 for literal in codes where code.contains(literal) {
                     let relative = file.path
                         .replacingOccurrences(of: sourcesRoot.path + "/", with: "")

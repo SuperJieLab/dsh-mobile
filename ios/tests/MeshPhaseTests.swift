@@ -23,9 +23,16 @@ final class MeshPhaseTests: XCTestCase {
     /// 其余每一档都只探活。
     ///
     /// 单独列出 `badKey` 而不是只测一个 `.ready`：key 被拒**不能**重试 —— 同样的 key 再问
-    /// 一次答案不会变，而 authkey 有使用次数限制。这两档最容易写反（都是 `.failed`）。
+    /// 一次答案不会变，而 authkey 有使用次数限制。这几档最容易写反（都是 `.failed`），
+    /// 所以四个失败原因逐个列出来。
+    ///
+    /// 「新增一档没人管」那半不靠这份名单：`shouldRetryRegistration` 是穷举 `switch`、
+    /// 没有 `default`，新增一档不给出答案就编译不过。
     func testEveryOtherPhaseOnlyProbes() {
-        let phases: [MeshPhase] = [.needsSetup, .connecting, .ready, .failed(.badKey)]
+        let phases: [MeshPhase] = [
+            .needsSetup, .connecting, .ready,
+            .failed(.badKey), .failed(.needsAuthKey), .failed(.pendingApproval),
+        ]
         for phase in phases {
             XCTAssertFalse(phase.shouldRetryRegistration,
                            "\(phase) 只该探活，不该重走注册")

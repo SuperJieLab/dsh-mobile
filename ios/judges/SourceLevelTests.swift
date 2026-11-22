@@ -79,44 +79,37 @@ final class SourceLevelTests: XCTestCase {
 
     // MARK: - 显示层不许内置档名 / 命令名
 
+    /// 这两个名字最可能被写成映射表的地方是显示层 —— 但它也可能被写进同屏的任何一处，
+    /// 所以**扫整个界面目录**，不点名文件。点名清单的失败方式是「新增一个文件默认合规」，
+    /// 与上面那条「扫目录不扫清单」的纪律相反。
+    private var sessionDetailRoot: URL {
+        iosRoot.appendingPathComponent("Sources/Features/SessionDetail")
+    }
+
     func testMenuSourcesBakeInNoLevelNames() throws {
-        let sources = iosRoot.appendingPathComponent("Sources/Features/SessionDetail")
-        let files = [
-            sources.appendingPathComponent("State/ModelMenu.swift"),
-            sources.appendingPathComponent("Views/ModelPickerView.swift"),
-            sources.appendingPathComponent("Views/ModelSheetView.swift"),
-            // 档名→字这件事最可能被写成映射表的地方，正是显示层 —— 它必须一起扫。
-            sources.appendingPathComponent("Display/CatalogText.swift"),
-        ]
-        // 只认带引号的字面量：注释里提到 low/high 不算内置。
+        let files = Self.swiftFiles(under: sessionDetailRoot)
+        XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
+        // 只认带引号的字面量：注释里提到 low/high 不算内置，所以逐代码行判。
         let baked = ["\"low\"", "\"high\"", "\"max\""]
         for file in files {
-            let text = try read(file)
-            for literal in baked {
-                XCTAssertFalse(text.contains(literal), "\(file.lastPathComponent) 内置了档名字面量 \(literal)")
+            for (line, code) in Self.codeLines(in: try read(file)) {
+                for literal in baked where code.contains(literal) {
+                    XCTFail("\(file.lastPathComponent):\(line) 内置了档名字面量 \(literal)")
+                }
             }
         }
     }
 
     func testSlashSourcesBakeInNoCommandNames() throws {
-        let sources = iosRoot.appendingPathComponent("Sources/Features/SessionDetail")
-        let files = [
-            sources.appendingPathComponent("State/SlashTrigger.swift"),
-            sources.appendingPathComponent("State/CommandDirectory.swift"),
-            sources.appendingPathComponent("Views/CommandPalette.swift"),
-            sources.appendingPathComponent("Views/CommandRow.swift"),
-        ]
+        let files = Self.swiftFiles(under: sessionDetailRoot)
+        XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
         let names = ["permission", "compact", "export", "goal", "plan", "feedback"]
         let baked = names.flatMap { ["\"/\($0)\"", "\"\($0)\""] }
         for file in files {
-            let text = try read(file)
-            // 逐**代码行**判，跳过注释：注释里点名某个命令正是为了说「别内置它」，
-            // 整段 `contains` 会把那种说明当成内置。
-            for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-                let code = line.trimmingCharacters(in: .whitespaces)
-                guard !code.hasPrefix("//"), !code.hasPrefix("/*"), !code.hasPrefix("*") else { continue }
+            // 逐**代码行**判，跳过注释：注释里点名某个命令正是为了说「别内置它」。
+            for (line, code) in Self.codeLines(in: try read(file)) {
                 for literal in baked where code.contains(literal) {
-                    XCTFail("\(file.lastPathComponent):\(index + 1) 内置了命令名字面量 \(literal)")
+                    XCTFail("\(file.lastPathComponent):\(line) 内置了命令名字面量 \(literal)")
                 }
             }
         }
@@ -124,18 +117,26 @@ final class SourceLevelTests: XCTestCase {
 
     // MARK: - 丢弃要留痕
 
+    /// 留痕句必须落在一条 `Log.warn(` 调用上，**不是只出现在文件里**。
+    ///
+    /// 整文件 `contains` 的失败方式：删掉日志那一行、在注释里留同一句话（解释为什么记
+    /// 这一行），判据照样绿 —— 而它是这条路径唯一的证据。
     func testCancelWithoutEventIdLeavesAVisibleTrace() throws {
-        let source = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/Approval/State/ApprovalStore.swift"))
-        XCTAssertTrue(source.contains("dropped a cancel without an eventId"),
-                      "留痕句不在了 —— 无寻址撤回被丢弃时现场只剩这一行")
+        let lines = Self.codeLines(in: try read(iosRoot.appendingPathComponent(
+            "Sources/Features/Approval/State/ApprovalStore.swift")))
+        XCTAssertTrue(
+            lines.contains { $0.1.contains("Log.warn(") && $0.1.contains("dropped a cancel without an eventId") },
+            "留痕句不在了（或只剩注释）—— 无寻址撤回被丢弃时现场只剩这一行")
     }
 
     func testDroppedListChangeLeavesAVisibleTrace() throws {
-        let source = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionList/State/SessionListState.swift"))
-        XCTAssertTrue(source.contains("dropped a session event this build does not know"),
-                      "留痕句不在了 —— 坏增量被丢弃时现场只剩这一行")
+        let lines = Self.codeLines(in: try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionList/State/SessionListState.swift")))
+        XCTAssertTrue(
+            lines.contains {
+                $0.1.contains("Log.warn(") && $0.1.contains("dropped a session event this build does not know")
+            },
+            "留痕句不在了（或只剩注释）—— 坏增量被丢弃时现场只剩这一行")
     }
 
     // MARK: - 票不落盘
@@ -191,16 +192,24 @@ final class SourceLevelTests: XCTestCase {
     /// 客户端这一侧由**类型**表达：实现了 `AuditableRequest` 就是一次写操作，不再维护 op 名单。
     /// 所以这里从源码取两样 —— 哪些请求类型实现了那个协议、以及它们的端点名（`endpoint`）。
     ///
-    /// 两处活性锚是必须的：取到 0 个时「两边一致」只说明两边都空。
+    /// **活性锚不用常量**：常量总落后于表（写 8 的时候表里已经有 9 条），落后一格恰好让
+    /// 「漏读一个写端点」变成绿 —— 而那正是这条判据要抓的。这里直接数表里的 `write: true`
+    /// 与客户端的 `extension …: AuditableRequest`，两边的解析结果必须与各自的标志数相等，
+    /// 正则漏一条就当场对不上。
     func testClientCoversEveryWriteEndpointTheGatewayDeclares() throws {
         let declared = try gatewayWriteEndpoints()
-        // 锚写成 8 而不是 5：今天是 8 个。锚低于真实值时，少读出一个（8→7）不会红，
-        // 而「漏掉一个写端点」正是这条判据要抓的。
-        XCTAssertGreaterThanOrEqual(declared.count, 8,
+        let flags = try gatewayWriteFlagCount()
+        XCTAssertEqual(declared.count, flags,
+                       "解析出 \(declared.count) 个写端点，表里有 \(flags) 处 `write: true` —— 正则漏了条目")
+        XCTAssertGreaterThanOrEqual(declared.count, 9,
                                     "只读到 \(declared.count) 个写端点 —— 先怀疑路径或正则")
 
         let covered = try auditableClientEndpoints()
-        XCTAssertGreaterThanOrEqual(covered.count, 8,
+        let extensions = try auditableExtensionCount()
+        XCTAssertEqual(covered.count, extensions,
+                       "客户端有 \(extensions) 处 `AuditableRequest`，只解析出 \(covered.count) 个端点名 —— "
+                       + "先怀疑请求类型的正则")
+        XCTAssertGreaterThanOrEqual(covered.count, 9,
                                     "只读到 \(covered.count) 个可审计端点 —— 先怀疑解析")
 
         let missing = declared.subtracting(covered)
@@ -230,6 +239,20 @@ final class SourceLevelTests: XCTestCase {
         return writes
     }
 
+    /// 端点表里 `write: true` 的条数 —— 与 `gatewayWriteEndpoints()` 互为活性锚。
+    ///
+    /// 只认**行首**的 `write: true`：表里每条端点的这个标志都独占一行。写法变了（挪到别的
+    /// 字段后面、写成别的形状）时这里会少数，于是与解析结果对不上而红 —— 报的是
+    /// 「先看标志的写法」，不是静默放过。
+    private func gatewayWriteFlagCount() throws -> Int {
+        let source = try read(repoRoot.appendingPathComponent(
+            "gateway/src/protocol/unary-endpoints.ts"))
+        return Self.codeLines(in: source).filter {
+            $0.1.trimmingCharacters(in: .whitespaces)
+                .range(of: #"^write:\s*true\b"#, options: .regularExpression) != nil
+        }.count
+    }
+
     /// 客户端可审计的**端点**名：请求类型实现了 `AuditableRequest`，且它的 `endpoint`
     /// 是个字面量（`static let endpoint = "…"`）。
     private func auditableClientEndpoints() throws -> Set<String> {
@@ -238,7 +261,7 @@ final class SourceLevelTests: XCTestCase {
 
         var endpointByType: [String: String] = [:]
         let structPattern = try NSRegularExpression(
-            pattern: #"struct\s+(\w+)\s*:\s*GatewayRequest\s*\{([\s\S]*?)\n\}"#)
+            pattern: #"struct\s+(\w+)\s*:\s*GatewayRequest\b[^\n{]*\{([\s\S]*?)\n\}"#)
         let range = NSRange(messages.startIndex..., in: messages)
         for match in structPattern.matches(in: messages, range: range) {
             guard let nameRange = Range(match.range(at: 1), in: messages),
@@ -257,12 +280,35 @@ final class SourceLevelTests: XCTestCase {
         return Set(auditable.compactMap { endpointByType[$0] })
     }
 
+    /// 源码里 `extension …: AuditableRequest` 的条数 —— 与解析出的端点数互为活性锚。
+    private func auditableExtensionCount() throws -> Int {
+        var count = 0
+        for file in Self.swiftFiles(under: iosRoot.appendingPathComponent("Sources")) {
+            guard let text = try? read(file) else { continue }
+            count += Self.literals(in: text, pattern: #"extension\s+(\w+)\s*:\s*AuditableRequest"#).count
+        }
+        return count
+    }
+
     private static func literals(in text: String, pattern: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         return regex.matches(in: text, range: range).compactMap { match in
             Range(match.range(at: 1), in: text).map { String(text[$0]) }
         }
+    }
+
+    /// 代码行：跳过整行注释（`//` / `*` / `/*` 开头）。行内注释不剥 —— 与其余判据同一口径。
+    private static func codeLines(in text: String) -> [(Int, String)] {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+            .compactMap { index, line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") {
+                    return nil
+                }
+                return (index + 1, String(line))
+            }
     }
 
     private static func swiftFiles(under root: URL) -> [URL] {

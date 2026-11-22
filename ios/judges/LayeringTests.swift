@@ -23,7 +23,7 @@ final class LayeringTests: XCTestCase {
 
     private var featuresRoot: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // ios/tests/
+            .deletingLastPathComponent()   // ios/judges/
             .deletingLastPathComponent()   // ios/
             .appendingPathComponent("Sources")
             .appendingPathComponent("Features")
@@ -259,9 +259,9 @@ final class LayeringTests: XCTestCase {
     /// 新增业务词汇时加一行。
     ///
     /// 拆流之后通信域里**一个 `on*` 注册口都不该有**：听众表只提供通用的 `add` / `fire`，
-    /// 带业务语义的订阅面（`onApproval` / `onQuestion` / `onChange`）全在各自的 Feature 里。所以这条判据
-    /// 同时断言两件事 —— 词表零命中，且 `on*` 声明为零（后者是拆流之后新增的事实，
-    /// 把「不在 Core」从「碰巧没有」变成「写了就红」）。
+    /// 带业务语义的订阅面（`onApproval` / `onQuestion` / `onChange`）全在各自的 Feature
+    /// 里。所以这条判据同时断言两件事 —— 词表零命中，且 `on*` 声明为零（后者是拆流之后
+    /// 新增的事实，把「不在 Core」从「碰巧没有」变成「写了就红」）。
     ///
     /// 正控：扫描器必须看得见方法声明（`func ` 行数过下限），否则零命中会被读成合规。
     ///
@@ -280,7 +280,9 @@ final class LayeringTests: XCTestCase {
             for (line, code) in codeLines(in: text) {
                 guard code.contains("func ") else { continue }
                 declarations += 1
-                guard code.contains("func on") else { continue }
+                // 注册口的形状是 `func onXxx`：要求 on 后面紧跟大写字母。
+                // 只查 `func on` 会把 `func once()` 这类无关函数算成注册口（假红）。
+                guard code.range(of: #"func\s+on[A-Z]"#, options: .regularExpression) != nil else { continue }
                 subscriptions.append("Core/Gateway/\(file.lastPathComponent):\(line)")
                 for word in Self.businessSubscriptionWords where code.contains(word) {
                     hits.append("Core/Gateway/\(file.lastPathComponent):\(line) \(word)")

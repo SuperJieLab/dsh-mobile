@@ -34,8 +34,16 @@ enum MeshPhase: Equatable {
     ///
     /// 只有 `.failed(.unreachable)` 是。key 被拒不重试：同样的 key 再问一次答案不会变，
     /// 而 authkey 有使用次数限制 —— 那两档都是 `.failed`，最容易写反。
+    ///
+    /// **显式穷举、不留 `default`**：新增一档（或新增一个失败原因）时，不给出「重不重试」
+    /// 的答案就编译不过。判据能枚举的只是当下这几档，编译期这条才是新档的闸门。
     var shouldRetryRegistration: Bool {
-        if case .failed(.unreachable) = self { return true }
-        return false
+        switch self {
+        case .failed(.unreachable):
+            return true
+        case .needsSetup, .connecting, .ready,
+             .failed(.badKey), .failed(.needsAuthKey), .failed(.pendingApproval):
+            return false
+        }
     }
 }

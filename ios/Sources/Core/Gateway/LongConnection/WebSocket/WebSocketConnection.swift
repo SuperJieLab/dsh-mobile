@@ -44,6 +44,11 @@ final class WebSocketConnection: Channel {
     /// 建连的传输与地址每次现取：组网激活后下一轮连接即走隧道，本类零改动。
     var sessionProvider: () -> URLSession = { .shared }
     var baseURLProvider: () -> URL? = { nil }
+    /// 第 `attempt` 次失败之后等多久（毫秒）。默认就是 `Backoff` 的曲线；
+    /// 判据注入小值，于是「每一代都换届次」这类断言不必等 250–500 ms 的墙钟。
+    var reconnectDelay: (_ attempt: Int) -> Int = {
+        Backoff.delayMs(attempt: $0, random: Double.random(in: 0..<1))
+    }
 
     // MARK: - 状态
 
@@ -521,9 +526,7 @@ final class WebSocketConnection: Channel {
         reconnectWorkItem?.cancel()
         reconnectAttempt += 1
 
-        let delay = Backoff.delayMs(
-            attempt: reconnectAttempt, random: Double.random(in: 0..<1)
-        )
+        let delay = reconnectDelay(reconnectAttempt)
 
         Log.info(Log.Module.session, "reconnect scheduled",
                  ["delayMs": String(delay), "attempt": String(reconnectAttempt)])
