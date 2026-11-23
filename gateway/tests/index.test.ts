@@ -653,7 +653,7 @@ test('the stream channel answers an upgrade on the same port and refuses a follo
     // No session controller behind the port: the pump must fail as an error frame
     // (the stream channel's "a hostile data source is still a reply"), never as a
     // dead socket.
-    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: 's1' }, activate: true, assistantStream: true, maxMessages: 500 } } } }))
     const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
       socket.addEventListener('message', event => {
         const frame = JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>
@@ -961,7 +961,12 @@ function fakeFollowHost(opening: {
       sessionController: {
         follow: async function* (_request: unknown, signal: AbortSignal) {
           // 与 control 读的是同一份 `projected`：两条出口必须给出同一个水位下的同一份值。
-          yield { type: 'snapshot', ...opening, ...(projected === undefined ? {} : { projections: projected }) }
+          yield {
+            type: 'snapshot',
+            header: { version: 1, id: 's1', createdAt: 1, isSeeded: false },
+            ...opening,
+            projections: projected ?? { asOfSeq: opening.cursor, values: {} },
+          }
           while (!signal.aborted) {
             while (events.length > 0) yield { type: 'event', event: events.shift()! }
             await new Promise(resolve => setTimeout(resolve, 5))
@@ -1045,7 +1050,7 @@ test('U6: control 流给 baseline，触发事件后推一条 projection', { time
       { projectedTokens: 52_300, contextWindow: 128_000 }, '整份投影原样带出')
 
     // 触发源：一条 follow 流，它的事件是「投影可能变了」的信号。
-    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: 's1' }, activate: true, assistantStream: true, maxMessages: 500 } } } }))
     await waitFor(f => f.some(frame => frame.streamId === 's1' && frame.type === 'item'), 'the follow opening')
 
     // 判据 8：同一 `asOfSeq` 下，两条出口给出同一份视图值。
@@ -1105,7 +1110,7 @@ test('U6: without projections the baseline is absent and no frame is ever pushed
     const access = await accessTokenFor(port)
     const { socket, frames, waitFor } = await openStream(port, access)
 
-    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: 's1' }, activate: true, assistantStream: true, maxMessages: 500 } } } }))
     await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
     assert.equal(openingOf(frames)!['occupancy'], undefined, 'nothing displayable means no baseline, not a zero')
 
@@ -1139,22 +1144,23 @@ test('the configured opening cap narrows the window through the real assembly', 
     ],
     hasMore: false,
   })
-  const { teardown } = install('127.0.0.1', port, credentialsPath, follow.services, { maxOpeningBytes: 700 })
+  const { teardown } = install('127.0.0.1', port, credentialsPath, follow.services, { maxOpeningBytes: 900 })
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
     const { socket, frames, waitFor } = await openStream(port, access)
 
-    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
+    socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: 's1' }, activate: true, assistantStream: true, maxMessages: 500 } } } }))
     await waitFor(f => openingOf(f) !== undefined, 'the follow opening')
 
     const opening = openingOf(frames)!
-    assert.equal(opening['pageStart'], 2, 'the configured cap reached the adapter and narrowed the window')
-    assert.equal(opening['hasOlder'], true, 'the narrowed-away part stays reachable')
-    assert.equal(opening['cursor'], 4, 'the water mark does not move with the window')
+    const records = opening['records'] as { event: { seq: number } }[]
+    assert.equal(records[0].event.seq, 2, 'the configured cap reached the adapter and narrowed the window')
+    assert.equal(opening['hasMore'], true, 'the narrowed-away part stays reachable')
+    assert.equal(opening['cursor'], 3, 'the water mark does not move with the window')
     const wire = Buffer.byteLength(JSON.stringify(frames.find(frame => frame.type === 'item')), 'utf8')
-    assert.ok(wire <= 700, `the opening frame fits the configured cap (was ${wire})`)
+    assert.ok(wire <= 900, `the opening frame fits the configured cap (was ${wire})`)
 
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))

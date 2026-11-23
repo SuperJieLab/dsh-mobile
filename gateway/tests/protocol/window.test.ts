@@ -13,29 +13,12 @@ import {
   LogNotDenseError,
   fitOpeningToBytes,
   pageWindow,
-  upstreamWindow,
 } from '../../src/protocol/window.ts'
-import { DEFAULT_PAGE_MESSAGES } from '../../src/protocol/rpc.ts'
-import { DEFAULT_FOLLOW_MESSAGES } from '../../src/wire/mux.ts'
-import type { WireEvent } from '../../src/wire/rpc.ts'
+import type { SessionRecord, WireEvent } from '../../src/wire/rpc.ts'
 
-test('upstreamWindow: the reference spelling of our one-target window rule', () => {
-  // The reference splits the rule into a floor it may stop after and a ceiling it
-  // must stop at; ours takes one target and derives the ceiling. Here the two
-  // spellings meet.
-  assert.deepEqual(upstreamWindow(50), {
-    maxMessages: 100,
-    turnWindow: { minMessages: 50, minTurns: 1 },
-  })
-  assert.deepEqual(upstreamWindow(7), {
-    maxMessages: 14,
-    turnWindow: { minMessages: 7, minTurns: 1 },
-  })
-})
-
-/** A window event; its wire size is supplied by the fixture's own size table. */
-function event(type: string, seq: number): WireEvent {
-  return { type, seq, time: 1_700_000_000_000 + seq, data: {} }
+/** 一条窗口记录；它在线上的字节数由夹具自己的尺寸表给出。 */
+function event(type: string, seq: number): SessionRecord {
+  return { type: 'event', event: { type, seq, time: 1_700_000_000_000 + seq, data: {} } }
 }
 
 /**
@@ -150,13 +133,4 @@ test('pageWindow: a target larger than the log yields all of it, with nothing ol
   assert.equal(window.asOfSeq, log.length)
   assert.equal(window.hasOlder, false)
   assert.deepEqual(window.events, log)
-})
-
-test('pageWindow: the two carriers ask the host and themselves for the same target', () => {
-  // 流 opening 的窗口由宿主按 `upstreamWindow` 的拼法切，`page` 由 `pageWindow` 本地切。
-  // 两条路径共用的不是同一段代码，而是**同一个目标**与同一个上限倍数 —— 这两条等式
-  // 就是「两条出口给出同一个窗口」这句话在今天的可验证形态。
-  assert.equal(DEFAULT_FOLLOW_MESSAGES, DEFAULT_PAGE_MESSAGES)
-  assert.equal(DEFAULT_FOLLOW_MESSAGES, 50)
-  assert.equal(upstreamWindow(DEFAULT_FOLLOW_MESSAGES).maxMessages, DEFAULT_PAGE_MESSAGES * 2)
 })

@@ -58,15 +58,28 @@ test('parseClientFrame: a bad payload is still a frame — the envelope is all t
 
 
 test('openRequestOf: 端点说这条流要什么，参数在 payload.args 里', () => {
-  // 信封（`parseClientFrame`）只说「几号流」，这里说「这条流要什么」。三个端点各有
-  // 自己的请求形状：`session/follow` 带会话名，另两条没有入参。
+  // 信封（`parseClientFrame`）只说「几号流」，这里说「这条流要什么」。四个端点各有
+  // 自己的请求形状：`session/follow` 带一份上游的 `request`，另三条没有入参。
+  //
+  // 请求**嵌一层**：摊平的话 `kind` 会跟着请求一起被转给宿主，而宿主的形参只有
+  // `SessionFollowRequest` 的那几个键。
+  const follow = {
+    address: { kind: 'session', sessionId: 's1' },
+    activate: true,
+    assistantStream: true,
+    maxMessages: 9,
+  }
   assert.deepEqual(
-    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }),
-    { kind: 'follow', sessionId: 's1' },
+    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { request: follow } } }),
+    { kind: 'follow', request: follow },
   )
   assert.deepEqual(
-    openRequestOf({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1', maxMessages: 9 } } }),
-    { kind: 'follow', sessionId: 's1', maxMessages: 9 },
+    openRequestOf({
+      type: 'open', streamId: 's1', endpoint: 'session/follow',
+      payload: { args: { request: { address: { kind: 'session', sessionId: 's1' } } } },
+    }),
+    { kind: 'follow', request: { address: { kind: 'session', sessionId: 's1' } } },
+    '可缺省的键不补默认值 —— 收到几格就是几格',
   )
   assert.deepEqual(
     openRequestOf({ type: 'open', streamId: 's1', endpoint: '$events', payload: { args: {} } }),

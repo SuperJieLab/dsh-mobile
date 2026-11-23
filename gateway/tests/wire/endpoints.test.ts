@@ -16,13 +16,16 @@ import test from 'node:test'
 import { ENDPOINTS, resolveEndpoint } from '../../src/wire/endpoints.ts'
 
 test('resolveEndpoint: 四个名字各自落到自己的泵', () => {
+  const address = { kind: 'session', sessionId: 's-1' }
   assert.deepEqual(
-    resolveEndpoint('session/follow', { sessionId: 's-1' }),
-    { ok: true, kind: 'follow', request: { sessionId: 's-1' } },
+    resolveEndpoint('session/follow', { request: { address } }),
+    { ok: true, kind: 'follow', request: { address } },
   )
   assert.deepEqual(
-    resolveEndpoint('session/follow', { sessionId: 's-1', maxMessages: 20 }),
-    { ok: true, kind: 'follow', request: { sessionId: 's-1', maxMessages: 20 } },
+    resolveEndpoint('session/follow', {
+      request: { address, maxMessages: 20, turnWindow: { minMessages: 5, minTurns: 2 }, activate: true },
+    }),
+    { ok: true, kind: 'follow', request: { address, maxMessages: 20, turnWindow: { minMessages: 5, minTurns: 2 }, activate: true } },
   )
   assert.deepEqual(resolveEndpoint('session/control', {}), { ok: true, kind: 'control', request: undefined })
   assert.deepEqual(resolveEndpoint('$events', {}), { ok: true, kind: 'events', request: undefined })
@@ -36,12 +39,20 @@ test('resolveEndpoint: 名字不在表里是 unknown-endpoint，与参数无关'
 })
 
 test('resolveEndpoint: 名字对、参数不对是 invalid-args', () => {
+  const address = { kind: 'session', sessionId: 's-1' }
   const bad = [
+    // 上一期的扁平形状：少一层 `request` 容器、地址也是裸的 `sessionId`。
+    ['session/follow', { address }],
+    ['session/follow', { sessionId: 's-1' }],
     ['session/follow', {}],
-    ['session/follow', { sessionId: '' }],
-    ['session/follow', { sessionId: 1 }],
-    ['session/follow', { sessionId: 's-1', maxMessages: 0 }],
-    ['session/follow', { sessionId: 's-1', maxMessages: 1.5 }],
+    ['session/follow', { request: {} }],
+    ['session/follow', { request: { address: { kind: 'session', sessionId: '' } } }],
+    ['session/follow', { request: { address: { kind: 'session', sessionId: 1 } } }],
+    ['session/follow', { request: { address: { kind: 'subagent', sessionId: 's-1' } } }],
+    ['session/follow', { request: { address, maxMessages: 0 } }],
+    ['session/follow', { request: { address, maxMessages: 1.5 } }],
+    ['session/follow', { request: { address, turnWindow: { minMessages: 5 } } }],
+    ['session/follow', { request: { address, assistantStream: false } }],
     ['session/control', { sessionId: 's-1' }],
     ['$events', { anything: true }],
     // 组流也没有入参：多一个键说明客户端以为它有参数，该在开流时就拒。

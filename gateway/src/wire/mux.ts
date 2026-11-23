@@ -8,12 +8,11 @@
  * 无需关联。HTTP 信封的 `{v, op, ok}` 外壳不进流，因为流没有可标 ok 的应答；
  * 版本闸门在 `mux v1` 成帧契约里（"word for word"）。
  *
- * 这里**只有形状与编解码**。「这条打开装哪些事件」是传输层的事，由
- * `remote/stream.ts` 的泵从宿主给出的窗口装配。
+ * 这里**只有形状与编解码**。「这条打开装哪些事件」是宿主的事 —— 网关把 `snapshot`
+ * 原样转达（`remote/stream.ts` 只按字节约束一次）。
  */
 
-import type { WireEvent } from './rpc.ts'
-import type { ModelSelection } from './model.ts'
+import type { ProjectionBaseline, SessionRecord, SessionWireHeader } from './rpc.ts'
 import { nonEmptyString } from './fields.ts'
 import { resolveEndpoint, type FollowRequest } from './endpoints.ts'
 
@@ -138,7 +137,7 @@ export type EventsValue =
 export type ControlValue =
   | {
     type: 'baseline'
-    value: { projections: Readonly<Record<string, { asOfSeq: number; values: Readonly<Record<string, unknown>> }>> }
+    value: { projections: Readonly<Record<string, ProjectionBaseline>> }
   }
   | {
     type: 'projection'
@@ -149,6 +148,27 @@ export type ControlValue =
   }
 
 /**
+ * 打开帧 —— 上游 `SessionFollowFrame` 的 `snapshot` 支，一个字段都不多不少。
+ *
+ * 网关**不再组装**它：窗口由宿主按自己的规则切，我们只转达。唯一的改动是字节收窄
+ * （`records` 按轮截短、`hasMore` 改真），那是传输层的上界，不是窗口规则。
+ *
+ * `header` 与 `projections` 在宿主类型里是必填 —— 这里也必填。缺一格就是另一份形状，
+ * 让它们可选只会让「上游漏发」在网关上看起来正常，而客户端整帧丢弃。
+ */
+export interface FollowSnapshot {
+  type: 'snapshot'
+  header: SessionWireHeader
+  /** 打开覆盖到的最后一个 seq，**含端**（换算成「下一个期望」是客户端入口的事）。 */
+  cursor: number
+  records: readonly SessionRecord[]
+  /** 窗口之前是否还有更旧的记录 —— 裁过就必须为真。 */
+  hasMore: boolean
+  projections: ProjectionBaseline
+  assistantStream?: unknown
+}
+
+/**
  * `session/follow` 的货物 —— 三种，每种带自己的判别字段。
  *
  * 与 `EventsValue` / `ControlValue` 并列：三条流各自一张表，出货处用 `satisfies`
@@ -156,7 +176,7 @@ export type ControlValue =
  * （形状由端点决定，判在信封层等于把货物知识挪进来），总表也就没有消费方。
  */
 export type FollowValue =
-  | ({ type: 'snapshot' } & FollowOpening)
+  | FollowSnapshot
   | { type: 'event'; event: unknown }
   | { type: 'assistant-stream'; frame: unknown }
 
@@ -221,7 +241,7 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
  * `workspace` 是组清单流，没有入参（组是进程级的，不分会话）。
  */
 export type OpenRequest =
-  | ({ kind: 'follow' } & FollowRequest)
+  | { kind: 'follow'; request: FollowRequest }
   | { kind: 'events' }
   | { kind: 'control' }
   | { kind: 'workspace' }
@@ -238,8 +258,10 @@ export type OpenRequestRefusal = { readonly error: 'unknown-endpoint' | 'invalid
 export function openRequestOf(frame: MuxOpenFrame): OpenRequest | OpenRequestRefusal {
   const resolution = resolveEndpoint(frame.endpoint, argsOf(frame.payload))
   if (!resolution.ok) return { error: resolution.code }
+  // 请求**嵌一层**而不是摊平：摊平后那个 `kind` 会跟着请求一起被转给宿主，
+  // 而宿主的形参只有 `SessionFollowRequest` 的那几个键 —— 多一格就是网关自己加的东西。
   return resolution.kind === 'follow'
-    ? { kind: 'follow', ...resolution.request }
+    ? { kind: 'follow', request: resolution.request }
     : { kind: resolution.kind }
 }
 
@@ -248,48 +270,3 @@ function argsOf(payload: unknown): unknown {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
   return (payload as Record<string, unknown>).args
 }
-
-/** 打开帧的载荷：`page` 形状的窗口加上这条流的锚点。 */
-export interface FollowOpening {
-  sessionId: string
-  /**
-   * 打开被切下时日志已到达的排他上界 —— 其后的事件帧都从这一位置*之后*
-   * 开始，客户端因此无需比对窗口内容即可断言「从这里起都是实时到达的」。
-   */
-  cursor: number
-  /** 窗口首个 seq —— 客户端回翻页时的下一个 `beforeSeq`。 */
-  pageStart: number
-  /** 与 `page` 应答中的同名字段同义。 */
-  hasOlder: boolean
-  /** 窗口 —— 序列化方式与 `page` 应答的 `events` 完全一致。 */
-  events: readonly WireEvent[]
-  /**
-   * 打开时读到的投影基线（`{asOfSeq, values}`）。
-   *
-   * 与 `session/control` 的 `baseline` 同源：同一 `asOfSeq` 下两处给出的值必须逐字段
-   * 相等（判据 8）。客户端以 control 为权威，这里的值只在 control 到达之前当初值用 ——
-   * 但两条出口都得发：上游的 `snapshot` 就带它，砍掉会让两端不同形。
-   */
-  projections?: { asOfSeq: number; values: Readonly<Record<string, unknown>> }
-  /**
-   * transient 基线，活跃时原样随行：一个进行中的 assistant 尝试及其累计
-   * 文本与下一个 chunk 序号。此处不透明 —— 语义归客户端的 `TransientChannel`
-   * 所有；契约只承诺源给什么、到达时不变。
-   */
-  assistantStream?: unknown
-  /**
-   * 这条会话下一轮将用的模型；源不知道时缺省 —— 与 `occupancy` 同为陈述，
-   * 不是故障。语义是**选择本身**（`{provider, model, …}`），不是宿主的投影视图。
-   *
-   * 与 `snapshot` 应答里的同名字段同义、同值：两条出口读的是同一份投影
-   * （`page` 不带这个字段 —— 它不读投影）。
-   */
-  model?: ModelSelection
-}
-
-/**
- * 调用方不指定时 follow 打开的窗口大小 —— 与 `page` 用同一个默认值，
- * 因为打开就是第一页。
- */
-export const DEFAULT_FOLLOW_MESSAGES = 50
-

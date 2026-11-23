@@ -127,7 +127,19 @@ export class BenchClient {
       type: 'open',
       streamId: this.streamId,
       endpoint: 'session/follow',
-      payload: { args: { sessionId: this.options.sessionId } },
+      // 与 Web UI 同一份窗口参数：压测量的是「同一屏」在链路上的表现，
+      // 网关不再替客户端补默认值。
+      payload: {
+        args: {
+          request: {
+            address: { kind: 'session', sessionId: this.options.sessionId },
+            activate: true,
+            assistantStream: true,
+            maxMessages: 500,
+            turnWindow: { minMessages: 50, minTurns: 2 },
+          },
+        },
+      },
     }))
   }
 
@@ -214,16 +226,20 @@ export class BenchClient {
     const payload = frame.value as Record<string, unknown> | undefined
     if (payload === undefined) return
 
-    // 打开帧：sessionId + cursor + events 三件齐（判读与 iOS 传输层同一形状）。
-    if (payload['sessionId'] !== undefined && payload['cursor'] !== undefined && payload['events'] !== undefined) {
+    // 打开帧：`{type:'snapshot', header, cursor, records, …}` —— 上游的形状，判读与
+    // iOS 传输层同一份（`records` 里每条包一层 `{type:'event', event}`）。
+    const records = payload['type'] === 'snapshot' ? payload['records'] as Record<string, unknown>[] | undefined : undefined
+    if (records !== undefined && payload['cursor'] !== undefined) {
       const devRecv = perfNow()
       // fold 等价物（opening 半）：窗口事件进镜像 —— 应用是同步的，返回即 fold 完成。
-      const events = payload['events'] as Record<string, unknown>[]
-      for (const windowEvent of events) this.mirror.set(windowEvent.seq as number, windowEvent)
+      for (const record of records) {
+        const windowEvent = record['event'] as Record<string, unknown>
+        this.mirror.set(windowEvent['seq'] as number, windowEvent)
+      }
       this.recordsStore.push({
         seg: 'dev',
         t: perfNow(),
-        sessionId: payload['sessionId'] as string,
+        sessionId: this.options.sessionId,
         seq: payload['cursor'] as number,
         kind: 'opening',
         gen: this.gen,

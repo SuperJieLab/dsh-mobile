@@ -11,7 +11,8 @@
 import assert from 'node:assert/strict'
 import type { Server } from 'node:http'
 import { STREAM_PATH } from '../../src/remote/connection.ts'
-import type { FollowSource, ProjectionBaseline, UpstreamFollowFrame } from '../../src/ports/follow.ts'
+import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
+import type { ProjectionBaseline } from '../../src/wire/rpc.ts'
 import type { ForwardedSink, ForwardedSource, UpstreamWireFrame } from '../../src/ports/events.ts'
 import type { WireEvent } from '../../src/wire/rpc.ts'
 
@@ -76,6 +77,25 @@ export function fakeSource(
         if (signal.aborted) return
         yield frame
       }
+    },
+  }
+}
+
+/**
+ * 打开一条 follow 流的 `args` —— 上游 `SessionFollowRequest` 那几格，外面套一层宿主
+ * 形参同名的 `request` 容器。
+ *
+ * 每个键都写全（不是随手给个 `address`）：网关「不补默认值」这件事只有在请求本身
+ * 带全时才看得出来 —— 少给一格，夹具就替网关把默认值补上了。
+ */
+export function openArgs(sessionId: string): unknown {
+  return {
+    request: {
+      address: { kind: 'session', sessionId },
+      activate: true,
+      assistantStream: true,
+      maxMessages: 500,
+      turnWindow: { minMessages: 50, minTurns: 2 },
     },
   }
 }
@@ -154,18 +174,27 @@ export function event(seq: number): WireEvent {
   return { type: seq % 2 === 0 ? 'user/message' : 'assistant/message', seq, time: 1_700_000_000_000 + seq, data: { text: `m${seq}` } }
 }
 
+/**
+ * 上游 `snapshot` 的一帧 —— 与宿主同形：`header`/`cursor`/`records`/`hasMore`/`projections`
+ * 都在，`assistantStream` 可选。
+ *
+ * `header` 与 `projections` 是**必填**的：宿主类型里就是必填，夹具若给缺一格的帧，
+ * 「客户端缺字段就丢帧」那条规则在网关侧就永远测不到（网关只会转发它）。
+ */
 export function snapshotFrame(
   log: readonly WireEvent[],
   windowSize: number,
-  extra: { projections?: ProjectionBaseline } = {},
+  extra: { projections?: ProjectionBaseline; assistantStream?: unknown } = {},
 ): UpstreamFollowFrame {
   const records = log.slice(-windowSize).map(ev => ({ type: 'event' as const, event: ev }))
   return {
     type: 'snapshot',
+    header: { version: 1, id: 's-1', createdAt: 1_700_000_000_000, cwd: '/tmp/x', isSeeded: false },
     cursor: log.length - 1,
     records,
     hasMore: log.length > windowSize,
-    ...extra,
+    projections: extra.projections ?? { asOfSeq: log.length - 1, values: {} },
+    ...(extra.assistantStream === undefined ? {} : { assistantStream: extra.assistantStream }),
   }
 }
 

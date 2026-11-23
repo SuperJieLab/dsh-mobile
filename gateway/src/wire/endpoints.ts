@@ -13,7 +13,7 @@
  * 实际按缺省值发出去 —— 那是假绿的一种。
  */
 
-import { isPositiveInteger, nonEmptyString } from './fields.ts'
+import { isPositiveInteger, nonEmptyString, requestContainerOf } from './fields.ts'
 import { parseWorkspaceArgs } from './workspace-stream.ts'
 
 
@@ -24,14 +24,30 @@ export type EndpointResolution =
   | { readonly ok: false; readonly code: 'unknown-endpoint' | 'invalid-args' }
 
 /**
- * `open` 载荷携带的 follow 请求 —— 刻意精简。参考请求是
- * `{address, maxMessages?, assistantStream?}`；显著的缺席者是水位：重连会重新
- * 打开并从新 opening 重建窗口，而不是从 cursor 续读。
+ * 会话地址 —— 上游 `SessionAddress` 的判别联合。
+ *
+ * 本期只实现 `session` 一支，但**形状仍是带 `kind` 的联合**，不是裸 `sessionId`：
+ * 将来加一种地址（`subagent`）时，改的是这一处判别，而不是每一个调用点的字段名。
+ */
+export interface SessionAddress {
+  kind: 'session'
+  sessionId: string
+}
+
+/**
+ * `open` 载荷携带的 follow 请求 —— **上游 `SessionFollowRequest` 逐字**。
+ *
+ * 网关不再按自己的目标重算窗口（那一版把 `maxMessages` 乘二、`minTurns` 改成 1，
+ * 于是同一屏在手机与 Web UI 上长度不同）。这里收到的就是宿主方法的实参，原样交出去；
+ * 缺省的键也**不补** —— 补一个宿主没要的默认值，就是第二份窗口规则。
  */
 export interface FollowRequest {
-  sessionId: string
-  /** 打开的窗口大小；缺省即默认值，与 `page` 相同。 */
+  address: SessionAddress
   maxMessages?: number
+  turnWindow?: { minMessages: number; minTurns: number }
+  /** 打开即激活会话（宿主的 `promote`）；缺省留作被动观察。 */
+  activate?: boolean
+  assistantStream?: true
 }
 
 /**
@@ -70,13 +86,55 @@ export function resolveEndpoint(endpoint: unknown, args: unknown): EndpointResol
   return { ok: false, code: 'unknown-endpoint' }
 }
 
-/** `follow` 的入参：会话名必需，窗口大小可缺省但给了就得是正整数。 */
+/**
+ * `follow` 的入参：宿主的形参是一个 `request` 对象，所以线上也多一层同名容器。
+ *
+ * 可缺省的四个键只在**出现**时校验：给了就得是那个类型（畸形参数拒掉，
+ * 不静默退化 —— 退化的表现是「看起来生效了」而请求按缺省值发出去）。没给就**不补**：
+ * 宿主自己有一份默认值，网关再补一份就是第二个来源。
+ */
 function followArgsOf(args: unknown): FollowRequest | undefined {
   if (!isPlainObject(args)) return undefined
-  const sessionId = nonEmptyString(args.sessionId)
-  if (sessionId === undefined) return undefined
-  if (args.maxMessages === undefined) return { sessionId }
-  return isPositiveInteger(args.maxMessages) ? { sessionId, maxMessages: args.maxMessages } : undefined
+  const request = requestContainerOf(args)
+  if (request === undefined) return undefined
+  const address = sessionAddressOf(request.address)
+  if (address === undefined) return undefined
+
+  const follow: FollowRequest = { address }
+  if ('maxMessages' in request) {
+    if (!isPositiveInteger(request.maxMessages)) return undefined
+    follow.maxMessages = request.maxMessages
+  }
+  if ('turnWindow' in request) {
+    const turnWindow = turnWindowOf(request.turnWindow)
+    if (turnWindow === undefined) return undefined
+    follow.turnWindow = turnWindow
+  }
+  if ('activate' in request) {
+    if (typeof request.activate !== 'boolean') return undefined
+    follow.activate = request.activate
+  }
+  if ('assistantStream' in request) {
+    // 上游把它声明成字面量 `true`：“要”就写 true，不要就省略。`false` 不在集合里。
+    if (request.assistantStream !== true) return undefined
+    follow.assistantStream = true
+  }
+  return follow
+}
+
+/** 会话地址：`kind` 只认 `session`，`sessionId` 必须是非空字符串。 */
+function sessionAddressOf(value: unknown): SessionAddress | undefined {
+  if (!isPlainObject(value)) return undefined
+  if (value.kind !== 'session') return undefined
+  const sessionId = nonEmptyString(value.sessionId)
+  return sessionId === undefined ? undefined : { kind: 'session', sessionId }
+}
+
+/** 翻页窗口的两个下限：都必须是正整数，缺一个就整格不成形。 */
+function turnWindowOf(value: unknown): { minMessages: number; minTurns: number } | undefined {
+  if (!isPlainObject(value)) return undefined
+  if (!isPositiveInteger(value.minMessages) || !isPositiveInteger(value.minTurns)) return undefined
+  return { minMessages: value.minMessages, minTurns: value.minTurns }
 }
 
 /**

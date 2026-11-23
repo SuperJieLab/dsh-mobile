@@ -1,19 +1,19 @@
 /**
- * 反向窗口算术。三个导出各服务一条路径，别把它们当成同一件事：
+ * 反向窗口算术。两个导出各服务一条路径，别把它们当成同一件事：
  *
  *   pageWindow          在整条日志上切一个窗口 —— 只有 `page` 调用它
- *   upstreamWindow      把同一个**目标**翻成宿主要的分页参数 —— 流 opening 用这条：
- *                       窗口由宿主切好交回来，本地不重切
- *   fitOpeningToBytes   把窗口按字节二次收窄 —— 流 opening 在装帧前调用
+ *   fitOpeningToBytes   把**宿主切好的窗口**按字节二次收窄 —— 流 opening 调用它
  *
- * 「`page` 与流 opening 给出同一个窗口」靠的是**同一个目标**，不是同一段代码：
- * 前者本地切，后者把目标交出去。两条路都在 `TURN_ALIGN_CEILING` 这个上限上收口。
+ * 窗口本身不再由网关切：`session/follow` 与 `session/page` 都把上游的请求原样转给
+ * 宿主，规则只有一份。剩下的只有字节这一条约束 —— 宿主按消息数切、不保证字节，
+ * 而上游的客户端没有 4 MiB 的消息上界这回事。
  *
  * `maxMessages` 是**目标**，不是承诺：调用方拿到的窗口**始于 turn 边界** ——
  * 一轮中间打开没有折叠头，只能平摊，回翻到该轮的打开处会把同一轮整体折起
  * （同内容、两形状）。目标的两倍即终止走查，够不到的边界因此不会无界撑大窗口。
  */
 
+import type { SessionRecord } from '../wire/rpc.ts'
 import type { WireEvent } from '../wire/rpc.ts'
 import type { PageWindow } from '../wire/window.ts'
 
@@ -98,25 +98,6 @@ export function pageWindow(
   return { pageStart: start, asOfSeq: end, hasOlder: start > 0, events: events.slice(start, end) }
 }
 
-/**
- * 参考宿主对同一窗口规则的拼法，输入是 {@link pageWindow} 收到的同一目标。
- *
- * 参考把规则拆成「走到后可停的下限」与「必须停的上限」；我们由目标推出
- * 上限（{@link TURN_ALIGN_CEILING}）。两者都把走查封顶在目标的两倍，
- * follow 打开与 `page` 因此保持对齐。
- */
-export function upstreamWindow(targetMessages: number): {
-  maxMessages: number
-  turnWindow: { minMessages: number; minTurns: number }
-} {
-  return {
-    maxMessages: targetMessages * TURN_ALIGN_CEILING,
-    // 参考一遇到 turn 就计入，所以 `minTurns: 1` 意为「最近的边界优先」
-    // —— 与我们的走查一致。
-    turnWindow: { minMessages: targetMessages, minTurns: 1 },
-  }
-}
-
 /** {@link fitOpeningToBytes} 的结果：收窄后的起点，或「连最小窗口都装不下」。 */
 export type OpeningShrink =
   | { start: number; cutTurns: number; cutEvents: number }
@@ -138,14 +119,14 @@ export type OpeningShrink =
  * 窗口内一个 `turn/start` 都没有时（起点本就不在轮边界的退化情形），退回按字节
  * 切：那种窗口本身极小，收窄通常不会触发，此处只需给出确定结果。
  *
- * @param window - 窗口内的事件，下标 0 即当前起点。
- * @param cap - 最终**帧**的字节上界（不止事件：外壳与随行基线都算在内）。
+ * @param window - 宿主交回来的记录，下标 0 即当前起点。
+ * @param cap - 最终**帧**的字节上界（不止记录：外壳与随行基线都算在内）。
  * @param frameBytesOf - 量尺：给定候选起点，算出那一帧的序列化字节数。由调用方
- *   注入，因为帧里还有事件之外的东西（外壳、占用、模型基线、未定稿基线），
+ *   注入，因为帧里还有记录之外的东西（外壳、头部、投影基线、未定稿基线），
  *   那些只有调用方知道 —— 纯函数不猜。
  */
 export function fitOpeningToBytes(
-  window: readonly WireEvent[],
+  window: readonly SessionRecord[],
   cap: number,
   frameBytesOf: (start: number) => number,
 ): OpeningShrink {
@@ -153,7 +134,9 @@ export function fitOpeningToBytes(
   // 不能被拒绝路径吞掉。
   if (window.length === 0) return { start: 0, cutTurns: 0, cutEvents: 0 }
 
-  const turnStarts = window.flatMap((event, index) => (event.type === 'turn/start' ? [index] : []))
+  // 记录外面那层 `{type:'event'}` 是线上的判别字段，轮边界看的是**里面那个事件**的
+  // 类型 —— 看外层的话每一格都是 `'event'`，候选集只剩 0。
+  const turnStarts = window.flatMap((record, index) => (record.event.type === 'turn/start' ? [index] : []))
   // 候选起点：**0 永远在列**（「本来就装得下」是最该被选中的那一支），加上窗口内各
   // `turn/start`。窗口起点**不保证**落在轮边界上 —— 窗口是整份日志、或对齐目标在首个
   // `turn` 之前就到了，都会让 index 0 不是 `turn/start`。少了 0，装得下也会被裁到第一个

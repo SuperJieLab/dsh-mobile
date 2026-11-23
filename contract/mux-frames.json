@@ -11,7 +11,7 @@
   "client": [
     {
       "name": "follow",
-      "text": "{\"endpoint\":\"session/follow\",\"payload\":{\"args\":{\"sessionId\":\"s-1\"}},\"streamId\":\"s-9\",\"type\":\"open\"}",
+      "text": "{\"endpoint\":\"session/follow\",\"payload\":{\"args\":{\"request\":{\"address\":{\"kind\":\"session\",\"sessionId\":\"s-1\"},\"activate\":true,\"assistantStream\":true,\"maxMessages\":500,\"turnWindow\":{\"minMessages\":50,\"minTurns\":2}}}},\"streamId\":\"s-9\",\"type\":\"open\"}",
       "type": "open",
       "streamId": "s-9",
       "kind": "follow",
@@ -48,7 +48,7 @@
   "server": [
     {
       "name": "item-follow-opening",
-      "text": "{\"type\":\"item\",\"streamId\":\"s-9\",\"value\":{\"type\":\"snapshot\",\"sessionId\":\"s-1\",\"cursor\":3,\"pageStart\":1,\"hasOlder\":false,\"events\":[]}}",
+      "text": "{\"type\":\"item\",\"streamId\":\"s-9\",\"value\":{\"type\":\"snapshot\",\"header\":{\"version\":1,\"id\":\"s-1\",\"createdAt\":1700000000000,\"cwd\":\"/Users/x/proj\",\"isSeeded\":false},\"cursor\":3,\"records\":[{\"type\":\"event\",\"event\":{\"type\":\"user/message\",\"seq\":3,\"time\":1700000000003,\"data\":{\"text\":\"m3\"}}}],\"hasMore\":false,\"projections\":{\"asOfSeq\":3,\"values\":{}}}}",
       "type": "item",
       "streamId": "s-9",
       "kind": "follow"

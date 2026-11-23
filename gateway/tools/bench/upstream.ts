@@ -12,7 +12,8 @@
  * `seq` 接着走 —— 与协议「只补差量」的语义对齐，产物记缺口条数而非秒数。
  */
 
-import type { FollowSource } from '../../src/ports/follow.ts'
+import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
+import type { WireEvent } from '../../src/wire/rpc.ts'
 
 /** 事件载荷形状。`small` 恒定小载荷；`mixed` 在几档尺寸间循环。 */
 export type PayloadShape = 'small' | 'mixed'
@@ -62,13 +63,13 @@ function payloadOf(shape: PayloadShape, seq: number): string {
 }
 
 /** 一条合成事件：`time` 是目标节拍时刻（epoch ms），网关侧即 `evTime`。 */
-function eventAt(seq: number, dueMs: number, shape: PayloadShape): Record<string, unknown> {
+function eventAt(seq: number, dueMs: number, shape: PayloadShape): WireEvent {
   return { type: 'assistant/message', seq, time: dueMs, data: { text: payloadOf(shape, seq) } }
 }
 
 /** 每会话的状态：日志（含 backlog）与下一个 seq。 */
 interface SessionState {
-  log: Record<string, unknown>[]
+  log: WireEvent[]
   nextSeq: number
 }
 
@@ -103,10 +104,7 @@ export function startFakeUpstream(params: UpstreamParams): UpstreamHandle {
     state: SessionState,
     request: { maxMessages?: number },
     signal: AbortSignal,
-  ): AsyncIterable<
-    | { type: 'snapshot'; cursor: number; records: readonly { type: 'event'; event: unknown }[]; hasMore: boolean }
-    | { type: 'event'; event: unknown }
-  > {
+  ): AsyncIterable<UpstreamFollowFrame> {
     // 首次打开：预置 backlog（决定 3）—— 时间均匀铺在过去，seq 从 0 起。
     if (state.log.length === 0 && params.backlogSeq > 0) {
       const intervalMs = 1_000 / params.eventRate
@@ -119,7 +117,14 @@ export function startFakeUpstream(params: UpstreamParams): UpstreamHandle {
 
     const window = request.maxMessages ?? 500
     const records = state.log.slice(-window).map(event => ({ type: 'event' as const, event }))
-    yield { type: 'snapshot', cursor: state.nextSeq - 1, records, hasMore: state.log.length > window }
+    yield {
+      type: 'snapshot',
+      header: { version: 1, id: 'bench', createdAt: Date.now(), isSeeded: false },
+      cursor: state.nextSeq - 1,
+      records,
+      hasMore: state.log.length > window,
+      projections: { asOfSeq: state.nextSeq - 1, values: {} },
+    }
 
     const intervalMs = 1_000 / params.eventRate
     let nextDue = Date.now()

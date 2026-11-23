@@ -51,7 +51,14 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
   'item-follow-opening': {
     type: 'item',
     streamId: 's-9',
-    value: { type: 'snapshot', sessionId: 's-1', cursor: 3, pageStart: 1, hasOlder: false, events: [] },
+    value: {
+      type: 'snapshot',
+      header: { version: 1, id: 's-1', createdAt: 1_700_000_000_000, cwd: '/Users/x/proj', isSeeded: false },
+      cursor: 3,
+      records: [{ type: 'event', event: { type: 'user/message', seq: 3, time: 1_700_000_000_003, data: { text: 'm3' } } }],
+      hasMore: false,
+      projections: { asOfSeq: 3, values: {} },
+    },
   },
   'item-events-question': {
     type: 'item',
@@ -151,11 +158,8 @@ test('every client sample is exactly what the gateway parses', () => {
     assert.equal(request.kind, sample.kind, `${sample.name}: 开的是哪种流`)
     if (sample.kind === 'follow') {
       assert.equal(sample.sessionId !== undefined, true, `${sample.name}: follow 样本必须带会话名`)
-      assert.equal(
-        (request as { sessionId?: string }).sessionId,
-        sample.sessionId,
-        `${sample.name}: 会话名`,
-      )
+      const parsed = (request as { request?: { address?: { sessionId?: string } } }).request
+      assert.equal(parsed?.address?.sessionId, sample.sessionId, `${sample.name}: 会话名`)
     }
   }
 })

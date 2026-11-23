@@ -1,6 +1,10 @@
 /**
- * 模型基线的两条出口：同一份 `modelSelection` 投影视图，经 HTTP `snapshot`（`SessionPort.read`）
- * 与 WS follow 的 opening 必须给出同一个值 —— 都是投影的 `next`。
+ * 模型基线**经 HTTP `snapshot`** 的那条出口：读的是同一份 `modelSelection` 投影视图，
+ * 交出去的必须是投影的 `next`。
+ *
+ * WS 那条出口本期已经没有了 —— 打开帧改成转发上游 `snapshot` 之后，网关不再往里加
+ * 任何一格（判据：`remote/stream.test.ts` 的「the opening carries no model」）。
+ * 这条 HTTP 出口本身也在第 2 期的 `session/page` 转发里退场，届时本文件随之删除。
  *
  * 为什么这条判据要接到真实来源上：宿主给的是 `{lastUsed, next}` 两格的视图，而协议要的是
  * 「下一轮将用什么」这一个选择。`lastUsed` 是**上一轮**用了什么，把它或整份视图发出去，
@@ -12,13 +16,8 @@
  * Run: node --test tests/model-baseline.test.ts
  */
 import assert from 'node:assert/strict'
-import { once } from 'node:events'
-import { createServer } from 'node:http'
 import test from 'node:test'
-import { attachStreamHandler } from '../src/remote/server.ts'
-import { STREAM_PATH } from '../src/remote/connection.ts'
-import type { FollowSource } from '../src/ports/follow.ts'
-import { modelSelectionSourceOver, streamSourceOver } from '../src/upstream/faces.ts'
+import { modelSelectionSourceOver } from '../src/upstream/faces.ts'
 import { createSessionPort, type PersistenceLike } from '../src/upstream/sessions.ts'
 import type { ModelSelection } from '../src/wire/model.ts'
 
@@ -32,7 +31,7 @@ const HOST_VIEW = {
 /** 期望的基线：投影的 `next`，一个字都不多。 */
 const EXPECTED: ModelSelection = { provider: 'deepseek', model: 'reasoner', reasoningEffort: 'high' }
 
-type HostContext = Parameters<typeof streamSourceOver>[0]
+type HostContext = Parameters<typeof modelSelectionSourceOver>[0]
 
 /**
  * 假宿主：只提供两条出口真正读到的服务，形状照运行时 —— `sessions.get(id)` 拿到会话对象，
@@ -93,67 +92,19 @@ async function baselineOverHttp(view: unknown): Promise<unknown> {
   return 'model' in slice ? slice.model : undefined
 }
 
-/**
- * WS 那条出口的基线：真监听、真 WebSocket、真流处理器；只取第一帧（opening）。
- * 判据是「手机收到什么」，所以收的是线上文本 —— 不是装配函数的返回值。
- */
-async function baselineOverStream(view: unknown): Promise<{ model: unknown; present: boolean }> {
-  const source: FollowSource = streamSourceOver(fakeHost(view))
-  const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
-  server.listen(0)
-  try {
-    await once(server, 'listening')
-    const address = server.address()
-    assert.ok(address !== null && typeof address === 'object')
-    const socket = new WebSocket(`ws://127.0.0.1:${address.port}${STREAM_PATH}`)
-    try {
-      await new Promise<void>((resolve, reject) => {
-        socket.addEventListener('open', () => resolve(), { once: true })
-        socket.addEventListener('error', () => reject(new Error('socket failed to open')), { once: true })
-      })
-      const opening = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        socket.addEventListener('message', event => {
-          resolve(JSON.parse(String((event as { data: unknown }).data)) as Record<string, unknown>)
-        }, { once: true })
-        socket.addEventListener('error', () => reject(new Error('socket errored before the opening')), { once: true })
-        socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } }))
-      })
-      const payload = opening.value as Record<string, unknown>
-      return { model: payload.model, present: 'model' in payload }
-    } finally {
-      socket.close()
-    }
-  } finally {
-    server.closeAllConnections()
-    await new Promise<void>(resolve => { server.close(() => { resolve() }) })
-  }
-}
-
-test('both exits hand out the projection next — never the whole view, never lastUsed', { timeout: 15_000 }, async () => {
-  const overHttp = await baselineOverHttp(HOST_VIEW)
-  const overStream = await baselineOverStream(HOST_VIEW)
-
-  assert.deepEqual(overStream.model, EXPECTED,
-    'the opening carries the selection itself: `{provider, model, …}`, not the host view `{lastUsed, next}`')
-  assert.deepEqual(overHttp, EXPECTED, 'the snapshot carries the same selection')
-  // 两条出口同值由上面这两条共同确立，不另立一条断言 —— 重复的断言看起来像
-  // 第三条证据，实际不可能单独失败。
+test('the snapshot hands out the projection next — never the whole view, never lastUsed', { timeout: 15_000 }, async () => {
+  assert.deepEqual(await baselineOverHttp(HOST_VIEW), EXPECTED,
+    'the selection itself: `{provider, model, …}`, not the host view `{lastUsed, next}`')
 })
 
-test('a projection without next leaves the field out of both exits, never null and never a default', { timeout: 15_000 }, async () => {
+test('a projection without next leaves the field out, never null and never a default', { timeout: 15_000 }, async () => {
   const noNext = { lastUsed: HOST_VIEW.lastUsed, next: null }
-
-  assert.equal(await baselineOverHttp(noNext), undefined, 'HTTP: no baseline, the field is absent')
-  const overStream = await baselineOverStream(noNext)
-  assert.equal(overStream.present, false, 'WS: no baseline, the field is absent — not null, not a guess')
+  assert.equal(await baselineOverHttp(noNext), undefined, 'no baseline, the field is absent')
 })
 
-test('a projection that lacks modelSelection is honestly absent on both exits', { timeout: 15_000 }, async () => {
+test('a projection that lacks modelSelection is honestly absent', { timeout: 15_000 }, async () => {
   // 覆盖面是「投影未装 / 视图缺席」，不含「会话不存在」—— `fakeHost` 仍让
   // `sessions.get('s1')` 返回会话对象。后者由 `modelBaselineOf` 的第一句挡掉，
   // 那条分支的判据在读取处，不在这里。
-  assert.equal(await baselineOverHttp(undefined), undefined, 'HTTP: no projection, nothing to say')
-  const overStream = await baselineOverStream(undefined)
-  assert.equal(overStream.present, false, 'WS: no projection, nothing to say')
+  assert.equal(await baselineOverHttp(undefined), undefined, 'no projection, nothing to say')
 })

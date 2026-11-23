@@ -132,9 +132,8 @@ export function streamSourceOver(ctx: HostContext): FollowSource {
   // （漏了 `turnWindow`）。
   const controller = ctx.sessionController as unknown as Pick<FollowSource, 'follow'>
   return {
+    // 入参是上游的 `SessionFollowRequest`，原样递过去 —— 这一层不该认识窗口。
     follow: (request, signal) => controller.follow(request, signal),
-    // 模型基线随开流走：与 snapshot 路径同一处读取 —— 开流是存活会话走的路径。
-    modelOf: (sessionId) => modelBaselineOf(ctx, sessionId),
     // control 流的基线：全部会话，与上游 `SessionControlController.baseline()` 同形。
     controlBaseline: () => {
       const read = ctx.sessionProjections as unknown as ProjectionsLike

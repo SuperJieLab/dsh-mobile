@@ -32,6 +32,48 @@ export interface WireEvent {
   [extraField: string]: unknown
 }
 
+/**
+ * 一屏历史里的一条记录：事件外面包一层判别字段。
+ *
+ * 打开帧的 `records` 与分页应答的 `records` 是**同一个类型** —— 客户端用同一套合并
+ * 逻辑吃它们，两处分开声明时，加一格只会在一边加。剥这一层是客户端的事。
+ */
+export interface SessionRecord {
+  type: 'event'
+  event: WireEvent
+}
+
+/**
+ * 会话的元信息，随打开帧原样下发（上游 `SessionWireHeader`，九格）。
+ *
+ * 网关不解释其中的任何一格：`version` 的取值集合上游没有约定，`cwd`/`parentSession`
+ * 只对宿主有意义。手机上用到哪几格是手机的判断，这里是转达。
+ */
+export interface SessionWireHeader {
+  version: number
+  id: string
+  /** Unix 纪元毫秒。 */
+  createdAt: number
+  cwd?: string
+  parentSession?: string
+  /** 会话是否含一段 fork 继承来的前缀。 */
+  isSeeded: boolean
+  origin?: 'subagent'
+  delegationDepth?: number
+  agentPreset?: string
+}
+
+/**
+ * 一次投影切取：值，以及它到达的水位。
+ *
+ * `session/control` 的 `baseline` 与打开帧随行的 `projections` 同形 —— 两者是同一份
+ * 投影在两个出口上的样子，类型分开声明就会在一边漏一格。
+ */
+export interface ProjectionBaseline {
+  asOfSeq: number
+  values: Readonly<Record<string, unknown>>
+}
+
 /** 一次读出的会话日志切片，以及它到达的水位。 */
 export interface SessionSlice {
   /** 下一个期望的 seq —— 见上文的半开规则。 */

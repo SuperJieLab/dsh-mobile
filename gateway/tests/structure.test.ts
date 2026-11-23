@@ -1263,7 +1263,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   {
     home: 'protocol/window.ts',
-    values: ['LogNotDenseError', 'CursorPastEndError', 'pageWindow', 'upstreamWindow', 'fitOpeningToBytes'],
+    values: ['LogNotDenseError', 'CursorPastEndError', 'pageWindow', 'fitOpeningToBytes'],
     types: ['OpeningShrink'],
   },
   { home: 'protocol/usage.ts', values: ['usageIsTrigger'], types: [] },

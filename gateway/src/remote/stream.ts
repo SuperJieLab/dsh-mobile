@@ -31,25 +31,24 @@
  */
 
 import {
-  DEFAULT_FOLLOW_MESSAGES,
   openRequestOf,
   parseClientFrame,
   type EventsValue,
-  type FollowOpening,
   type FollowValue,
   type MuxApprovalWaterfall,
   type StreamId,
 } from '../wire/mux.ts'
 import { encodeServerFrame, type ControlValue } from '../wire/mux.ts'
-import { fitOpeningToBytes, upstreamWindow } from '../protocol/window.ts'
+import { fitOpeningToBytes } from '../protocol/window.ts'
+import type { FollowSnapshot } from '../wire/mux.ts'
 import { usageIsTrigger } from '../protocol/usage.ts'
 import { randomUUID } from 'node:crypto'
 import { describeError } from '../ports/errors.ts'
+import type { FollowRequest } from '../wire/endpoints.ts'
 import type { ApprovalSource, HeldApproval } from '../ports/approval.ts'
 import { streamErrorOf } from '../protocol/error-codes.ts'
-import type { WireEvent } from '../wire/rpc.ts'
-import type { ModelSelection } from '../wire/model.ts'
-import type { FollowSource, ProjectionBaseline } from '../ports/follow.ts'
+import type { FollowSource } from '../ports/follow.ts'
+import type { ProjectionBaseline } from '../wire/rpc.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import type { ForwardedSource } from '../ports/events.ts'
 import type { Duplex } from 'node:stream'
@@ -160,7 +159,7 @@ export function onClientText(
     return { ok: true }
   }
 
-  void pumpFollow(socket, source, frame.streamId, request, abort.signal, done, openingCapBytes)
+  void pumpFollow(socket, source, frame.streamId, request.request, abort.signal, done, openingCapBytes)
   return { ok: true }
 }
 
@@ -475,57 +474,36 @@ function waterfallValue(held: HeldApproval): MuxApprovalWaterfall {
 }
 
 /**
- * 打开帧的货物：`snapshot` 支。
+ * 泵一条 follow 流：**转达**打开帧，随后转达事件，直到源结束、客户端取消，
+ * 或源破坏自己的契约。
  *
- * 判别字段是**货物种类**，不是业务事件类型 —— 打开帧的载荷里本来没有 `type`，
- * 加了它，客户端才有一条「读一格就知道是哪类货物」的路（S2）。事件与未定稿帧同理：
- * 前者包成 `{type:'event', event}`，后者的 `type:'assistant-stream'` 本来就是判别字段。
+ * 网关在这一条上只剩两件事：把字节上界施加在宿主的窗口上（§B1），以及见证
+ * 「seq 无缺口」这条源自己的承诺。窗口怎么切、哪些字段随行，都是宿主的判定 ——
+ * 上一版在这里按 `maxMessages` 重切一遍，等于把宿主的规则抄了一份，宿主改规则时
+ * 网关不会红，症状是「同一屏在 Web UI 与手机上长度不同」。
+ *
+ * **裁剪只动 `records` 与 `hasMore`**：`cursor` 说的是「宿主覆盖到哪」，不是「我发了
+ * 多少」；跟着裁的后果是客户端把「上面还有」读成「日志到头」。
  */
-function snapshotValue(opening: FollowOpening): { type: 'snapshot' } & FollowOpening {
-  return { type: 'snapshot', ...opening }
-}
-
 async function pumpFollow(
   socket: Duplex,
   source: FollowSource,
   streamId: StreamId,
-  request: { sessionId: string; maxMessages?: number },
+  request: FollowRequest,
   signal: AbortSignal,
   done: () => void,
   openingCapBytes: number,
 ): Promise<void> {
+  const sessionId = request.address.sessionId
   const sendItem = (payload: unknown, perf?: PerfContext): void => {
     send(socket, { type: 'item', streamId, value: payload }, perf)
   }
 
-  /**
-   * 读模型基线，规则同占用：事件之外的附加物，抛错的读记日志后
-   * 跳过，绝不是 `error` 帧。
-   */
-  const readModel = (): ModelSelection | undefined => {
-    if (source.modelOf === undefined) return undefined
-    try {
-      return source.modelOf(request.sessionId)
-    } catch (error) {
-      log.error('model read failed',
-        { session: request.sessionId, error: describeError(error) })
-      return undefined
-    }
-  }
-
   try {
-    const iterable = source.follow({
-      address: { kind: 'session', sessionId: request.sessionId },
-      // 窗口按参考的拼法请求，切自我们 `page` 窗口所用的同一目标 ——
-      // 打开因此始于 turn 边界。
-      ...upstreamWindow(request.maxMessages ?? DEFAULT_FOLLOW_MESSAGES),
-      assistantStream: true,
-      // 与上游浏览器客户端同一条路：打开即激活。少了它，这个会话在宿主里只被被动观察，
-      // `ctx.agents` 里没有它 —— 手机上看着一切正常，一发消息就是「会话不在」。
-      activate: true,
-    }, signal)
+    // 入参原样交给宿主 —— 包括缺省的键。补一个宿主没要的默认值就是第二份窗口规则。
+    const iterable = source.follow(request, signal)
 
-    let expectedSeq: number | undefined // 下一个事件 seq，取自打开的 cursor
+    let expectedSeq: number | undefined // 下一个事件 seq，取自打开的 cursor（含端，故 +1）
     let transientCount = 0
 
     for await (const frame of iterable) {
@@ -534,49 +512,30 @@ async function pumpFollow(
       const gwRecv = perfNow()
 
       if (frame.type === 'snapshot') {
-        // 窗口已由源自身的分页切好 —— 与 `page` 建模所依据的是同一条
-        // 消息数规则。解包即可，不要重切。
-        //
-        // `record.event` 在宿主侧是不透明的，这里把它标成 `WireEvent` 是
-        // **转发契约的断言**（协议 §4.1 承诺 `{type, seq, time, data}`，我们
-        // 原样转达、不解语义）。不标它，opening 的类型就拴不住实际发出的字段。
-        const events = frame.records.map(record => record.event as WireEvent)
-        const cursor = frame.cursor + 1 // 参考 cursor 含端；我们排他
-        expectedSeq = cursor
-        const model = readModel()
+        expectedSeq = frame.cursor + 1
+        const records = frame.records
 
-        // 窗口的组装只写一处：量尺与实际发送共用它 —— 否则「量了什么」
-        // 与「发了什么」迟早漂移。返回类型钉成 `FollowOpening`：加字段忘了
-        // 改类型、或把错形状塞进某个字段，都在编译期失败（本期 `model` 就是
-        // 这么漏了两版）。
-        const openingPayload = (start: number): FollowOpening => {
-          const kept = events.slice(start)
-          const first = kept[0] as { seq?: unknown } | undefined
-          return {
-            sessionId: request.sessionId,
-            cursor,
-            pageStart: typeof first?.seq === 'number' ? first.seq : cursor,
-            hasOlder: start > 0 || frame.hasMore,
-            events: kept,
-            ...(frame.projections === undefined ? {} : { projections: frame.projections }),
-            ...(frame.assistantStream === undefined ? {} : { assistantStream: frame.assistantStream }),
-            ...(model === undefined ? {} : { model }),
-          }
-        }
+        // 帧的组装只写一处：量尺与实际发送共用它 —— 否则「量了什么」与「发了什么」
+        // 迟早漂移。`{...frame}` 是转达本身：宿主多给的字段照发，网关不筛。
+        const withRecords = (start: number): FollowSnapshot => ({
+          ...frame,
+          records: records.slice(start),
+          hasMore: start > 0 ? true : frame.hasMore,
+        })
 
         // 界由字节定、切点由轮定：装不下就按轮边界收窄，连一轮都装不下则拒绝 ——
         // 「断连」与「发半截轮」都不是可接受的降级。
         const frameBytesAt = (start: number): number =>
-          encodeTextFrame(encodeServerFrame({ type: 'item', streamId, value: snapshotValue(openingPayload(start)) })).length
-        const shrink = fitOpeningToBytes(events, openingCapBytes, frameBytesAt)
+          encodeTextFrame(encodeServerFrame({ type: 'item', streamId, value: withRecords(start) })).length
+        const shrink = fitOpeningToBytes(records, openingCapBytes, frameBytesAt)
         if ('unshrinkable' in shrink) {
           log.error('follow opening exceeds the cap even at one turn — refused',
-            { session: request.sessionId, cap: openingCapBytes })
+            { session: sessionId, cap: openingCapBytes })
           // 拒绝路径没有帧可发，但这条记录就是「这个会话为什么打不开」的答案。
           perfRecord(LogModule.ws, gwRecord({
-            sessionId: request.sessionId,
+            sessionId,
             kind: 'opening',
-            events: events.length,
+            events: records.length,
             rejected: 'window-too-large',
             gwRecv,
           }, perfNow(), frameBytesAt(0)))
@@ -588,30 +547,30 @@ async function pumpFollow(
           return
         }
 
-        const sentCount = events.length - shrink.start
+        const payload = withRecords(shrink.start)
         // 字节数进 info 行（不是只在 perf 记录里）：慢链路上「帧有多大」与「传了多久」
         // 是两件事，而这一行是后者的一半已知量 —— 另一半在客户端。**两半分开报**：
-        // 收窄只裁得动 `events`；未定稿基线 / 占用 / 模型基线裁不动，却同样占着上界的
+        // 收窄只裁得动 `records`；头部 / 投影基线 / 未定稿基线裁不动，却同样占着上界的
         // 额度 —— 帧超限时，超出的部分可以整个落在这裁不动的一半里。
         const openingBytes = frameBytesAt(shrink.start)
         const fixedBytes = encodeTextFrame(encodeServerFrame({
-          type: 'item', streamId, value: snapshotValue({ ...openingPayload(shrink.start), events: [] }),
+          type: 'item', streamId, value: { ...frame, records: [] },
         })).length
         log.info('follow opening', {
-          session: request.sessionId,
-          cursor: String(cursor),
-          events: sentCount,
+          session: sessionId,
+          cursor: String(payload.cursor),
+          events: payload.records.length,
           bytes: openingBytes,
           fixedBytes,
           cutEvents: shrink.cutEvents,
           cutTurns: shrink.cutTurns,
         })
-        sendItem(snapshotValue(openingPayload(shrink.start)), {
+        sendItem(payload, {
           // 窗口重放也占 t2 段，且通常是整条流里最大的一帧 —— 它的尺寸
           // 是「这一帧为什么超限」唯一的现场证据。
-          sessionId: request.sessionId,
+          sessionId,
           kind: 'opening',
-          events: sentCount,
+          events: payload.records.length,
           // 未收窄时这两个字段缺席（不填 0）——「没裁」与「裁了 0 条」是两件事。
           ...(shrink.cutTurns === 0 ? {} : { cutTurns: shrink.cutTurns, cutEvents: shrink.cutEvents }),
           gwRecv,
@@ -631,7 +590,7 @@ async function pumpFollow(
         }
         if (typeof event?.seq === 'number') expectedSeq = event.seq + 1
         sendItem({ type: 'event', event } satisfies FollowValue, {
-          sessionId: request.sessionId,
+          sessionId,
           kind: 'event',
           ...(typeof event?.seq === 'number' ? { seq: event.seq } : {}),
           ...(typeof event?.time === 'number' ? { evTime: event.time } : {}),
@@ -641,7 +600,7 @@ async function pumpFollow(
         // 这类事件可能挪动了投影 —— 叫醒同会话的 control 流去重读。控制流自己开着
         // 才有听众，没开时这里是一次空遍历。
         if (typeof event?.type === 'string' && usageIsTrigger({ type: event.type })) {
-          notifyProjection(request.sessionId, typeof event.seq === 'number' ? event.seq : 0)
+          notifyProjection(sessionId, typeof event.seq === 'number' ? event.seq : 0)
         }
         continue
       }

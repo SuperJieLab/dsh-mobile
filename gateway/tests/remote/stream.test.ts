@@ -15,7 +15,7 @@ import { setPerfSink } from '../../src/log.ts'
 import type { FollowSource, UpstreamFollowFrame } from '../../src/ports/follow.ts'
 import type { WireEvent } from '../../src/wire/rpc.ts'
 import {
-  connect, event, fakeSource, filler, receive, send, snapshotFrame, turn,
+  connect, event, fakeSource, filler, openArgs, receive, send, snapshotFrame, turn,
 } from './harness.ts'
 
 
@@ -33,17 +33,16 @@ test('upgrade + follow: opening, then events, in mux frames', { timeout: 10_000 
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const opening = await receive(socket)
     assert.equal(opening.type, 'item')
-    const payload = opening.value as Record<string, unknown>
+    const payload = opening.value as { type?: string; cursor?: number; hasMore?: boolean; records?: { event?: unknown }[] }
     assert.equal(payload.type, 'snapshot', '打开帧的货物种类')
-    assert.equal(payload.sessionId, 's1')
-    assert.equal(payload.cursor, 3, 'exclusive end of the opening window')
-    assert.equal(payload.hasOlder, false)
-    // The events are the DSH objects verbatim — unwrapped, untransformed.
-    assert.deepEqual(payload.events, log)
+    assert.equal(payload.cursor, 2, 'cursor 是宿主给的含端上界，原样')
+    assert.equal(payload.hasMore, false)
+    // 记录是宿主给的那一份 —— 每条包一层判别字段，里面的事件逐字。
+    assert.deepEqual(payload.records?.map(record => record.event), log)
 
     const first = await receive(socket)
     assert.equal((first.value as { type?: string }).type, 'event', '货物种类是判别字段，不是业务事件类型')
@@ -72,7 +71,7 @@ test('the follow request asks the host to activate the session — the same as t
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     await receive(socket)
 
     assert.equal(source.requests.length, 1)
@@ -101,15 +100,15 @@ test('S1 at the adapter: the WS opening equals the HTTP page window', { timeout:
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     const opening = await receive(socket)
-    const payload = opening.value as { events: WireEvent[]; cursor: number; pageStart: number; hasOlder: boolean }
+    const payload = opening.value as { records: { event: WireEvent }[]; cursor: number; hasMore: boolean }
 
-    assert.equal(payload.events.length, 50)
-    assert.equal(payload.pageStart, 7)
-    assert.equal(payload.hasOlder, true)
-    assert.equal(payload.cursor, 57)
-    assert.equal(JSON.stringify(payload.events), JSON.stringify(log.slice(7)))
+    assert.equal(payload.records.length, 50, '宿主切的窗口原样到达')
+    assert.equal(payload.records[0].event.seq, 7, '窗口起点就是宿主给的那一条')
+    assert.equal(payload.hasMore, true, '窗口之前还有 —— 宿主说的')
+    assert.equal(payload.cursor, 56, '含端上界原样，不 +1')
+    assert.equal(JSON.stringify(payload.records.map(record => record.event)), JSON.stringify(log.slice(7)))
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30)) // let the close handshake clear the server's heartbeat
   } finally {
@@ -130,10 +129,10 @@ test('a transient frame passes through verbatim and cursor-less', { timeout: 10_
   try {
     await once(server, 'listening')
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const opening = await receive(socket)
-    assert.equal((opening.value as Record<string, unknown>).cursor, 0)
+    assert.equal((opening.value as Record<string, unknown>).cursor, -1, '空日志的含端上界是 -1，原样转达')
 
     const frame = await receive(socket)
     assert.deepEqual(frame.value, { type: 'assistant-stream', frame: transient.frame })
@@ -161,7 +160,7 @@ test('a source that skips a seq is refused loudly, not rendered', { timeout: 10_
     try {
       await once(server, 'listening')
       const socket = await connect(server)
-      send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+      send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
       await receive(socket) // opening
       const refusal = await receive(socket)
@@ -186,7 +185,7 @@ test('a hostile source still answers with an error frame — the process does no
   try {
     await once(server, 'listening')
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 'ghost' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('ghost') } })
 
     const refusal = await receive(socket)
     assert.equal(refusal.type, 'error')
@@ -208,7 +207,7 @@ test('an unreadable-session failure maps to its own code, like the HTTP path', {
   try {
     await once(server, 'listening')
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     const refusal = await receive(socket)
     assert.equal((refusal.error as { code: string }).code, 'unreadable-session')
     socket.close()
@@ -217,62 +216,6 @@ test('an unreadable-session failure maps to its own code, like the HTTP path', {
     server.closeAllConnections()
     server.close()
   }
-})
-
-test('the opening asks upstream for a window that starts on a turn boundary', { timeout: 10_000 }, async () => {
-  const source = fakeSource([snapshotFrame([event(0)], 1)])
-  const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
-  server.listen(0)
-
-  const socket = await connect(server)
-  try {
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
-    await receive(socket) // the opening frame
-  } finally {
-    socket.close()
-    server.closeAllConnections()
-    server.close()
-  }
-
-  // The reference spells the rule as a floor and a ceiling; both come from the
-  // one target our own window function takes, so the opening and `page` ask for
-  // the same window.
-  assert.deepEqual(source.requests, [{
-    address: { kind: 'session', sessionId: 's1' },
-    maxMessages: 100,
-    turnWindow: { minMessages: 50, minTurns: 1 },
-    assistantStream: true,
-    activate: true,
-  }])
-})
-
-test('an explicit maxMessages reaches upstream as its own target, not the default', { timeout: 10_000 }, async () => {
-  // 默认目标那条已由上一条钉住；这条问的是**显式尺寸有没有被丢在半路**：
-  // `followRequestOf` 解出来的 `maxMessages` 若没传到 `upstreamWindow`，宿主就会按
-  // 默认窗口切，而客户端拿到的首屏比它要的更宽 —— 无报错、只是多了。
-  const source = fakeSource([snapshotFrame([event(0)], 1)])
-  const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
-  server.listen(0)
-
-  const socket = await connect(server)
-  try {
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1', maxMessages: 7 } } })
-    await receive(socket) // the opening frame
-  } finally {
-    socket.close()
-    server.closeAllConnections()
-    server.close()
-  }
-
-  assert.deepEqual(source.requests, [{
-    address: { kind: 'session', sessionId: 's1' },
-    maxMessages: 14,
-    turnWindow: { minMessages: 7, minTurns: 1 },
-    assistantStream: true,
-    activate: true,
-  }])
 })
 
 test('cancel stops the stream; the pump yields no further frames for it', { timeout: 10_000 }, async () => {
@@ -302,7 +245,7 @@ test('cancel stops the stream; the pump yields no further frames for it', { time
   try {
     await once(server, 'listening')
     socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     await receive(socket) // opening
     await receive(socket) // event 1
@@ -330,35 +273,20 @@ test('cancel stops the stream; the pump yields no further frames for it', { time
   }
 })
 
-test('the opening carries the model baseline when the source knows it, absent otherwise', { timeout: 10_000 }, async () => {
-  const source = {
-    ...fakeSource([snapshotFrame([event(0)], 1)]),
-    modelOf: (sessionId: string) => sessionId === 's1' ? { provider: 'p', model: 'A' } : undefined,
-  }
+test('the opening carries no model — the projection is the only source', { timeout: 10_000 }, async () => {
+  // 打开帧曾经带一份 `model`，投影也带一份：切模型走 `session/selectModel`，投影会变、
+  // 打开帧不会 —— 症状是「切了模型但功能条不变」。转发之后打开帧里没有这一格可带。
+  const source = fakeSource([snapshotFrame([event(0)], 1)])
   const server = createServer()
-  // 这条会连两次：一个身份只许一条 socket（本期），所以每次升级给一个新身份。
-  let identitySeq = 0
-  attachStreamHandler(server, source, {
-    authenticate: () => ({ id: `test-${(identitySeq += 1)}`, canAnswer: true }),
-  })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) })
   server.listen(0)
   try {
     await once(server, 'listening')
-
-    const first = await connect(server)
-    send(first, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
-    const known = await receive(first)
-    assert.deepEqual((known.value as Record<string, unknown>).model, { provider: 'p', model: 'A' },
-      'the baseline rides the opening, same breath as the window')
-    first.close()
-
-    const second = await connect(server)
-    send(second, { type: 'open', streamId: 's2', endpoint: 'session/follow', payload: { args: { sessionId: 's-unknown' } } })
-    const unknown = await receive(second)
-    assert.equal('model' in (unknown.value as Record<string, unknown>), false,
-      'an unknown baseline stays out of the payload, never guessed')
-    second.close()
-
+    const socket = await connect(server)
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
+    const payload = (await receive(socket)).value as Record<string, unknown>
+    assert.equal('model' in payload, false, '打开帧里不该再有模型')
+    socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
     server.closeAllConnections()
@@ -390,7 +318,7 @@ test('pump: one perf record per forwarded frame — opening and events alike', {
   try {
     await once(server, 'listening')
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     await receive(socket) // opening
     await receive(socket) // event 3
@@ -448,21 +376,21 @@ test('opening narrowing: cut on a turn boundary, kept under the byte cap', { tim
   const log = [turn(0), filler(1, 300), turn(2), filler(3, 300)]
   const source = fakeSource([snapshotFrame(log, 4)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 700 })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 900 })
   server.listen(0)
   try {
     await once(server, 'listening')
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const opening = await receive(socket)
-    const payload = opening.value as { events: WireEvent[]; pageStart: number; hasOlder: boolean; cursor: number }
+    const payload = opening.value as { records: { event: WireEvent }[]; hasMore: boolean; cursor: number }
     const wire = Buffer.byteLength(JSON.stringify(opening), 'utf8')
-    assert.ok(wire <= 700, `the frame fits the cap (was ${wire})`)
-    assert.equal(payload.events[0].type, 'turn/start', 'the start is a turn boundary')
-    assert.equal(payload.pageStart, 2, 'the earliest turn boundary that still fits')
-    assert.equal(payload.hasOlder, true, 'the older part stays reachable')
-    assert.equal(payload.cursor, 4, 'the water mark does not move when the window narrows')
+    assert.ok(wire <= 900, `the frame fits the cap (was ${wire})`)
+    assert.equal(payload.records[0].event.type, 'turn/start', 'the start is a turn boundary')
+    assert.equal(payload.records[0].event.seq, 2, 'the earliest turn boundary that still fits')
+    assert.equal(payload.hasMore, true, 'the older part stays reachable')
+    assert.equal(payload.cursor, 3, 'the water mark does not move when the window narrows')
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
@@ -483,7 +411,7 @@ test('opening narrowing: a single turn over the cap is refused, not truncated', 
   try {
     await once(server, 'listening')
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const refusal = await receive(socket)
     assert.equal(refusal.type, 'error')
@@ -507,11 +435,11 @@ test('opening narrowing: a nonsensical cap falls back to the default instead of 
   try {
     await once(server, 'listening')
     const socket = await connect(server)
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const opening = await receive(socket)
     assert.equal(opening.type, 'item', 'a nonsense cap must not turn into a refusal')
-    assert.equal((opening.value as { pageStart: number }).pageStart, 0, 'the default cap applies instead')
+    assert.equal((opening.value as { records: { event: { seq: number } }[] }).records[0].event.seq, 0, 'the default cap applies instead')
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
   } finally {
@@ -544,13 +472,13 @@ test('pump: a narrowed opening records how much it cut', { timeout: 10_000 }, as
   const log = [turn(0), filler(1, 300), turn(2), filler(3, 300)]
   const source = fakeSource([snapshotFrame(log, 4)])
   const server = createServer()
-  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 700 })
+  attachStreamHandler(server, source, { authenticate: () => ({ id: 'test-identity', canAnswer: true }) }, { openingCapBytes: 900 })
   server.listen(0)
   try {
     const records = await collectPerf(async () => {
       await once(server, 'listening')
       const socket = await connect(server)
-      send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+      send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
       await receive(socket)
       socket.close()
       await new Promise(resolve => setTimeout(resolve, 30))
@@ -579,7 +507,7 @@ test('pump: a refused opening is recorded with its reason', { timeout: 10_000 },
     const records = await collectPerf(async () => {
       await once(server, 'listening')
       const socket = await connect(server)
-      send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+      send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
       await receive(socket) // the error frame
       socket.close()
       await new Promise(resolve => setTimeout(resolve, 30))
@@ -621,13 +549,13 @@ test('one stream failing leaves the other stream on the same connection alive', 
     const socket = await connect(server)
 
     // 先起坏的那条：它应当收到一条 error 帧。
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 'broken' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('broken') } })
     const refusal = await receive(socket)
     assert.equal(refusal.type, 'error')
     assert.equal((refusal.error as { code: string }).code, 'internal-error')
 
     // 同一条连接上再起一条好的：连接与它都还活着。
-    send(socket, { type: 'open', streamId: 's2', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's2', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     const opening = await receive(socket)
     assert.equal(opening.type, 'item', 'the second stream still opens after the first one failed')
     const forwarded = await receive(socket)
@@ -700,15 +628,15 @@ test('U1: cancel then reopen under a fresh id — the second stream really runs'
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     assert.equal((await receiveFor(socket, 'a')).type, 'item', '先有第一条流的打开帧')
 
     send(socket, { type: 'cancel', streamId: 'a' })
-    send(socket, { type: 'open', streamId: 'b', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'b', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const opening = await receiveFor(socket, 'b')
     assert.equal(opening.type, 'item', '取消之后换号重开：新的打开帧必须到达')
-    assert.equal((opening.value as Record<string, unknown>).sessionId, 's1')
+    assert.equal((opening.value as { header?: { id?: string } }).header?.id, 's-1', '打开帧带的是宿主给的头部')
     assert.equal(source.started, 2, '两次开流各起过一条泵 —— 取消没有把第二次一起吞掉')
 
     socket.close()
@@ -728,11 +656,11 @@ test('U2: a second open under the same id is a protocol violation — the connec
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 'dup', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'dup', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     await receiveFor(socket, 'dup') // 泵还活着（源停在原地）
 
     // 编号归客户端所有，约定不复用。重复出现说明客户端坏了。
-    send(socket, { type: 'open', streamId: 'dup', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'dup', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const code = await waitForClose(socket)
     // 1008 = 策略违规：帧协议被破坏。带码而不是 destroy（1006）—— 手机侧要靠这个码
@@ -753,8 +681,8 @@ test('U3: two streams on one connection — cancelling one leaves the other aliv
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
-    send(socket, { type: 'open', streamId: 'b', endpoint: 'session/follow', payload: { args: { sessionId: 's2' } } })
+    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
+    send(socket, { type: 'open', streamId: 'b', endpoint: 'session/follow', payload: { args: openArgs('s2') } })
     await receiveFor(socket, 'a')
     await receiveFor(socket, 'b')
     assert.equal(source.started, 2, '同一连接上并存两条流')
@@ -789,7 +717,7 @@ test('U4: cancel for an id whose pump already finished is not a violation', { ti
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 'gone', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'gone', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     await receiveFor(socket, 'gone')
     assert.equal((await receiveFor(socket, 'gone')).type, 'end', '源结束，泵自己收尾')
     await new Promise(resolve => setTimeout(resolve, 30)) // 让 `finally` 里的删除落地
@@ -797,7 +725,7 @@ test('U4: cancel for an id whose pump already finished is not a violation', { ti
     send(socket, { type: 'cancel', streamId: 'gone' })
 
     // 连接还在的证据：同一个连接上还能开新流并收到它的打开帧。
-    send(socket, { type: 'open', streamId: 'next', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'next', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     const opening = await receiveFor(socket, 'next')
     assert.equal(opening.type, 'item', '取消一个已收尾的编号之后，连接必须还能用')
     assert.equal(source.calls, 2)
@@ -854,16 +782,18 @@ test('U5: a stream that ends by itself reclaims its id — the table does not gr
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 'x', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'x', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     await receiveFor(socket, 'x')
     assert.equal((await receiveFor(socket, 'x')).type, 'end')
     await new Promise(resolve => setTimeout(resolve, 50)) // 收尾的删除落地
 
     // 同号再开必须被当成**新流**接受 —— 条目没被回收的话，这里会变成「重复编号」而关连接。
-    send(socket, { type: 'open', streamId: 'x', endpoint: 'session/follow', payload: { args: { sessionId: 's2' } } })
+    send(socket, { type: 'open', streamId: 'x', endpoint: 'session/follow', payload: { args: openArgs('s2') } })
     const opening = await receiveFor(socket, 'x')
     assert.equal(opening.type, 'item', '收尾后编号已被回收，同号可以再开')
-    assert.equal((opening.value as Record<string, unknown>).sessionId, 's2')
+    // 打开帧里没有 `sessionId` 了（那是网关自己算的字段）；两条流的区别由请求决定 ——
+    // 这一条要说的是「编号被回收、新流真的起了」。
+    assert.equal((opening.value as { type?: string }).type, 'snapshot')
     assert.equal(source.calls, 2)
 
     socket.close()
@@ -886,14 +816,14 @@ test('U6: cancel does not drop the entry while the pump is still winding down', 
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     await receiveFor(socket, 'a')
 
     send(socket, { type: 'cancel', streamId: 'a' })
     await source.entered // 泵确定还在（被闸门挡着），条目此刻一定在表里
     assert.equal(source.aborted, 1, '取消送到了泵')
 
-    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'a', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const code = await waitForClose(socket)
     assert.equal(code, 1008, `取消后同号开流要带 1008 关；实际 code=${code}`)
@@ -922,7 +852,7 @@ test('E1a: an open naming no known endpoint is refused on that stream alone', { 
 
     // 非空的另一半：拒绝没有升级成断线 —— 同一连接上再开一条真流，它必须真的开起来。
     // 只断言「连接没关」看不出「把新 op 误判成断线」与「正确拒绝」的差别。
-    send(socket, { type: 'open', streamId: 'e3', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'e3', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     const opening = await receive(socket)
     assert.equal(opening.type, 'item')
     assert.equal(opening.streamId, 'e3')
@@ -946,7 +876,7 @@ test('E1b: a frame that cannot be attributed to any stream closes the connection
     const socket = await connect(server)
 
     // 先开一条真流：关连接时它确实被一起带走，而不是「反正也没东西可带」。
-    send(socket, { type: 'open', streamId: 'e1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 'e1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
     await receive(socket)
 
     send(socket, { type: 'open' }) // 没有编号：读不出它属于哪条流
@@ -974,7 +904,7 @@ test('opening 不再带占用 —— 占用量走 control 流', { timeout: 10_00
     await once(server, 'listening')
     const socket = await connect(server)
 
-    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { sessionId: 's1' } } })
+    send(socket, { type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: openArgs('s1') } })
 
     const payload = (await receive(socket)).value as Record<string, unknown>
     assert.equal(payload.occupancy, undefined, '打开帧里不该再有占用读数')
