@@ -6,7 +6,7 @@
  * 手机上长度不同」。判据因此只有三类：请求原样到达宿主、应答原样回到客户端、
  * 上游的「没有这个会话」被折成自己的码。
  *
- * 「原样」是双向的：多一格（网关补的默认值、自己算的 `pageStart`）与少一格
+ * 「原样」是双向的：多一格（网关补的默认值、自己算的窗口起点）与少一格
  * （只转发它记得的键）都算改了它。
  *
  * Run: node --test tests/protocol/page-forward.test.ts
@@ -64,7 +64,7 @@ test('判据 6: the page request reaches the host verbatim and its answer comes 
   // 请求：**同一个对象**，不是重拼的一份 —— 重拼就会漏掉网关不认识的键。
   assert.deepEqual(port.requests, [REQUEST])
   assert.equal(port.requests[0], REQUEST, '递过去的就是收到的那一份，不是副本')
-  // 应答：宿主的键集合（没有 `pageStart`/`asOfSeq`/`sessionId`/`events`）。
+  // 应答：宿主的键集合（没有窗口起点、没有 `asOfSeq`、没有 `sessionId`/`events`）。
   assert.deepEqual(valueOf(result), HOST_PAGE)
   assert.deepEqual(Object.keys(valueOf(result) as object).sort(), ['cursor', 'hasMore', 'records'])
 })
@@ -98,6 +98,9 @@ test('判据 6: a not-found from the host becomes unknown-session, anything else
 test('判据 14: the table serves session/page and neither mobile reader', () => {
   const names = registeredEndpointNames()
   assert.equal(names.includes('session/page'), true, 'session/page 必须在表里')
-  assert.deepEqual(names.filter(name => name === 'mobile/snapshot' || name === 'mobile/page'), [],
+  // terms-ok:start 判据的断言对象：它要证明这两条名字已从表里消失
+  const gone = ['mobile/snapshot', 'mobile/page']
+  // terms-ok:end
+  assert.deepEqual(names.filter(name => gone.includes(name)), [],
     '两条旧读端点已退场 —— 留着别名期就永远不知道谁还在用')
 })

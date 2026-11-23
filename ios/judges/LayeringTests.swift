@@ -2067,7 +2067,7 @@ final class LayeringTests: XCTestCase {
         return false
     }
 
-    /// 状态机不另声明窗口 / 快照的形状 —— 它引用协议里的 `SessionWindow` / `SessionSnapshot`。
+    /// 状态机不另声明窗口的形状 —— 它引用协议里的 `SessionWindow`。
     ///
     /// **只查「不许声明」，不查「有没有用上」。** 后者看着更严，实际是弱检查：入口签名里
     /// 写着 `SessionWindow` 就够让「出现过」为真，而被替换成本地同形类型时（真正的失败模式）

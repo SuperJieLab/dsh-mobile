@@ -5,7 +5,7 @@
  * 只有两类：入参收不收（判据 1），出帧是不是逐字那份（判据 3、4）。任何一条「我们
  * 自己算出来的字段」都会让第一条红。
  *
- * 判据 3 的键集合是**穷举**的：多一格（比如又塞回 `model` 或 `pageStart`）与少一格
+ * 判据 3 的键集合是**穷举**的：多一格（比如又塞回 `model` 或窗口起点）与少一格
  * （漏了 `header`）一样红 —— 两种都让手机端与 Web UI 看到的不是同一份东西。
  *
  * Run: node --test tests/remote/follow-opening.test.ts
@@ -129,8 +129,11 @@ test('判据 3: the opening is the host snapshot verbatim — same keys, same va
     assert.deepEqual(Object.keys(payload).sort(),
       ['cursor', 'hasMore', 'header', 'projections', 'records', 'type'],
       '打开帧的键集合就是宿主 snapshot 的键集合')
-    for (const gone of ['sessionId', 'pageStart', 'hasOlder', 'model', 'events']) {
-      assert.equal(gone in payload, false, `网关自己算的 "${gone}" 不该再出现`)
+    // terms-ok:start 判据的断言对象：这些格子必须已经不在打开帧里
+    const gone = ['sessionId', 'pageStart', 'hasOlder', 'model', 'events']
+    // terms-ok:end
+    for (const name of gone) {
+      assert.equal(name in payload, false, `网关自己算的 "${name}" 不该再出现`)
     }
 
     // 记录仍是 `{type:'event', event}`：剥层是客户端的事，网关不动。

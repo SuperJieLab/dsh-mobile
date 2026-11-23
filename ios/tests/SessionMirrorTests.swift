@@ -22,11 +22,10 @@ final class SessionMirrorTests: XCTestCase {
   /**
    一屏历史 —— 协议形状，状态机直接吃它。
 
-   参数名沿用旧口径（`asOfSeq` 是**排他**上界），窗口里存的是**含端**的 `cursor`：
-   换算是 `cursor = asOfSeq - 1`。用例因此可以继续按「覆盖到哪（不含）」写期望，
-   而状态机吃的是线上那一个数。
+   参数沿用「覆盖到哪（不含）」的写法（`asOfSeq`），窗口里存的是**含端**的 `cursor`：
+   换算是 `cursor = asOfSeq - 1`。用例因此可以按不含的上界写期望，而状态机吃的是线上那个数。
    */
-  private func window(_ pageStart: Int, _ asOfSeq: Int, _ events: [SessionEvent],
+  private func window(_ start: Int, _ asOfSeq: Int, _ events: [SessionEvent],
                       hasMore: Bool = false) -> SessionWindow {
     SessionWindow(
       records: events.map { SessionRecord(type: "event", event: $0) },

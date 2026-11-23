@@ -41,7 +41,7 @@ export interface StreamOwners {
  *
  * **只剩一格**：两条一元读端点退场之后，「一条应答至多多少事件 / 多少字节」不再
  * 是网关的事 —— 分页的窗口由宿主切（`session/page`），网关能施加的只有 WSS 一帧的
- * 尺寸。`maxDeltaEvents` / `maxDeltaBytes` 随 `mobile/snapshot` 一起删了：留着就是
+ * 尺寸。`maxDeltaEvents` / `maxDeltaBytes` 随 HTTP 快照端点一起删了：留着就是
  * 两个没有读者的旋钮，而配置文档会继续承诺一个并不存在的截断。
  */
 export interface Limits {

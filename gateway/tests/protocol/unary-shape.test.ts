@@ -96,12 +96,12 @@ test('新路径回 server-response，值就是数据源的产出', async () => {
 
 test('请求里的 method 与路径不一致 → invalid-request，且不落到处理器', async () => {
   await withListener(async (post) => {
-    const response = await post('/api/session/list', request('mobile/snapshot', 'r-1', { _request: {} }))
+    const response = await post('/api/session/list', request('commands/list', 'r-1', { _request: {} }))
     assert.equal(response.status, 200, '已归到一条端点的事，用信封而不是状态码表达')
     const body = await response.json() as { result: { ok: boolean; error: { code: string; details: unknown } } }
     assert.equal(body.result.ok, false)
     assert.equal(body.result.error.code, 'invalid-request')
-    assert.deepEqual(body.result.error.details, { method: 'mobile/snapshot', endpoint: 'session/list' })
+    assert.deepEqual(body.result.error.details, { method: 'commands/list', endpoint: 'session/list' })
   })
 })
 

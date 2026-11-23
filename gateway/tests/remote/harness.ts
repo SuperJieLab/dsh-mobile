@@ -66,8 +66,7 @@ export function fakeSource(
   return {
     calls: 0,
     requests: [],
-    // 这套夹具只造事件流：`occupancyOf` 是必填形状，这里给「不知道」；`modelOf` 是可选的，
-    // 整套夹具不造模型基线 —— 一个值都不伪造。
+    // 这套夹具只造事件流：`controlBaseline` 是可选面，整套夹具不造投影 —— 一个值都不伪造。
     async *follow(request, signal) {
       this.calls += 1
       this.requests.push(request)

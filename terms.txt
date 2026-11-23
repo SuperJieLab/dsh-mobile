@@ -48,6 +48,14 @@ mobile/permissionCatalog;mobile/permissionCatalog;permissionPresets/catalog;目�
 mobile/permissionSelect;mobile/permissionSelect;commands/execute 的 /permission;切档走命令域，与 Web UI 同一条路（F3 第 1 期）
 rpc/stream;/rpc/stream;WS /api/remote.mux;传输路径照上游（F3 第 1 期）
 
+# ── 端点与字段的退场名（F3 第 2 期：会话窗口改转发）──────────────────────
+# 两条自造读端点没了，窗口由宿主切；`pageStart`/`hasOlder` 是它们的出参格，
+# 与「含端 cursor / hasMore」是两套口径 —— 留着旧名就等于留两份水位写法。
+mobile/snapshot;mobile/snapshot;打开帧 + session/page;两条自造读端点退场（F3 第 2 期）
+mobile/page;mobile/page;session/page;同上
+pageStart;pageStart;窗口起点（records.first.seq）;随 mobile/page 退场（F3 第 2 期）
+hasOlder;hasOlder;hasMore;随 mobile/page 退场（F3 第 2 期）
+
 # ── 自查样本：规则被改坏时这里先红，不必等仓库真的回潮 ──────────────────
 expect-hit;正在生成的打字机内容
 expect-hit;瞬态帧不进水位
@@ -77,3 +85,10 @@ expect-pass;承载的是挂 seq 的四段边界记录
 expect-pass;文件名 = 它承载的核心类型名
 expect-pass;使用场景：回前台恢复
 expect-pass;组网 × 身份 × 传输 三段
+expect-hit;POST /api/mobile/snapshot
+expect-hit;翻页打的是 /api/mobile/page
+expect-hit;打开帧带 pageStart
+expect-hit;hasOlder 为假表示到头了
+expect-pass;POST /api/session/page
+expect-pass;窗口起点取 records.first.seq
+expect-pass;hasMore 为真表示上面还有
