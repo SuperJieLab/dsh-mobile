@@ -13,11 +13,9 @@ struct SessionListView: View {
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
 
-    /// 输入面板开着吗。**这是视图的本地值**：它只管「这一层皮在不在」，
-    /// 名字合法与否归 `WorkspaceName`，判定（发不发请求）与创建结果归状态层。
-    @State private var isNaming = false
-    /// 面板里那个输入框的内容。输入的**持有者**是视图，规则不在这里。
-    @State private var draftName = ""
+    /// 目录浏览器开着吗。**这是视图的本地值**：它只管「这一层皮在不在」，
+    /// 浏览到哪、能不能建归状态层。
+    @State private var isBrowsingWorkspace = false
     /// 正等着确认删除的那一组。`nil` 表示没有框开着 —— 它同时也是 `confirmationDialog`
     /// 的呈现条件，所以不另设一个布尔。
     @State private var pendingDeletion: PendingDeletion?
@@ -26,24 +24,26 @@ struct SessionListView: View {
         pairedList
     }
 
-    /// 打开「新建工作空间」的输入面板。
-    ///
-    /// 名字预填 `workspace-N`（**已注册**的那些里第一个空闲的）—— 用户多数时候只想赶紧建
-    /// 一个，不该被要求从零想个名字。根下还没注册的目录看不见，那种情况交给服务端撞。
-    private func startNamingWorkspace() {
-        draftName = WorkspaceName.suggestion(among: list.workspaces.map(\.title))
-        list.beginNamingWorkspace()
-        isNaming = true
+    /// 打开「新建工作空间」的目录浏览器，从宿主的 home 开始。
+    private func startBrowsingWorkspace() {
+        list.beginWorkspaceCreation()
+        isBrowsingWorkspace = true
+        Task { await list.browseDirectory(nil) }
     }
 
-    /// 提交名字。判定在状态层（不合法就不发请求），这里只发起 —— 视图不接结果。
-    private func submitName() {
-        Task { await list.submitWorkspaceName(draftName) }
+    /// 进一层（或上翻一格）：路径来自宿主给的那一行，视图不拼。
+    private func browse(_ path: String) {
+        Task { await list.browseDirectory(path) }
     }
 
-    private func closeNaming() {
-        isNaming = false
-        draftName = ""
+    /// 把当前这一层注册成工作空间。判定在状态层，这里只发起 —— 视图不接结果。
+    private func submitCurrentDirectory() {
+        guard let path = list.directoryListing?.path else { return }
+        Task { await list.createWorkspace(path: path) }
+    }
+
+    private func closeBrowsing() {
+        isBrowsingWorkspace = false
     }
 
     /// 这一次提交已经有结论（建好了 / 已经有了）—— 收口按钮该说「完成」。
@@ -56,15 +56,6 @@ struct SessionListView: View {
         }
     }
 
-    /// 名字不能用的理由，说人话。
-    private func text(of problem: WorkspaceName.Problem) -> String {
-        switch problem {
-        case .blank: return "名字不能是空的。"
-        case .pathSeparator: return "名字里不能有斜杠。"
-        case .dotEntry: return "「.」和「..」不能当名字。"
-        }
-    }
-
     /// 创建结果，说人话。
     private func text(of creation: WorkspaceCreation) -> String {
         switch creation {
@@ -74,24 +65,73 @@ struct SessionListView: View {
         }
     }
 
-    /// 「新建工作空间」的输入面板。
+    /// 「新建工作空间」的目录浏览器。
     ///
-    /// 只输一个名字：目录落在哪由网关决定（固定的根，与 Web UI 首次使用的是同一个父目录），
-    /// 所以这里**不出现任何目录浏览**。创建结果由状态层带回，面板只负责把它说人话。
-    private var namingSheet: some View {
+    /// 面包屑 + 子目录列表，每一行的 `path` 都是宿主给的绝对路径 —— 客户端只回声，
+    /// **不拼路径段**。选中的那一层就是新工作空间的目录；`title` 由宿主从路径取。
+    private var workspaceBrowserSheet: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("工作空间名字", text: $draftName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } footer: {
-                    if let problem = list.workspaceNameProblem {
-                        Text(text(of: problem)).foregroundStyle(.red)
-                    } else if let creation = list.workspaceCreation {
-                        Text(text(of: creation))
-                    } else {
-                        Text("名字就是 Mac 上那个目录的名字，会建在「文稿/deepseek-harness」下面。")
+            List {
+                if let listing = list.directoryListing {
+                    Section("位置") {
+                        ForEach(listing.crumbs, id: \.path) { crumb in
+                            Button {
+                                browse(crumb.path)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "folder")
+                                    Text(crumb.name)
+                                    Spacer()
+                                    if crumb.path == listing.path {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(.tint)
+                                    }
+                                }
+                            }
+                            .disabled(crumb.path == listing.path)
+                        }
+                    }
+
+                    Section {
+                        if listing.entries.isEmpty {
+                            Text("这一层没有子目录。")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(listing.entries, id: \.path) { entry in
+                                Button {
+                                    browse(entry.path)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: entry.hidden ? "folder.badge.questionmark" : "folder")
+                                        Text(entry.name)
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("子目录")
+                    } footer: {
+                        if listing.truncated {
+                            Text("这一层的子目录太多，只列出了前面一部分。")
+                        } else if let creation = list.workspaceCreation {
+                            Text(text(of: creation))
+                        } else if let failure = list.browseFailure {
+                            Text(failure).foregroundStyle(.red)
+                        } else {
+                            Text("在这个目录下新建工作空间：\(listing.path)")
+                        }
+                    }
+                } else if let failure = list.browseFailure {
+                    Text(failure).foregroundStyle(.red)
+                } else {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("正在读取 Mac 上的目录…")
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -99,16 +139,16 @@ struct SessionListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(hasOutcome ? "关闭" : "取消") { closeNaming() }
+                    Button(hasOutcome ? "关闭" : "取消") { closeBrowsing() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if hasOutcome {
                         // 建好了就得有一个**语义正确**的收口动作。只留「取消」的话，
                         // 用户对着一次成功会被要求点一个写着「放弃」的按钮。
-                        Button("完成") { closeNaming() }
+                        Button("完成") { closeBrowsing() }
                     } else {
-                        Button("创建") { submitName() }
-                            .disabled(list.isCreatingWorkspace)
+                        Button("在这里新建") { submitCurrentDirectory() }
+                            .disabled(list.directoryListing == nil || list.isCreatingWorkspace)
                     }
                 }
             }
@@ -235,12 +275,12 @@ struct SessionListView: View {
                     // 所以这里唯一的动作是建一个（不是「新建会话」）。
                     Text("在手机上建一个：给它起个名字，剩下的交给 Mac。")
                 } actions: {
-                    Button("新建工作空间") { startNamingWorkspace() }
+                    Button("新建工作空间") { startBrowsingWorkspace() }
                         .disabled(list.isCreatingWorkspace)
                 }
             }
         }
-        .sheet(isPresented: $isNaming) { namingSheet }
+        .sheet(isPresented: $isBrowsingWorkspace) { workspaceBrowserSheet }
         .confirmationDialog(deletionTitle,
                             isPresented: deletionIsPresented,
                             titleVisibility: .visible,
@@ -287,7 +327,7 @@ struct SessionListView: View {
                 // 顶层唯一的「新建」：造一个工作空间。会话由各组的标题行按钮建 ——
                 // 两步各自只做一件事，谁失败都看得出是哪一步。
                 Button {
-                    startNamingWorkspace()
+                    startBrowsingWorkspace()
                 } label: {
                     Image(systemName: "folder.badge.plus")
                 }

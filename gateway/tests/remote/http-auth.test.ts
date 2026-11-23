@@ -47,6 +47,7 @@ const deps = (): RpcListenerDeps => ({
   modelPort: undefined,
   commandPort: undefined,
   workspacePort: undefined,
+  directoryPort: undefined,
   permissionPort: undefined,
   auditLog: { append: (entry: Omit<AuditEntry, 'at'>) => { records.push(entry) } } as never,
 })
@@ -153,7 +154,7 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
     'session/selectModel',
     'commands/execute',
     'session/create',
-    'mobile/workspaceCreate',
+    'workspace/create',
     'workspace/delete',
     '$events/result',
     'session/prompt',

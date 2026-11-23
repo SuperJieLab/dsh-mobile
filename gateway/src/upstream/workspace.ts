@@ -20,7 +20,14 @@ const log = createLogger(LogModule.workspace)
  */
 export interface WorkspaceCreateFace {
   create(request: { path: string }): Promise<{
-    workspace: { workspaceId: string; title: string }
+    workspace: {
+      workspaceId: string
+      path: string
+      title: string
+      sessionIds: readonly string[]
+      createdAt: string
+      updatedAt: string
+    }
     created: boolean
   }>
 }
@@ -43,13 +50,14 @@ export interface WorkspaceDeleteFace {
 export async function createWorkspaceIn(
   controller: WorkspaceCreateFace,
   path: string,
-): Promise<{ workspaceId: string; title: string; created: boolean }> {
-  const { workspace, created } = await controller.create({ path })
+): Promise<{ workspace: Awaited<ReturnType<WorkspaceCreateFace['create']>>['workspace']; created: boolean }> {
+  // 入参与应答都原样：宿主按路径注册，标题由它从路径取；我们只搬。
+  const made = await controller.create({ path })
   // `created` 是这条链唯一一次出现的「这一次到底建了没有」—— 界面据此说两句不同的话，
   // 日志里没有它就分不清「用户以为建了新的，其实命中了旧的」。
-  log.info(created ? 'workspace registered' : 'workspace already registered',
-    { path, workspace: workspace.workspaceId })
-  return { workspaceId: workspace.workspaceId, title: workspace.title, created }
+  log.info(made.created ? 'workspace registered' : 'workspace already registered',
+    { path, workspace: made.workspace.workspaceId })
+  return made
 }
 
 /**

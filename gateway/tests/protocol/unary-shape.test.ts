@@ -39,6 +39,7 @@ function deps(): RpcListenerDeps {
       create: unused,
       delete: async () => {},
     },
+    directoryPort: undefined,
     permissionPort: undefined,
     auditLog: undefined,
   }

@@ -180,7 +180,7 @@ extension SessionCreateRequest: AuditableRequest {
 }
 
 extension WorkspaceCreateRequest: AuditableRequest {
-    var auditTarget: String { name }
+    var auditTarget: String { path }
 }
 
 extension WorkspaceDeleteRequest: AuditableRequest {

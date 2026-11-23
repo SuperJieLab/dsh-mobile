@@ -66,6 +66,12 @@ answerId;answerId;（删除）;幂等改由 waterfall 一次性消费承担（F3
 promptId;promptId;requestId;上游的关联 id 名（F3 第 3 期）
 unknown-approval;unknown-approval;（删除）;上游对已结算事件是幂等 no-op（F3 第 3 期）
 
+# ── 工作空间创建的退场名（F3 第 4 期：按路径注册）────────────────────────
+# 目录由用户在宿主上选，名字规则整条退场：标题由宿主从路径取。
+mobile/workspaceCreate;mobile/workspaceCreate;workspace/create;端点改名并换形（F3 第 4 期）
+workspaceNameOf;workspaceNameOf;workspacePathOf;只认路径（F3 第 4 期）
+WorkspaceName;WorkspaceName;（删除）;名字规则与目录选择器互斥（F3 第 4 期）
+
 # ── 自查样本：规则被改坏时这里先红，不必等仓库真的回潮 ──────────────────
 expect-hit;正在生成的打字机内容
 expect-hit;瞬态帧不进水位
@@ -109,3 +115,9 @@ expect-hit;已经答过了会回 unknown-approval
 expect-pass;POST /api/$events/result
 expect-pass;requestId 用于乐观插入对账
 expect-pass;outcome 的 kind 是 result
+expect-hit;POST /api/mobile/workspaceCreate
+expect-hit;WorkspaceName.problem(with: raw)
+expect-hit;名字先用 WorkspaceName 判一遍
+expect-pass;POST /api/workspace/create
+expect-pass;路径原样转发，标题由宿主取
+expect-pass;POST /api/directoryPicker/list

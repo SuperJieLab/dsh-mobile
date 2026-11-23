@@ -33,6 +33,7 @@ async function withListener(
     modelPort: undefined,
     commandPort: undefined,
     workspacePort: undefined,
+  directoryPort: undefined,
     permissionPort: undefined,
     auditLog: undefined,
   })

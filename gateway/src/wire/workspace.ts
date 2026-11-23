@@ -1,57 +1,41 @@
 /**
- * 两个工作空间写 op 的线上形状与请求判型。
+ * 工作空间写 op 的线上形状与请求判型。
  *
- * 形状只有几格：`workspace-create` 的 `name` 与应答的 `workspaceId` / `title` / `created`；
- * `workspace-delete` 的 `workspaceId`。
+ * 两条都是转发：`workspace/create` 收 `{request:{path}}`（宿主按路径注册一个**已存在**的
+ * 目录），`workspace/delete` 收 `{request:{workspaceId}}`。
  *
- * 判型与语义合在一次判断里 —— 对客户端而言两者的补救动作相同（改字重发 / 换一个组），
- * 分两个码只会让界面多一个分支。
- *
- * ⚠️ 名字规则在客户端有一份同样的实现（它要在提交前就拦下、不发请求）。两份靠同一组
- * 字面量对齐，改这里必须同步改 `WorkspaceName.swift`。
+ * **没有名字规则**：F3 第 4 期起工作空间的标题由宿主从路径取，客户端不再输入名字，
+ * 网关也不再判「这个名字能不能用」—— 那条规则曾经在两端各有一份，改一处另一处不会红。
  */
 
 import { nonEmptyString, requestContainerOf } from './fields.ts'
 
-/** 名字里不许出现的两个路径分隔符。 */
-const SEPARATORS = ['/', '\\']
+/**
+ * 请求 → 要注册的路径；形状不对、空串或纯空白时返回 `undefined`。
+ *
+ * 读的是宿主的 `request` 容器（`args.request.path`）—— 它的 `create(request)` 收一个对象，
+ * 线上照抄这一层。少一层容器是旧客户端，按畸形拒。
+ *
+ * **不判这个路径是否存在、是不是绝对路径**：那是宿主的职责，它有自己的错误码
+ * （`workspace/...`），在这里先判会让「目录不存在」表现成一个客户端载荷错误。
+ *
+ * @param args - `payload.args`。
+ */
+export function workspacePathOf(args: Record<string, unknown>): string | undefined {
+  const request = requestContainerOf(args)
+  if (request === undefined) return undefined
+  const path = nonEmptyString(request.path)
+  return path === undefined || path.trim() === '' ? undefined : path
+}
 
-/** `workspace-create` 的请求形状：只有一个名字。 */
+/** `workspace-create` 的请求形状：只有一条宿主路径。 */
 export interface WorkspaceCreatePayload {
-  name: string
+  path: string
 }
 
 /** `workspace-delete` 的请求形状：只有一个工作空间 id。 */
 export interface WorkspaceDeletePayload {
   workspaceId: string
-}
-
-/**
- * 这个名字能不能当工作空间名。
- *
- * 判据是 trim 之后：非空、不含路径分隔符、不是 `.` 或 `..`。点开头（隐藏目录）是允许的 ——
- * 它是合法的目录名，没有理由拦。
- *
- * **不导出**：它只服务 `workspaceNameOf` 这一个 codec。对外只有一个答案 ——
- * 「这个名字能不能用」，由 codec 给。
- */
-function isValidName(name: string): boolean {
-  const trimmed = name.trim()
-  return trimmed !== '' && trimmed !== '.' && trimmed !== '..'
-    && !SEPARATORS.some(separator => trimmed.includes(separator))
-}
-
-/**
- * 请求 → 要用的名字（已 trim）；形状不对或名字不合法时返回 `undefined`。
- *
- * @param payload - 解析后的请求体，构造上形状未知。
- */
-export function workspaceNameOf(payload: unknown): string | undefined {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  const name = nonEmptyString((payload as Record<string, unknown>).name)
-  if (name === undefined) return undefined
-  const trimmed = name.trim()
-  return isValidName(trimmed) ? trimmed : undefined
 }
 
 /**

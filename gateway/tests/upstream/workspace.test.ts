@@ -17,7 +17,10 @@ import { createWorkspaceIn, deleteWorkspaceIn } from '../../src/upstream/workspa
  * 这一次是不是新建的 —— 这一格是控制器给的，注册表本身没有。
  */
 function fakeController() {
-  const byPath = new Map<string, { workspaceId: string; title: string }>()
+  const byPath = new Map<string, {
+    workspaceId: string; path: string; title: string; sessionIds: readonly string[]
+    createdAt: string; updatedAt: string
+  }>()
   let serial = 0
   return {
     calls: 0,
@@ -26,7 +29,14 @@ function fakeController() {
       const existing = byPath.get(request.path)
       if (existing !== undefined) return { workspace: existing, created: false }
       serial += 1
-      const workspace = { workspaceId: `w-${serial}`, title: request.path.split('/').at(-1) ?? request.path }
+      const workspace = {
+        workspaceId: `w-${serial}`,
+        path: request.path,
+        title: request.path.split('/').at(-1) ?? request.path,
+        sessionIds: [],
+        createdAt: '2026-11-23T00:00:00.000Z',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      }
       byPath.set(request.path, workspace)
       return { workspace, created: true }
     },
@@ -40,13 +50,14 @@ test('registering the same path twice reports created once', async () => {
 
   assert.equal(first.created, true, '第一次是新建')
   assert.equal(second.created, false, '第二次不是 —— 「已存在」不是失败，是幂等')
-  assert.equal(second.workspaceId, first.workspaceId, '两次给的是同一个工作空间')
+  assert.equal(second.workspace.workspaceId, first.workspace.workspaceId, '两次给的是同一个工作空间')
   assert.equal(controller.calls, 2, '两次都问控制器：判断「是不是新建」是它的事，不是我们的')
 })
 
 test('a brand-new path reports the title the host derived', async () => {
   const made = await createWorkspaceIn(fakeController(), '/根/记账 App')
-  assert.equal(made.title, '记账 App', '标题由宿主从目录名派生，网关不改写')
+  assert.equal(made.workspace.title, '记账 App', '标题由宿主从目录名派生，网关不改写')
+  assert.equal(made.workspace.path, '/根/记账 App', '路径原样 —— 网关不归一化')
 })
 
 // -- 删除（幂等） -------------------------------------------------------------

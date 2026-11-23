@@ -117,18 +117,31 @@ final class SessionListStateTests: XCTestCase {
         )))
     }
 
+    /// 一层目录的夹具 —— 只给判据要用的那几格。
+    private func listing(path: String, entries: [(String, String)]) -> DirectoryListing {
+        DirectoryListing(
+            path: path,
+            home: "/Users/x",
+            crumbs: [DirectoryEntry(name: "/", path: "/", hidden: false)],
+            entries: entries.map { DirectoryEntry(name: $0.0, path: $0.1, hidden: false) },
+            truncated: false
+        )
+    }
+
     private func make(
         _ fetch: FakeFetch,
         workspaces: FakeWorkspaces? = nil,
         create: @escaping (String?) async throws -> String = { _ in throw WriteNotExpected() },
         createWorkspace: @escaping (String) async throws -> WorkspaceCreated = { _ in throw WriteNotExpected() },
+        browseDirectory: @escaping (String?) async throws -> DirectoryListing = { _ in throw WriteNotExpected() },
         deleteWorkspace: @escaping (String) async throws -> Void = { _ in throw WriteNotExpected() },
         open: @escaping (String) -> Void = { _ in },
         expansion: GroupExpansion = GroupExpansion(),
         persisted: @escaping (GroupExpansion) -> Void = { _ in }
     ) -> SessionListState {
         let state = SessionListState(fetch: { try await fetch.fetch() }, create: create,
-                                     createWorkspace: createWorkspace, deleteWorkspace: deleteWorkspace,
+                                     createWorkspace: createWorkspace, browseDirectory: browseDirectory,
+                                     deleteWorkspace: deleteWorkspace,
                                      open: open, expansion: expansion, persistExpansion: persisted)
         // 组流替身：默认一个空的（多数用例不关心分组，那时全部会话落「未分组」）。
         state.attach(workspaces: workspaces ?? FakeWorkspaces())
@@ -556,24 +569,24 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(asked, [Optional("w-a")], "手机点的那个组必须原样传下去")
     }
 
-    /// 造工作空间成功：名字先 trim，新组**由组流推来**（不做本地插入）。
+    /// 造工作空间成功：发出去的是**当前这一层的绝对路径**，新组**由组流推来**（不做本地插入）。
     func testCreatingAWorkspaceShowsTheGroupTheStreamPushes() async {
         let fetch = FakeFetch()
         fetch.holds = false
         let workspaces = FakeWorkspaces()
         var asked: [String] = []
-        let state = make(fetch, workspaces: workspaces, createWorkspace: { name in
-            asked.append(name)
+        let state = make(fetch, workspaces: workspaces, createWorkspace: { path in
+            asked.append(path)
             // 宿主建好之后组流推一条 `upsert` —— 替身里就是这一下。
-            workspaces.push([self.workspace("w-new", name)])
-            return WorkspaceCreated(workspaceId: "w-new", title: name, created: true)
+            workspaces.push([self.workspace("w-new", "记账")])
+            return WorkspaceCreated(workspaceId: "w-new", title: "记账", created: true)
         })
         await state.reload()
         let before = fetch.calls
 
-        await state.createWorkspace(name: "  记账  ")
+        await state.createWorkspace(path: "/Users/x/记账")
 
-        XCTAssertEqual(asked, ["记账"], "发出去的是 trim 过的名字 —— 首尾空白不是名字的一部分")
+        XCTAssertEqual(asked, ["/Users/x/记账"], "发出去的是宿主给的绝对路径，客户端一字不改")
         XCTAssertEqual(state.workspaceCreation, .created)
         XCTAssertEqual(fetch.calls, before + 1, "成功之后仍重拉一次（行的状态可能刚被宿主动过）—— 但新组不靠它，见下一行")
         XCTAssertEqual(state.workspaces.map(\.workspaceId), ["w-new"], "新组来自组流，不是本地插的")
@@ -585,10 +598,12 @@ final class SessionListStateTests: XCTestCase {
     func testAnAlreadyExistingWorkspaceIsReportedAsSuch() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        let state = make(fetch, createWorkspace: { name in WorkspaceCreated(workspaceId: "w-old", title: name, created: false) })
+        let state = make(fetch, createWorkspace: { _ in
+            WorkspaceCreated(workspaceId: "w-old", title: "已有的", created: false)
+        })
         await state.reload()
 
-        await state.createWorkspace(name: "已有的")
+        await state.createWorkspace(path: "/Users/x/已有的")
 
         XCTAssertEqual(state.workspaceCreation, .alreadyExists,
                        "「已有」不是失败 —— 那个工作空间已经在那儿了，界面只需说清这一点")
@@ -602,7 +617,7 @@ final class SessionListStateTests: XCTestCase {
         await state.reload()
         let calls = fetch.calls
 
-        await state.createWorkspace(name: "会失败的")
+        await state.createWorkspace(path: "/Users/x/会失败的")
 
         XCTAssertEqual(fetch.calls, calls, "失败不重拉：组清单没变，白读一次")
         guard case .failed(let reason)? = state.workspaceCreation else {
@@ -611,59 +626,80 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertFalse(reason.isEmpty, "失败必须有说法")
     }
 
-    /// 打开面板时清掉上一次的结果，否则「已经有了」会一直挂在那儿。
-    func testBeginningToNameClearsThePreviousOutcome() async {
+    /// 打开浏览器时清掉上一次的结果与列表，否则「已经有了」会一直挂在那儿。
+    func testBeginningToBrowseClearsThePreviousOutcome() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        let state = make(fetch, createWorkspace: { name in WorkspaceCreated(workspaceId: "w-old", title: name, created: false) })
+        let state = make(fetch, createWorkspace: { _ in
+            WorkspaceCreated(workspaceId: "w-old", title: "x", created: false)
+        })
         await state.reload()
-        await state.createWorkspace(name: "x")
+        await state.createWorkspace(path: "/Users/x")
         XCTAssertNotNil(state.workspaceCreation)
 
-        state.beginNamingWorkspace()
+        state.beginWorkspaceCreation()
 
         XCTAssertNil(state.workspaceCreation)
+        XCTAssertNil(state.directoryListing)
+        XCTAssertNil(state.browseFailure)
     }
 
-    /// 非法名字**一个请求都不发** —— 守的是 spec「不许把非法路径送出去靠服务端兜」。
-    ///
-    /// 判定住在状态层（`submitWorkspaceName`）而不是视图里：视图里那句
-    /// `if problem != nil { return }` 删掉不会有任何判据变红，而它守的正是这一条。
-    func testAnInvalidNameNeverReachesTheNetwork() async {
+    /// 浏览：每一次请求的 `path` 都是宿主给的那一行（客户端不拼）。
+    func testBrowsingFollowsTheHostPathsOfTheRows() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        var called = 0
-        let state = make(fetch, createWorkspace: { name in
-            called += 1
-            return WorkspaceCreated(workspaceId: "w", title: name, created: true)
+        var asked: [String?] = []
+        let home = listing(path: "/Users/x", entries: [("proj", "/Users/x/proj")])
+        let state = make(fetch, browseDirectory: { path in
+            asked.append(path)
+            return path == nil ? home : self.listing(path: path!, entries: [])
         })
 
-        for name in ["", "   ", "a/b", "a\\b", ".", ".."] {
-            await state.submitWorkspaceName(name)
-        }
+        await state.browseDirectory(nil)
+        XCTAssertEqual(asked, [nil], "第一次不带路径 —— 由宿主决定从哪开始")
+        XCTAssertEqual(state.directoryListing?.path, "/Users/x")
 
-        XCTAssertEqual(called, 0, "非法名字一个请求都不该发出去")
-        XCTAssertNotNil(state.workspaceNameProblem, "拒了得给一个理由")
-        XCTAssertNil(state.workspaceCreation, "没发请求就没有创建结果")
+        await state.browseDirectory(home.entries[0].path)
+        XCTAssertEqual(asked, [nil, "/Users/x/proj"], "点一行就发那一行的绝对路径")
+        XCTAssertEqual(state.directoryListing?.path, "/Users/x/proj")
     }
 
-    /// 合法的那一次要把上一次的红字清掉，并把 trim 过的名字发出去。
-    func testAValidNameClearsTheProblemAndCreates() async {
+    /// 建组用的是**当前这一层**的路径 —— 与浏览到哪同一个状态。
+    func testCreatingUsesTheCurrentDirectory() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        var asked: [String] = []
-        let state = make(fetch, createWorkspace: { name in
-            asked.append(name)
-            return WorkspaceCreated(workspaceId: "w-new", title: name, created: true)
+        var created: [String] = []
+        let home = listing(path: "/Users/x", entries: [])
+        let state = make(fetch,
+                         createWorkspace: { path in
+                             created.append(path)
+                             return WorkspaceCreated(workspaceId: "w-1", title: "x", created: true)
+                         },
+                         browseDirectory: { _ in home })
+
+        await state.browseDirectory(nil)
+        await state.createWorkspace(path: state.directoryListing!.path)
+
+        XCTAssertEqual(created, ["/Users/x"], "建在当前这一层，不是别处")
+        XCTAssertEqual(state.workspaceCreation, .created)
+        XCTAssertFalse(state.isCreatingWorkspace)
+    }
+
+    /// 列目录失败：留着上一层，给一句说法 —— 用户还能选别的。
+    func testAFailedBrowseKeepsThePreviousLevelAndExplains() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        let home = listing(path: "/Users/x", entries: [])
+        let state = make(fetch, browseDirectory: { path in
+            if path == nil { return home }
+            throw RpcClientError.badStatus(500)
         })
 
-        await state.submitWorkspaceName("a/b")
-        XCTAssertNotNil(state.workspaceNameProblem)
+        await state.browseDirectory(nil)
+        await state.browseDirectory("/Users/x/nope")
 
-        await state.submitWorkspaceName("  记账  ")
-
-        XCTAssertNil(state.workspaceNameProblem, "合法的这一次要把上一次的红字清掉")
-        XCTAssertEqual(asked, ["记账"])
+        XCTAssertEqual(state.directoryListing?.path, "/Users/x", "失败不清空上一层")
+        XCTAssertNotNil(state.browseFailure, "要有一句说法")
     }
 
     /// 组清单**不依赖**列表那一次读：在途期间推来的组照样出现，也不会被在途的结果盖掉。
@@ -677,7 +713,7 @@ final class SessionListStateTests: XCTestCase {
 
         let pending = Task { await state.reload() }
         await settle()
-        let creating = Task { await state.createWorkspace(name: "记账") }
+        let creating = Task { await state.createWorkspace(path: "/Users/x/记账") }
         await settle()
         fetch.release()
         await pending.value

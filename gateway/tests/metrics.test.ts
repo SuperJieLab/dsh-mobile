@@ -96,6 +96,7 @@ async function withListener(
       create: unused,
       delete: async () => {},
     },
+    directoryPort: undefined,
     permissionPort: undefined,
     auditLog: undefined,
     metrics,

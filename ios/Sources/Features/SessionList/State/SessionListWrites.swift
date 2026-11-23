@@ -26,27 +26,32 @@ struct WorkspaceCreated: Equatable {
     let created: Bool
 }
 
-/// 让宿主造一个工作空间：在固定根下建目录并注册。
+/// 让宿主把一条已存在的目录注册成工作空间。
 ///
-/// 名字里用 `make` 而不是 `create`：状态层那个动作叫 `createWorkspace(name:)`（它是
+/// 名字里用 `make` 而不是 `create`：状态层那个动作叫 `createWorkspace(path:)`（它是
 /// 用户按下去的那件事），这里是它落到线上去的那一半 —— 两者同名会让调用点看起来在
 /// 递归。
 ///
-/// 同名**不报错**（`created` 为假）—— 那正是用户想要的：那个工作空间已经在那儿了。
+/// 同一路径**不报错**（`created` 为假）—— 那正是用户想要的：那个工作空间已经在那儿了。
 @MainActor
-func makeWorkspace(_ client: RpcClient, name: String) async throws -> WorkspaceCreated {
-    let response: WorkspaceCreateResponse = try await client.perform(WorkspaceCreateRequest(name: name))
-    guard let workspaceId = response.workspaceId,
-          let title = response.title,
+func makeWorkspace(_ client: RpcClient, path: String) async throws -> WorkspaceCreated {
+    let response: WorkspaceCreateResponse = try await client.perform(WorkspaceCreateRequest(path: path))
+    guard let workspace = response.workspace,
           let created = response.created else {
-        throw RpcClientError.malformedResponse(detail: "workspaceId/title/created")
+        throw RpcClientError.malformedResponse(detail: "workspace/created")
     }
     // 与网关那一侧同名的一格：界面据 `created` 说两句不同的话，日志里没有它，
     // 「我以为建了新的、其实命中旧的」这种投诉就查不出来。
     Log.info(Log.Module.workspace, "workspace-create",
-             ["workspace": workspaceId, "name": name,
+             ["workspace": workspace.workspaceId, "path": path,
               "state": created ? "created" : "already existed"])
-    return WorkspaceCreated(workspaceId: workspaceId, title: title, created: created)
+    return WorkspaceCreated(workspaceId: workspace.workspaceId, title: workspace.title, created: created)
+}
+
+/// 列一层宿主目录（目录浏览器）。`path` 缺省 = 宿主的 home。
+@MainActor
+func listDirectory(_ client: RpcClient, path: String?) async throws -> DirectoryListing {
+    try await client.perform(DirectoryListRequest(path: path))
 }
 
 /// 让宿主建一个空会话，返回它的 id。

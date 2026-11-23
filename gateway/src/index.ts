@@ -29,6 +29,7 @@ import { AuditLog, defaultAuditDirectory } from './audit.ts'
 import { Metrics } from './metrics.ts'
 import { checkHostVersion, hostVersionOf } from './host-version.ts'
 import { commandChannelOver, gatewayOver, modelChannelOver, permissionChannelOver, sessionListFace, sessionPageFace, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
+import { directoryPickerOver } from './upstream/directory-picker.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
@@ -158,7 +159,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     // 登记表**只 new 一次**，交给两条路：WS 升级（占名额）与一元闸门（判归属）。
     // 两处各 new 一个就永远 409 不到、也永远判不出主人 —— 判据 2 与 7 在真端口上钉住它。
     const registry = new IdentityRegistry()
-    const server = createRpcListener({ sessionPort, vault, registry, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
+    const server = createRpcListener({ sessionPort, vault, registry, writePort, modelPort, commandPort, workspacePort, directoryPort: directoryPickerOver(ctx), permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
 
     // 流通道与监听器共享：同端口，`POST /api/<命名空间>/<方法>` 走一元调用，`/api/remote.mux`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。

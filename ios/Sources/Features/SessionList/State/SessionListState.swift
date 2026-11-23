@@ -56,10 +56,13 @@ final class SessionListState {
     /// 上一次创建工作空间的结果；`nil` 表示这次还没发起过。视图据它给提示 ——
     /// 结果留在这里而不是交回调用方，视图才不必接 `await` 的返回值。
     private(set) var workspaceCreation: WorkspaceCreation?
-    /// 上一次提交被名字规则拒掉的理由。**判断在这里，不在视图**：视图里那句
-    /// `if problem != nil { return }` 删掉不会有任何判据变红，而它守的正是 spec 的
-    /// 「非法名字一个请求都不发」。
-    private(set) var workspaceNameProblem: WorkspaceName.Problem?
+    /// 目录浏览器当前这一层。**它是「选中哪」的唯一状态** —— 确认按钮读它，
+    /// 不在视图里另存一份（两份会在「上翻一级又立刻确认」时分叉）。
+    private(set) var directoryListing: DirectoryListing?
+    /// 正在列一层目录。
+    private(set) var isBrowsingDirectory = false
+    /// 最近一次列目录失败的说法；下一次成功即清。
+    private(set) var browseFailure: String?
     /// 哪些组被点开了。默认全折（`GroupExpansion` 的初值是空集合）。
     private(set) var expansion: GroupExpansion
     private(set) var outcome: Outcome = .ready
@@ -72,8 +75,10 @@ final class SessionListState {
     ///
     /// 参数是落在哪个工作空间；`nil` 表示不指定（宿主用它自己的当前目录）。
     private let create: (String?) async throws -> String
-    /// 让宿主造一个工作空间。同样注入，理由同上。
+    /// 让宿主把一条路径注册成工作空间。同样注入，理由同上。
     private let createWorkspaceAction: (String) async throws -> WorkspaceCreated
+    /// 列一层宿主目录（目录浏览器）。注入的理由同 `fetch`。
+    private let browseDirectoryAction: (String?) async throws -> DirectoryListing
     /// 让宿主删掉一个工作空间。注入的理由同 `create` —— 「宿主拒绝」与「网络断了」在
     /// 测试里长得一样，而这一条要断言的是「拒绝时列表没动」。
     private let deleteWorkspaceAction: (String) async throws -> Void
@@ -99,6 +104,7 @@ final class SessionListState {
     init(fetch: @escaping () async throws -> [SessionSummary],
          create: @escaping (String?) async throws -> String,
          createWorkspace: @escaping (String) async throws -> WorkspaceCreated,
+         browseDirectory: @escaping (String?) async throws -> DirectoryListing,
          deleteWorkspace: @escaping (String) async throws -> Void,
          open: @escaping (String) -> Void,
          expansion: GroupExpansion,
@@ -106,6 +112,7 @@ final class SessionListState {
         self.fetch = fetch
         self.create = create
         self.createWorkspaceAction = createWorkspace
+        self.browseDirectoryAction = browseDirectory
         self.deleteWorkspaceAction = deleteWorkspace
         self.open = open
         self.expansion = expansion
@@ -115,7 +122,8 @@ final class SessionListState {
     convenience init(client: RpcClient, open: @escaping (String) -> Void) {
         self.init(fetch: { try await fetchSessions(client) },
                   create: { try await createBlankSession(client, in: $0) },
-                  createWorkspace: { try await makeWorkspace(client, name: $0) },
+                  createWorkspace: { try await makeWorkspace(client, path: $0) },
+                  browseDirectory: { try await listDirectory(client, path: $0) },
                   deleteWorkspace: { try await removeWorkspace(client, workspaceId: $0) },
                   open: open,
                   expansion: .load(),
@@ -275,22 +283,7 @@ extension SessionListState {
         }
     }
 
-    /// 提交一个名字：**规则先判**，不合法就停在这里，一个请求也不发。
-    ///
-    /// 这一步住在状态层而不是视图里：它是「发不发请求」的判定，删掉它不会有任何判据变红
-    /// —— 而 `WorkspaceNameTests` 只证明规则算得对，证明不了它被用上。
-    ///
-    /// @param raw - 用户输入的原样。规则与 trim 各做一次，都在 `WorkspaceName` 里。
-    func submitWorkspaceName(_ raw: String) async {
-        if let problem = WorkspaceName.problem(with: raw) {
-            workspaceNameProblem = problem
-            return
-        }
-        workspaceNameProblem = nil
-        await createWorkspace(name: raw)
-    }
-
-    /// 造一个工作空间。成功（新建或本已存在）都重拉一次列表。
+    /// 把浏览器当前这一层注册成工作空间。成功（新建或本已存在）都重拉一次列表。
     ///
     /// **重拉的理由不是「组变了」**：组清单来自组流，`reload()` 一个字都不碰它。重拉是因为
     /// 宿主把会话挂进新组之后，`items[].sessionIds` 会变 —— 而那一份是组流推的，所以严格
@@ -305,13 +298,13 @@ extension SessionListState {
     /// （与新建会话同一条纪律）。失败也**只落这里**，不落列表顶部：动作是在输入面板里
     /// 发起的，用户的眼睛在那儿；两处显示同一句话，两处迟早不一致。
     ///
-    /// @param name - 用户输入的原样；这里 trim 一次，不判合法性（`WorkspaceName` 的家）。
-    func createWorkspace(name: String) async {
+    /// @param path - 浏览器当前那一层的绝对路径（由宿主给出，客户端不拼）。
+    func createWorkspace(path: String) async {
         guard !isCreatingWorkspace else { return }
         isCreatingWorkspace = true
         defer { isCreatingWorkspace = false }
         do {
-            let made = try await createWorkspaceAction(WorkspaceName.trimmed(name))
+            let made = try await createWorkspaceAction(path)
             workspaceCreation = made.created ? .created : .alreadyExists
             await reloadAfterAction()
         } catch {
@@ -366,10 +359,28 @@ extension SessionListState {
         Log.warn(Log.Module.session, "list refresh skipped — a read stayed in flight for every attempt")
     }
 
-    /// 打开输入面板时清掉上一次的结果与拒绝理由 —— 否则「已经有了」会一直挂在那儿。
-    func beginNamingWorkspace() {
+    /// 打开目录浏览器时清掉上一次的结果与列表 —— 否则「已经有了」会一直挂在那儿，
+    /// 而上一层的目录会让新一次浏览看起来「一打开就在这里」。
+    func beginWorkspaceCreation() {
         workspaceCreation = nil
-        workspaceNameProblem = nil
+        directoryListing = nil
+        browseFailure = nil
+    }
+
+    /// 列一层目录。`nil` = 宿主的 home。
+    ///
+    /// **单飞**：在途时再点一行会被丢掉 —— 两次往返的先后不保证，后到的旧应答会把
+    /// 当前层退回去。失败不清空上一层的列表：留着让用户还能选别的。
+    func browseDirectory(_ path: String?) async {
+        guard !isBrowsingDirectory else { return }
+        isBrowsingDirectory = true
+        defer { isBrowsingDirectory = false }
+        do {
+            directoryListing = try await browseDirectoryAction(path)
+            browseFailure = nil
+        } catch {
+            browseFailure = error.localizedDescription
+        }
     }
 
     /// 展开 / 收起一个组。视图只负责发起，结果落在 {@link expansion} 上。

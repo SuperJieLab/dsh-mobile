@@ -30,6 +30,7 @@ import {
   workspaceCreateOf,
   workspaceDeleteOf,
 } from './rpc.ts'
+import { directoryListArgumentsOf } from '../wire/directory.ts'
 import type { RemoteResult, UnaryEndpointName } from '../wire/unary.ts'
 
 /**
@@ -168,7 +169,22 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
       )
     },
   },
-  'mobile/workspaceCreate': {
+  'directoryPicker/list': {
+    legacyOp: 'directory-list',
+    write: false,
+    async invoke(args, ctx) {
+      const directory = ctx.ports.directory
+      if (directory === undefined) {
+        return refused('internal-error', 'directory channel not wired for "directoryPicker/list"')
+      }
+      const request = directoryListArgumentsOf(args)
+      if (request === undefined) {
+        return refused('invalid-request', '"path" must be a non-empty string when present')
+      }
+      return { ok: true, value: await directory.list(request.path, UNCANCELLED) }
+    },
+  },
+  'workspace/create': {
     legacyOp: 'workspace-create',
     write: true,
     invoke(args, ctx) {

@@ -1,6 +1,10 @@
 /**
  * 装配边界：协议层要的「读工作空间」能力（组流）与两条写 op。
  *
+ * 目录浏览不在这里：那是宿主的另一个控制器（`directoryPickerController`），
+ * 有自己的一条端口（`ports/directory.ts`）—— 合成一个会让「组」与「文件系统」两个
+ * 变化原因住进同一个接口。
+ *
  * 接口归**消费方**（协议层），所以住这里而不是传输层或适配层 —— 与
  * `session.ts` 同一理由：否则适配层要反过来 import 传输层去取一个类型。
  *
@@ -12,14 +16,14 @@ import type { WorkspaceFollowFrame } from '../wire/workspace-stream.ts'
 /** 协议层所依赖的数据源，用 fake 让测试摆脱运行时与文件系统。 */
 export interface WorkspacePort {
   /**
-   * 在固定根下造出 `name` 这个目录，并把它注册成工作空间。
+   * 把宿主上一条**已存在的目录**注册成工作空间。
    *
-   * 同名已经在用时**不是错误**：返回既有的那个，`created` 为假 —— 那正是用户想要的
-   * （那个工作空间已经在那儿了）。要目录已存在才能注册是宿主的约束，所以这里先建目录。
+   * 同一个路径已经注册过时**不是错误**：返回既有的那个，`created` 为假 —— 那正是
+   * 用户想要的（那个工作空间已经在那儿了）。目录不存在或不可读由宿主拒绝，网关只转发。
    *
-   * @param name - 已判过的名字（单段、非空、不含分隔符）。
+   * @param path - 已判过的非空路径（是否存在、是否绝对由宿主判）。
    */
-  create(name: string): Promise<WorkspaceCreated>
+  create(path: string): Promise<WorkspaceCreated>
   /**
    * 解除一个工作空间的注册。**目录与会话日志都不动** —— 那一批会话从此没有归属，
    * 会落到「未分组」里。
@@ -47,10 +51,21 @@ export interface WorkspacePort {
   follow?(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame>
 }
 
-/** 一次创建工作空间的结果。 */
+/** 宿主的一条工作空间 —— 七个字段原样转发，网关不裁。 */
+export interface WorkspaceView {
+  readonly workspaceId: string
+  readonly path: string
+  readonly title: string
+  readonly sessionIds: readonly string[]
+  /** ISO-8601。 */
+  readonly createdAt: string
+  /** ISO-8601。 */
+  readonly updatedAt: string
+}
+
+/** 一次创建工作空间的结果 —— 上游 `WorkspaceCreateValue` 的原样。 */
 export interface WorkspaceCreated {
-  workspaceId: string
-  title: string
-  /** `false` 表示这个名字已经在用，返回的是既有的那个 —— 不是失败。 */
-  created: boolean
+  readonly workspace: WorkspaceView
+  /** `false` 表示这个目录已经注册过，返回的是既有的那个 —— 不是失败。 */
+  readonly created: boolean
 }

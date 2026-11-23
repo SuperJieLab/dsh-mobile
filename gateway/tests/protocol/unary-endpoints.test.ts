@@ -43,6 +43,7 @@ const deps = (): RpcListenerDeps => ({
     execute: unused,
   },
   workspacePort: undefined,
+  directoryPort: undefined,
   permissionPort: {
     catalog: async () => ({
       options: [{ value: 'ask', name: 'Ask' }],

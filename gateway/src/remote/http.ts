@@ -16,6 +16,7 @@ import type { PermissionPort } from '../ports/permission.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
+import type { DirectoryPort } from '../ports/directory.ts'
 import { auditEntryOf, type AuditLog } from '../audit.ts'
 import type { Metrics } from '../metrics.ts'
 import { CredentialVault } from './credentials.ts'
@@ -77,6 +78,8 @@ export interface RpcListenerDeps {
   permissionPort: PermissionPort | undefined
   /** 列表分组的来源；只读装配可以不给，那时应答里没有组清单。 */
   workspacePort: WorkspacePort | undefined
+  /** 目录浏览器；只读装配可以不给，那时 `directoryPicker/list` 拒答。 */
+  directoryPort: DirectoryPort | undefined
   /** 写操作的审计落点；不给 = 不记（只读装配与判据不需要它）。 */
   auditLog: AuditLog | undefined
   /** 指标表；不给 = `/metrics` 返回空（判据用最小装配时）。 */
@@ -238,6 +241,7 @@ async function answerEndpoint(
       model: deps.modelPort,
       command: deps.commandPort,
       workspace: deps.workspacePort,
+      directory: deps.directoryPort,
       permission: deps.permissionPort,
     },
     now: Date.now,

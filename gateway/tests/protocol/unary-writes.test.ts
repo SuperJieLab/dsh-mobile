@@ -62,9 +62,16 @@ const deps = (): RpcListenerDeps => ({
       : { ok: false, code: 'unknown-command', message: 'not a command' }),
   } as never,
   workspacePort: {
-    create: async (name) => ({ workspaceId: `w-${name}`, title: name, created: true }),
+    create: async (path) => ({
+      workspace: {
+        workspaceId: `w-${path}`, path, title: path.split('/').at(-1) ?? path,
+        sessionIds: [], createdAt: '2026-11-23T00:00:00.000Z', updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+      created: true,
+    }),
     delete: async () => {},
   },
+  directoryPort: undefined,
   permissionPort: {
     catalog: async () => ({}),
     select: async (_sessionId: string, preset: string) => (preset === 'ask'
@@ -133,7 +140,13 @@ test('七个写端点各发一次合法请求全部 ok，且 value 带着这次�
     ['/api/session/selectModel', { request: { sessionId: 's-1', provider: 'p', model: 'm-1' } }, { selected: { provider: 'p', model: 'm-1' } }],
     ['/api/commands/execute', { agentId: 's-1', line: '/permission ask', submittedAttachments: [] }, { commandId: 'c-1' }],
     ['/api/session/create', { request: {} }, { sessionId: 's-new' }],
-    ['/api/mobile/workspaceCreate', { name: 'proj' }, { workspaceId: 'w-proj', title: 'proj', created: true }],
+    ['/api/workspace/create', { request: { path: '/Users/x/proj' } }, {
+      workspace: {
+        workspaceId: 'w-/Users/x/proj', path: '/Users/x/proj', title: 'proj',
+        sessionIds: [], createdAt: '2026-11-23T00:00:00.000Z', updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+      created: true,
+    }],
     ['/api/workspace/delete', { request: { workspaceId: 'w-1' } }, {}],
     ['/api/$events/result', { clientId: OWN_CLIENT_ID, eventId: 'e-1', outcome: { kind: 'result', value: 'allowed-once' } }, { ok: true }],
     ['/api/session/prompt', { request: { requestId: 'r-1', sessionId: 's-1', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } }, { accepted: true }],
@@ -158,7 +171,8 @@ test('每个写端点的拒绝码与旧路径一致 —— 拒了就不能说 ok
       ['/api/commands/execute', { agentId: 's-1', line: 'no slash', submittedAttachments: [] }, 'invalid-request'],
       ['/api/commands/execute', { agentId: 's-1', line: '/nope', submittedAttachments: [] }, 'unknown-command'],
       ['/api/commands/execute', {}, 'invalid-request'],
-      ['/api/mobile/workspaceCreate', { name: ' ' }, 'invalid-request'],
+      ['/api/workspace/create', { request: { path: ' ' } }, 'invalid-request'],
+      ['/api/workspace/create', { path: '/x' }, 'invalid-request'],
       ['/api/workspace/delete', {}, 'invalid-request'],
       ['/api/workspace/delete', { workspaceId: 'w-1' }, 'invalid-request'],
       ['/api/$events/result', { clientId: OWN_CLIENT_ID, eventId: 'e-reject', outcome: { kind: 'result', value: 'rejected' } }, 'internal-error'],

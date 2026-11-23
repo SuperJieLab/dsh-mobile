@@ -204,7 +204,8 @@ function auditTargetOf(op: string, message: Record<string, unknown>): string {
       // `$events/result` 的参数是平铺的三键（上游的形），目标就是那条挂起项。
       return identifierOf(message.eventId);
     case 'workspace-create':
-      return identifierOf(message.name);
+      // 工作空间由路径标识（F3 第 4 期起没有名字这一格）。
+      return identifierOf(request.path);
     case 'workspace-delete':
       return identifierOf(request.workspaceId);
     case 'session-create':

@@ -73,10 +73,33 @@ struct SessionCreateRequest: GatewayRequest {
     }
 }
 
-/// `mobile/workspaceCreate` 请求：只发一个名字 —— 目录落在哪由网关决定，客户端不指定路径。
+/// `workspace/create` 请求：把宿主上一条**已存在的目录**注册成工作空间。
+///
+/// 参数在宿主的 `request` 容器里，里面只有 `path`。没有名字这一格 —— 标题由宿主从路径取。
 struct WorkspaceCreateRequest: GatewayRequest {
-    static let endpoint = "mobile/workspaceCreate"
-    let name: String
+    static let endpoint = "workspace/create"
+    let path: String
+
+    private enum PathKeys: String, CodingKey { case path }
+
+    func encode(to encoder: any Encoder) throws {
+        var outer = encoder.container(keyedBy: RequestContainerKeys.self)
+        var request = outer.nestedContainer(keyedBy: PathKeys.self, forKey: .request)
+        try request.encode(path, forKey: .path)
+    }
+}
+
+/// `directoryPicker/list` 请求：列一层宿主目录。`path` 缺省时**整个键不出现**（列 home）。
+struct DirectoryListRequest: GatewayRequest {
+    static let endpoint = "directoryPicker/list"
+    var path: String? = nil
+
+    private enum Keys: String, CodingKey { case path }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: Keys.self)
+        try container.encodeIfPresent(path, forKey: .path)
+    }
 }
 
 /// `commands/list` 请求：**宿主的参数名是 `agentId`**（`agentId` 与 `sessionId` 同值 ——
@@ -388,13 +411,38 @@ struct SessionCreateResponse: GatewayResponse {
     var sessionId: String? = nil
 }
 
-/// `mobile/workspaceCreate` 回包。
+/// 创建回包里的那一条工作空间 —— **只声明客户端真读的两格**。
 ///
-/// `created` 为假**不是失败**：这个名字已经在用，返回的是既有的那个。界面据它说不同的话。
+/// 上游 `WorkspaceView` 还有 `path` / `sessionIds` / `createdAt` / `updatedAt`：这一屏
+/// 一个都不显示（组清单走 `workspace/follow`，那里有自己的 `WorkspaceView`）。声明它们
+/// 等于给这条应答加四个会让整条解不出的必填项，而读的人看不出「这四格其实没用」。
+struct WorkspaceAck: Decodable, Equatable {
+    let workspaceId: String
+    let title: String
+}
+
+/// `workspace/create` 回包。
+///
+/// `created` 为假**不是失败**：这个目录已经注册过，返回的是既有的那个。界面据它说不同的话。
 struct WorkspaceCreateResponse: GatewayResponse {
-    var workspaceId: String? = nil
-    var title: String? = nil
+    var workspace: WorkspaceAck? = nil
     var created: Bool? = nil
+}
+
+/// 目录列表里的一行：一个子目录或一格面包屑。`path` 是**绝对路径**，客户端只回声。
+struct DirectoryEntry: Decodable, Equatable {
+    let name: String
+    let path: String
+    let hidden: Bool
+}
+
+/// `directoryPicker/list` 的回包 —— 宿主 `DirectoryListing` 的五格。
+struct DirectoryListing: GatewayResponse, Equatable {
+    let path: String
+    let home: String
+    let crumbs: [DirectoryEntry]
+    let entries: [DirectoryEntry]
+    let truncated: Bool
 }
 
 /// `workspace/delete` 回包。

@@ -15,7 +15,6 @@ import type { SessionPort } from '../ports/session.ts'
 import type { ModelCatalog, ModelSelection } from '../wire/model.ts'
 
 import { createWorkspaceIn, deleteWorkspaceIn, type WorkspaceCreateFace, type WorkspaceDeleteFace } from './workspace.ts'
-import { makeWorkspaceDirectory } from './workspace-root.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import type { WorkspaceFollowFrame } from '../wire/workspace-stream.ts'
 import type { FollowSource } from '../ports/follow.ts'
@@ -101,13 +100,10 @@ export function workspacePortOver(ctx: HostContext): WorkspacePort {
   const follow = workspaceFollowFace(ctx)
   return {
     ...follow === undefined ? {} : { follow },
-    // 只有「建目录」是我们的：「在指定父目录下建一个子目录」这件事宿主没有可用入口
-    // （目录选择器的建目录能力挂在 browse 后端上，而 macOS 绑回环时挂的是 native 后端）。
-    // 注册这一步走宿主的控制器 —— 它回答 created，也自带串行化。
-    create: async (name) => {
-      const path = await makeWorkspaceDirectory(name)
-      return await createWorkspaceIn(ctx.workspaceController as unknown as WorkspaceCreateFace, path)
-    },
+    // 只转发：宿主按路径注册一个已存在的目录，标题由它从路径取。网关不建目录 ——
+    // 手机传进来的路径必须是宿主上已经存在的那个（目录浏览器保证这一点）。
+    create: async (path) =>
+      await createWorkspaceIn(ctx.workspaceController as unknown as WorkspaceCreateFace, path),
     // 删除只转发：宿主那一行 `delete` 已经把「只解注册、保留目录与会话日志」写进了语义，
     // 我们唯一要补的是「删一个已经不在的算成功」（见 `deleteWorkspaceIn`）。
     delete: async (workspaceId) => {

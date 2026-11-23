@@ -144,6 +144,44 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertNotNil(request["clientTimeZone"] as? String, "系统时区名必须随行 —— 它是宿主排版时间的依据")
     }
 
+    /// 判据 4：建组只发路径，参数在 `request` 容器里 —— 没有 `name` 这一格。
+    func testTheWorkspaceCreateCarriesOnlyAPath() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "workspace/create": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"workspace":{"workspaceId":"w-1","title":"p"},"created":true}}}"#
+            ),
+        ])
+
+        let made = try await makeWorkspace(client(), path: "/Users/x/p")
+        XCTAssertEqual(made.workspaceId, "w-1")
+        XCTAssertEqual(made.title, "p")
+        XCTAssertTrue(made.created)
+
+        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["workspace/create"])
+        let args = try XCTUnwrap((sent.first?["payload"] as? [String: Any])?["args"] as? [String: Any])
+        XCTAssertEqual(Set(args.keys), ["request"], "参数在 `request` 里 —— 少一层就是 invalid-request")
+        let request = try XCTUnwrap(args["request"] as? [String: Any])
+        XCTAssertEqual(Set(request.keys), ["path"], "只有路径一格；名字由宿主从路径取")
+        XCTAssertEqual(request["path"] as? String, "/Users/x/p")
+    }
+
+    /// 判据 5：目录列表的 `path` 缺省时**整个键不出现**（不是 `null`、不是空串）。
+    func testTheDirectoryListOmitsAnAbsentPath() async throws {
+        let body = #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"path":"/Users/x","home":"/Users/x","crumbs":[],"entries":[],"truncated":false}}}"#
+        ScriptedURLProtocol.reset(replies: ["directoryPicker/list": .init(status: 200, body: body)])
+
+        _ = try await listDirectory(client(), path: nil)
+        _ = try await listDirectory(client(), path: "/Users/x/proj")
+
+        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["directoryPicker/list"])
+        XCTAssertEqual(sent.count, 2)
+        let first = try XCTUnwrap((sent[0]["payload"] as? [String: Any])?["args"] as? [String: Any])
+        XCTAssertEqual(Set(first.keys), [], "缺省即缺席 —— 宿主据此列 home")
+        let second = try XCTUnwrap((sent[1]["payload"] as? [String: Any])?["args"] as? [String: Any])
+        XCTAssertEqual(second["path"] as? String, "/Users/x/proj")
+    }
+
     /// 判据 7 的前半：`details` 要原样解出来。
     func testRefusalCarriesDetails() async throws {
         ScriptedURLProtocol.reset(replies: [

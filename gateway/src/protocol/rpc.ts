@@ -17,11 +17,12 @@ import type { WritePort } from '../ports/write.ts'
 import type { CommandPort } from '../ports/command.ts'
 import type { PermissionPort } from '../ports/permission.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
+import type { DirectoryPort } from '../ports/directory.ts'
 import type { RemoteResult } from '../wire/unary.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
 import { remoteEventResultOf, sessionPromptOf } from '../wire/write.ts'
-import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
+import { workspaceIdOf, workspacePathOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import type { Identity } from './auth.ts'
 
@@ -73,6 +74,7 @@ export interface Ports {
   model?: ModelPort
   command?: CommandPort
   workspace?: WorkspacePort
+  directory?: DirectoryPort
   permission?: PermissionPort
 }
 
@@ -93,25 +95,21 @@ export async function sessionCreateOf(
 }
 
 /**
- * 在固定根下造一个工作空间。
+ * 把一个已存在的宿主目录注册成工作空间。
  *
- * 名字不合法时在这里就拒，**不碰文件系统** —— 形状与语义合成一次判断，因为对客户端
- * 而言两者的补救动作相同（改字重发）。
+ * 载荷畸形时在这里就拒，**不碰文件系统**；路径是否存在、是不是绝对路径归宿主判 ——
+ * 它有自己的错误码，这里再造一份只会让「目录不存在」表现成载荷错。
  */
 export async function workspaceCreateOf(
   args: Record<string, unknown>,
   workspace: WorkspacePort | undefined,
 ): Promise<RemoteResult> {
   if (workspace === undefined) return refused('internal-error', 'workspace channel not wired for "workspace-create"')
-  const name = workspaceNameOf(args)
-  if (name === undefined) {
-    return refused('invalid-request', 'workspace-create needs a name that is one non-blank path segment')
+  const path = workspacePathOf(args)
+  if (path === undefined) {
+    return refused('invalid-request', 'workspace-create takes { request: { path } } — a non-blank host path')
   }
-  const made = await workspace.create(name)
-  return {
-    ok: true,
-    value: { workspaceId: made.workspaceId, title: made.title, created: made.created },
-  }
+  return { ok: true, value: await workspace.create(path) }
 }
 
 /**

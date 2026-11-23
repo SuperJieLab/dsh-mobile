@@ -64,7 +64,7 @@ test('each write op maps to its own target field', () => {
     ['command-execute', { agentId: 's-2' }, 's-2'],
     // 三条跟着宿主的 `request` 容器走：线上多一层，目标在那层里面。
     ['model-select', { request: { sessionId: 's-4' } }, 's-4'],
-    ['workspace-create', { name: 'proj' }, 'proj'],
+    ['workspace-create', { request: { path: '/Users/x/proj' } }, '/Users/x/proj'],
     ['workspace-delete', { request: { workspaceId: 'w-1' } }, 'w-1'],
     ['session-create', { request: { workspaceId: 'w-2' } }, 'w-2'],
   ]
@@ -193,6 +193,7 @@ test('a real request through the listener leaves a record', { timeout: 10_000 },
       create: unused,
       delete: async () => {},
     },
+    directoryPort: undefined,
     permissionPort: undefined,
     auditLog: audit,
   })

@@ -19,8 +19,8 @@ import { nonEmptyString } from './fields.ts'
 /**
  * 我们开的一元端点名，两段式。
  *
- * 十一个与上游逐字一致（参数与返回内容见各期方案）；剩下三个挂在 `mobile/` 下：
- * 一个「上游只有近似端点」（`workspaceCreate`），以及两条移动端鉴权。
+ * 十二个与上游逐字一致（参数与返回内容见各期方案）；剩下两条是移动端鉴权
+ * （`pair` / `refresh`）—— 手机没有浏览器入口，这一层永远是我们自己的。
  */
 export type UnaryEndpointName =
   | 'session/modelCatalog'
@@ -29,12 +29,13 @@ export type UnaryEndpointName =
   | 'session/prompt'
   | 'commands/list'
   | 'commands/execute'
+  | 'workspace/create'
   | 'workspace/delete'
   | 'session/list'
   | 'session/page'
   | 'permissionPresets/catalog'
-  | 'mobile/workspaceCreate'
   | '$events/result'
+  | 'directoryPicker/list'
   | 'mobile/pair'
   | 'mobile/refresh'
 
@@ -46,12 +47,13 @@ export const UNARY_ENDPOINT_NAMES: readonly UnaryEndpointName[] = [
   'session/prompt',
   'commands/list',
   'commands/execute',
+  'workspace/create',
   'workspace/delete',
   'session/list',
   'session/page',
   'permissionPresets/catalog',
-  'mobile/workspaceCreate',
   '$events/result',
+  'directoryPicker/list',
   'mobile/pair',
   'mobile/refresh',
 ]

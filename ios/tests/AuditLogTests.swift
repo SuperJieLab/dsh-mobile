@@ -121,7 +121,7 @@ final class AuditLogTests: XCTestCase {
             CommandExecuteRequest(agentId: "s", line: "/clear"),
             ModelSelectRequest(sessionId: "s", provider: "p", model: "m"),
             SessionCreateRequest(),
-            WorkspaceCreateRequest(name: "proj"),
+            WorkspaceCreateRequest(path: "/Users/x/proj"),
             WorkspaceDeleteRequest(workspaceId: "w"),
         ]
     }
