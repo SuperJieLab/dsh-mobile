@@ -4,7 +4,7 @@
  * 这是 S5 那条「一条流归属于一个对象」的机制半边。它只回答三个问题 ——
  * 这个身份现在有没有占着一条 socket、这条 socket 属于谁、这条流是谁的 ——
  * 不认识协议，不认识审批，也不判「谁能答」（那在 `protocol/rpc.ts` 的
- * `approvalAnswerValue` 里，它只看一个 `ownerOf`）。
+ * `remoteEventResultValue` 里，它只看一个 `ownerOf`）。
  *
  * 为什么住在 `remote/`：它管的是 socket 与流的对应关系，是传输层的机制。
  * `protocol/` 一侧只看见窄接口 `StreamOwners`（声明在 `protocol/rpc.ts`）——
