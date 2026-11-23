@@ -159,14 +159,10 @@ protocol AuditableRequest {
 }
 
 extension SessionPromptRequest: AuditableRequest {
-    var auditTarget: String { sessionId }
+    var auditTarget: String { request.sessionId }
 }
 
-extension ApprovalAnswerRequest: AuditableRequest {
-    var auditTarget: String { eventId }
-}
-
-extension QuestionAnswerRequest: AuditableRequest {
+extension RemoteEventResultRequest: AuditableRequest {
     var auditTarget: String { eventId }
 }
 

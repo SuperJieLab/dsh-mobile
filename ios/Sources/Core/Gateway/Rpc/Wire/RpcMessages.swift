@@ -184,23 +184,17 @@ struct PageRequest: GatewayRequest {
     }
 }
 
-/// 审批应答：应答词汇表只有两键，映射在服务端完成 ——
-/// `allow` → `allowed-once`（一次性，绝不推断持久授权）。
-struct ApprovalAnswerRequest: GatewayRequest {
-    static let endpoint = "mobile/approvalAnswer"
-    let eventId: String
-    let decision: String
-    /// 幂等键：同键重试，网关回放第一次的结论。
-    let answerId: String
-    /// 这条审批是在哪条流上看到的 —— 网关按它判「是不是你」。
-    /// 取自最近一次 `ready` 的 `clientId`，由 `ApprovalStore` 从流上读出来。
-    let clientId: String
+/// 审批卡的两个按钮对应的上游结局词 —— 客户端直接发这个词，网关不翻译。
+enum ApprovalDecision: String, Encodable {
+    /// 只允许这一次，绝不推断持久授权。
+    case allowedOnce = "allowed-once"
+    case rejected = "rejected"
 }
 
-/// 一个问题的一道答案 —— 字段与网关 `QuestionAnswerMessage` 的 `answers` 元素逐字相同。
+/// 一个问题的一道答案 —— 字段与上游 `AskUserQuestionAnswerItem` 逐字相同。
 ///
 /// `custom` 缺席时整个键不出现（合成的 `Encodable` 对 Optional 用 `encodeIfPresent`），
-/// 与网关那侧「缺席 ≠ 空串」一致。
+/// 与「缺席 ≠ 空串」一致。
 struct QuestionAnswerItem: Encodable {
     let id: String
     /// 选中的选项 label；只填自由文本时是空数组。
@@ -209,28 +203,95 @@ struct QuestionAnswerItem: Encodable {
     let custom: String?
 }
 
-/// 一张卡的整批答案。**`answerId` 的主键是卡**，不是单个问题 —— 一卡一次提交。
+/// 一次交互应答的 `outcome` —— 上游 `$events/result` 的那一格。
 ///
-/// 答案必须覆盖卡上全部 `id`（一个不缺、一个不多），否则网关回 `invalid-request`
-/// 且不投递。这条约束在这里表达不出来，客户端提交前自己保证。
-struct QuestionAnswerRequest: GatewayRequest {
-    static let endpoint = "mobile/questionAnswer"
-    let eventId: String
-    let answers: [QuestionAnswerItem]
-    let answerId: String
-    /// 这条提问是在哪条流上看到的 —— 与审批应答同一条归属判定。
-    let clientId: String
+/// 客户端只构造 `result`；网关认三种（`next` / `result` / `rejected`），但另外两种
+/// 在本项目里没有产生者，所以这里不声明它们 —— 「用不到的形状先不写」比「预留三支」
+/// 少一处永远不被执行的编码。
+enum RemoteEventOutcome: Encodable {
+    case result(RemoteEventValue)
+
+    private enum CodingKeys: String, CodingKey { case kind, value }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .result(let value):
+            try container.encode("result", forKey: .kind)
+            try container.encode(value, forKey: .value)
+        }
+    }
 }
 
-/// 下发指令：`promptId` 是幂等键，服务端按它去重重复投递。
+/// `outcome.value` 的两种形状：审批是一个结局词，提问是整批答案。
+enum RemoteEventValue: Encodable {
+    case approval(ApprovalDecision)
+    case answers([QuestionAnswerItem])
+
+    private enum CodingKeys: String, CodingKey { case answers }
+
+    func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .approval(let decision):
+            var one = encoder.singleValueContainer()
+            try one.encode(decision.rawValue)
+        case .answers(let answers):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(answers, forKey: .answers)
+        }
+    }
+}
+
+/// 一次交互应答。三键平铺 —— 键名就是上游方法的参数名，**没有客户端幂等键**：
+/// 幂等由上游 waterfall 的一次性消费承担（对已结算事件再答一次是 no-op）。
 ///
-/// ⚠️ 上游把这一格叫 `requestId`，我们仍叫 `promptId` —— 改 wire 名是行为变更，
-/// 不在「换信封」的范围里。
+/// `clientId` 取最近一次 `ready` 下发的那个；网关按它判「这条应答是不是你的」。
+struct RemoteEventResultRequest: GatewayRequest {
+    static let endpoint = "$events/result"
+    let clientId: String
+    let eventId: String
+    let outcome: RemoteEventOutcome
+}
+
+/// 下发指令 —— 上游 `SessionPromptRequest` 的形（参数在 `request` 容器里）。
+///
+/// `requestId` 是客户端铸的**关联 id**，不是幂等键：宿主把它写进持久
+/// `user/message` 的 `source.rpcId`，客户端据此把乐观插入的那一行与落定的一行对上。
 struct SessionPromptRequest: GatewayRequest {
     static let endpoint = "session/prompt"
-    let sessionId: String
-    let text: String
-    let promptId: String
+
+    struct Body: Encodable {
+        let requestId: String
+        let sessionId: String
+        let mode: Mode
+        /// 本期只有文本（附件在范围外）。
+        struct Content: Encodable {
+            let type = "text"
+            let text: String
+        }
+        let content: [Content]
+        /// 系统时区名（IANA）；`nil` 时整个键不出现。
+        let clientTimeZone: String?
+    }
+
+    enum Mode: String, Encodable {
+        case queue
+        case steer
+    }
+
+    let request: Body
+
+    init(requestId: String, sessionId: String, mode: Mode, text: String) {
+        request = Body(
+            requestId: requestId,
+            sessionId: sessionId,
+            mode: mode,
+            content: [Body.Content(text: text)],
+            clientTimeZone: TimeZone.current.identifier
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey { case request }
 }
 
 /// `workspace/delete` 请求：只带一个工作空间 id。
@@ -289,14 +350,18 @@ struct PageResponse: GatewayResponse {
     let hasMore: Bool?
 }
 
-/// 审批应答回包：成功不带业务字段。
-struct ApprovalAnswerResponse: GatewayResponse {}
+/// `$events/result` 回包：上游的 `{ok:true}` 原样作为 `value`。
+///
+/// 外层信封的 `ok` 已经说过「网关收下了」；这一格是**上游**的那一句。两处都为真才算
+/// 投递成功 —— 只看外层会把「上游拒了」读成成功。
+struct RemoteEventResultResponse: GatewayResponse {
+    let ok: Bool?
+}
 
-/// 一张卡的答案回包：成功即已投递。结局由上游结算，客户端不推演。
-struct QuestionAnswerResponse: GatewayResponse {}
-
-/// 下发指令回包：成功即已受理。
-struct SessionPromptResponse: GatewayResponse {}
+/// 下发指令回包：`accepted` 为真即已受理。缺这一格 = 畸形应答，不补默认值。
+struct SessionPromptResponse: GatewayResponse {
+    let accepted: Bool?
+}
 
 /// 目录回包：**宿主目录的原样**（四个键，含 `routableProviders`）。
 ///

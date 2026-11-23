@@ -300,8 +300,8 @@ struct SessionDetailView: View {
         // 一次求值给这一节用 —— 它在 body 里被读三处（首张、计数、计数减一）。
         let pending = detail.pendingApprovals
         if let first = pending.first {
-            ApprovalCard(approval: first, state: detail.approvals.state(for: first.eventId)) { allow in
-                Task { await detail.approvals.answer(first, allow: allow) }
+            ApprovalCard(approval: first, state: detail.approvals.state(for: first.eventId)) { decision in
+                Task { await detail.approvals.answer(first, decision: decision) }
             }
             .padding(.horizontal, 4)
             .padding(.bottom, 6)
@@ -382,6 +382,16 @@ struct SessionDetailView: View {
                     .font(.title2)
             }
             .disabled(!detail.composer.canSubmit)
+            // 插话（`steer`）的入口只有这一处：长按发送键。用什么手势不在 spec 的
+            // 约束里，选上下文菜单是因为它不会与「点一下发送」抢同一次点击。
+            .contextMenu {
+                Button {
+                    send(mode: .steer)
+                } label: {
+                    Label("插话发送（不等这一轮结束）", systemImage: "bolt.fill")
+                }
+                .disabled(!detail.composer.canSubmit)
+            }
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
@@ -396,11 +406,11 @@ struct SessionDetailView: View {
     /// 发送：走哪条路判定在 `SlashTrigger.dispatch`，视图只照它的结论办事。
     /// **草稿在「已受理」之后才清**：命令名打错是用户能自己改好的失败，清掉等于让人重打整行。
     /// 代价：以 `/` 开头的普通消息发不出去（与 Web UI 同）。
-    private func send() {
+    private func send(mode: SessionPromptRequest.Mode = .queue) {
         // 发送即收键盘：功能条跟着回来，用户能看到它接下来的连接态与占用。
         // 草稿由 `composer` 按「是否受理」决定留不留 —— 失败了那行字还在，改个字就能重按。
         isComposing = false
-        Task { await detail.composer.submit(detail.sync.deliver) }
+        Task { await detail.composer.submit(detail.sync.deliver, mode: mode) }
     }
 
     // MARK: - 详情面
@@ -431,8 +441,8 @@ struct SessionDetailView: View {
                         VStack(spacing: 8) {
                             ForEach(rest) { approval in
                                 ApprovalCard(approval: approval,
-                                             state: detail.approvals.state(for: approval.eventId)) { allow in
-                                    Task { await detail.approvals.answer(approval, allow: allow) }
+                                             state: detail.approvals.state(for: approval.eventId)) { decision in
+                                    Task { await detail.approvals.answer(approval, decision: decision) }
                                 }
                             }
                         }

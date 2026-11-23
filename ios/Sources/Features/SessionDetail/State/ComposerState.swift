@@ -17,7 +17,7 @@ final class ComposerState {
     private(set) var isSubmitting = false
 
     /// 投递一条：入参是已经分好流的那一行，返回值是**是否已受理**。
-    typealias Deliver = @MainActor (SlashDispatch) async -> Bool
+    typealias Deliver = @MainActor (SlashDispatch, SessionPromptRequest.Mode) async -> Bool
 
     /// 能发吗。与 `submit` 里的取值读同一份判定 ——「判空」与「取值」同源。
     var canSubmit: Bool {
@@ -39,16 +39,16 @@ final class ComposerState {
         text = SlashTrigger.insert(name: name)
     }
 
-    /// 提交一次。
+    /// 提交一次。`mode` 只传给 `.prompt` 那一支（命令没有排队与插话之分）。
     ///
     /// - Returns: 是否已受理。受理后清空草稿；没送到就原样留着。
     @discardableResult
-    func submit(_ deliver: Deliver) async -> Bool {
+    func submit(_ deliver: Deliver, mode: SessionPromptRequest.Mode = .queue) async -> Bool {
         guard !isSubmitting, let normalized = PromptDraft.normalized(text) else { return false }
         isSubmitting = true
         defer { isSubmitting = false }
 
-        let accepted = await deliver(SlashTrigger.dispatch(of: normalized))
+        let accepted = await deliver(SlashTrigger.dispatch(of: normalized), mode)
         if accepted { text = "" }
         return accepted
     }

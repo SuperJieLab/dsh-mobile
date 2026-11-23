@@ -24,8 +24,6 @@ extension GatewayErrorCode {
             return "本机记的位置在 Mac 上不存在了 —— 正在从头发起一次同步。"
         case .unauthenticated:
             return "没有可用的身份 —— 未配对或配对已被撤销。"
-        case .unknownApproval:
-            return "这条审批已经不在了 —— 可能已被取消或在 Mac 上处理过。"
         case .notOwner:
             return "这条审批不在你当前这条连接上 —— 等它重新出现再答。"
         case .invalidRequest:

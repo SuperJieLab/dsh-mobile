@@ -25,10 +25,8 @@ enum GatewayErrorCode: String, CaseIterable {
     case sourceUnavailable = "source-unavailable"
     case resyncRequired = "resync-required"
     case unauthenticated = "unauthenticated"
-    case unknownApproval = "unknown-approval"
-    /// 这条流不归你：它是别人的、已经换代了，或者这个身份根本不许答审批。
-    /// 与 `unknown-approval` 分开是因为「换一条流再试」对前者可能有用，对后者没有 ——
-    /// 但两者对客户端的处置相同（撤卡，等重投）。
+    /// 这条流不归你：它是别人的、已经换代了，或者这个身份根本不许应答。
+    /// 处置是撤卡等重投 —— 「别处先答」不在这里（那一支上游回成功）。
     case notOwner = "not-owner"
     case invalidRequest = "invalid-request"
     case sessionModelUnavailable = "session/model-unavailable"

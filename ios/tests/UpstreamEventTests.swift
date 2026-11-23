@@ -27,7 +27,7 @@ final class UpstreamEventTests: XCTestCase {
     }
 
     private final class NoopAnswerer: QuestionAnswering {
-        func answer(eventId: String, answers: [QuestionAnswerItem], answerId: String, clientId: String) async throws {}
+        func answer(eventId: String, answers: [QuestionAnswerItem], clientId: String) async throws {}
     }
 
     func testNotificationsReachTheStoreForwarder() {

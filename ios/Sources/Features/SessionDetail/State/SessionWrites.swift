@@ -4,7 +4,7 @@
  * 共同点是**回包只表示受理**，真正的结果从订阅流回来。两条的失败说法不同，所以不合成一个入口。
  *
  * 两条成功时都留一行：它们「成功了但后面没动静」的样子与「根本没发出去」在界面上分不开，
- * 而 `promptId` 是唯一能与流里那条回答对上的号。
+ * 而 `requestId` 是唯一能与流里那条回答对上的号。
  */
 import Foundation
 
@@ -14,14 +14,19 @@ func promptSession(
     _ client: RpcClient,
     sessionId: String,
     text: String,
-    promptId: String
+    requestId: String,
+    mode: SessionPromptRequest.Mode
 ) async throws {
-    let _: SessionPromptResponse = try await client.perform(
-        SessionPromptRequest(sessionId: sessionId, text: text, promptId: promptId)
+    let response: SessionPromptResponse = try await client.perform(
+        SessionPromptRequest(requestId: requestId, sessionId: sessionId, mode: mode, text: text)
     )
+    // `accepted` 缺席或为假 = 畸形应答：回包说 ok 却不给这一格，说明两端版本不一致。
+    guard response.accepted == true else {
+        throw RpcClientError.malformedResponse(detail: "session/prompt: accepted")
+    }
     // 正文长度而不是正文：内容属于会话，日志不该成为它的第二份副本。
     Log.info(Log.Module.session, "session-prompt accepted",
-             ["session": sessionId, "key": promptId, "chars": String(text.count)])
+             ["session": sessionId, "key": requestId, "mode": mode.rawValue, "chars": String(text.count)])
 }
 
 /// 安装一次会话级选择。`ok` = **已安装给下一轮**，不是「已生效」——

@@ -1,8 +1,8 @@
 /**
  * 待答审批的宿主：持表、发布给界面、把一次应答的三种结局翻成卡片状态。
  *
- * 判定在 `ApprovalTable`。它与 App 同寿 —— 停在列表时表照样在长。每次应答都带客户端生成的
- * `answerId`：回包丢了重试，网关回放第一次的结果，绝不二次投递。
+ * 判定在 `ApprovalTable`。它与 App 同寿 —— 停在列表时表照样在长。应答不带幂等键：
+ * 上游对已结算的事件是幂等 no-op，重发不会二次投递，也不会报错。
  */
 import Foundation
 
@@ -12,26 +12,29 @@ import Foundation
 /// 它由 `ApprovalStore` 从流上读出来传进来，本协议不负责取。
 @MainActor
 protocol ApprovalAnswering {
-    func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws
+    func answer(eventId: String, decision: ApprovalDecision, clientId: String) async throws
 }
 
-/// 生产实现：走既有的一次 HTTP 应答。
-/// `ok` 只意味着**已投递**，权威结果以流里的 `approval/decided` 为准。
+/// 生产实现：走 `$events/result`。
+/// `ok` 只意味着**已交给上游**（结算或幂等 no-op），权威结果以流里的 `approval/decided` 为准。
 @MainActor
 struct GatewayApprovalAnswerer: ApprovalAnswering {
     let client: RpcClient
 
-    func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws {
-        let _: ApprovalAnswerResponse = try await client.perform(
-            ApprovalAnswerRequest(
-                eventId: eventId, decision: allow ? "allow" : "deny", answerId: answerId,
-                clientId: clientId
+    func answer(eventId: String, decision: ApprovalDecision, clientId: String) async throws {
+        let response: RemoteEventResultResponse = try await client.perform(
+            RemoteEventResultRequest(
+                clientId: clientId, eventId: eventId,
+                outcome: .result(.approval(decision))
             )
         )
+        guard response.ok == true else {
+            throw RpcClientError.malformedResponse(detail: "$events/result: ok")
+        }
         // 「批了但对面没动」是这一屏最典型的投诉形状，而它的两种成因（没投递出去 /
         // 投递了但上游没接）在界面上完全一样。这一行钉住的是**已经投递**这一半。
         Log.info(Log.Module.session, "approval-answer delivered",
-                 ["approval": eventId, "decision": allow ? "allow" : "deny"])
+                 ["approval": eventId, "decision": decision.rawValue])
     }
 }
 
@@ -164,7 +167,7 @@ final class ApprovalStore {
     }
 
     /// 应答一张卡。守卫只看「有没有状态」—— 在途、未知、被拒的那一张都不再发第二次。
-    func answer(_ entry: ApprovalTable.Entry, allow: Bool) async {
+    func answer(_ entry: ApprovalTable.Entry, decision: ApprovalDecision) async {
         guard states[entry.eventId] == nil else { return }
         // 归属的键只有流能给。流还没就绪（或刚收起）时不发：这一发网关一定会拒，
         // 而「网关拒绝了」对用户说的是另一件事。卡留着 —— 等 `ready` 之后它还在表里。
@@ -185,14 +188,10 @@ final class ApprovalStore {
         defer { pruneStates() }
         do {
             try await answerer.answer(
-                eventId: entry.eventId, allow: allow, answerId: UUID().uuidString, clientId: clientId
+                eventId: entry.eventId, decision: decision, clientId: clientId
             )
             // 上游先摘掉自己的投递再广播取消 —— 应答者收不到自己的收口帧，等就是永远等。
-            settle(entry, notice: ApprovalStore.deliveredNote(allow: allow))
-        } catch RpcClientError.refused(let failure)
-            where failure.code == GatewayErrorCode.unknownApproval.rawValue {
-            // 这条已经不在了：留着就是一张永远按不动的卡。
-            settle(entry, notice: failure.readableDescription)
+            settle(entry, notice: ApprovalStore.deliveredNote(decision: decision))
         } catch RpcClientError.refused(let failure)
             where failure.code == GatewayErrorCode.notOwner.rawValue {
             // 这条审批不是当前这条流的（换了连接、或它在另一台设备上）：同一处置 ——

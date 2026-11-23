@@ -126,6 +126,94 @@ final class SessionSyncTests: XCTestCase {
 
     /// 会话同步要两个真实依赖：连接（只用来取阶段）与一元客户端。
     /// 端点指向连不上的 `127.0.0.1:1`：这一组不发起请求，只喂帧。
+    /// 判据 7：发出去的那一行先上屏，持久事件按 `source.rpcId` 认领它。
+    ///
+    /// 两条路各自都绿、中间那一跳没人守，就会同时出现「两条一样的消息」或
+    /// 「屏幕上什么都没有」—— 而这两种都不报错。
+    func testAnAcceptedPromptShowsAtOnceAndRetiresOnItsDurableMessage() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/prompt": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accepted":true}}}"#
+            ),
+        ])
+        let sync = makeScriptedSync()
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
+
+        let accepted = await sync.deliver(.prompt("你好"), mode: .queue)
+        XCTAssertTrue(accepted, "受理了")
+        let pending = try XCTUnwrap(sync.pendingPrompts.first, "受理之后那条乐观行该在")
+        XCTAssertEqual(sync.nodes.last?.data, .message(MessageNodeData(text: "你好", time: pending.time)),
+                       "发出去的字立刻上屏 —— 不必等宿主落成持久事件")
+
+        // 宿主把它落成持久事件，带着同一个 rpcId。
+        sync.apply(StreamReading(content: .event(SessionEvent(
+            type: "user/message", seq: 5, time: 2,
+            data: .object([
+                "id": .string("m-1"),
+                "source": .object(["kind": .string("user"), "rpcId": .string(pending.requestId)]),
+                "content": .array([.object(["type": .string("text"), "text": .string("你好")])]),
+            ])
+        ))))
+        XCTAssertTrue(sync.pendingPrompts.isEmpty, "持久事件一到，乐观行就该交接")
+        try await Task.sleep(for: .milliseconds(60))
+        let texts = sync.nodes.compactMap { node -> String? in
+            if case .message(let message) = node.data { return message.text }
+            return nil
+        }
+        XCTAssertEqual(texts.filter { $0 == "你好" }.count, 1, "同一句话只该有一行")
+    }
+
+    /// 发送失败即撤：那一行不能留在屏幕上假装发出去了。
+    func testAFailedPromptTakesItsOptimisticRowAway() async {
+        ScriptedURLProtocol.reset(replies: [
+            "session/prompt": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":false,"error":{"code":"internal-error","message":"no","details":{}}}}"#
+            ),
+        ])
+        let sync = makeScriptedSync()
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 0, records: []))))
+
+        let accepted = await sync.deliver(.prompt("发不出去"), mode: .queue)
+        XCTAssertFalse(accepted)
+        XCTAssertTrue(sync.pendingPrompts.isEmpty, "没送到就不该留一行")
+    }
+
+    /// 一份最小的打开帧夹具 —— 只给判据要用的四格。
+    private func snapshot(cursor: Int, records: [SessionRecord]) -> SnapshotFrame {
+        SnapshotFrame(
+            header: SessionWireHeader(version: 1, id: "session-1", createdAt: 0, cwd: nil,
+                                      parentSession: nil, isSeeded: false, origin: nil,
+                                      delegationDepth: nil, agentPreset: nil),
+            cursor: cursor,
+            records: records,
+            hasMore: false,
+            projections: ProjectionBlock(asOfSeq: cursor, values: .object([:])),
+            assistantStream: nil
+        )
+    }
+
+    /// 走真传输的 `SessionSync`（脚本化 URLProtocol）——「受理」这条分支需要真的回包。
+    private func makeScriptedSync() -> SessionSync {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ScriptedURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let credentials = CredentialStore(
+            storage: .init(read: { nil }, write: { _ in }, delete: {})
+        )
+        let client = RpcClient(session: { session },
+                               baseURL: { URL(string: "http://127.0.0.1:9")! },
+                               credentials: credentials)
+        let link = LongConnection(
+            authorization: { "ticket" },
+            renewTicket: { .unavailable },
+            session: { session },
+            baseURL: { URL(string: "http://127.0.0.1:9")! }
+        )
+        return SessionSync(client: client, sessionId: "session-1", link: link)
+    }
+
     private func makeSync(control: ControlStream? = nil) -> SessionSync {
         let link = LongConnection(
             authorization: { "ticket" },

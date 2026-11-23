@@ -12,18 +12,24 @@ import Foundation
 
 /// 一次问题应答的出口。可注入：测试要造出「被拒」「没发」这些终局。
 protocol QuestionAnswering {
-    func answer(eventId: String, answers: [QuestionAnswerItem], answerId: String, clientId: String) async throws
+    func answer(eventId: String, answers: [QuestionAnswerItem], clientId: String) async throws
 }
 
-/// 生产实现：走 `mobile/questionAnswer`。
+/// 生产实现：走 `$events/result`。
 @MainActor
 struct GatewayQuestionAnswerer: QuestionAnswering {
     let client: RpcClient
 
-    func answer(eventId: String, answers: [QuestionAnswerItem], answerId: String, clientId: String) async throws {
-        let _: QuestionAnswerResponse = try await client.perform(
-            QuestionAnswerRequest(eventId: eventId, answers: answers, answerId: answerId, clientId: clientId)
+    func answer(eventId: String, answers: [QuestionAnswerItem], clientId: String) async throws {
+        let response: RemoteEventResultResponse = try await client.perform(
+            RemoteEventResultRequest(
+                clientId: clientId, eventId: eventId,
+                outcome: .result(.answers(answers))
+            )
         )
+        guard response.ok == true else {
+            throw RpcClientError.malformedResponse(detail: "$events/result: ok")
+        }
         Log.info(Log.Module.session, "question-answer delivered", ["request": eventId])
     }
 }
@@ -126,7 +132,6 @@ final class QuestionStore {
             try await answerer.answer(
                 eventId: entry.eventId,
                 answers: QuestionAnswers.payload(entry, selections: selections),
-                answerId: UUID().uuidString,
                 clientId: clientId
             )
             settle(entry, notice: QuestionText.deliveredNote)
@@ -141,9 +146,11 @@ final class QuestionStore {
         }
     }
 
-    /// 两种「不在了」：别人先答 / 撤回 / 从未提出，与「不是你的这条流」。
+    /// 「不是你的这条流」：换过连接，或这条卡在另一台设备上。
+    ///
+    /// 别处先答不会走到这里 —— 上游对已结算事件是幂等 no-op，那一次回的是成功。
     private static func meansGone(_ code: String) -> Bool {
-        code == GatewayErrorCode.unknownApproval.rawValue || code == GatewayErrorCode.notOwner.rawValue
+        code == GatewayErrorCode.notOwner.rawValue
     }
 
     private func settle(_ entry: QuestionTable.Entry, notice: String) {

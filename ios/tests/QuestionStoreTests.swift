@@ -15,7 +15,7 @@ final class QuestionStoreTests: XCTestCase {
         var calls: [(eventId: String, answers: [QuestionAnswerItem], clientId: String)] = []
         var error: Error?
 
-        func answer(eventId: String, answers: [QuestionAnswerItem], answerId: String, clientId: String) async throws {
+        func answer(eventId: String, answers: [QuestionAnswerItem], clientId: String) async throws {
             calls.append((eventId, answers, clientId))
             if let error { throw error }
         }

@@ -18,8 +18,38 @@ final class SessionSync {
     /// 视图只取 `visible` —— 那一半才是「不闪」的另一半。
     private(set) var snapshot: ChatSnapshot = .empty
 
-    /// 视图读的那一列。
-    var nodes: [ChatNode] { snapshot.visible }
+    /// 视图读的那一列：持久的一列 + 还没落定的那几行（乐观插入）。
+    ///
+    /// **排序按锚点**，不是「持久的一律在前」：乐观行落在发送那一刻的末尾，
+    /// 之后到的持久事件与未定稿帧都排在它后面（它们的锚点更大）。
+    var nodes: [ChatNode] {
+        guard !pendingPrompts.isEmpty else { return snapshot.visible }
+        return (snapshot.visible + pendingPrompts.map(\.node)).sorted { $0.anchorSeq < $1.anchorSeq }
+    }
+
+    /// 已经发出去、还没被持久事件认领的用户消息。
+    ///
+    /// **不进 `ConversationAssembler`**：那里的每个输入都要有 `seq`，而这一行还没有 ——
+    /// 造一个伪 `seq` 会破坏单调与去重（跳号会被判成缺口，一条本地行会让整条流不可信）。
+    /// 退休只有一条判据：持久 `user/message` 的 `source.rpcId` 等于这里的 `requestId`。
+    struct PendingPrompt: Equatable {
+        let requestId: String
+        let text: String
+        let time: Double
+        let anchorSeq: EventOrder
+
+        /// 渲染成一个普通的消息节点 —— 与持久的那一行同一种外观。
+        var node: ChatNode {
+            ChatNode(key: "pending:\(requestId)",
+                     kind: "message",
+                     businessId: "pending:\(requestId)",
+                     anchorSeq: anchorSeq,
+                     visibility: .visible,
+                     data: .message(MessageNodeData(text: text, time: time)))
+        }
+    }
+
+    private(set) var pendingPrompts: [PendingPrompt] = []
 
     /// 消息条数 —— 从已组装的节点数，不另存一份（两个出处必然不同步）。
     var messageCount: Int {
@@ -156,8 +186,27 @@ final class SessionSync {
     // MARK: - 用户动作（转给写侧）
 
     /// 把一行字送出去 —— 走哪条路由 `ComposerState` 判好交进来。
-    func deliver(_ dispatch: SlashDispatch) async -> Bool {
-        await actions.deliver(dispatch)
+    ///
+    /// `.prompt` 那一支先记一条乐观行再发：`requestId` 在这里铸，于是「发出去的请求」
+    /// 与「屏幕上那一行」从出生就是同一个号，落定的持久事件按它来认领。
+    func deliver(_ dispatch: SlashDispatch, mode: SessionPromptRequest.Mode = .queue) async -> Bool {
+        switch dispatch {
+        case .command(let line):
+            return await actions.executeCommand(line)
+        case .prompt(let text):
+            let requestId = UUID().uuidString
+            pendingPrompts.append(PendingPrompt(
+                requestId: requestId,
+                text: PromptDraft.normalized(text) ?? text,
+                time: Date().timeIntervalSince1970 * 1000,
+                // 落在发送那一刻的最后一条持久事件之后、未定稿帧（末 seq + 0.999）之前。
+                anchorSeq: Double(max(0, mirror.frontier - 1)) + 0.5
+                    + Double(pendingPrompts.count) * 0.001
+            ))
+            let accepted = await actions.sendPrompt(text, requestId: requestId, mode: mode)
+            if !accepted { pendingPrompts.removeAll { $0.requestId == requestId } }
+            return accepted
+        }
     }
 
     /// 安装一次会话级选择。
@@ -262,6 +311,14 @@ final class SessionSync {
         }
     }
 
+    /// 持久事件认领了一条乐观行：交接，不重复显示。
+    private func retirePendingPrompt(rpcId: String) {
+        guard pendingPrompts.contains(where: { $0.requestId == rpcId }) else { return }
+        pendingPrompts.removeAll { $0.requestId == rpcId }
+        Log.info(Log.Module.session, "optimistic prompt retired by its durable message",
+                 ["key": rpcId])
+    }
+
     // MARK: - 事件吸收
 
     /// 打开帧与事件帧的埋点；其余类别一个渲染帧就完了，计时只会撑大日志。
@@ -308,6 +365,12 @@ final class SessionSync {
 
     private func applySnapshot(_ snapshot: SnapshotFrame) {
         lastFrameAt = Date()
+        // 打开帧里已经有了的那几条：持久事件比乐观行权威，立刻交接。
+        for record in snapshot.records {
+            if let rpcId = record.event.data["source"]?["rpcId"]?.string {
+                retirePendingPrompt(rpcId: rpcId)
+            }
+        }
         // 手空着时等价于「打开」，重连时走「重对齐」：保留更早的部分。
         let wasEmpty = mirror.isEmpty
         let verdict = mirror.realign(with: SessionWindow(opening: snapshot))
@@ -372,6 +435,10 @@ final class SessionSync {
     }
 
     private func applyLiveEvent(_ event: SessionEvent) {
+        // 落定的用户消息按 `source.rpcId` 认领乐观行 —— 只在这一处退休。
+        if event.type == "user/message", let rpcId = event.data["source"]?["rpcId"]?.string {
+            retirePendingPrompt(rpcId: rpcId)
+        }
         lastFrameAt = Date()
         // 上游 gap-free 是契约，重复与跳号各有一种处置（见 `SessionMirror.append`）。
         let verdict = mirror.append(event)

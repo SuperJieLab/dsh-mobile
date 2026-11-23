@@ -5,7 +5,7 @@ import SwiftUI
 struct ApprovalCard: View {
     let approval: ApprovalTable.Entry
     let state: ApprovalStore.AnswerState?
-    let onAnswer: (Bool) -> Void
+    let onAnswer: (ApprovalDecision) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -40,7 +40,7 @@ struct ApprovalCard: View {
             case nil:
                 HStack(spacing: 12) {
                     Button {
-                        onAnswer(true)
+                        onAnswer(.allowedOnce)
                     } label: {
                         Text("允许一次")
                             .frame(maxWidth: .infinity)
@@ -48,7 +48,7 @@ struct ApprovalCard: View {
                     .buttonStyle(.borderedProminent)
 
                     Button {
-                        onAnswer(false)
+                        onAnswer(.rejected)
                     } label: {
                         Text("拒绝")
                             .frame(maxWidth: .infinity)

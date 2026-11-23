@@ -8,9 +8,12 @@ import Foundation
 
 extension ApprovalStore {
 
-    /// 应答已投递。`allow` 决定说哪一个动作。
-    static func deliveredNote(allow: Bool) -> String {
-        allow ? "已投递：允许" : "已投递：拒绝"
+    /// 应答已投递。结局决定说哪一个动作。
+    static func deliveredNote(decision: ApprovalDecision) -> String {
+        switch decision {
+        case .allowedOnce: return "已投递：允许"
+        case .rejected: return "已投递：拒绝"
+        }
     }
 
     /// 已经发出、回包还没到。

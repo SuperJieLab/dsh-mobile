@@ -116,8 +116,8 @@ final class AuditLogTests: XCTestCase {
     /// 少了那个扩展，下面的类型转换会失败。
     private func writeRequests() -> [any GatewayRequest] {
         [
-            SessionPromptRequest(sessionId: "s", text: "t", promptId: "p"),
-            ApprovalAnswerRequest(eventId: "e", decision: "allow", answerId: "a", clientId: "c-1"),
+            SessionPromptRequest(requestId: "r", sessionId: "s", mode: .queue, text: "t"),
+            RemoteEventResultRequest(clientId: "c-1", eventId: "e", outcome: .result(.approval(.allowedOnce))),
             CommandExecuteRequest(agentId: "s", line: "/clear"),
             ModelSelectRequest(sessionId: "s", provider: "p", model: "m"),
             SessionCreateRequest(),

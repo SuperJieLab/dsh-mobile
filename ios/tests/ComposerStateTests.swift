@@ -20,7 +20,7 @@ final class ComposerStateTests: XCTestCase {
         XCTAssertFalse(composer.canSubmit, "只剩空白等于没写")
 
         var delivered = 0
-        let accepted = await composer.submit { _ in delivered += 1; return true }
+        let accepted = await composer.submit { _, _ in delivered += 1; return true }
         XCTAssertFalse(accepted, "空白不发")
         XCTAssertEqual(delivered, 0, "空白一个字都没送出去")
     }
@@ -30,7 +30,7 @@ final class ComposerStateTests: XCTestCase {
         let composer = ComposerState()
         composer.text = "/compact"
         var saw: SlashDispatch?
-        let accepted = await composer.submit { dispatch in saw = dispatch; return true }
+        let accepted = await composer.submit { dispatch, _ in saw = dispatch; return true }
 
         XCTAssertTrue(accepted)
         XCTAssertEqual(saw, .command("/compact"), "斜杠那行走命令通道")
@@ -41,7 +41,7 @@ final class ComposerStateTests: XCTestCase {
     func testRejectedSubmissionKeepsTheDraft() async {
         let composer = ComposerState()
         composer.text = "/nosuchcmd"
-        let accepted = await composer.submit { _ in false }
+        let accepted = await composer.submit { _, _ in false }
 
         XCTAssertFalse(accepted)
         XCTAssertEqual(composer.text, "/nosuchcmd", "命令名打错：整行留着，改一个字就能重按")
@@ -58,7 +58,7 @@ final class ComposerStateTests: XCTestCase {
         XCTAssertEqual(composer.paletteQuery, "per", "前导空格归一化后仍然是「在敲命令」")
 
         var saw: SlashDispatch?
-        _ = await composer.submit { dispatch in saw = dispatch; return true }
+        _ = await composer.submit { dispatch, _ in saw = dispatch; return true }
         XCTAssertEqual(saw, .command("/per"), "同一行确实走了命令通道 —— 两边不矛盾")
     }
 
@@ -88,7 +88,7 @@ final class ComposerStateTests: XCTestCase {
         XCTAssertNil(composer.paletteQuery, "回填之后已经不在敲名字，面板该收起")
 
         var delivered = 0
-        _ = await composer.submit { _ in delivered += 1; return true }
+        _ = await composer.submit { _, _ in delivered += 1; return true }
         XCTAssertEqual(delivered, 1, "回填本身不投递；是 submit 那一次")
     }
 
@@ -98,9 +98,9 @@ final class ComposerStateTests: XCTestCase {
         composer.text = "/compact"
         var delivered = 0
         // 第一次投递在闭包里再触发一次 submit —— 此时 isSubmitting 已经是 true。
-        let inner = await composer.submit { dispatch in
+        let inner = await composer.submit { dispatch, _ in
             delivered += 1
-            let second = await composer.submit { _ in delivered += 1; return true }
+            let second = await composer.submit { _, _ in delivered += 1; return true }
             XCTAssertFalse(second, "在途期间第二次提交不该被受理")
             _ = dispatch
             return true

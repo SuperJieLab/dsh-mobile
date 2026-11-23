@@ -111,6 +111,39 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertEqual(address["sessionId"] as? String, "s-1")
     }
 
+    /// 判据 6：prompt 的参数在 `request` 容器里，五格齐全且 `mode` 不被改回 queue。
+    func testThePromptCarriesTheUpstreamContainerAndMode() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/prompt": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accepted":true}}}"#
+            ),
+        ])
+
+        try await promptSession(client(), sessionId: "s-1", text: "hi", requestId: "r-1", mode: .steer)
+
+        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["session/prompt"], "这一发没到达 session/prompt")
+        let body = try XCTUnwrap(sent.first, "没有收到请求体")
+        XCTAssertEqual(body["method"] as? String, "session/prompt")
+
+        let args = try XCTUnwrap((body["payload"] as? [String: Any])?["args"] as? [String: Any])
+        XCTAssertEqual(Set(args.keys), ["request"], "参数在 `request` 里 —— 少一层就是 invalid-request")
+
+        let request = try XCTUnwrap(args["request"] as? [String: Any])
+        XCTAssertEqual(Set(request.keys),
+                       ["requestId", "sessionId", "mode", "content", "clientTimeZone"],
+                       "五格（时区由系统给）—— 没有上一版的扁平键，也没有一个平铺的 text")
+        XCTAssertEqual(request["requestId"] as? String, "r-1", "客户端铸的关联 id 原样")
+        XCTAssertEqual(request["sessionId"] as? String, "s-1")
+        XCTAssertEqual(request["mode"] as? String, "steer", "插话必须发 steer —— 改成 queue 不会报错，只会等下一轮")
+
+        let content = try XCTUnwrap(request["content"] as? [[String: Any]])
+        XCTAssertEqual(content.count, 1)
+        XCTAssertEqual(content[0]["type"] as? String, "text")
+        XCTAssertEqual(content[0]["text"] as? String, "hi")
+        XCTAssertNotNil(request["clientTimeZone"] as? String, "系统时区名必须随行 —— 它是宿主排版时间的依据")
+    }
+
     /// 判据 7 的前半：`details` 要原样解出来。
     func testRefusalCarriesDetails() async throws {
         ScriptedURLProtocol.reset(replies: [

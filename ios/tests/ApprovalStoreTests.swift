@@ -24,7 +24,7 @@ final class ApprovalStoreTests: XCTestCase {
 
         private(set) var clients: [String] = []
 
-        func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws {
+        func answer(eventId: String, decision: ApprovalDecision, clientId: String) async throws {
             calls.append(eventId)
             clients.append(clientId)
             if holdsFirstCall, !held {
@@ -145,28 +145,12 @@ final class ApprovalStoreTests: XCTestCase {
         let store = readyStore(FakeAnswerer())
         store.receive(waterfall())
 
-        await store.answer(store.pending(in: "s1")[0], allow: true)
+        await store.answer(store.pending(in: "s1")[0], decision: .allowedOnce)
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "答完即走 —— 没有任何帧参与")
         XCTAssertNil(store.state(for: "e1"))
         // 同源断言：守的是「成功分支有没有说话」，不守文案 —— 文案坏了由 Display 那一侧的事管。
-        XCTAssertEqual(store.notice(for: "s1"), ApprovalStore.deliveredNote(allow: true))
-    }
-
-    /// 「这条已经不在了」：移除并说明 —— 留着就是一张永远按不动的卡。
-    func testAnAlreadyGoneApprovalIsRemovedWithAnExplanation() async {
-        let answerer = FakeAnswerer()
-        answerer.outcome = .failure(refused("unknown-approval"))
-        let store = readyStore(answerer)
-        store.receive(waterfall())
-
-        await store.answer(store.pending(in: "s1")[0], allow: false)
-
-        XCTAssertTrue(store.pending(in: "s1").isEmpty)
-        XCTAssertNil(store.state(for: "e1"))
-        XCTAssertEqual(store.notice(for: "s1"),
-                       GatewayFailure(code: "unknown-approval", message: "")
-                        .readableDescription)
+        XCTAssertEqual(store.notice(for: "s1"), ApprovalStore.deliveredNote(decision: .allowedOnce))
     }
 
     /// 传输失败：卡留着、转「结果未知」。断线的写操作是未知，不是失败 ——
@@ -177,7 +161,7 @@ final class ApprovalStoreTests: XCTestCase {
         let store = readyStore(answerer)
         store.receive(waterfall())
 
-        await store.answer(store.pending(in: "s1")[0], allow: true)
+        await store.answer(store.pending(in: "s1")[0], decision: .allowedOnce)
 
         XCTAssertEqual(store.pending(in: "s1").count, 1)
         XCTAssertEqual(store.state(for: "e1"), .unknown)
@@ -190,7 +174,7 @@ final class ApprovalStoreTests: XCTestCase {
         let store = readyStore(answerer)
         store.receive(waterfall())
 
-        await store.answer(store.pending(in: "s1")[0], allow: true)
+        await store.answer(store.pending(in: "s1")[0], decision: .allowedOnce)
 
         XCTAssertEqual(store.pending(in: "s1").count, 1)
         XCTAssertEqual(store.state(for: "e1"), .refused("网关自身出错 —— 进程还活着，只是这次请求失败了。"))
@@ -201,7 +185,7 @@ final class ApprovalStoreTests: XCTestCase {
     /// 第一次作答还没回来时再点一次：门只被调用一次。
     ///
     /// 守卫必须在**发出之前**置位。写在回包之后（今天就是这样）时，等待期间守卫是空的，
-    /// 连点两次会发两次；第二次得到 `unknown-approval`，把第一次的「已投递」冲成「已经不在了」。
+    /// 连点两次会发两次；第二次会把第一次的「已投递」冲成另一个结局。
     func testASecondTapWhileTheFirstIsInFlightDoesNothing() async {
         let answerer = FakeAnswerer()
         answerer.holdsFirstCall = true
@@ -209,7 +193,7 @@ final class ApprovalStoreTests: XCTestCase {
         store.receive(waterfall())
         let entry = store.pending(in: "s1")[0]
 
-        let first = Task { await store.answer(entry, allow: true) }
+        let first = Task { await store.answer(entry, decision: .allowedOnce) }
         for _ in 0..<500 {
             if !answerer.calls.isEmpty { break }
             await Task.yield()
@@ -217,7 +201,7 @@ final class ApprovalStoreTests: XCTestCase {
         XCTAssertEqual(answerer.calls, ["e1"], "第一次该已经发出")
         XCTAssertEqual(store.state(for: "e1"), .sending, "往返期间卡上说的是「正在发送」")
 
-        await store.answer(entry, allow: true)
+        await store.answer(entry, decision: .allowedOnce)
         XCTAssertEqual(answerer.calls, ["e1"], "第二次不该再发一次")
 
         answerer.release()
@@ -345,7 +329,7 @@ final class ApprovalStoreTests: XCTestCase {
         store.receive(waterfall())
         let entry = store.pending(in: "s1")[0]
 
-        let answer = Task { await store.answer(entry, allow: true) }
+        let answer = Task { await store.answer(entry, decision: .allowedOnce) }
         for _ in 0..<500 {
             if !answerer.calls.isEmpty { break }
             await Task.yield()
@@ -377,10 +361,10 @@ final class ApprovalStoreTests: XCTestCase {
             return XCTFail("前置：两张卡都该在表里")
         }
         // e1 走成功：撤卡 + 写一句说明。
-        await store.answer(first, allow: true)
+        await store.answer(first, decision: .allowedOnce)
         // e2 走传输失败：卡留着、状态停在 `.unknown`。
         answerer.outcome = .failure(RpcClientError.notActivated)
-        await store.answer(second, allow: true)
+        await store.answer(second, decision: .allowedOnce)
 
         // 正控：三样都真的非空 —— 少了这一步，下面的断言只是在测 nil == nil。
         XCTAssertNotNil(store.notice(for: "s1"), "成功应答该留下一条说明")
@@ -416,7 +400,7 @@ final class ApprovalOwnershipTests: XCTestCase {
         XCTAssertEqual(events.clientId, "c-42", "流要记住它 —— 这是全仓唯一的来源")
 
         store.receive(waterfall())
-        await store.answer(store.pending(in: "s1")[0], allow: true)
+        await store.answer(store.pending(in: "s1")[0], decision: .allowedOnce)
 
         XCTAssertEqual(answerer.clients, ["c-42"], "应答要带上最近一次 ready 的那个 id")
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "前置：这一发是成功的")
@@ -432,14 +416,14 @@ final class ApprovalOwnershipTests: XCTestCase {
         store.attach(sink: EmptySink())
 
         store.receive(waterfall())
-        await store.answer(store.pending(in: "s1")[0], allow: true)
+        await store.answer(store.pending(in: "s1")[0], decision: .allowedOnce)
 
         XCTAssertTrue(answerer.clients.isEmpty, "没有归属的键就不发 —— 这一发注定被拒")
         XCTAssertEqual(store.pending(in: "s1").count, 1, "卡留着：等 ready 之后它还能答")
         XCTAssertEqual(store.state(for: "e1"), .unknown, "状态如实说「不知道」，不是「被拒」")
     }
 
-    /// `not-owner` 与 `unknown-approval` 同一处置：撤卡。
+    /// `not-owner` 的处置是撤卡。
     ///
     /// 留着一张永远答不动的卡比撤掉更坏 —— 网关在重连时会重发仍未答的问题，撤掉不会丢。
     func testANotOwnerRefusalRemovesTheCardWithAnExplanation() async {
@@ -449,7 +433,7 @@ final class ApprovalOwnershipTests: XCTestCase {
         store.attach(sink: ReadySink(clientId: "c-1"))
 
         store.receive(waterfall())
-        await store.answer(store.pending(in: "s1")[0], allow: true)
+        await store.answer(store.pending(in: "s1")[0], decision: .allowedOnce)
 
         XCTAssertTrue(store.pending(in: "s1").isEmpty, "撤卡")
         XCTAssertNil(store.state(for: "e1"))
@@ -464,7 +448,7 @@ final class ApprovalOwnershipTests: XCTestCase {
         private(set) var clients: [String] = []
         var outcome: Result<Void, Error> = .success(())
 
-        func answer(eventId: String, allow: Bool, answerId: String, clientId: String) async throws {
+        func answer(eventId: String, decision: ApprovalDecision, clientId: String) async throws {
             clients.append(clientId)
             try outcome.get()
         }

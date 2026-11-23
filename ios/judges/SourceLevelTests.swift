@@ -250,8 +250,8 @@ final class SourceLevelTests: XCTestCase {
         XCTAssertEqual(declared.count, flags,
                        "解析出 \(declared.count) 个写端点，表里有 \(flags) 处 `write: true` —— 正则漏了条目")
         // 下限随端点增减改这一处：它守的是「表里没有多出来的空号」，不是某个具体数量。
-        // 当前 8 个 —— 权限切档改走 `commands/execute` 之后 `permissionSelect` 退场了。
-        XCTAssertGreaterThanOrEqual(declared.count, 8,
+        // 当前 7 个 —— 第 3 期把两条应答端点换成了一条 `$events/result`。
+        XCTAssertGreaterThanOrEqual(declared.count, 7,
                                     "只读到 \(declared.count) 个写端点 —— 先怀疑路径或正则")
 
         let covered = try auditableClientEndpoints()
@@ -259,7 +259,7 @@ final class SourceLevelTests: XCTestCase {
         XCTAssertEqual(covered.count, extensions,
                        "客户端有 \(extensions) 处 `AuditableRequest`，只解析出 \(covered.count) 个端点名 —— "
                        + "先怀疑请求类型的正则")
-        XCTAssertGreaterThanOrEqual(covered.count, 8,
+        XCTAssertGreaterThanOrEqual(covered.count, 7,
                                     "只读到 \(covered.count) 个可审计端点 —— 先怀疑解析")
 
         let missing = declared.subtracting(covered)
