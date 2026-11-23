@@ -11,7 +11,7 @@
   "client": [
     {
       "name": "follow",
-      "text": "{\"endpoint\":\"session/follow\",\"payload\":{\"args\":{\"request\":{\"address\":{\"kind\":\"session\",\"sessionId\":\"s-1\"},\"activate\":true,\"assistantStream\":true,\"maxMessages\":500,\"turnWindow\":{\"minMessages\":50,\"minTurns\":2}}}},\"streamId\":\"s-9\",\"type\":\"open\"}",
+      "text": "{\"endpoint\":\"session/follow\",\"payload\":{\"args\":{\"request\":{\"activate\":true,\"address\":{\"kind\":\"session\",\"sessionId\":\"s-1\"},\"assistantStream\":true,\"maxMessages\":500,\"turnWindow\":{\"minMessages\":50,\"minTurns\":2}}}},\"streamId\":\"s-9\",\"type\":\"open\"}",
       "type": "open",
       "streamId": "s-9",
       "kind": "follow",

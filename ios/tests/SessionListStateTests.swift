@@ -102,7 +102,7 @@ final class SessionListStateTests: XCTestCase {
     }
 
     private func removed(_ id: String) throws -> SessionListChange {
-        try change("api-session/removed", #"["\#(id)]"#)
+        try change("api-session/removed", #"["\#(id)"]"#)
     }
 
     /// 这一组里的多数用例不碰写动作（建会话 / 建工作空间 / 删工作空间）：三个都默认给一个
@@ -317,7 +317,8 @@ final class SessionListStateTests: XCTestCase {
 
         let data = Data("""
         {"type":"item","streamId":"e1","value":{"type":"emit","event":"api-session/added",
-          "args":[{"sessionId":"s1","updatedAt":100,"running":false,"blank":false}]}}
+          "args":[{"sessionId":"s1","updatedAt":100,"running":false,"blank":false,
+                   "agentAvailable":false}]}}
         """.utf8)
         _ = stream.handle(try XCTUnwrap(InboundFrame.decode(data)))
 

@@ -99,7 +99,14 @@ final class JSONValueDecoderTests: XCTestCase {
     }
 
     func testRootMustBeAnObjectForAKeyedType() throws {
-        XCTAssertNil(try Sample(from: JSONValueDecoder(.array([]))), "根不是对象时该抛错")
-        XCTAssertNil(try Sample(from: JSONValueDecoder(.null)), "根是 null 时也抛错")
+        // `init(from:)` 对非对象根**抛** `typeMismatch`：写成 `XCTAssertNil(try …)` 时
+        // 抛出的错会直接冒出去，断言本身根本没机会比较。
+        XCTAssertThrowsError(try Sample(from: JSONValueDecoder(.array([]))),
+                             "根不是对象时该抛错") { error in
+            guard case DecodingError.typeMismatch = error else {
+                return XCTFail("根不是对象该报 typeMismatch，实际：\(error)")
+            }
+        }
+        XCTAssertThrowsError(try Sample(from: JSONValueDecoder(.null)), "根是 null 时也抛错")
     }
 }

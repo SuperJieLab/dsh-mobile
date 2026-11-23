@@ -191,6 +191,10 @@ final class SessionSync {
         self.models = models
         self.actions = SessionActions(client: client, sessionId: sessionId,
                                       status: statusBox, models: models)
+
+        // 投影订阅跟着**这一屏存在**，不跟着流的开关：订在这里，`stopFollowing` 退订。
+        // 开流只管事件流 —— 这一屏还没开流时也要能显示当前模型与占用。
+        subscribeControl()
     }
 
     // MARK: - 用户动作（转给写侧）

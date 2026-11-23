@@ -242,7 +242,8 @@ final class InboundFrameTests: XCTestCase {
         ]
 
         for item in cases {
-            let value = try jsonValue(#"{"type":"snapshot",\#(item.payload.dropFirst())}"#)
+            // 载荷自带两端的花括号，模板只补 `"type"` 那一格 —— 去掉首尾之后正好嵌进来。
+            let value = try jsonValue(#"{"type":"snapshot",\#(item.payload.dropFirst().dropLast())}"#)
             guard case .decoded(.opening(let shape)) = FollowItem.read(value) else {
                 return XCTFail("「\(item.name)」该仍归 opening（载荷本身可解）")
             }

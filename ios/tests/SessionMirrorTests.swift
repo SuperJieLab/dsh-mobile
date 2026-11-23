@@ -53,9 +53,10 @@ final class SessionMirrorTests: XCTestCase {
     // 打开一屏，然后事件一条条到 —— 序号相接就接上，探测的是「视图与 `frontier` 同步推进」。
     var mirror = SessionMirror()
     _ = mirror.open(with: window(1, [event(0), event(1)]))
-    XCTAssertTrue(mirror.append(event(3)) == .merged(added: 1), "接得上的一条记为 1 条新增")
-    XCTAssertTrue(mirror.frontier == 4, "位置跟着事件前进")
-    XCTAssertTrue(mirror.events.map(\.seq) == [0, 1, 3], "视图按 seq 连续")
+    // 切点含端：`cursor` 1 覆盖到 seq 1，下一个期望的就是 2。
+    XCTAssertTrue(mirror.append(event(2)) == .merged(added: 1), "接得上的一条记为 1 条新增")
+    XCTAssertTrue(mirror.frontier == 3, "位置跟着事件前进")
+    XCTAssertTrue(mirror.events.map(\.seq) == [0, 1, 2], "视图按 seq 连续")
 
     // MARK: SM2 重复的事件丢掉
 
@@ -69,7 +70,7 @@ final class SessionMirrorTests: XCTestCase {
     let beforeGap = mirror.events
     XCTAssertTrue(mirror.append(event(9)) == .resetRequired(.gap), "跳过的 seq ⇒ 中间有洞")
     XCTAssertTrue(mirror.events == beforeGap, "判定不等于自动改视图：调用方重置前一律不动")
-    XCTAssertTrue(mirror.frontier == 4, "判定本身也不动位置")
+    XCTAssertTrue(mirror.frontier == 3, "判定本身也不动位置")
 
     // MARK: SM4 翻页在途时事件照常进
 

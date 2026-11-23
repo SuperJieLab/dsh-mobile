@@ -129,7 +129,7 @@ final class SessionStreamReaderTests: XCTestCase {
     /// 打开帧还在路上时，这条流就被当成开成了，于是它永远等不到自己的基线窗口。
     func testOnlyAnOpeningEstablishesTheStream() throws {
         let samples: [(name: String, text: String, establishes: Bool)] = [
-            ("打开帧", #"{"type":"item","streamId":"s-1","value":{"type":"snapshot","sessionId":"s-1","cursor":1,"events":[]}}"#, true),
+            ("打开帧", #"{"type":"item","streamId":"s-1","value":{"type":"snapshot","header":{"version":1,"id":"s-1","createdAt":1,"isSeeded":false},"cursor":1,"records":[],"hasMore":false,"projections":{"asOfSeq":0,"values":{}}}}"#, true),
             ("事件帧", #"{"type":"item","streamId":"s-1","value":{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{}}}}"#, false),
             ("收尾帧", #"{"type":"end","streamId":"s-1"}"#, false),
             ("拒绝帧", #"{"type":"error","streamId":"s-1","error":{"code":"internal-error","message":"","details":{}}}"#, false),
