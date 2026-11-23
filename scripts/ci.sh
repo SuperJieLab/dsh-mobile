@@ -33,6 +33,25 @@ mkdir -p "$OUT"
 
 FAILED=0
 
+# ── 沙箱内的本机补丁 ────────────────────────────────────────────────────────
+# `xcodebuild` 自己会再起几层 `sandbox-exec`（依赖 manifest、构建插件、Run Script、
+# 编译器插件）。外层已经是沙箱时，内核拒绝再套第二层（`sandbox_apply: Operation
+# not permitted`），于是它连依赖都解析不完。这里把它们关掉。
+#
+# **这份清单是唯一的一份**：`dev/README.md` 与项目记忆只指到这里，不抄键名 ——
+# 其中两个是未公开的 IDE 键，会随 Xcode 版本变，抄一份就是第二份事实。
+#
+# CI 上不需要（runner 没有外层沙箱），所以只在 `$CI` 未设时展开。
+SANDBOX_FLAGS=()
+if [[ -z "${CI:-}" ]]; then
+  SANDBOX_FLAGS=(
+    OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox'
+    -IDEPackageSupportDisableManifestSandbox=1
+    -IDEPackageSupportDisablePluginExecutionSandbox=1
+    ENABLE_USER_SCRIPT_SANDBOXING=NO
+  )
+fi
+
 say() { printf '%s\n' "$*"; }
 hr() { printf '%s\n' "────────────────────────────────────────────────────────"; }
 
@@ -170,26 +189,11 @@ run_judges() {
   hr; say "判据 · xcodebuild test（macOS）"; hr
   local log="$OUT/judges.log"
 
-  # 本机补丁：外层已有沙箱时，xcodebuild 自己再起的那两层 `sandbox-exec` 必然失败
-  # （`sandbox_apply: Operation not permitted`）：
-  #   ① SwiftPM 解析包时编 manifest 的沙箱 —— 两个 IDE 开关关掉它（未公开，见下）；
-  #   ② Run Script 阶段的用户脚本沙箱 —— `ENABLE_USER_SCRIPT_SANDBOXING=NO`。
-  # CI 上不需要（runner 里没有外层沙箱），加了只是多几条无意义的覆盖。
-  local -a extra=()
-  if [[ -z "${CI:-}" ]]; then
-    extra=(
-      OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox'
-      -IDEPackageSupportDisableManifestSandbox=1
-      -IDEPackageSupportDisablePluginExecutionSandbox=1
-      ENABLE_USER_SCRIPT_SANDBOXING=NO
-    )
-  fi
-
   xcodebuild test \
     -project "$ROOT/ios/DshMobile.xcodeproj" \
     -scheme DshMobileJudges \
     -destination 'platform=macOS' \
-    ${extra[@]+"${extra[@]}"} >"$log" 2>&1
+    ${SANDBOX_FLAGS[@]+"${SANDBOX_FLAGS[@]}"} >"$log" 2>&1
 
   if ! grep -q '\*\* TEST FAILED \*\*' "$log" \
      && ! grep -q '\*\* TEST SUCCEEDED \*\*' "$log"; then
@@ -293,21 +297,6 @@ run_ios() {
   fi
   say "模拟器：${udid}"
 
-  # 本机沙箱（agent 的 Bash）会拦两层 `sandbox-exec`，与判据那节同一个补丁：
-  #   ① SwiftPM 的 manifest 沙箱（两个未公开的 IDE 开关）；
-  #   ② Run Script 阶段的用户脚本沙箱（`ENABLE_USER_SCRIPT_SANDBOXING=NO`）。
-  # 另加 `-Xfrontend -disable-sandbox` 关掉编译器插件（宏）那一层。
-  # CI 的 runner 没有外层沙箱，加这些只会多几条覆盖。
-  local -a extra=()
-  if [[ -z "${CI:-}" ]]; then
-    extra=(
-      OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox'
-      -IDEPackageSupportDisableManifestSandbox=1
-      -IDEPackageSupportDisablePluginExecutionSandbox=1
-      ENABLE_USER_SCRIPT_SANDBOXING=NO
-    )
-  fi
-
   local project="$ROOT/ios/DshMobile.xcodeproj"
   local dest="id=$udid"
   local build_log="$OUT/ios-build.log"
@@ -318,11 +307,11 @@ run_ios() {
   xcrun simctl boot "$udid" >/dev/null 2>&1 || true
   xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || true
 
-  # `"${extra[@]+...}"` 而不是 `"${extra[@]}"`：macOS 自带 bash 3.2 在 `set -u`
-  # 下对空数组会报 unbound variable —— 而 CI 那条分支里 extra 恰好是空的。
+  # `"${SANDBOX_FLAGS[@]+...}"` 而不是 `"${SANDBOX_FLAGS[@]}"`：macOS 自带 bash 3.2 在
+  # `set -u` 下对空数组会报 unbound variable —— 而 CI 那条分支里它恰好是空的。
   xcodebuild build-for-testing \
     -project "$project" -scheme DshMobile -destination "$dest" \
-    ${extra[@]+"${extra[@]}"} >"$build_log" 2>&1
+    ${SANDBOX_FLAGS[@]+"${SANDBOX_FLAGS[@]}"} >"$build_log" 2>&1
   local build_status=$?
 
   if [[ $build_status -ne 0 ]]; then
@@ -334,7 +323,7 @@ run_ios() {
 
   xcodebuild test-without-building \
     -project "$project" -scheme DshMobile -destination "$dest" \
-    ${extra[@]+"${extra[@]}"} >"$test_log" 2>&1
+    ${SANDBOX_FLAGS[@]+"${SANDBOX_FLAGS[@]}"} >"$test_log" 2>&1
   local test_status=$?
 
   # 一份日志里每个 suite 各打一行「Executed N tests」，总数取其中最大那一行
