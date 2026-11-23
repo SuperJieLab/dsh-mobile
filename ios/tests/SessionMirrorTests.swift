@@ -22,14 +22,14 @@ final class SessionMirrorTests: XCTestCase {
   /**
    一屏历史 —— 协议形状，状态机直接吃它。
 
-   参数沿用「覆盖到哪（不含）」的写法（`asOfSeq`），窗口里存的是**含端**的 `cursor`：
-   换算是 `cursor = asOfSeq - 1`。用例因此可以按不含的上界写期望，而状态机吃的是线上那个数。
+   `cut` 是回包的 `cursor`（**含端**切点）：打开帧里它等于这一屏的末尾，分页回包里它是
+   `throughSeq`（日志当时覆盖到哪），**可以大于本页末尾** —— 夹具按后者的真实情形给值，
+   否则「拿 `cursor` 当页尾」这类错法会被夹具掩成绿。
    */
-  private func window(_ start: Int, _ asOfSeq: Int, _ events: [SessionEvent],
-                      hasMore: Bool = false) -> SessionWindow {
+  private func window(_ cut: Int, _ events: [SessionEvent], hasMore: Bool = false) -> SessionWindow {
     SessionWindow(
       records: events.map { SessionRecord(type: "event", event: $0) },
-      cursor: asOfSeq - 1,
+      cursor: cut,
       hasMore: hasMore
     )
   }
@@ -52,7 +52,7 @@ final class SessionMirrorTests: XCTestCase {
 
     // 打开一屏，然后事件一条条到 —— 序号相接就接上，探测的是「视图与 `frontier` 同步推进」。
     var mirror = SessionMirror()
-    _ = mirror.open(with: window(0, 2, [event(0), event(1)]))
+    _ = mirror.open(with: window(1, [event(0), event(1)]))
     XCTAssertTrue(mirror.append(event(3)) == .merged(added: 1), "接得上的一条记为 1 条新增")
     XCTAssertTrue(mirror.frontier == 4, "位置跟着事件前进")
     XCTAssertTrue(mirror.events.map(\.seq) == [0, 1, 3], "视图按 seq 连续")
@@ -75,7 +75,7 @@ final class SessionMirrorTests: XCTestCase {
 
     // 事件不是对某次请求的回应 —— 翻页在途时它不该被闸门挡住，也不该松开那个闸门。
     var paging = SessionMirror()
-    _ = paging.open(with: window(0, 2, [event(0), event(1)]))
+    _ = paging.open(with: window(1, [event(0), event(1)]))
     XCTAssertTrue(paging.beginRequest(), "翻页拿到发起权")
     XCTAssertTrue(paging.append(event(2)) == .merged(added: 1), "在途时事件照常并进")
     XCTAssertTrue(paging.events.map(\.seq) == [0, 1, 2], "事件进得去")
@@ -85,7 +85,7 @@ final class SessionMirrorTests: XCTestCase {
 
     var opened = SessionMirror()
     XCTAssertTrue(opened.isEmpty, "SM9 新镜像里什么都没有")
-    let verdictOpen = opened.open(with: window(1, 4, [event(1), event(2), event(3)], hasMore: true))
+    let verdictOpen = opened.open(with: window(3, [event(1), event(2), event(3)], hasMore: true))
     XCTAssertTrue(verdictOpen == .merged(added: 3), "SM9 打开会话合并了整段窗口")
     XCTAssertTrue(opened.windowStart == 1 && opened.hasMore, "SM9 窗口起点与「还有更早的」都记下了")
     XCTAssertTrue(opened.frontier == 4, "SM9 位置落在窗口末尾，追新增从这里开始")
@@ -95,33 +95,45 @@ final class SessionMirrorTests: XCTestCase {
 
     // MARK: SM10 再来一次「打开」是替换，不是叠加
 
-    let verdictReopen = opened.open(with: window(2, 5, [event(2), event(3), event(4)], hasMore: true))
+    let verdictReopen = opened.open(with: window(4, [event(2), event(3), event(4)], hasMore: true))
     XCTAssertTrue(verdictReopen == .merged(added: 3), "SM10 刷新以服务端给的窗口为准")
     XCTAssertTrue(opened.events.map(\.seq) == [2, 3, 4], "SM10 旧内容整段被换掉，而不是叠上去")
 
     // MARK: SM11 往回翻：前插，末尾位置不动
 
     var paged = SessionMirror()
-    _ = paged.open(with: window(4, 6, [event(4), event(5)], hasMore: true))
-    let verdictOlder = paged.prepend(window(2, 4, [event(2), event(3)], hasMore: true))
+    _ = paged.open(with: window(5, [event(4), event(5)], hasMore: true))
+    let verdictOlder = paged.prepend(window(5, [event(2), event(3)], hasMore: true))
     XCTAssertTrue(verdictOlder == .merged(added: 2), "SM11 更早的一段接上了")
     XCTAssertTrue(paged.events.map(\.seq) == [2, 3, 4, 5], "SM11 更早的事件排在前面")
     XCTAssertTrue(paged.frontier == 6, "SM11 往回翻不改变末尾位置")
     XCTAssertTrue(paged.windowStart == 2, "SM11 窗口起点跟着前移")
+    XCTAssertTrue(paged.throughSeq == 5, "SM11 切点不动 —— 它钉的是打开那一刻日志到哪")
 
     // MARK: SM12 往回翻一段接不上的 ⇒ 判定缺口
 
     var mismatched = SessionMirror()
-    _ = mismatched.open(with: window(4, 6, [event(4), event(5)], hasMore: true))
-    let verdictMismatch = mismatched.prepend(window(0, 3, [event(0), event(1), event(2)], hasMore: false))
+    _ = mismatched.open(with: window(5, [event(4), event(5)], hasMore: true))
+    let verdictMismatch = mismatched.prepend(window(5, [event(0), event(1), event(2)], hasMore: false))
     XCTAssertTrue(verdictMismatch == .resetRequired(.gap), "SM12 末尾接不上起点 ⇒ 中间有洞，宁可重置")
     XCTAssertTrue(mismatched.events.map(\.seq) == [4, 5], "SM12 判定为缺口时视图不动")
+
+    // MARK: SM12b 与网关 `page-forward` 的样本同形：`cursor` 远大于本页末尾也能接上
+
+    // 网关那条判据的回包是 `{records: [seq 6], cursor: 129, hasMore: true}`（`beforeSeq: 7`）。
+    // 拿 `cursor` 当页尾比会判成缺口 —— 这一条就是那个错法的现场复现。
+    var sameAsGateway = SessionMirror()
+    _ = sameAsGateway.open(with: window(129, (7..<130).map(event), hasMore: true))
+    let verdictGatewayShape = sameAsGateway.prepend(window(129, [event(6)], hasMore: true))
+    XCTAssertTrue(verdictGatewayShape == .merged(added: 1),
+                  "回包的 `cursor`（129）不是这一页的末尾（6）—— 接续看 `records.last`")
+    XCTAssertTrue(sameAsGateway.events.first?.seq == 6, "更早的那条排在最前")
 
     // MARK: SM13 翻到日志开头：hasMore 归假
 
     var exhausted = SessionMirror()
-    _ = exhausted.open(with: window(2, 4, [event(2), event(3)], hasMore: true))
-    let verdictFirst = exhausted.prepend(window(0, 2, [event(0), event(1)], hasMore: false))
+    _ = exhausted.open(with: window(3, [event(2), event(3)], hasMore: true))
+    let verdictFirst = exhausted.prepend(window(3, [event(0), event(1)], hasMore: false))
     XCTAssertTrue(verdictFirst == .merged(added: 2), "SM13 最后一段也能接上")
     XCTAssertTrue(exhausted.hasMore == false, "SM13 到头了就说明白，界面据此收起入口")
     XCTAssertTrue(exhausted.events.map(\.seq) == [0, 1, 2, 3], "SM13 覆盖了整份日志")
@@ -129,9 +141,12 @@ final class SessionMirrorTests: XCTestCase {
     // MARK: SM14 空窗口是一份合法的答案
 
     var blank = SessionMirror()
-    let verdictBlank = blank.open(with: window(0, 0, [], hasMore: false))
+    let verdictBlank = blank.open(with: window(-1, [], hasMore: false))
     XCTAssertTrue(verdictBlank == .caughtUp, "SM14 空日志不是错误")
     XCTAssertTrue(blank.isEmpty && !blank.hasMore, "SM14 空视图且没有更早的")
+    XCTAssertTrue(blank.windowStart == 0 && blank.frontier == 0,
+                  "SM14 空窗口的两个位置都是 0（`cursor = -1` 的 +1 换算只在一处）")
+    XCTAssertTrue(blank.throughSeq == -1, "SM14 空日志的切点是 -1，不是 0")
 
     // MARK: SM15 重连重对齐：本地更早的部分原样保留
 
@@ -139,8 +154,8 @@ final class SessionMirrorTests: XCTestCase {
     // 重连送来一个新窗口 —— 它的起点落在本地内部。旧码整段替换，于是那几页连同「读到哪」
     // 一起丢了；重对齐只换尾部。
     var following = SessionMirror()
-    _ = following.open(with: window(0, 10, (0..<10).map(event), hasMore: false))
-    let verdictRealign = following.realign(with: window(6, 14, (6..<14).map(event), hasMore: true))
+    _ = following.open(with: window(9, (0..<10).map(event), hasMore: false))
+    let verdictRealign = following.realign(with: window(13, (6..<14).map(event), hasMore: true))
     XCTAssertTrue(verdictRealign == .merged(added: 4), "SM15 新增只算新覆盖到的那几条，不是整个窗口的长度")
     XCTAssertTrue(following.events.map(\.seq) == Array(0..<14), "SM15 本地更早的 0..5 原样在，尾部换成新窗口")
     XCTAssertTrue(following.windowStart == 0, "SM15 左端没动，起点就不动")
@@ -152,8 +167,8 @@ final class SessionMirrorTests: XCTestCase {
     // 与 SM15 相对的另一支：新窗口的起点比本地还早（服务端窗口变大、或本地只拿到很少）。
     // 这时它覆盖了本地，没有可保留的部分 —— 左端坐标改由服务端说了算。
     var widened = SessionMirror()
-    _ = widened.open(with: window(6, 10, (6..<10).map(event), hasMore: true))
-    let verdictWidened = widened.realign(with: window(2, 14, (2..<14).map(event), hasMore: true))
+    _ = widened.open(with: window(9, (6..<10).map(event), hasMore: true))
+    let verdictWidened = widened.realign(with: window(13, (2..<14).map(event), hasMore: true))
     XCTAssertTrue(verdictWidened == .merged(added: 8), "SM16 新窗口覆盖得更早，净增 = 新条数减被换掉的")
     XCTAssertTrue(widened.windowStart == 2, "SM16 起点跟着新窗口前移")
     XCTAssertTrue(widened.events.map(\.seq) == Array(2..<14), "SM16 事件与新窗口逐条相同")
@@ -162,24 +177,24 @@ final class SessionMirrorTests: XCTestCase {
     // MARK: SM17 接不上 ⇒ 沿用既有的重置判定，且一条都不动
 
     var gapped = SessionMirror()
-    _ = gapped.open(with: window(0, 10, (0..<10).map(event), hasMore: false))
-    let verdictGapped = gapped.realign(with: window(12, 14, (12..<14).map(event), hasMore: false))
+    _ = gapped.open(with: window(9, (0..<10).map(event), hasMore: false))
+    let verdictGapped = gapped.realign(with: window(13, (12..<14).map(event), hasMore: false))
     XCTAssertTrue(verdictGapped == .resetRequired(.gap), "SM17 新窗口起点越过本地末尾 ⇒ 中间有洞，宁可重置")
     XCTAssertTrue(gapped.events.map(\.seq) == Array(0..<10), "SM17 判定缺口时视图一条不动")
     XCTAssertTrue(gapped.frontier == 10 && gapped.windowStart == 0 && gapped.hasMore == false,
                   "SM17 判定缺口时位置也不动")
 
     var rewound = SessionMirror()
-    _ = rewound.open(with: window(0, 10, (0..<10).map(event), hasMore: true))
-    let verdictRewound = rewound.realign(with: window(0, 8, (0..<8).map(event), hasMore: true))
+    _ = rewound.open(with: window(9, (0..<10).map(event), hasMore: true))
+    let verdictRewound = rewound.realign(with: window(7, (0..<8).map(event), hasMore: true))
     XCTAssertTrue(verdictRewound == .resetRequired(.waterMarkWentBack), "SM17 新窗口末尾比本地还靠前 ⇒ 位置不可信")
     XCTAssertTrue(rewound.events.map(\.seq) == Array(0..<10), "SM17 水位倒退时视图也不动")
 
     // MARK: SM18 同一条 opening 再来一次：幂等，不累积偏差
 
     var redelivered = SessionMirror()
-    _ = redelivered.open(with: window(0, 10, (0..<10).map(event), hasMore: false))
-    let recon = window(6, 14, (6..<14).map(event), hasMore: true)
+    _ = redelivered.open(with: window(9, (0..<10).map(event), hasMore: false))
+    let recon = window(13, (6..<14).map(event), hasMore: true)
     _ = redelivered.realign(with: recon)
     let afterFirst = redelivered.events.map(\.seq)
     let verdictAgain = redelivered.realign(with: recon)

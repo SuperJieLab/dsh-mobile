@@ -110,6 +110,8 @@ final class MuxFrameFixtureTests: XCTestCase {
                     encoded = try MuxOpenFrame.events(streamId: sample.streamId).encoded()
                 case "control":
                     encoded = try MuxOpenFrame.control(streamId: sample.streamId).encoded()
+                case "workspace":
+                    encoded = try MuxOpenFrame.workspace(streamId: sample.streamId).encoded()
                 default:
                     XCTFail("\(sample.name): 样本里的 kind 不认识（\(sample.kind ?? "nil")）")
                     continue

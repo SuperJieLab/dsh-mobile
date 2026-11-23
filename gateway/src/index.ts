@@ -145,8 +145,8 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // 预设服务不在 `inject` 里，所以端口在第一次调用时才取；取不到不是错误，只是
   // 「这个装配没有权限格」，手机据此不画那一格。
   const permissionPort = permissionChannelOver(ctx)
-  // 列表分组：组清单与每行归属都取自工作空间注册表。它与会话列表同一次应答
-  // 发出，所以没有自己的一条流。
+  // 工作空间端口：建/删两条写面，读面（组清单与归属）另有一条 `workspace/follow` 流
+  // （`workspacePortOver` 里的 `follow`），列表应答里没有归属。
   const workspacePort = workspacePortOver(ctx)
 
   log.info('plugin loaded — auth on both channels, write + model channels on, command + permission channels on demand')

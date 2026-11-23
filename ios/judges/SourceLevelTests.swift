@@ -40,19 +40,39 @@ final class SourceLevelTests: XCTestCase {
     /// （`Task.sleep` / `Timer`）、HTTP 客户端（`RpcClient` / `readSnapshot` / `readPage`）、
     /// 以及那个闭包（`syncNow`）。`start()` 必须在（正控：切块没切错）。
     func testTheSecondScreenNeverComesOverHTTP() throws {
-        let text = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionFollowing.swift"))
-        XCTAssertTrue(text.contains("func start()"), "读到的不是流开关 —— 先怀疑路径推算")
+        let root = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/State")
+        let files = Self.swiftFiles(under: root)
+        // 活性锚：目录扫空了下面的差集也会「通过」。
+        XCTAssertGreaterThan(files.count, 5, "只扫到 \(files.count) 个状态文件 —— 路径推算错了？")
+
+        // 两档禁词，因为「第二条取数路」在两个地方会长：
+        //  ① 整个状态目录都不许出现 —— 快照读、定时器、那个闭包（它们只服务兜底）；
+        //  ② 只有流开关不许出现 —— `RpcClient` / `readPage`（翻页是读侧编排的事，
+        //     流开关不该自己发请求）。
+        let bannedEverywhere = ["readSnapshot", "syncNow", "Task.sleep", "Timer"]
+        let bannedInFollowing = ["RpcClient", "readPage"]
 
         var hits: [String] = []
-        for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let code = String(line)
-            for banned in ["Task.sleep", "Timer", "RpcClient", "readSnapshot", "readPage", "syncNow"] {
-                if code.contains(banned) { hits.append(":\(number + 1) \(banned)") }
+        for file in files {
+            let name = file.lastPathComponent
+            let text = try read(file)
+            for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let code = String(line)
+                for banned in bannedEverywhere where code.contains(banned) {
+                    hits.append("\(name):\(number + 1) \(banned)")
+                }
+                if name == "SessionFollowing.swift" {
+                    for banned in bannedInFollowing where code.contains(banned) {
+                        hits.append("\(name):\(number + 1) \(banned)")
+                    }
+                }
             }
         }
+        let following = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionFollowing.swift"))
+        XCTAssertTrue(following.contains("func start()"), "读到的不是流开关 —— 先怀疑路径推算")
         XCTAssertEqual(hits, [],
-                       "流开关里又出现了第二条取数路 —— 一屏只有一个来源（判据 12）")
+                       "状态层里又出现了第二条取数路 —— 一屏只有一个来源（判据 12）")
     }
 
     // MARK: - 收帧链路只解一次

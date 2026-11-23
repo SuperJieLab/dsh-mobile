@@ -185,6 +185,7 @@ test('术语回潮检查：网关源码、测试、工具与活文档里不出�
  */
 const PHASE_ONE_ENDPOINTS: readonly (readonly [endpoint: string, argsKey: string])[] = [
   ['session/list', '_request'],
+  ['session/page', 'request'],
   ['commands/list', 'agentId'],
   ['commands/execute', 'agentId'],
   ['permissionPresets/catalog', ''],

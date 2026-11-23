@@ -118,8 +118,9 @@ struct SessionRecord: Decodable, Equatable {
 
 /// 会话的元信息，随打开帧原样下发（上游 `SessionWireHeader`，九格）。
 ///
-/// 客户端只读 `id`（串流防护：这一帧属于哪条会话）与 `parentSession` / `origin`
-/// （是不是子会话）；其余原样收下不解释 —— `version` 的取值集合上游没有约定。
+/// 客户端只读 `id`（**埋点用**：这条打开帧归哪个会话 —— 流本身已经按会话开过，
+/// 不再拿它做一次校验）与 `parentSession` / `origin`（是不是子会话）；其余原样收下
+/// 不解释 —— `version` 的取值集合上游没有约定。
 struct SessionWireHeader: Decodable, Equatable {
     let version: Int
     let id: String

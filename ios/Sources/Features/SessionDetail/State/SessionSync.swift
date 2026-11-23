@@ -290,7 +290,7 @@ final class SessionSync {
     func apply(_ reading: StreamReading) {
         switch reading.content {
         case .opening(let opening):
-            applyOpening(opening)
+            applySnapshot(opening)
             applyOpeningProjections(opening.projections)
         case .event(let event):
             applyLiveEvent(event)
@@ -306,11 +306,11 @@ final class SessionSync {
         }
     }
 
-    private func applyOpening(_ opening: SnapshotFrame) {
+    private func applySnapshot(_ snapshot: SnapshotFrame) {
         lastFrameAt = Date()
         // 手空着时等价于「打开」，重连时走「重对齐」：保留更早的部分。
         let wasEmpty = mirror.isEmpty
-        let verdict = mirror.realign(with: SessionWindow(opening: opening))
+        let verdict = mirror.realign(with: SessionWindow(opening: snapshot))
 
         // 一条新流开始：上一代扣着没点名的定稿一律作废 —— 它们要么会作为普通持久事件重来，
         // 要么属于已经结束的那一轮。留着只会让 feedEngine 永久跳过它们（静默少一行）。
@@ -330,7 +330,7 @@ final class SessionSync {
 
         // 未定稿基线：opening 带进行中的 attempt 就恢复草稿槽位（基线内容变成事件交给引擎），
         // 没有就清场。基线是服务端此刻的权威，本地那份一律丢掉。
-        if let baseline = opening.assistantStream {
+        if let baseline = snapshot.assistantStream {
             for event in transient.apply(baseline: baseline, cursor: max(0, mirror.frontier - 1)) {
                 conversation.append(event)
             }
@@ -350,7 +350,7 @@ final class SessionSync {
                 refreshView()
                 // 镜像与引擎都空了，而这条流不会再送旧窗口。重开流，让服务端送一份新 opening。
                 //
-                // 必须留到帧处理返回之后再做：在 `applyOpening` 里同步重开，外层随后仍拿**旧帧**的
+                // 必须留到帧处理返回之后再做：在 `applySnapshot` 里同步重开，外层随后仍拿**旧帧**的
                 // `establishes` 去结算新代次，会把新开流的超时守卫当场关掉。
                 Task { @MainActor [weak self] in self?.following.retry() }
             }

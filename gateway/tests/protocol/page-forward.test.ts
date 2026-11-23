@@ -27,9 +27,15 @@ const REQUEST = {
   turnWindow: { minMessages: 50, minTurns: 2 },
 }
 
-/** 宿主的一页：`{records, hasMore, cursor}`，`cursor` 是**含端**的 `throughSeq`。 */
+/**
+ * 宿主的一页：`{records, hasMore, cursor}`。
+ *
+ * ⚠️ `cursor` 是这次读的**切点**（`throughSeq` = 129），不是这一页的末尾（`beforeSeq` 是 7，
+ * 所以末尾是 6）。两个数取不同的值是有意的 —— 相等时「客户端拿 `cursor` 当页尾」这个错法
+ * 会被样本掩住（上游 `history/controller.ts` 的 `end = min(throughSeq + 1, beforeSeq)`）。
+ */
 const HOST_PAGE = {
-  records: [{ type: 'event', event: { type: 'user/message', seq: 7, time: 1, data: { text: '早' } } }],
+  records: [{ type: 'event', event: { type: 'user/message', seq: 6, time: 1, data: { text: '早' } } }],
   hasMore: true,
   cursor: 129,
 }

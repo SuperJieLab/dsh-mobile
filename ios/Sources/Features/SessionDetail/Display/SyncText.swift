@@ -30,9 +30,7 @@ extension SessionSync.Step {
     /// 因为那几句的措辞不是「动作 + 失败」能拼出来的）。
     fileprivate var name: String {
         switch self {
-        case .opening: return "打开"
         case .paging: return "读取"
-        case .syncing: return "同步"
         case .sending: return "发送"
         case .executing: return "执行命令"
         case .selecting: return "换模型"
@@ -51,22 +49,16 @@ extension SessionSync.Cause {
         switch self {
         case .transport:
             switch step {
-            case .opening: return "没连上网关 —— 这一屏还是空的。"
             case .paging: return "没连上网关 —— 未能加载更早的消息。"
-            case .syncing: return "没连上网关 —— 手机上看到的仍是上一次同步的内容。"
             case .sending, .executing, .selecting, .streaming: return "没连上网关。"
             }
 
         case .refusal(let code):
             switch step {
-            case .opening, .paging: return "服务端拒绝了这次读取：\(code)"
-            case .syncing: return "服务端拒绝了这次同步：\(code)"
+            case .paging: return "服务端拒绝了这次读取：\(code)"
             case .sending, .executing, .selecting, .streaming:
                 return "服务端拒绝了这次\(step.name)：\(code)"
             }
-
-        case .resetLoop(let reason):
-            return "服务端连续要求重新同步（\(reason.words)）—— 已停止重试。"
 
         case .thrown(let error):
             let detail = error.localizedDescription
@@ -75,7 +67,7 @@ extension SessionSync.Cause {
             case .executing: return "命令没能执行：\(detail)"
             case .selecting: return "模型没换成：\(detail)"
             case .streaming: return "订阅流被拒绝：\(detail)"
-            case .opening, .paging, .syncing: return "\(step.name)失败：\(detail)"
+            case .paging: return "\(step.name)失败：\(detail)"
             }
         }
     }

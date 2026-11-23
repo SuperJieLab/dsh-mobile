@@ -23,10 +23,12 @@ final class SessionStatus {
     }
 
     /// 失败发生在哪一步 —— 每步各有一句说法。
+    ///
+    /// **只有真有产生者的步骤**。`opening` / `syncing` 曾经在这里，它们唯一的产生者是
+    /// 「打开 / 追新增」那条 HTTP 路 —— 那条路随打开帧改成唯一来源一起删了；留着就是两句
+    /// 谁都到不了的文案（2026-11-23 复核发现，见本期 checks）。
     enum Step {
-        case opening
         case paging
-        case syncing
         case sending
         case executing
         case selecting
@@ -39,8 +41,6 @@ final class SessionStatus {
         case transport
         /// 服务端按信封拒绝，但镜像只留了协议码。
         case refusal(code: String)
-        /// 编排自己执行的重置撞上了缺口，连着两次。
-        case resetLoop(ResetReason)
         /// 抛出来的错误原样带过去：编排查不出它属于哪一类，也不需要查 —— 显示层会解释。
         case thrown(any Error)
     }

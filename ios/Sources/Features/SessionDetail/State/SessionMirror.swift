@@ -150,16 +150,27 @@ struct SessionMirror {
   mutating func prepend(_ window: SessionWindow) -> Verdict {
     inFlight = false
 
-    // 只接受**紧邻**的一段：两个数都是含端的，所以「这一页的切点正好在本地起点下一位」
-    // 就是无缝。比原来少一次换算（原来一端含、一端不含）。
-    guard window.cursor == windowStart - 1 else {
+    // 只接受**紧邻**的一段：这一页的**末尾**必须正好在本地起点下一位。
+    //
+    // 判据是 `records.last` 而**不是回包的 `cursor`**：`cursor` 是这次读的切点（`throughSeq`，
+    // 日志当时覆盖到哪），它大于等于本页末尾 —— 拿它比会把每一次翻页都判成缺口，
+    // 而缺口的表现是「中间有事件没拿到」，看上去像另一件事。
+    guard Self.endsAt(window, windowStart - 1) else {
       return .resetRequired(.gap)
     }
 
     events.insert(contentsOf: window.events, at: 0)
-    windowStart = window.start
+    // 起点只由**这一页的首条记录**前移。空页不碰起点 —— 它只可能是「日志到头」那一支。
+    if let first = window.records.first { windowStart = first.event.seq }
     hasMore = window.hasMore
     return .merged(added: window.records.count)
+  }
+
+  /// 这一页是否正好结束在 `seq` 上。空页只在 `seq == -1`（本地起点已经是 0）时算接上 ——
+  /// 那是翻到了日志开头，不是缺口。
+  private static func endsAt(_ window: SessionWindow, _ seq: Int) -> Bool {
+    if let last = window.records.last { return last.event.seq == seq }
+    return seq == -1
   }
 
     /// 并进一条**实时事件**。

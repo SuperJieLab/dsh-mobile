@@ -219,17 +219,6 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
 }
 
 /**
- * 把 `open` 载荷校验为 follow 请求。
- *
- * op 集合与 HTTP 信封按名字与语义共享；follow 也走 mux 帧 —— 其他 op 或无 op，
- * 都不是 follow 请求。
- *
- * @returns 请求本身；命名不出会话时返回 `undefined` —— 与 `page` 相同的
- *   宽容边界：畸形 `maxMessages` 退化为默认值；没有可用 `sessionId` 就不是
- *   follow 请求。
- */
-
-/**
  * 一条 `open` 帧要开的是**哪种**流 —— 端点表的判定结果。
  *
  * 与信封分两层判：`parseClientFrame` 只说「这是几号流」，这里说「这条流要什么」。
