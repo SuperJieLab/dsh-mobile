@@ -20,22 +20,26 @@ final class SessionStreamReaderTests: XCTestCase {
         return SessionStreamReader.read(frame, sessionId: session)
     }
 
-    // MARK: - O1：打开帧（三字段同在）
+    // MARK: - O1：打开帧（五格同在）
 
-    /// 三个字段同在才进这一支；缺任何一个都该落到别的分类里去（`MuxShapeTests` 守着
-    /// 缺字段那三条，这里守正向样本本身没被判歪）。
-    func testOpeningNeedsAllThreeFields() throws {
+    /// 五格同在才进这一支；缺任何一个都该落到别的分类里去（`MuxShapeTests` 守着
+    /// 缺字段那五条，这里守正向样本本身没被判歪）。
+    func testOpeningNeedsAllFiveFields() throws {
         let reading = try read("""
         {"type":"item","streamId":"s-1","value":{
-          "type":"snapshot","sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,
-          "events":[{"type":"user/message","seq":2,"time":1700000000000,"data":{}}]}}
+          "type":"snapshot",
+          "header":{"version":1,"id":"s-1","createdAt":1700000000000,"isSeeded":false},
+          "cursor":5,"hasMore":true,
+          "records":[{"type":"event","event":{"type":"user/message","seq":2,"time":1700000000000,"data":{}}}],
+          "projections":{"asOfSeq":5,"values":{}}}}
         """)
 
         guard case .opening(let opening) = reading.content else {
-            return XCTFail("三字段同在该判成打开帧，实际：\(reading.content)")
+            return XCTFail("五格同在该判成打开帧，实际：\(reading.content)")
         }
-        XCTAssertEqual(opening.cursor, 5, "窗口末尾取 cursor")
-        XCTAssertEqual(opening.events.map(\.seq), [2], "事件照常带出")
+        XCTAssertEqual(opening.cursor, 5, "含端上界原样带出")
+        XCTAssertEqual(opening.header.id, "s-1", "会话 id 在头部")
+        XCTAssertEqual(opening.records.map(\.event.seq), [2], "记录剥层后照常带出")
     }
 
     // MARK: - O2：事件帧（type + seq）

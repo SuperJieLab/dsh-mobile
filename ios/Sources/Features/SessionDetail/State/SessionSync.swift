@@ -349,7 +349,7 @@ final class SessionSync {
         switch reading.content {
         case .opening(let opening):
             Log.perf(Log.Module.session, PerfRecord(
-                seg: .dev, t: PerfRecord.nowMs(), sessionId: opening.sessionId, seq: opening.cursor,
+                seg: .dev, t: PerfRecord.nowMs(), sessionId: opening.header.id, seq: opening.cursor,
                 fields: ["kind": .text("opening"), "devRecv": .number(recv),
                          "devApply": .number(apply), "bytes": .number(Double(bytes))]
             ))
@@ -385,7 +385,7 @@ final class SessionSync {
         }
     }
 
-    private func applyOpening(_ opening: OpeningFrame) {
+    private func applyOpening(_ opening: SnapshotFrame) {
         lastFrameAt = Date()
         // WS 自己把窗口送到了，HTTP 兜底取消，免得两秒后又拉一次。
         following.cancelFirstScreenFallback()
@@ -404,9 +404,6 @@ final class SessionSync {
         if let previous = transient.liveAttemptId {
             conversation.settleAssistant(attemptId: previous, settlement: nil)
         }
-
-        // 模型基线：opening 的 `model` 是进会话那一刻权威的「下一轮用什么」；不在 = 不知道。
-        models.absorb(baseline: opening.model)
 
         // 先把持久窗口喂给引擎，再放基线事件 —— 顺序不能反：
         // 基线进的是「空引擎」，而紧接着的 refreshView 会用持久窗口重建整段，把基线抹掉。
@@ -602,8 +599,7 @@ final class SessionSync {
     ///
     /// 两条出口同源，所以这里不需要另算规则 —— 只是把同一份值先放上屏。
     /// 之后 control 的 `projection` 会按水位覆盖它（`UsageState` 只认严格更高的水位）。
-    func applyOpeningProjections(_ block: ProjectionBlock?) {
-        guard let block else { return }
+    func applyOpeningProjections(_ block: ProjectionBlock) {
         applyUsage(UsageView.snapshotOf(block.values, asOfSeq: block.asOfSeq))
     }
 

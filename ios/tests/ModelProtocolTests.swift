@@ -1,7 +1,7 @@
 /**
  * 模型选择的协议解码测试 + 订阅更新状态机。
  *
- * 覆盖两处协议形状：目录回应与 opening 的 `model` 字段。解码的核心是**缺省安全**：
+ * 覆盖两处协议形状：目录回应与当前选择的来源。解码的核心是**缺省安全**：
  * 字段缺省是陈述不是故障，要区分「服务端读不出」与「值就是空」。
  * 服务端「不知道」时客户端不得猜。
  */
@@ -18,7 +18,6 @@ final class ModelProtocolTests: XCTestCase {
     func testDecodeAndFollow() {
         decodeSelection()
         decodeCatalog()
-        decodeOpening()
         encodeRequests()
         followUpdates()
     }
@@ -75,22 +74,6 @@ final class ModelProtocolTests: XCTestCase {
             from: Data(#"{"groups":[],"failures":[]}"#.utf8)
         )
         XCTAssertTrue(bare?.default == nil && bare?.groups?.isEmpty == true, "D2e default 缺省 = nil，目录其余照常")
-    }
-
-    // MARK: - opening 的 model 字段
-
-    private func decodeOpening() {
-        let withModel = try? decoder.decode(SnapshotResponse.self, from: Data("""
-        {"asOfSeq":128,"hasMore":false,"events":[],
-         "model":{"provider":"deepseek","model":"v3.2","reasoningEffort":"high"}}
-        """.utf8))
-        XCTAssertTrue(withModel?.model?.model == "v3.2" && withModel?.model?.reasoningEffort == "high",
-                      "D3a opening 带 model 基线时解码落地")
-
-        let withoutModel = try? decoder.decode(SnapshotResponse.self, from: Data("""
-        {"asOfSeq":128,"hasMore":false,"events":[]}
-        """.utf8))
-        XCTAssertTrue(withoutModel?.model == nil, "D3b opening 不带 model = 服务端不知道，字段缺省不是故障")
     }
 
     // MARK: - 订阅更新状态机（V1–V4）

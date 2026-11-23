@@ -149,8 +149,12 @@ final class MuxFrameFixtureTests: XCTestCase {
                     XCTFail("\(sample.name): follow 的样本该解成 opening")
                     continue
                 }
-                XCTAssertEqual(shape.cursor, 3, "\(sample.name): 打开窗口的 cursor")
-                XCTAssertEqual(shape.sessionId, "s-1", "\(sample.name): 会话名")
+                let opening = try XCTUnwrap(shape.frame(), "\(sample.name): 五格齐全该成形")
+                XCTAssertEqual(opening.cursor, 3, "\(sample.name): 打开窗口的 cursor（含端，原样）")
+                XCTAssertEqual(opening.header.id, "s-1", "\(sample.name): 会话名在头部")
+                XCTAssertEqual(opening.records.map(\.event.seq), [3],
+                               "\(sample.name): 记录里是事件（`event` 那一格）")
+                XCTAssertEqual(opening.projections.asOfSeq, 3, "\(sample.name): 投影基线随行")
             case "events":
                 guard case .decoded(let item) = EventsItem.read(value) else {
                     XCTFail("\(sample.name): events 的样本该解成 events 货物")

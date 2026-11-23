@@ -9,7 +9,7 @@ struct StreamReading {
     /// 这一帧是什么。
     enum Content {
         /// 打开帧：窗口 + 这条流的锚点。
-        case opening(OpeningFrame)
+        case opening(SnapshotFrame)
         /// 一条持久事件（载荷本体就是事件）。
         case event(SessionEvent)
         /// 一条未定稿帧（`start` / `chunk` / `end`），原样转出。
@@ -67,10 +67,12 @@ enum SessionStreamReader {
             switch FollowItem.read(value) {
             case .decoded(.opening(let shape)):
                 guard let opening = shape.frame() else {
-                    // 是本流的打开帧、但必填字段缺了（sessionId / cursor / events）。缺字段的
-                    // 打开帧是开流超时的第一现场，静默忽略会让它和「这一条流什么都没发生」
-                    // 长得一样。
-                    Log.warn(Log.Module.session, "opening missing required fields (sessionId/cursor/events)")
+                    // 是本流的打开帧、但必填字段缺了（header / cursor / records / hasMore /
+                    // projections）。缺字段的打开帧是开流超时的第一现场，静默忽略会让它和
+                    // 「这一条流什么都没发生」长得一样。**不补默认值**：补一个就是替服务端
+                    // 声明它没说的事，而两种「补」都不报错。
+                    Log.warn(Log.Module.session,
+                             "opening missing required fields (header/cursor/records/hasMore/projections)")
                     return StreamReading(content: .ignored)
                 }
                 return StreamReading(content: .opening(opening))

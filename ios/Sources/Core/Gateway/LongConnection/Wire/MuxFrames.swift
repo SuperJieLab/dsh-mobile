@@ -16,11 +16,51 @@ typealias StreamId = String
 
 // MARK: - 开流请求
 
-/// 开一条订阅流的请求体（网关侧同名接口）。
-/// 与网关那份不同形：类型自身不存 `op`，编码时写出 —— 存了之后谁都能构造出 `op` 不对的请求。
-/// 网关另有可选 `maxMessages`，客户端从不发它（取服务端默认值）。
+/// 开一条订阅流的请求体 —— 上游 `SessionFollowRequest` 逐字（网关侧同名接口）。
+///
+/// **窗口参数由客户端决定**：网关不再替我们换算。上一版它把 `maxMessages` 乘二、
+/// `minTurns` 改成 1，于是同一屏在手机上比 Web UI 长一倍 —— 两份窗口规则里外各一份，
+/// 谁也不会红。这里的四个数就是上游浏览器客户端用的那一组。
 struct FollowRequest: Encodable {
-    let sessionId: String
+
+    /// 会话地址 —— 带 `kind` 判别字段的联合，不是裸 `sessionId`：将来加一种地址
+    /// （`subagent`）时，改的是这一处判别，而不是每个调用点的字段名。
+    struct Address: Encodable {
+        let kind = "session"
+        let sessionId: String
+    }
+
+    /// 「走到后可停的下限」与「必须停的轮数」—— 与上游同一组数。
+    struct TurnWindow: Encodable {
+        let minMessages: Int
+        let minTurns: Int
+    }
+
+    let address: Address
+    /// 打开即激活这个会话（宿主的 `promote`）。**不是可选项**：不带它，会话只被被动观察 ——
+    /// 手机上看着一切正常，一发消息就是「会话不在」。
+    let activate: Bool
+    /// 要进程内的未定稿帧（进行中的 assistant 输出）。
+    let assistantStream: Bool
+    let maxMessages: Int
+    let turnWindow: TurnWindow
+
+    /// 上游浏览器客户端打开会话时用的那一组（`HISTORY_PAGE_OPTIONS`）。
+    static func opening(sessionId: String) -> FollowRequest {
+        FollowRequest(
+            address: Address(sessionId: sessionId),
+            activate: true,
+            assistantStream: true,
+            maxMessages: 500,
+            turnWindow: TurnWindow(minMessages: 50, minTurns: 2)
+        )
+    }
+}
+
+/// `args` 里的那一层 `request` 容器 —— 宿主的形参就叫 `request`，线上照抄这一层。
+/// 少一层就是 `invalid-args`：网关按「宿主的参数名」判容器，不猜。
+private struct FollowArguments: Encodable {
+    let request: FollowRequest
 }
 
 /// 开流帧：`{type:"open", streamId, endpoint, payload:{args}}`。
@@ -39,7 +79,8 @@ struct MuxOpenFrame: Encodable {
     }
 
     static func following(sessionId: String, streamId: StreamId) -> MuxOpenFrame {
-        MuxOpenFrame(streamId: streamId, endpoint: "session/follow", request: .follow(FollowRequest(sessionId: sessionId)))
+        MuxOpenFrame(streamId: streamId, endpoint: "session/follow",
+                     request: .follow(FollowRequest.opening(sessionId: sessionId)))
     }
 
     static func events(streamId: StreamId) -> MuxOpenFrame {
@@ -66,7 +107,7 @@ struct MuxOpenFrame: Encodable {
         var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .payload)
         switch request {
         case let .follow(follow)?:
-            try payload.encode(follow, forKey: .args)
+            try payload.encode(FollowArguments(request: follow), forKey: .args)
         case nil:
             try payload.encode(EmptyArguments(), forKey: .args)
         }
@@ -114,47 +155,53 @@ private func muxText<Frame: Encodable>(of frame: Frame) throws -> String {
 // MARK: - 打开帧的载荷
 
 /**
- * opening 帧的 typed 形状（网关侧的 `FollowOpening`）：帧原文**就地解码一次**，不经
- * `JSONValue → Data → typed` 的往返 —— 那条路上每一步都可能悄悄改掉一次取值。
- * 坏事件单条跳过（`FailableDecodable`），坏模型 / 坏占用整段忽略。
+ 打开帧的 typed 形状 —— 上游 `SessionFollowFrame` 的 `snapshot` 支（网关侧的
+ `FollowSnapshot`）：帧原文**就地解码一次**，不经 `JSONValue → Data → typed` 的往返 ——
+ 那条路上每一步都可能悄悄改掉一次取值。
+
+ **五格必填**：`header` / `cursor` / `records` / `hasMore` / `projections`。缺任何一格
+ 就不是打开帧 —— 丢弃并留痕，**不补默认值**。补一个默认值等于替服务端声明一件它没说的事：
+ `hasMore` 补成 `false` 就是「上面没有了」（往回翻的入口永远不出现），`projections` 补成空
+ 就是「没有占用」，两种都不会报错。坏记录单条跳过（`FailableDecodable`，那一格解不出的是
+ 一条事件，不是整帧）。
  */
-struct OpeningFrame {
-    let sessionId: String
-    let pageStart: Int
+struct SnapshotFrame {
+    /// 会话元信息（九格）。`id` 是会话 id —— 从前那一格叫 `sessionId`。
+    let header: SessionWireHeader
+    /// 打开覆盖到的最后一个 seq，**含端**。「下一个期望的 seq」是 `cursor + 1`，在入口换算一次。
     let cursor: Int
-    let hasOlder: Bool
-    let events: [SessionEvent]
-    let assistantStream: JSONValue?
-    let model: ModelSelection?
+    let records: [SessionRecord]
+    /// 窗口之前是否还有更旧的记录。
+    let hasMore: Bool
     /// 打开时读到的投影基线 —— 与 `session/control` 的 `baseline` 同源。
     /// 客户端以 control 为权威，这里的值只在 control 到达之前当初值用。
-    let projections: ProjectionBlock?
+    let projections: ProjectionBlock
+    /// 未定稿基线：一个进行中的 assistant 尝试。不透明 —— 语义归 `TransientChannel`。
+    let assistantStream: JSONValue?
 
-    /// 载荷的线上形状。三个字段（sessionId / cursor / events）同在才成形，其余都可缺。
-    /// `projections` 用 `FailableDecodable` 包着：这一格坏了只丢这一格，不该让整条打开帧
-    /// 变成「解不出」—— 那等于为了一个附加读数丢掉整个窗口。
     struct Payload: Decodable {
-        let sessionId: String?
-        let pageStart: Int?
+        let header: FailableDecodable<SessionWireHeader>?
         let cursor: Int?
-        let hasOlder: Bool?
-        let events: [FailableDecodable<SessionEvent>]?
-        let assistantStream: JSONValue?
-        let model: FailableDecodable<ModelSelection>?
+        let records: [FailableDecodable<SessionRecord>]?
+        let hasMore: Bool?
         let projections: FailableDecodable<ProjectionBlock>?
+        let assistantStream: JSONValue?
 
         /// 缺一个必填字段就不是打开帧 —— 交给别的分类，不猜默认值。
-        func frame() -> OpeningFrame? {
-            guard let sessionId, let cursor, let events else { return nil }
-            return OpeningFrame(
-                sessionId: sessionId,
-                pageStart: pageStart ?? 0,
+        func frame() -> SnapshotFrame? {
+            guard let header = header?.value,
+                  let cursor,
+                  let records,
+                  let hasMore,
+                  let projections = projections?.value
+            else { return nil }
+            return SnapshotFrame(
+                header: header,
                 cursor: cursor,
-                hasOlder: hasOlder ?? false,
-                events: events.compactMap(\.value),
-                assistantStream: assistantStream,
-                model: model?.value,
-                projections: projections?.value
+                records: records.compactMap(\.value),
+                hasMore: hasMore,
+                projections: projections,
+                assistantStream: assistantStream
             )
         }
     }
@@ -287,7 +334,7 @@ enum CargoReading<Cargo> {
 enum FollowItem {
 
     /// 打开窗口（含投影基线）。
-    case opening(OpeningFrame.Payload)
+    case opening(SnapshotFrame.Payload)
     /// 一条已落地的事件。
     case sessionEvent(SessionEvent)
     /// 未定稿帧 —— 一个进行中的 assistant 尝试的增量。
@@ -296,7 +343,7 @@ enum FollowItem {
     static func read(_ value: JSONValue) -> CargoReading<FollowItem> {
         switch value["type"]?.string {
         case "snapshot":
-            let payload = try? OpeningFrame.Payload(from: JSONValueDecoder(value))
+            let payload = try? SnapshotFrame.Payload(from: JSONValueDecoder(value))
             return payload.map { .decoded(.opening($0)) } ?? .unparsable
         case "event":
             let event = try? SessionEvent(from: JSONValueDecoder(value["event"] ?? .null))

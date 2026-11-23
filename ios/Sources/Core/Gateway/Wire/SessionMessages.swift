@@ -80,6 +80,33 @@ struct SessionEvent: Decodable, Equatable {
 }
 
 
+/// 一屏历史里的一条记录：事件外面包一层判别字段（`{type:"event", event}`）。
+///
+/// 打开帧的 `records` 与分页应答的 `records` 是**同一个类型** —— 客户端用同一套合并逻辑
+/// 吃它们，两处分开声明时，加一格只会在一边加。剥这一层只在这里发生。
+struct SessionRecord: Decodable, Equatable {
+    let type: String
+    let event: SessionEvent
+}
+
+/// 会话的元信息，随打开帧原样下发（上游 `SessionWireHeader`，九格）。
+///
+/// 客户端只读 `id`（串流防护：这一帧属于哪条会话）与 `parentSession` / `origin`
+/// （是不是子会话）；其余原样收下不解释 —— `version` 的取值集合上游没有约定。
+struct SessionWireHeader: Decodable, Equatable {
+    let version: Int
+    let id: String
+    /// Unix 纪元毫秒。
+    let createdAt: Double
+    let cwd: String?
+    let parentSession: String?
+    /// 会话是否含一段 fork 继承来的前缀。
+    let isSeeded: Bool
+    let origin: String?
+    let delegationDepth: Int?
+    let agentPreset: String?
+}
+
 /// 一次快照的结果。`Equatable` 是状态机的需要：`Outcome` 要能比较，
 /// 而它装着这个类型。
 struct SessionSnapshot: Equatable {
@@ -110,10 +137,14 @@ extension SessionPage {
     /// `cursor`（订阅流的说法：已读到的位置）与 `asOfSeq`（窗口末尾，不含）是同一个量，
     /// 改名只在这里发生一次。归这里是因为 `asOfSeq` 属于 `SessionPage`：谁持有目标名字，
     /// 谁负责翻译。
-    init(opening: OpeningFrame) {
-        self.init(pageStart: opening.pageStart,
-                  asOfSeq: opening.cursor,
-                  hasOlder: opening.hasOlder,
-                  events: opening.events)
+    init(opening: SnapshotFrame) {
+        // 三个换算都只在这里发生一次（第 2 期起打开帧是上游形状）：
+        // 窗口起点是首条记录的 seq（网关不再自己算 `pageStart`）、末尾是 `cursor + 1`
+        // （上游 `cursor` 含端）、`hasMore` 就是「上面还有」。
+        let events = opening.records.map(\.event)
+        self.init(pageStart: events.first?.seq ?? opening.cursor + 1,
+                  asOfSeq: opening.cursor + 1,
+                  hasOlder: opening.hasMore,
+                  events: events)
     }
 }

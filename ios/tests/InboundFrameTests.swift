@@ -58,7 +58,8 @@ final class InboundFrameTests: XCTestCase {
     func testAnItemFrameKeepsItsCargoUnread() throws {
         let frame = try decode("""
         {"type":"item","streamId":"s-1","value":{
-          "type":"snapshot","sessionId":"s-1","cursor":5,"events":[]}}
+          "type":"snapshot","header":{"version":1,"id":"s-1","createdAt":1,"isSeeded":false},
+          "cursor":5,"records":[],"hasMore":false,"projections":{"asOfSeq":5,"values":{}}}}
         """)
 
         XCTAssertEqual(frame.type, "item")
@@ -72,16 +73,20 @@ final class InboundFrameTests: XCTestCase {
     func testOpeningPayloadIsStronglyTyped() throws {
         let value = try cargo(of: """
         {"type":"item","streamId":"s-1","value":{
-          "type":"snapshot","sessionId":"s-1","pageStart":2,"cursor":5,"hasOlder":true,
-          "events":[{"type":"user/message","seq":2,"time":1700000000000,"data":{}}]}}
+          "type":"snapshot",
+          "header":{"version":1,"id":"s-1","createdAt":1700000000000,"isSeeded":false},
+          "cursor":5,"hasMore":true,
+          "records":[{"type":"event","event":{"type":"user/message","seq":2,"time":1700000000000,"data":{}}}],
+          "projections":{"asOfSeq":5,"values":{}}}}
         """)
 
         guard case .decoded(.opening(let payload)) = FollowItem.read(value) else {
             return XCTFail("snapshot 该归 opening")
         }
-        XCTAssertEqual(payload.cursor, 5)
-        XCTAssertEqual(payload.events?.compactMap(\.value).map(\.seq), [2],
-                       "坏事件单条跳过，好事件照常解 —— 与 `FailableDecodable` 同一口径")
+        XCTAssertEqual(payload.cursor, 5, "含端上界原样")
+        XCTAssertEqual(payload.header?.value?.id, "s-1", "会话 id 在头部")
+        XCTAssertEqual(payload.records?.compactMap(\.value).map(\.event.seq), [2],
+                       "记录剥层后是事件 —— 坏的那条单条跳过，与 `FailableDecodable` 同一口径")
     }
 
     /// O2：`event` → 事件帧，本体是 `event` 那一格里的 `SessionEvent`。
@@ -220,15 +225,20 @@ final class InboundFrameTests: XCTestCase {
         }
     }
 
-    /// 打开帧三字段齐全才成形：缺 `cursor` / `sessionId` / `events` 任一，`frame()` 给 nil。
+    /// 打开帧五格齐全才成形：缺 `header` / `cursor` / `records` / `hasMore` / `projections`
+    /// 任一，`frame()` 给 nil（不补默认值）。
     ///
-    /// 三个字段分开断言：它们是同一个 `guard` 的三段，而「只写了第一段」的写法在别的两支上
+    /// 五格分开断言：它们是同一个 `guard` 的五段，而「只写了第一段」的写法在别的四支上
     /// 会静默放过 —— 一条事件帧于是被当成 opening、把窗口清空。
     func testOpeningWithoutItsRequiredFieldsIsNotAnOpening() throws {
+        let header = #""header":{"version":1,"id":"s-1","createdAt":1,"isSeeded":false}"#
+        let projections = #""projections":{"asOfSeq":0,"values":{}}"#
         let cases: [(name: String, payload: String)] = [
-            ("cursor", #"{"sessionId":"s-1","pageStart":0,"events":[]}"#),
-            ("sessionId", #"{"pageStart":0,"cursor":2,"events":[]}"#),
-            ("events", #"{"sessionId":"s-1","pageStart":0,"cursor":2}"#),
+            ("header", "{\"cursor\":2,\"hasMore\":false,\"records\":[],\(projections)}"),
+            ("cursor", "{\(header),\"hasMore\":false,\"records\":[],\(projections)}"),
+            ("records", "{\(header),\"cursor\":2,\"hasMore\":false,\(projections)}"),
+            ("hasMore", "{\(header),\"cursor\":2,\"records\":[],\(projections)}"),
+            ("projections", "{\(header),\"cursor\":2,\"hasMore\":false,\"records\":[]}"),
         ]
 
         for item in cases {

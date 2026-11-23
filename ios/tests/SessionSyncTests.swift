@@ -22,20 +22,20 @@ final class SessionSyncTests: XCTestCase {
         let sync = makeSync()
         let payload = UsagePayload(usedTokens: 148_807, contextWindow: 1_000_000)
 
-        sync.apply(StreamReading(content: .opening(OpeningFrame(
-            sessionId: "session-1",
-            pageStart: 0,
+        sync.apply(StreamReading(content: .opening(SnapshotFrame(
+            header: SessionWireHeader(version: 1, id: "session-1", createdAt: 0, cwd: nil,
+                                      parentSession: nil, isSeeded: false, origin: nil,
+                                      delegationDepth: nil, agentPreset: nil),
             cursor: 0,
-            hasOlder: false,
-            events: [],
-            assistantStream: nil,
-            model: nil,
+            records: [],
+            hasMore: false,
             projections: ProjectionBlock(asOfSeq: 295, values: .object([
                 "contextPressure": .object([
                     "projectedTokens": .number(148_807),
                     "contextWindow": .number(1_000_000),
                 ]),
-            ]))
+            ])),
+            assistantStream: nil
         ))))
 
         XCTAssertEqual(sync.usage, payload,
@@ -50,20 +50,20 @@ final class SessionSyncTests: XCTestCase {
     func testALaterUsageFrameStillWins() {
         let sync = makeSync()
         let opening = UsagePayload(usedTokens: 10, contextWindow: 100)
-        sync.apply(StreamReading(content: .opening(OpeningFrame(
-            sessionId: "session-1",
-            pageStart: 0,
+        sync.apply(StreamReading(content: .opening(SnapshotFrame(
+            header: SessionWireHeader(version: 1, id: "session-1", createdAt: 0, cwd: nil,
+                                      parentSession: nil, isSeeded: false, origin: nil,
+                                      delegationDepth: nil, agentPreset: nil),
             cursor: 0,
-            hasOlder: false,
-            events: [],
-            assistantStream: nil,
-            model: nil,
+            records: [],
+            hasMore: false,
             projections: ProjectionBlock(asOfSeq: 10, values: .object([
                 "contextPressure": .object([
                     "projectedTokens": .number(50),
                     "contextWindow": .number(100),
                 ]),
-            ]))
+            ])),
+            assistantStream: nil
         ))))
         // 打开帧的占用**取自 `projections`**（第 1 期把 usage 收进投影）—— 窗口里那格
         // `opening` 只是基线之前的值，不该赢过同帧带来的投影。
