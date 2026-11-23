@@ -38,10 +38,10 @@ export interface AuditEntry {
 /**
  * 一条记录拼成一行。
  *
- * 字段值与日志同一套拼法（按 key 排序、含空格加引号），但审计这里**多一条约束**：
- * 值不含空格。`op` / `result` / `code` 是枚举，`target` 是 id —— 它们本来就没有空格，
- * 所以解析可以按空格切而不用处理引号。加一个含空格的 target 会解析错，因此
- * {@link parseAuditEntry} 遇到拆不出的行会返回 `undefined` 而不是猜。
+ * 字段值与日志同一套拼法（按 key 排序、含空格/引号的值用 `JSON.stringify` 加引号）。
+ * **`target` 可以带空格**：F3 第 4 期起它是宿主路径（`/Users/x/记账 App`），空格是常态。
+ * 所以 {@link parseAuditEntry} 按引号切字段，而不是按空格 —— 按空格切会把
+ * `target` 读成路径的前半截，而那种错不会抛异常。
  */
 export function formatAuditEntry(entry: AuditEntry): string {
   const fields = {
@@ -61,13 +61,8 @@ export function parseAuditEntry(line: string): AuditEntry | undefined {
   const matched = LINE_PATTERN.exec(line);
   if (matched === null) return undefined;
 
-  const fields: Record<string, string> = {};
-  for (const part of matched[2].split(' ')) {
-    const equals = part.indexOf('=');
-    if (equals <= 0) continue;
-    fields[part.slice(0, equals)] = part.slice(equals + 1);
-  }
-  if (fields.op === undefined || fields.target === undefined) return undefined;
+  const fields = fieldsOf(matched[2]);
+  if (fields === undefined || fields.op === undefined || fields.target === undefined) return undefined;
 
   return {
     at: matched[1],
@@ -77,6 +72,50 @@ export function parseAuditEntry(line: string): AuditEntry | undefined {
     ...(fields.code === undefined ? {} : { code: fields.code }),
     ...(fields.req === undefined ? {} : { request: fields.req }),
   };
+}
+
+/**
+ * 把 `key=value` 串切成字段表，**认引号**。
+ *
+ * `formatLogFields` 对含空格 / `=` / `"` 的值用 `JSON.stringify` 加引号并转义；
+ * 这里按同样的规则解开。未闭合的引号、解不开的转义一律整行判无 ——
+ * 半条记录读成一条比读不出来更坏。
+ */
+function fieldsOf(text: string): Record<string, string> | undefined {
+  const fields: Record<string, string> = {};
+  let cursor = 0;
+  while (cursor < text.length) {
+    while (text[cursor] === ' ') cursor += 1;
+    if (cursor >= text.length) break;
+
+    const equals = text.indexOf('=', cursor);
+    if (equals <= cursor) return undefined;
+    const key = text.slice(cursor, equals);
+
+    let value: string;
+    if (text[equals + 1] === '"') {
+      let end = equals + 2;
+      while (end < text.length) {
+        if (text[end] === '\\') { end += 2; continue; }
+        if (text[end] === '"') break;
+        end += 1;
+      }
+      if (end >= text.length) return undefined;
+      try {
+        value = JSON.parse(text.slice(equals + 1, end + 1)) as string;
+      } catch {
+        return undefined;
+      }
+      cursor = end + 1;
+    } else {
+      let end = text.indexOf(' ', equals + 1);
+      if (end < 0) end = text.length;
+      value = text.slice(equals + 1, end);
+      cursor = end;
+    }
+    fields[key] = value;
+  }
+  return fields;
 }
 
 /** 时间戳属于哪个月的文件。`2026-11-04T…` → `audit-2026-11.log`。 */

@@ -115,12 +115,13 @@ struct SessionListView: View {
                     } header: {
                         Text("子目录")
                     } footer: {
-                        if listing.truncated {
-                            Text("这一层的子目录太多，只列出了前面一部分。")
-                        } else if let creation = list.workspaceCreation {
+                        // 结果与失败先说：截断只是「这一层没列全」，不该把「建失败」盖掉。
+                        if let creation = list.workspaceCreation {
                             Text(text(of: creation))
                         } else if let failure = list.browseFailure {
                             Text(failure).foregroundStyle(.red)
+                        } else if listing.truncated {
+                            Text("这一层的子目录太多，只列出了前面一部分。")
                         } else {
                             Text("在这个目录下新建工作空间：\(listing.path)")
                         }

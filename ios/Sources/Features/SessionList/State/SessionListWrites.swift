@@ -5,7 +5,8 @@
  * 这边是「让一个会话或一个工作空间存在 / 不再存在」。失败域不同，合成一个入口会让
  * 「哪个会话」这个问题在一半的路径上没有答案。
  *
- * 名字的合法性**不在这里判**：`WorkspaceName` 是那条规则的家，调用方在发请求之前用它。
+ * **路径不在这里拼、也不在这里判**：它来自目录浏览器给的绝对路径，客户端只回声；
+ * 存在性与可读性由宿主判。
  */
 import Foundation
 
@@ -18,8 +19,9 @@ enum WorkspaceCreation: Equatable {
 
 /// 宿主造出来的那个工作空间。
 ///
-/// 三格都要：`created` 决定界面说哪句话，`workspaceId` 与 `title` 让列表在重拉之前
-/// 就能把它摆出来（重拉可能撞在一次在途请求上，那一撞什么也不拉）。
+/// 三格都要：`created` 决定界面说哪句话（新组由组流推来，不做本地插入）；
+/// `workspaceId` 与 `title` 只用于日志 —— 「我以为建了新的、其实命中旧的」这类投诉
+/// 要靠它们才查得出来。
 struct WorkspaceCreated: Equatable {
     let workspaceId: String
     let title: String

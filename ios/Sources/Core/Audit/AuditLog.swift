@@ -127,17 +127,56 @@ enum AuditLine {
         let stamp = String(line[line.startIndex..<marker.lowerBound])
         guard let at = parser.date(from: stamp) else { return nil }
 
-        var fields: [String: String] = [:]
-        for part in line[marker.upperBound...].split(separator: " ") {
-            guard let equals = part.firstIndex(of: "=") else { continue }
-            fields[String(part[part.startIndex..<equals])] = String(part[part.index(after: equals)...])
-        }
-        guard let op = fields["op"], let target = fields["target"] else { return nil }
+        guard let fields = fieldsOf(String(line[marker.upperBound...])),
+              let op = fields["op"], let target = fields["target"] else { return nil }
 
         let result: AuditResult = fields["result"] == "ok"
             ? .ok
             : .refused(code: fields["code"] ?? "unknown")
         return AuditEntry(at: at, op: op, target: target, result: result, requestId: fields["req"])
+    }
+
+    /// 把 `key=value` 串切成字段表，**认引号**（与网关那侧同一个规则）。
+    ///
+    /// `Log.formatFields` 对含空格 / `=` / `"` 的值用 JSON 加引号并转义；`target` 现在
+    /// 是宿主路径，空格是常态。按空格切会把目标读成半截，而那种错不会抛异常。
+    private static func fieldsOf(_ text: String) -> [String: String]? {
+        let chars = Array(text)
+        var fields: [String: String] = [:]
+        var cursor = 0
+        while cursor < chars.count {
+            while cursor < chars.count, chars[cursor] == " " { cursor += 1 }
+            if cursor >= chars.count { break }
+
+            var equals = cursor
+            while equals < chars.count, chars[equals] != "=" { equals += 1 }
+            guard equals > cursor, equals < chars.count else { return nil }
+            let key = String(chars[cursor..<equals])
+
+            let start = equals + 1
+            guard start < chars.count, chars[start] == "\"" else {
+                var end = start
+                while end < chars.count, chars[end] != " " { end += 1 }
+                fields[key] = String(chars[start..<end])
+                cursor = end
+                continue
+            }
+
+            var end = start + 1
+            var closed = false
+            while end < chars.count {
+                if chars[end] == "\\" { end += 2; continue }
+                if chars[end] == "\"" { closed = true; break }
+                end += 1
+            }
+            guard closed else { return nil }
+            let literal = String(chars[start...end])
+            guard let data = literal.data(using: .utf8),
+                  let value = try? JSONDecoder().decode(String.self, from: data) else { return nil }
+            fields[key] = value
+            cursor = end + 1
+        }
+        return fields
     }
 
     private static let parser: ISO8601DateFormatter = {

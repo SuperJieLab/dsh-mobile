@@ -96,6 +96,8 @@ test('退场端点名在 HTTP 上就是 404 纯文本，没有别名期', async 
       // 第 3 期：两条自造应答端点被一条 $events/result 取代。
       '/api/mobile/approvalAnswer',
       '/api/mobile/questionAnswer',
+      // 第 4 期：按名字建组改成按路径注册（workspace/create）。
+      '/api/mobile/workspaceCreate',
     ]
     // terms-ok:end
     for (const path of gone) {
@@ -121,6 +123,11 @@ test('合法的两段路径不是 404 —— 正控，防止「全都 404」蒙�
     // 它在 URL 里合法，但拼接与分段都容易写错，所以这条正控直接打它。
     const answered = await post('/api/$events/result', { body: '{}' })
     assert.notEqual(answered.status, 404, '$events/result 必须在表里')
+    // 第 4 期的两个：建组换了名字进表，目录浏览是新进表的那一条。
+    const created = await post('/api/workspace/create', { body: '{}' })
+    assert.notEqual(created.status, 404, 'workspace/create 必须在表里')
+    const browsed = await post('/api/directoryPicker/list', { body: '{}' })
+    assert.notEqual(browsed.status, 404, 'directoryPicker/list 必须在表里')
   })
 })
 

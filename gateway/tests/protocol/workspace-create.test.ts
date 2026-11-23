@@ -56,7 +56,7 @@ test('workspace/create answers the host value verbatim', async () => {
 
   assert.deepEqual(asked, ['/Users/x/记账 App'], '路径原样交给宿主')
   assert.equal(answer.ok, true)
-  assert.deepEqual(answer.workspace, VIEW, '七个字段原样 —— 网关不裁')
+  assert.deepEqual(answer.workspace, VIEW, '六个字段原样 —— 网关不裁')
   assert.equal(answer.created, true,
     'created 必须上线：手机靠它区分「建好了」与「已经有了」，缺了它两端会把一次成功读成失败')
 })
@@ -138,12 +138,12 @@ test('directoryPicker/list forwards a path verbatim and refuses an empty one', a
   assert.equal(ok.ok, true)
   assert.deepEqual(asked, ['/Users/x/proj'])
 
-  for (const path of ['', 42, null]) {
+  for (const path of ['', '   ', 42, null]) {
     const bad = await invoke('directoryPicker/list', { path }, { session: PORT, directory: port })
     assert.equal(bad.ok, false, JSON.stringify(path))
     assert.equal(bad.ok ? '' : bad.error.code, 'invalid-request')
   }
-  assert.deepEqual(asked, ['/Users/x/proj'], '畸形那三次都没到宿主')
+  assert.deepEqual(asked, ['/Users/x/proj'], '畸形那四次都没到宿主')
 })
 
 test('directoryPicker/list refuses when the channel is not wired', async () => {

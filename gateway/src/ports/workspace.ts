@@ -51,7 +51,7 @@ export interface WorkspacePort {
   follow?(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame>
 }
 
-/** 宿主的一条工作空间 —— 七个字段原样转发，网关不裁。 */
+/** 宿主的一条工作空间 —— 六个字段原样转发，网关不裁。 */
 export interface WorkspaceView {
   readonly workspaceId: string
   readonly path: string

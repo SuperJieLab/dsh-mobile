@@ -33,7 +33,8 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
 /**
  * 宿主的 `request` 容器：`args.request` 必须是普通对象。
  *
- * 四条写 op（`session/create`、`session/selectModel`、`session/prompt`、`workspace/delete`）
+ * 五条写 op（`session/create`、`session/selectModel`、`session/prompt`、`workspace/create`、
+ * `workspace/delete`）
  * 的宿主方法签名都是 `(request)` —— 一个对象。线上因此照抄这一层容器，键名就是宿主的形参名。
  *
  * **缺席不是「空请求」**：少一层容器的客户端是旧客户端，静默当空对象收下会让它看起来

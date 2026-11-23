@@ -23,5 +23,6 @@ export interface DirectoryListArguments {
 export function directoryListArgumentsOf(args: Record<string, unknown>): DirectoryListArguments | undefined {
   if (args.path === undefined) return {}
   const path = nonEmptyString(args.path)
-  return path === undefined ? undefined : { path }
+  // 纯空白同样拒：宿主会把它读成一个相对路径，指向与用户意图无关的目录。
+  return path === undefined || path.trim() === '' ? undefined : { path }
 }

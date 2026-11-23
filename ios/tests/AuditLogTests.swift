@@ -65,6 +65,15 @@ final class AuditLogTests: XCTestCase {
         XCTAssertEqual(AuditLine.parse(AuditLine.format(original)), original)
     }
 
+    /// `target` 是宿主路径，空格是常态（契约的示例就是「记账 App」）。
+    /// 按空格切字段会把目标读成半截，而那种错不抛异常。
+    func testATargetWithSpacesSurvivesTheRoundTrip() {
+        for target in ["/Users/x/记账 App", "带 空格 与 \"引号\" 的路径"] {
+            let original = entry(target: target)
+            XCTAssertEqual(AuditLine.parse(AuditLine.format(original))?.target, target)
+        }
+    }
+
     // MARK: - 落盘与读取
 
     func testEntriesLandInTheMonthTheyHappened() {

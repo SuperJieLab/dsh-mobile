@@ -685,6 +685,56 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertFalse(state.isCreatingWorkspace)
     }
 
+    /// 判据 9：点开「新建工作空间」只发浏览请求，不建任何东西。
+    ///
+    /// 视图那一侧只调 `beginWorkspaceCreation()` + `browseDirectory(nil)`；把它们换成
+    /// `createWorkspace` 不会有任何测试变红 —— 这一条守的就是这个边界。
+    func testOpeningTheBrowserOnlyBrowses() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        var created = 0
+        var browsed: [String?] = []
+        let state = make(fetch,
+                         createWorkspace: { _ in
+                             created += 1
+                             return WorkspaceCreated(workspaceId: "w", title: "x", created: true)
+                         },
+                         browseDirectory: { path in
+                             browsed.append(path)
+                             return self.listing(path: "/Users/x", entries: [])
+                         })
+
+        state.beginWorkspaceCreation()
+        await state.browseDirectory(nil)
+
+        XCTAssertEqual(browsed, [nil], "打开只发一次浏览")
+        XCTAssertEqual(created, 0, "点开不等于建：一个创建请求都不该发")
+    }
+
+    /// 在途时再点一行被丢掉 —— 两次往返的先后不保证，后到的旧应答会把当前层退回去。
+    func testASecondBrowseWhileTheFirstIsInFlightIsDropped() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        var asked: [String?] = []
+        var release: CheckedContinuation<Void, Never>?
+        let state = make(fetch, browseDirectory: { path in
+            asked.append(path)
+            if path == nil {
+                await withCheckedContinuation { release = $0 }
+            }
+            return self.listing(path: path ?? "/", entries: [])
+        })
+
+        let first = Task { await state.browseDirectory(nil) }
+        await settle()
+        await state.browseDirectory("/Users/x/two")
+        release?.resume()
+        await first.value
+
+        XCTAssertEqual(asked.count, 1, "在途时第二次不发")
+        XCTAssertEqual(state.directoryListing?.path, "/", "旧应答没有把当前层退回去")
+    }
+
     /// 列目录失败：留着上一层，给一句说法 —— 用户还能选别的。
     func testAFailedBrowseKeepsThePreviousLevelAndExplains() async {
         let fetch = FakeFetch()

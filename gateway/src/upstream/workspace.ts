@@ -9,6 +9,7 @@
  */
 
 import { describeError, isNotFound } from '../ports/errors.ts'
+import type { WorkspaceCreated } from '../ports/workspace.ts'
 import { createLogger, LogModule } from '../log.ts'
 
 const log = createLogger(LogModule.workspace)
@@ -50,7 +51,7 @@ export interface WorkspaceDeleteFace {
 export async function createWorkspaceIn(
   controller: WorkspaceCreateFace,
   path: string,
-): Promise<{ workspace: Awaited<ReturnType<WorkspaceCreateFace['create']>>['workspace']; created: boolean }> {
+): Promise<WorkspaceCreated> {
   // 入参与应答都原样：宿主按路径注册，标题由它从路径取；我们只搬。
   const made = await controller.create({ path })
   // `created` 是这条链唯一一次出现的「这一次到底建了没有」—— 界面据此说两句不同的话，

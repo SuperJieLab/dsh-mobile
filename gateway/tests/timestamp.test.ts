@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import { logTimestamp } from '../src/timestamp.ts'
 import { createLogger, mintRequestId, runWithRequestId, setLogSink } from '../src/log.ts'
 
-/** 捕获日志行。与 `workspace-root.test.ts` 同一个手法：替换去向，用完还原。 */
+/** 捕获日志行。与 `audit.test.ts` 同一个手法：替换去向，用完还原。 */
 function captureLogLines(): { lines: string[]; restore: () => void } {
   const lines: string[] = []
   const previous = setLogSink((_level, _module, line) => { lines.push(line) })
