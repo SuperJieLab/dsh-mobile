@@ -13,7 +13,7 @@ enum UpstreamNotification {
 
     /// 四条去路 + 「没人认领」。
     enum Route: Equatable {
-        /// `llm/models-updated`：模型目录变了。
+        /// `llm/models-updated` / `settings/document-updated`：模型目录变了。
         case models
         /// `commands/change`：命令目录变了（插件装卸）。
         case commands
@@ -27,7 +27,10 @@ enum UpstreamNotification {
 
     static func route(_ name: String) -> Route {
         switch name {
-        case "llm/models-updated": return .models
+        // 设置文档变了就是**模型配置可能变了**：上游 Web UI 的模型选择面同时订这两条
+        // （`ui-model-selection` 对 `llm/models-updated` 与 `settings/document-updated`
+        // 都刷目录）。我们这一格读的是同一份目录，所以两条都归它。
+        case "llm/models-updated", "settings/document-updated": return .models
         case "commands/change": return .commands
         case "permission-presets/catalog-changed": return .permissions
         case "deepseek-account/session-expired": return .accountExpired

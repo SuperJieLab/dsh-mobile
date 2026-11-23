@@ -325,6 +325,30 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(state.sessions.map(\.id), ["s1"], "这一帧该一路走到列表上")
     }
 
+    /// 别的命名空间的事件**不是这一屏的事**：静默跳过，列表与日志都不该动。
+    ///
+    /// 这条流是 Host-wide 的 —— 插件装卸、设置文档、凭据变化都在上面。把它们当成
+    /// 「本版不认识的列表事件」会让日志在每次 cd / 改设置时刷出一片警告，
+    /// 而真正值得看的「`api-session/` 里出现了新名字」反而被淹掉。
+    func testAnEventFromAnotherNamespaceIsSkippedSilently() throws {
+        let state = make(FakeFetch())
+        let stream = EventsStream()
+        state.attach(stream: EventsListSink(stream: stream))
+
+        XCTAssertFalse(SessionListEvents.claims("settings/document-updated"),
+                       "前缀判定是分流的那一处")
+        XCTAssertTrue(SessionListEvents.claims("api-session/added"))
+
+        for text in [
+            #"{"type":"item","streamId":"e1","value":{"type":"emit","event":"settings/document-updated","args":["ui",3]}}"#,
+            #"{"type":"item","streamId":"e1","value":{"type":"emit","event":"plugin-manager/changed","args":[]}}"#,
+        ] {
+            let frame = try XCTUnwrap(InboundFrame.decode(Data(text.utf8)))
+            _ = stream.handle(frame)
+        }
+        XCTAssertTrue(state.sessions.isEmpty, "别的命名空间不该改动列表")
+    }
+
     /// 认不出的列表增量在消费方丢弃：坏形状不进合并器，列表不动。
     ///
     /// 丢弃口径归消费方 —— 「认不出怎么办」是读法的一部分：列表的口径是跳过这一条继续。

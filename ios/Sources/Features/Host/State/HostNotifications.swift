@@ -59,7 +59,11 @@ final class HostNotifications {
         case .models, .commands, .permissions:
             for handler in handlers.values { handler(route) }
         case .unhandled:
-            Log.warn(Log.Module.gateway, "an upstream notification has no consumer", ["event": name])
+            // **不是警告**：`$events` 是 Host-wide 的流，装的是全部宿主事件
+            // （插件装卸、凭据、计划任务……），「不归这一版」是常态而不是异常。
+            // 打成 warn 会让一次插件安装在日志里刷出一片红，而真正要看的
+            // 「该处理却没处理」反而被淹掉。要查就带上 `DSH_LOG_DEBUG=1`。
+            Log.debug(Log.Module.gateway, "an upstream notification is not for this build", ["event": name])
         }
     }
 }

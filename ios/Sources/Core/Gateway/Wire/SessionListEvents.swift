@@ -11,6 +11,16 @@ import Foundation
 
 enum SessionListEvents {
 
+    /// 这一族事件的前缀。`$events` 是 Host-wide 的流，列表只认这一族。
+    static let namespace = "api-session/"
+
+    /// 这一条是不是列表该管的事。
+    ///
+    /// 判在**解析之前**：`changeOf` 对任何认不出的名字都回 `nil`，于是「别的命名空间」
+    /// 与「这一族里本版不认识的名字」在它那里同形 —— 而两者的处置不同：前者静默跳过
+    /// （插件装卸、设置文档那些事件每天都在来），后者才是值得留痕的版本错位。
+    static func claims(_ event: String) -> Bool { event.hasPrefix(namespace) }
+
     /// 一条 `emit` 的载荷 → 列表变化。
     /// 认不出的事件（不是 `api-session` 那几类、或参数不对）返回 `nil`。
     static func changeOf(event: String, args: JSONValue) -> SessionListChange? {

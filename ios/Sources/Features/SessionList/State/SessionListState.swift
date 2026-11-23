@@ -152,8 +152,10 @@ final class SessionListState {
         // 「列表不自己动」或「断线之后再也不对齐」—— 都不编译失败。
         // 增量的解释在这里：挖 `change`、解形状、认不出丢弃。
         stream.onEmit { [weak self] event, args in
+            // 这条流装的是全部宿主事件：别的命名空间不是这一屏的事，静默跳过。
+            guard SessionListEvents.claims(event) else { return }
             guard let change = SessionListEvents.changeOf(event: event, args: args) else {
-                Log.warn(Log.Module.session, "dropped a session event this build does not know",
+                Log.warn(Log.Module.session, "a session event this build cannot read",
                          ["event": String(describing: event)])
                 return
             }

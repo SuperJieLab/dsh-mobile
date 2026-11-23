@@ -20,6 +20,16 @@ final class UpstreamNotificationTests: XCTestCase {
     func testAnUnknownNameIsNotGuessed() {
         XCTAssertEqual(UpstreamNotification.route("something/else"), .unhandled)
         XCTAssertEqual(UpstreamNotification.route(""), .unhandled)
+        // Host-wide 的流上还有一大票与我们无关的事件：它们必须落 `.unhandled`，
+        // 而不是被猜成某一条去路（猜错会让某一屏无端重拉目录）。
+        XCTAssertEqual(UpstreamNotification.route("settings/document-created"), .unhandled)
+        XCTAssertEqual(UpstreamNotification.route("plugin-manager/changed"), .unhandled)
+        XCTAssertEqual(UpstreamNotification.route("schedule/changed"), .unhandled)
+    }
+
+    /// 设置文档变了 ⇒ 模型目录可能变了 —— 上游 ModelSelection 面对这两条都刷目录。
+    func testASettingsDocumentUpdateRefreshesTheModelCatalog() {
+        XCTAssertEqual(UpstreamNotification.route("settings/document-updated"), .models)
     }
 
 }
