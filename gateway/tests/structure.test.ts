@@ -766,6 +766,7 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
  */
 const WIRE_FIELD_GUARDS: readonly { file: string; name: string }[] = [
   { file: 'fields.ts', name: 'nonEmptyString' },
+  { file: 'fields.ts', name: 'isPlainObject' },
   { file: 'fields.ts', name: 'isPositiveInteger' },
   { file: 'fields.ts', name: 'requestContainerOf' },
 ]

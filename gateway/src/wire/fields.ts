@@ -25,11 +25,16 @@ export function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
+/** 普通对象：不是数组、不是 `null`、不是原始值。 */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 /**
  * 宿主的 `request` 容器：`args.request` 必须是普通对象。
  *
- * 三条写 op（`session/create`、`session/selectModel`、`workspace/delete`）的宿主方法
- * 签名都是 `(request)` —— 一个对象。线上因此照抄这一层容器，键名就是宿主的形参名。
+ * 四条写 op（`session/create`、`session/selectModel`、`session/prompt`、`workspace/delete`）
+ * 的宿主方法签名都是 `(request)` —— 一个对象。线上因此照抄这一层容器，键名就是宿主的形参名。
  *
  * **缺席不是「空请求」**：少一层容器的客户端是旧客户端，静默当空对象收下会让它看起来
  * 能用（而它发的字段一个都没生效）。两者补救不同，所以在这里就分开。

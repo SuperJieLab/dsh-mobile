@@ -49,6 +49,10 @@ final class SessionActions {
             )
             return true
         } catch {
+            // 失败要留一行：屏幕上的状态行只说「发送失败」，归因得回到日志。
+            Log.warn(Log.Module.session, "prompt not accepted",
+                     ["session": sessionId, "key": requestId, "mode": mode.rawValue,
+                      "error": String(describing: error)])
             status.set(.failed(step: .sending, cause: .thrown(error)))
             return false
         }

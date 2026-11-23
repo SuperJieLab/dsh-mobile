@@ -12,6 +12,7 @@
  */
 import { readErrorOf } from './error-codes.ts'
 import { describeError, isNotFound } from '../ports/errors.ts'
+import { isPlainObject } from '../wire/fields.ts'
 import { refused, type Ports, type StreamOwners } from './rpc.ts'
 import { pairOf, refreshOf } from './auth-ops.ts'
 import { sessionCreateTargetOf } from '../wire/write.ts'
@@ -39,11 +40,6 @@ import type { RemoteResult, UnaryEndpointName } from '../wire/unary.ts'
  * 而那条线没有任何判据在等它。
  */
 const UNCANCELLED = new AbortController().signal
-
-/** `{}` 才算是参数容器；数组、`null` 与裸值都不是。 */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /** 处理器需要的全部外部输入。`now` 注入是为了判据能钉住时间。 */
 export interface UnaryContext {

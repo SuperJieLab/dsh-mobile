@@ -13,7 +13,7 @@
  * 实际按缺省值发出去 —— 那是假绿的一种。
  */
 
-import { isPositiveInteger, nonEmptyString, requestContainerOf } from './fields.ts'
+import { isPlainObject, isPositiveInteger, nonEmptyString, requestContainerOf } from './fields.ts'
 import { parseWorkspaceArgs } from './workspace-stream.ts'
 
 
@@ -147,6 +147,3 @@ function isEmptyArgs(args: unknown): boolean {
   return parseWorkspaceArgs(args) !== undefined
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

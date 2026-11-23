@@ -13,7 +13,7 @@
  * `answerId` 已经退场（F3 第 3 期）：幂等由上游 waterfall 的一次性消费承担 ——  // terms-ok: 说明已退场的键
  * 对已结算的事件再答一次是**幂等 no-op**，不是错误。客户端不再需要铸键。
  */
-import { nonEmptyString, requestContainerOf } from './fields.ts'
+import { isPlainObject, nonEmptyString, requestContainerOf } from './fields.ts'
 
 /** 上游应答里的一种结局。三种都收，客户端目前只发 `result`。 */
 export type RemoteEventOutcome =
@@ -42,9 +42,6 @@ export interface RemoteEventResultMessage {
   readonly outcome: RemoteEventOutcome
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function rejectionOf(raw: unknown): RemoteEventRejection | undefined {
   if (!isPlainObject(raw)) return undefined

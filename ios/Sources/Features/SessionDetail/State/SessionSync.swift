@@ -51,6 +51,16 @@ final class SessionSync {
 
     private(set) var pendingPrompts: [PendingPrompt] = []
 
+    /// 「持久行已经上屏」的乐观行 id —— **退休要等这一拍**。
+    ///
+    /// 事件到达时先记账、不删：删早了，`nodes` 会退回旧快照，那条刚发的消息消失一帧。
+    /// 真正的删除在 `refreshSnapshot()` 之后（新快照里已经有持久行）。
+    /// 只在 `mirror.append` 接受这条事件时记账 —— 跳号时持久行进不了视图，那一行要留着。
+    private var settledPending: Set<String> = []
+
+    /// 乐观行锚点的序号（只增不减）。用 `count` 会让「先发的那条退休后再发一条」撞回同一个锚点。
+    private var pendingOrdinal = 0
+
     /// 消息条数 —— 从已组装的节点数，不另存一份（两个出处必然不同步）。
     var messageCount: Int {
         nodes.reduce(0) { count, node in
@@ -195,13 +205,15 @@ final class SessionSync {
             return await actions.executeCommand(line)
         case .prompt(let text):
             let requestId = UUID().uuidString
+            pendingOrdinal += 1
             pendingPrompts.append(PendingPrompt(
                 requestId: requestId,
                 text: PromptDraft.normalized(text) ?? text,
                 time: Date().timeIntervalSince1970 * 1000,
-                // 落在发送那一刻的最后一条持久事件之后、未定稿帧（末 seq + 0.999）之前。
-                anchorSeq: Double(max(0, mirror.frontier - 1)) + 0.5
-                    + Double(pendingPrompts.count) * 0.001
+                // 落在最后一条持久事件之后、**首块未定稿帧之前**（那一块是末 seq + 0.5）。
+                // 0.001 的步长只用来在连发时保序；同一个 frontier 下 250 条以内不会撞。
+                anchorSeq: Double(max(0, mirror.frontier - 1)) + 0.25
+                    + Double(pendingOrdinal) * 0.001
             ))
             let accepted = await actions.sendPrompt(text, requestId: requestId, mode: mode)
             if !accepted { pendingPrompts.removeAll { $0.requestId == requestId } }
@@ -311,12 +323,20 @@ final class SessionSync {
         }
     }
 
-    /// 持久事件认领了一条乐观行：交接，不重复显示。
-    private func retirePendingPrompt(rpcId: String) {
-        guard pendingPrompts.contains(where: { $0.requestId == rpcId }) else { return }
-        pendingPrompts.removeAll { $0.requestId == rpcId }
+    /// 持久行已经在新快照里了：撤掉同 `rpcId` 的乐观行。**只从 `refreshSnapshot` 调用** ——
+    /// 退休与上屏必须同一拍，否则中间那段 `nodes` 退回旧快照，消息消失一帧。
+    private func retireSettledPrompts() {
+        guard !settledPending.isEmpty else { return }
+        let retiring = pendingPrompts.filter { settledPending.contains($0.requestId) }
+        guard !retiring.isEmpty else {
+            settledPending.removeAll()
+            return
+        }
+        let ids = Set(retiring.map(\.requestId))
+        pendingPrompts.removeAll { ids.contains($0.requestId) }
+        settledPending.subtract(ids)
         Log.info(Log.Module.session, "optimistic prompt retired by its durable message",
-                 ["key": rpcId])
+                 ["count": String(retiring.count)])
     }
 
     // MARK: - 事件吸收
@@ -365,10 +385,11 @@ final class SessionSync {
 
     private func applySnapshot(_ snapshot: SnapshotFrame) {
         lastFrameAt = Date()
-        // 打开帧里已经有了的那几条：持久事件比乐观行权威，立刻交接。
+        // 打开帧里已经有了的那几条：持久事件比乐观行权威。记账即可 ——
+        // 紧随其后的 `refreshView()` 会把新快照建好，再撤（撤早了会空一帧）。
         for record in snapshot.records {
             if let rpcId = record.event.data["source"]?["rpcId"]?.string {
-                retirePendingPrompt(rpcId: rpcId)
+                settledPending.insert(rpcId)
             }
         }
         // 手空着时等价于「打开」，重连时走「重对齐」：保留更早的部分。
@@ -435,13 +456,15 @@ final class SessionSync {
     }
 
     private func applyLiveEvent(_ event: SessionEvent) {
-        // 落定的用户消息按 `source.rpcId` 认领乐观行 —— 只在这一处退休。
-        if event.type == "user/message", let rpcId = event.data["source"]?["rpcId"]?.string {
-            retirePendingPrompt(rpcId: rpcId)
-        }
+        // 落定的用户消息按 `source.rpcId` 认领乐观行 —— 只在这一处记账。
+        let claimed = event.type == "user/message" ? event.data["source"]?["rpcId"]?.string : nil
         lastFrameAt = Date()
         // 上游 gap-free 是契约，重复与跳号各有一种处置（见 `SessionMirror.append`）。
         let verdict = mirror.append(event)
+        // 跳号时持久行进不了视图，那一行不能撤 —— 否则屏幕上什么都没有，要等重连才回来。
+        if let claimed, !Self.isReset(verdict), pendingPrompts.contains(where: { $0.requestId == claimed }) {
+            settledPending.insert(claimed)
+        }
         // 「未接上」之后事件进不来；告知要跟上现状，否则界面静止却看起来正常。
         if case .resetRequired = verdict { observeNotice(verdict) }
         // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
@@ -597,6 +620,7 @@ final class SessionSync {
         Log.info(Log.Module.session, "镜像重置：引擎随之清空",
                  ["events": String(mirror.events.count), "hasMore": String(mirror.hasMore)])
         mirror.reset()
+        settledPending.removeAll()
         conversation = SessionSync.makeAssembler()
         builder = ChatSnapshotBuilder()
         held.removeAll()
@@ -618,6 +642,7 @@ final class SessionSync {
     private func refreshSnapshot() {
         builder.replace(conversation.nodes())
         snapshot = builder.snapshot
+        retireSettledPrompts()
     }
 
     /// 把镜像窗口里的新事件喂给引擎：往回长就前插，往前走就追加，接不上就整段重建。

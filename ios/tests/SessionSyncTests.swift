@@ -124,12 +124,11 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(sync.usage?.usedTokens, 60, "水位没推进的要丢 —— 乱序与重放不该让百分比跳回去")
     }
 
-    /// 会话同步要两个真实依赖：连接（只用来取阶段）与一元客户端。
-    /// 端点指向连不上的 `127.0.0.1:1`：这一组不发起请求，只喂帧。
     /// 判据 7：发出去的那一行先上屏，持久事件按 `source.rpcId` 认领它。
     ///
     /// 两条路各自都绿、中间那一跳没人守，就会同时出现「两条一样的消息」或
-    /// 「屏幕上什么都没有」—— 而这两种都不报错。
+    /// 「屏幕上什么都没有」—— 而这两种都不报错。走真传输（脚本化 URLProtocol），
+    /// 因为「受理」这条分支需要真的回包。
     func testAnAcceptedPromptShowsAtOnceAndRetiresOnItsDurableMessage() async throws {
         ScriptedURLProtocol.reset(replies: [
             "session/prompt": .init(
@@ -155,13 +154,12 @@ final class SessionSyncTests: XCTestCase {
                 "content": .array([.object(["type": .string("text"), "text": .string("你好")])]),
             ])
         ))))
-        XCTAssertTrue(sync.pendingPrompts.isEmpty, "持久事件一到，乐观行就该交接")
+        // 交接要等新快照建好（一个渲染帧的合并窗口）—— 这一拍里那一行**不能消失**。
+        XCTAssertEqual(texts(in: sync), ["你好"], "交接的空窗里那一行不能消失（撤早了会闪一下）")
+
         try await Task.sleep(for: .milliseconds(60))
-        let texts = sync.nodes.compactMap { node -> String? in
-            if case .message(let message) = node.data { return message.text }
-            return nil
-        }
-        XCTAssertEqual(texts.filter { $0 == "你好" }.count, 1, "同一句话只该有一行")
+        XCTAssertTrue(sync.pendingPrompts.isEmpty, "持久行上屏之后，乐观行才撤")
+        XCTAssertEqual(texts(in: sync), ["你好"], "同一句话只该有一行")
     }
 
     /// 发送失败即撤：那一行不能留在屏幕上假装发出去了。
@@ -178,6 +176,15 @@ final class SessionSyncTests: XCTestCase {
         let accepted = await sync.deliver(.prompt("发不出去"), mode: .queue)
         XCTAssertFalse(accepted)
         XCTAssertTrue(sync.pendingPrompts.isEmpty, "没送到就不该留一行")
+        XCTAssertEqual(texts(in: sync), [], "屏幕上也不能留着 —— 那会假装发出去了")
+    }
+
+    /// 视图那一列里的消息正文。
+    private func texts(in sync: SessionSync) -> [String] {
+        sync.nodes.compactMap { node -> String? in
+            if case .message(let message) = node.data { return message.text }
+            return nil
+        }
     }
 
     /// 一份最小的打开帧夹具 —— 只给判据要用的四格。
@@ -214,6 +221,8 @@ final class SessionSyncTests: XCTestCase {
         return SessionSync(client: client, sessionId: "session-1", link: link)
     }
 
+    /// 会话同步要两个真实依赖：连接（只用来取阶段）与一元客户端。
+    /// 端点指向连不上的 `127.0.0.1:1`：这一组只喂帧，不发起请求。
     private func makeSync(control: ControlStream? = nil) -> SessionSync {
         let link = LongConnection(
             authorization: { "ticket" },

@@ -25,8 +25,8 @@ struct ModelCatalogRequest: GatewayRequest {
     static let endpoint = "session/modelCatalog"
 }
 
-/// 宿主的 `request` 容器 —— 三条写 op（`session/selectModel`、`session/create`、
-/// `workspace/delete`）的宿主形参都叫 `request`，线上因此多一层。
+/// 宿主的 `request` 容器 —— 四条写 op（`session/selectModel`、`session/create`、
+/// `session/prompt`、`workspace/delete`）的宿主形参都叫 `request`，线上因此多一层。
 ///
 /// 少一层是旧客户端的形状，网关按畸形拒（`invalid-request`）；所以这里必须写出来，
 /// 不能指望「平铺也能收」。
@@ -291,7 +291,10 @@ struct SessionPromptRequest: GatewayRequest {
         )
     }
 
-    private enum CodingKeys: String, CodingKey { case request }
+    func encode(to encoder: any Encoder) throws {
+        var outer = encoder.container(keyedBy: RequestContainerKeys.self)
+        try outer.encode(request, forKey: .request)
+    }
 }
 
 /// `workspace/delete` 请求：只带一个工作空间 id。
