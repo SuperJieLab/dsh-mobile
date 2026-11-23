@@ -1,5 +1,8 @@
 /**
- * 权限预设的载荷。与链路无关：一个可选项，以及读回来的那一份视图。
+ * 权限预设的载荷。与链路无关：一个可选项，以及目录那一份。
+ *
+ * **当前档不在这里** —— 它住在 `permissions` 投影里（`{currentValue}`），由
+ * `session/control` 推过来。两处各一份就会出现「目录新、当前值旧」而没人分得清。
  */
 import Foundation
 
@@ -15,13 +18,14 @@ struct PermissionOption: Decodable, Equatable {
     var description: String? = nil
 }
 
-/// 读 op 回来的那一份：此刻能选什么、现在是什么。
+/// 目录 —— 与上游 `PermissionCatalog` 同形。
 ///
-/// 两格都可以缺席，含义不同：
-/// - `options` 缺席 = 这个装配没有权限服务（界面据此**不画**那一格）；
-///   `options` 是空数组 = 服务在、但一项都没配。
-/// - `current` 缺席 = 宿主不知道（会话不在、或投影没注册）—— 不是「默认档」。
-struct PermissionView: Equatable {
-    var current: String? = nil
+/// 三格都声明成可选只为一件事：**服务缺席时三键一起缺席**（界面据此不画那一格）。
+/// 服务在时的三键是必填，缺席会被当成「这个装配没有权限服务」。
+struct PermissionCatalog: Equatable {
     var options: [PermissionOption]? = nil
+    /// 装配声明的全部（不看当前集成）。
+    var defaultOptions: [PermissionOption]? = nil
+    /// **配置的默认档**，不是当前档；只在重拉期间兜底显示。
+    var defaultPreset: String? = nil
 }

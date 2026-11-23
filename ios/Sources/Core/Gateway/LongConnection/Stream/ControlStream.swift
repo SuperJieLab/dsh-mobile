@@ -42,35 +42,25 @@ final class ControlStream {
     func handle(_ frame: InboundFrame) -> StreamReply {
         switch frame.type {
         case "item":
-            guard case .item(.control(let value))? = frame.payload else {
-                if frame.payloadRejected {
-                    Log.warn(Log.Module.gateway, "control item unparsable (payload shape rejected)")
-                }
+            // 货物只在这一层按 `session/control` 的形状解 —— 连接层不认 `baseline` 的语义。
+            guard let raw = frame.value else {
+                Log.warn(Log.Module.gateway, "control item has no value (payload shape rejected)")
                 return StreamReply()
             }
-            switch value {
-            case .baseline(let blocks):
-                for (sessionId, block) in blocks {
-                    tables[sessionId] = block.values.object ?? [:]
-                    // 不写水位：`asOfSeq` 与后续增量的 `seq` 不同轴。
-                    if let values = block.values.object.map(JSONValue.object) {
-                        updateListeners.fire((sessionId, values, block.asOfSeq))
-                    }
-                }
-                return StreamReply(establishes: true)
-            case .projection(let sessionId, let seq, let changes):
-                // 增量之间比 `seq`（同一条流内单调）：不前进就是重放或乱序，丢掉。
-                if let current = lastEventSeq[sessionId], seq <= current { return StreamReply() }
-                var table = tables[sessionId] ?? [:]
-                for change in changes { table[change.key] = change.val }
-                tables[sessionId] = table
-                lastEventSeq[sessionId] = seq
-                updateListeners.fire((sessionId, .object(table), seq))
+            switch ControlValue.read(raw) {
+            case .decoded(let value):
+                return apply(value)
+            case .unparsable:
+                Log.warn(Log.Module.gateway, "control item unparsable (payload shape rejected)")
+                return StreamReply()
+            case .foreign(let type):
+                Log.warn(Log.Module.gateway, "dropped an item type this stream does not take",
+                         ["type": type ?? "?"])
                 return StreamReply()
             }
 
         case "error":
-            guard case .refused(let failure)? = frame.payload else { return StreamReply(next: .stop) }
+            guard let failure = frame.failure else { return StreamReply(next: .stop) }
             Log.warn(Log.Module.gateway, "control stream refused",
                      ["error": failure.code, "reason": failure.message])
             if !failure.isRetryable { detached = true }
@@ -80,6 +70,30 @@ final class ControlStream {
             return StreamReply(next: .reopen)
 
         default:
+            return StreamReply()
+        }
+    }
+
+    /// 一条已认出的投影货物落到表里。基线整份替换，增量按 `seq` 排重。
+    private func apply(_ value: ControlValue) -> StreamReply {
+        switch value {
+        case .baseline(let blocks):
+            for (sessionId, block) in blocks {
+                tables[sessionId] = block.values.object ?? [:]
+                // 不写水位：`asOfSeq` 与后续增量的 `seq` 不同轴。
+                if let values = block.values.object.map(JSONValue.object) {
+                    updateListeners.fire((sessionId, values, block.asOfSeq))
+                }
+            }
+            return StreamReply(establishes: true)
+        case .projection(let sessionId, let seq, let changes):
+            // 增量之间比 `seq`（同一条流内单调）：不前进就是重放或乱序，丢掉。
+            if let current = lastEventSeq[sessionId], seq <= current { return StreamReply() }
+            var table = tables[sessionId] ?? [:]
+            for change in changes { table[change.key] = change.val }
+            tables[sessionId] = table
+            lastEventSeq[sessionId] = seq
+            updateListeners.fire((sessionId, .object(table), seq))
             return StreamReply()
         }
     }

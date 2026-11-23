@@ -32,9 +32,20 @@ final class SessionListState {
     }
 
     private(set) var sessions: [SessionSummary] = []
-    /// 宿主的工作空间清单，顺序即显示顺序。只在拉取成功时更新 —— 组的成员或标题在
-    /// 别的设备上改了，要等一次刷新才看到（组关系没有自己的订阅通道）。
-    private(set) var workspaces: [WorkspaceSummary] = []
+    /// 组清单，顺序即显示顺序。**来自组流**（`workspace/follow`），不跟列表应答走 ——
+    /// 一条应答里同时给行与组，就会出现「行是新的、组是旧的」这种半新半旧的组合。
+    private(set) var workspaces: [WorkspaceView] = []
+    /// 归属表：会话 id → 工作空间 id。组清单一变就重算（`SessionOwners`），不另存第二份。
+    private(set) var owners: [String: String] = [:]
+    /// 控制流推来的标题：会话 id → 标题。**只放推来的那些** —— 行自带的标题仍在行上，
+    /// 合成规则在 `SessionRows.make`（一处）。
+    private(set) var titles: [String: String] = [:]
+
+    /// 渲染用的行：三源合成（行 + 标题；归属由分组那一步用 `owners`）。
+    ///
+    /// 现算而不是存一份：存一份就多了「标题变了要重算、行变了要重算」两个触发点，
+    /// 漏一个的症状是某一行停在旧标题上。两个入参都在本对象里，现算没有额外代价。
+    var rows: [SessionRow] { SessionRows.make(sessions, titles: titles) }
     private(set) var isLoading = false
     /// 正在让宿主建一个空会话。视图用它禁用入口 —— 连发两次只会让两个动作抢同一行状态。
     private(set) var isCreating = false
@@ -55,7 +66,7 @@ final class SessionListState {
 
     /// 取一次列表。收成闭包是为了让「在途期间发生了什么」可被断言 ——
     /// 走真网络时，「两次请求并发」与「一次请求很慢」在测试里长得一样。
-    private let fetch: () async throws -> SessionListPage
+    private let fetch: () async throws -> [SessionSummary]
     /// 让宿主建一个空会话、交回 id。与 `fetch` 一样注入：新建的失败面要能被断言，
     /// 而走真网络时「宿主拒绝」与「网络断了」在测试里长得一样。
     ///
@@ -73,13 +84,19 @@ final class SessionListState {
     /// `UserDefaults` 时「写了」与「没写」在测试里长得一样。
     private let persistExpansion: (GroupExpansion) -> Void
     /// 在途的那一次。单飞的落点，也是这批账的归属。
-    private var inflight: Task<SessionListPage, Error>?
+    private var inflight: Task<[SessionSummary], Error>?
     /// 这一次在途期间到达的变更，按到达顺序。进 `reload` 时必然为空 —— `apply` 只在
     /// `inflight != nil` 时入账，而它只在 `reload` 体内非 nil。
     private var buffered: [SessionListChange] = []
     /// 是否已经听过事件流（`attach` 幂等）。
     private var attached = false
-    init(fetch: @escaping () async throws -> SessionListPage,
+    /// 组流的当前来源。`attach(workspaces:)` 之后才非 nil。
+    private var workspaceSource: (any WorkspaceListSource)?
+    /// 是否已经听过组流（`attach(workspaces:)` 幂等）。
+    private var workspacesAttached = false
+    /// 是否已经听过控制流的标题投影（`attach(titles:)` 幂等）。
+    private var titlesAttached = false
+    init(fetch: @escaping () async throws -> [SessionSummary],
          create: @escaping (String?) async throws -> String,
          createWorkspace: @escaping (String) async throws -> WorkspaceCreated,
          deleteWorkspace: @escaping (String) async throws -> Void,
@@ -141,6 +158,44 @@ final class SessionListState {
         }
     }
 
+    /// 听组流。与 `attach(stream:)` 同一条纪律：幂等（视图重跑 `.task` 是常态）。
+    ///
+    /// 先取一次当前清单再订阅 —— 组流可能早于这一屏建好（它是 App 级的），那一次
+    /// `baseline` 已经到过；只订阅不取，列表会一直停在「未分组」直到下一次组变化。
+    func attach(workspaces source: any WorkspaceListSource) {
+        guard !workspacesAttached else { return }
+        workspacesAttached = true
+        workspaceSource = source
+        absorbWorkspaces()
+        source.onWorkspacesChanged { [weak self] in
+            self?.absorbWorkspaces()
+        }
+    }
+
+    /// 听控制流。**只取 `title` 这一格**：同一条投影里还有用量、权限那些，各有各的消费者。
+    ///
+    /// 基线到达时也会走这里（`updateListeners` 对基线与增量一视同仁），所以冷启动后
+    /// 列表的标题会被一次性补齐，不需要另开一条读。
+    func attach(titles stream: ControlStream) {
+        guard !titlesAttached else { return }
+        titlesAttached = true
+        stream.updateListeners.add { [weak self] sessionId, values, _ in
+            // 非字符串（含 `null`）不覆盖：那是「投影这一格读不出」，不是「标题被清空」。
+            guard let title = values["title"]?.string else { return }
+            self?.titles[sessionId] = title
+        }
+    }
+
+    /// 组清单换了：重算归属表，别的一个字不动。
+    ///
+    /// **不重拉列表**：组与行是两份事实，组变了不代表行变了。把它接成「组一变就重读」
+    /// 就是判据 5 要排除的那条 —— 组流断了，列表也跟着不动。
+    private func absorbWorkspaces() {
+        guard let source = workspaceSource else { return }
+        workspaces = source.workspaces
+        owners = SessionOwners.of(source.workspaces)
+    }
+
     /// 一条列表增量。立即生效；在途时同时记进这一批账，等落地后重放到响应上。
     ///
     /// **可见性两条路都要筛**：事件推来的行若不过 `SessionVisibility`，`blank`（在 Mac 上
@@ -174,15 +229,13 @@ final class SessionListState {
             isLoading = false
         }
         do {
-            let page = try await task.value
+            let rows = try await task.value
             // 先摆响应的顺序，再把这批账依次重放 —— 反过来会让事件带来的位置被响应冲掉。
-            var merged = visible(page.sessions)
+            var merged = visible(rows)
             for change in buffered { merged = SessionListMerger.apply(change, to: merged) }
             // 重放会把事件推来的行加回去，所以落地之后再筛一次 —— 只筛一次的话，在途
             // 期间到达的 blank / subagent 会从这里漏进列表。
             sessions = visible(merged)
-            // 组清单只跟应答走：它没有自己的增量通道，事件也不携带它。
-            workspaces = page.workspaces
             outcome = .ready
         } catch {
             // 列表保留（事件带来的变化已经生效），只换失败面。
@@ -237,12 +290,16 @@ extension SessionListState {
         await createWorkspace(name: raw)
     }
 
-    /// 造一个工作空间。成功（新建或本已存在）都重拉一次列表：
-    /// 组清单只在拉取时更新，不重拉新组不会出现。
+    /// 造一个工作空间。成功（新建或本已存在）都重拉一次列表。
     ///
-    /// 新建成功时**先就地插到最前**再重拉：宿主把新建的排在注册表首位，而 `reload` 撞在
-    /// 一次在途请求上时只等不重发（那是它的单飞语义）。没有这一步，界面说「建好了」而
-    /// 列表里没有那个组。
+    /// **重拉的理由不是「组变了」**：组清单来自组流，`reload()` 一个字都不碰它。重拉是因为
+    /// 宿主把会话挂进新组之后，`items[].sessionIds` 会变 —— 而那一份是组流推的，所以严格
+    /// 说这一次重拉只为「行的 `updatedAt`/`blank` 可能刚被宿主动过」。留着它是因为代价是
+    /// 一次读、而漏掉的代价是一行停在旧状态上；但它不承担「让新组出现」这件事。
+    ///
+    /// **不做本地插入**：组清单来自组流，宿主建好之后会推一条 `upsert`。本地先插一份
+    /// 就多了一个「这一次的组」的临时真相，而它与流推来的那一份迟早不一致（标题、
+    /// 顺序、甚至 id 都可能不同）。
     ///
     /// 结果落在 {@link workspaceCreation} 上而不是交回调用方 —— 视图只发起、不接结果
     /// （与新建会话同一条纪律）。失败也**只落这里**，不落列表顶部：动作是在输入面板里
@@ -256,9 +313,6 @@ extension SessionListState {
         do {
             let made = try await createWorkspaceAction(WorkspaceName.trimmed(name))
             workspaceCreation = made.created ? .created : .alreadyExists
-            if made.created {
-                workspaces.insert(WorkspaceSummary(id: made.workspaceId, title: made.title), at: 0)
-            }
             await reloadAfterAction()
         } catch {
             workspaceCreation = .failed(error.localizedDescription)
@@ -267,9 +321,11 @@ extension SessionListState {
 
     /// 让宿主解除一个工作空间的注册。
     ///
-    /// 成功后重拉：组清单只在拉取时更新，「那个组消失」与「它的会话进了未分组」两件事都要
-    /// 等一份新快照。**不做本地先行删除** —— 乐观地去掉再补回来，中间那一帧是「删了但没删掉」，
-    /// 而删除的频率低到不值得为它引入一个需要回滚的状态。
+    /// 成功后重拉一次列表。
+    ///
+    /// **「那个组消失」由组流负责**（宿主解除注册后推一条 `remove`），`reload()` 不碰组清单；
+    /// 重拉只为「那些会话的归属与 `blank` 可能刚变了」。**不做本地先行删除** —— 乐观地去掉
+    /// 再补回来，中间那一帧是「删了但没删掉」，而删除的频率低到不值得为它引入一个需要回滚的状态。
     ///
     /// 失败落 {@link outcome}（列表顶部那条红）而不是别处：这一次是从列表上的确认框发起的，
     /// 框一关就没有承载失败的地方了 —— 与建工作空间相反，那个的失败落在输入面板里。
@@ -342,8 +398,9 @@ extension SessionListState {
     /// 「这一发没取到组清单」，后一种情况下清记录就是错的。
     private func writeExpansion() {
         if !workspaces.isEmpty {
-            let known = Set(SessionGrouping.groups(sessions: sessions,
-                                                  workspaces: workspaces).map(\.id))
+            let known = Set(SessionGrouping.groups(rows: rows,
+                                                  workspaces: workspaces,
+                                                  owners: owners).map(\.id))
             expansion.retain(among: known)
         }
         persistExpansion(expansion)
@@ -371,29 +428,12 @@ extension SessionListState {
     }
 }
 
-/// 一次拉取得到的两样东西：会话行，与工作空间清单。
-///
-/// 合成一个类型而不是两个闭包：它们出自同一条应答、同一次读取，分开取就会有一个
-/// 「行是新的、组清单是旧的」的中间态。只有一个消费者（列表状态），所以与它同住。
-struct SessionListPage: Equatable {
-    let sessions: [SessionSummary]
-    let workspaces: [WorkspaceSummary]
-}
-
 /// 拉会话列表。服务端已按 `updatedAt` 降序排好 —— 协议规定客户端**不必自己排**。
+///
+/// **只有行**：分组来自 `workspace/follow`（见 `WorkspaceStream`），不在这一条应答里。
+/// 一份应答给两样东西，就会出现「行是新的、组是旧的」那种中间态。
 @MainActor
-func fetchSessions(_ client: RpcClient) async throws -> SessionListPage {
+func fetchSessions(_ client: RpcClient) async throws -> [SessionSummary] {
     let response: ListSessionsResponse = try await client.perform(ListSessionsRequest())
-    // clock 采样：服务端时钟与本地收到时刻的一对。两端 offset 由这一对估出来，
-    // 才能修正跨机的 t3 段与端到端 —— 直接相减会把这个 offset 算进延迟里。
-    // 采样点在这里而不是更上层：`serverTime` 只出现在这个回包里，而「收到的时刻」
-    if let serverTime = response.serverTime {
-        Log.perf(Log.Module.gateway, PerfRecord(
-            seg: .clock, t: PerfRecord.nowMs(),
-            fields: ["serverTime": .number(serverTime)]
-        ))
-    }
-    // 组清单缺席（只读装配）与空数组在界面上同义：都表现为「全在未分组」。
-    return SessionListPage(sessions: response.sessions ?? [],
-                           workspaces: response.workspaces ?? [])
+    return response.items ?? []
 }

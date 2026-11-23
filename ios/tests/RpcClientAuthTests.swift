@@ -50,7 +50,7 @@ final class ScriptedURLProtocol: URLProtocol {
         return calls
     }
 
-    /// 路径的末两段：`/api/mobile/listSessions` → `mobile/listSessions`。
+    /// 路径的末两段：`/api/session/list` → `session/list`。
     private static func endpointOf(_ url: URL?) -> String? {
         guard let segments = url?.pathComponents.filter({ $0 != "/" }), segments.count >= 2 else { return nil }
         return segments.suffix(2).joined(separator: "/")
@@ -126,11 +126,11 @@ final class RpcClientAuthTests: XCTestCase {
 
     /// 一句空的会话列表应答：这几条用例只关心票的顺序，列表内容无所谓。
     private static let noSessions = ScriptedURLProtocol.Reply(
-        status: 200, body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"sessions":[],"serverTime":0}}}"#
+        status: 200, body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"items":[]}}}"#
     )
 
     private static func script(ticket: ScriptedURLProtocol.Reply) {
-        ScriptedURLProtocol.reset(replies: ["mobile/refresh": ticket, "mobile/listSessions": noSessions])
+        ScriptedURLProtocol.reset(replies: ["mobile/refresh": ticket, "session/list": noSessions])
     }
 
     override func setUp() {
@@ -168,7 +168,7 @@ final class RpcClientAuthTests: XCTestCase {
         _ = try await fetchSessions(client)
 
         let calls = ScriptedURLProtocol.snapshot()
-        XCTAssertEqual(calls.map(\.op), ["mobile/refresh", "mobile/listSessions"],
+        XCTAssertEqual(calls.map(\.op), ["mobile/refresh", "session/list"],
                        "顺序是先换票、再发业务请求：\(calls.map(\.op))")
         XCTAssertEqual(calls[1].authorization, "Bearer fresh",
                        "业务请求上必须已经带上刚换到的票")
@@ -201,7 +201,7 @@ final class RpcClientAuthTests: XCTestCase {
         Self.script(ticket: Self.ticket("second"))
         _ = try await fetchSessions(client)
 
-        XCTAssertEqual(ScriptedURLProtocol.snapshot().map(\.op), ["mobile/listSessions"],
+        XCTAssertEqual(ScriptedURLProtocol.snapshot().map(\.op), ["session/list"],
                        "票还在就不该再换一张")
     }
 
@@ -214,7 +214,7 @@ final class RpcClientAuthTests: XCTestCase {
         _ = try await fetchSessions(client)
 
         let calls = ScriptedURLProtocol.snapshot()
-        XCTAssertEqual(calls.map(\.op), ["mobile/refresh", "mobile/listSessions"],
+        XCTAssertEqual(calls.map(\.op), ["mobile/refresh", "session/list"],
                        "过期的票等价于没有票")
         XCTAssertEqual(calls[1].authorization, "Bearer second")
     }

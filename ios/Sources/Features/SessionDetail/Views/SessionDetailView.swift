@@ -251,7 +251,7 @@ struct SessionDetailView: View {
     private var loginExpiredBanner: some View {
         if detail.loginExpired.isShowing {
             HStack(alignment: .top, spacing: 8) {
-                FailureBanner(text: SessionBannerText.loginExpired)
+                FailureBanner(text: HostText.loginExpired)
                 Button("知道了") { detail.loginExpired.dismiss() }
                     .font(.footnote)
                     .buttonStyle(.borderless)

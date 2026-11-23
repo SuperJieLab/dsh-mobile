@@ -18,6 +18,7 @@ final class SessionListEventsTests: XCTestCase {
             "updatedAt": .number(100),
             "running": .bool(true),
             "blank": .bool(false),
+            "agentAvailable": .bool(true),
             "projections": .object(["values": .object(["title": .string("标题")])]),
         ]
         for (key, value) in overrides { object[key] = value }
@@ -32,6 +33,24 @@ final class SessionListEventsTests: XCTestCase {
         XCTAssertEqual(row.updatedAt, 100)
         XCTAssertTrue(row.running)
         XCTAssertFalse(row.blank)
+        XCTAssertTrue(row.agentAvailable)
+        XCTAssertNil(row.cwd, "上游不带这一格时字段缺席，不是空串")
+    }
+
+    /// `running` / `blank` / `agentAvailable` 在上游都是必填：缺了要**丢这一条**，
+    /// 不能补一个 `false` —— 补出来的行看起来完全正常，只是在屏幕上说了错的话。
+    ///
+    /// 三个字段各测一次：只测一个的话，另两个退回默认值仍然绿。
+    func testAnAddedRowWithoutItsRequiredBooleansIsDropped() {
+        for key in ["running", "blank", "agentAvailable"] {
+            var object = host().object ?? [:]
+            object[key] = nil
+            XCTAssertNil(
+                SessionListEvents.changeOf(event: "api-session/added", args: args([.object(object)])),
+                "缺 \(key)：不能补默认值")
+        }
+        // 正控：三格都在时照常解出来，否则上面三条在「这一支整个坏了」时也绿。
+        XCTAssertNotNil(SessionListEvents.changeOf(event: "api-session/added", args: args([host()])))
     }
 
     func testRemovedStatusActivityMapPositionally() {

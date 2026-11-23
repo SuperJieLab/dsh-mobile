@@ -176,8 +176,10 @@ final class WebSocketConnectionTests: XCTestCase {
             #"{"type":"open","streamId":"\#(id)"}"#
         }
         func handle(_ frame: InboundFrame) -> StreamReply {
-            // 只看 `seq` 这一格 —— 分派到哪一支不重要，这条判的是**到达顺序**。
-            if case .item(.events(.emit(_, let args))) = frame.payload,
+            // 只看 `seq` 这一格 —— 是哪条流的货物不重要，这条判的是**到达顺序**。
+            // 货物按流解的入口就在这里过一次：伪造的帧是 `$events` 的 `emit`。
+            if let value = frame.value,
+               case .decoded(.emit(_, let args)) = EventsItem.read(value),
                let seq = args["seq"]?.int {
                 seen.append(seq)
             }

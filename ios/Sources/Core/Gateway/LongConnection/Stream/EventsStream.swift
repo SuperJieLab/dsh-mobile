@@ -54,36 +54,34 @@ final class EventsStream {
     func handle(_ frame: InboundFrame) -> StreamReply {
         switch frame.type {
         case "item":
-            guard case .item(let payload)? = frame.payload else {
-                if frame.payloadRejected {
-                    Log.warn(Log.Module.gateway, "events item unparsable (payload shape rejected)")
-                }
+            // 货物在这一层按 `$events` 的形状解 —— 连接层只把原始值交过来。
+            guard let value = frame.value else {
+                Log.warn(Log.Module.gateway, "events item has no value (payload shape rejected)")
                 return StreamReply()
             }
-            switch payload {
-            case .events(.ready(let id)):
+            switch EventsItem.read(value) {
+            case .decoded(.ready(let id)):
                 clientId = id
                 readyListeners.fire(())
                 return StreamReply(establishes: true)
-            case .events(.waterfall(let value)):
+            case .decoded(.waterfall(let value)):
                 waterfallListeners.fire(value)
-            case .events(.cancel(let value)):
+            case .decoded(.cancel(let value)):
                 cancelListeners.fire(value)
-            case .events(.emit(let event, let args)):
+            case .decoded(.emit(let event, let args)):
                 emitListeners.fire((event, args))
-            case .follow, .control:
-                // 别的流的货物：串流来的，丢弃。
-                break
-            case .unknown(let cargo):
+            case .unparsable:
+                Log.warn(Log.Module.gateway, "events item unparsable (payload shape rejected)")
+            case .foreign(let type):
                 // S6 的「可见」：丢弃但不能静默 —— 痕迹里带上货物自己的 `type`，
                 // 否则「网关推了新东西」与「这条流坏了」在日志里长得一样。
                 Log.warn(Log.Module.gateway, "dropped an item type this build does not know",
-                         ["type": cargo["type"]?.string ?? "?"])
+                         ["type": type ?? "?"])
             }
             return StreamReply()
 
         case "error":
-            guard case .refused(let failure)? = frame.payload else {
+            guard let failure = frame.failure else {
                 return StreamReply(next: .stop)
             }
             Log.warn(Log.Module.gateway, "events stream refused",

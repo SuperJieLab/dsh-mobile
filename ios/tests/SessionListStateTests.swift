@@ -18,8 +18,12 @@ final class SessionListStateTests: XCTestCase {
     /// 一条会话行。只有 `updatedAt` 与标题参与本组判据。
     private func row(_ id: String, title: String? = nil, updatedAt: Double) -> SessionSummary {
         SessionSummary(
-            id: id, title: title, createdAt: 1, updatedAt: updatedAt,
-            running: false, blank: false, origin: nil, workspaceId: nil
+            sessionId: id, updatedAt: updatedAt, running: false, blank: false,
+            agentAvailable: false, formatStatus: nil, parentSessionId: nil,
+            origin: nil, cwd: nil,
+            projections: title.map {
+                SessionProjections(kind: "cached", asOfSeq: 1, values: .object(["title": .string($0)]))
+            }
         )
     }
 
@@ -29,18 +33,16 @@ final class SessionListStateTests: XCTestCase {
     private final class FakeFetch {
         private(set) var calls = 0
         var rows: Result<[SessionSummary], Error> = .success([])
-        /// 组清单。多数用例不关心分组，默认空 —— 那时全部会话落「未分组」。
-        var workspaces: [WorkspaceSummary] = []
         var holds = true
         private var gate: CheckedContinuation<Void, Never>?
 
-        func fetch() async throws -> SessionListPage {
+        func fetch() async throws -> [SessionSummary] {
             calls += 1
             if holds {
                 holds = false   // 只停第一次：单飞的那一条要证明第二次根本没发出去
                 await withCheckedContinuation { gate = $0 }
             }
-            return SessionListPage(sessions: try rows.get(), workspaces: workspaces)
+            return try rows.get()
         }
 
         func release() {
@@ -49,9 +51,58 @@ final class SessionListStateTests: XCTestCase {
         }
     }
 
-    private func change(_ payload: String) throws -> SessionListChange {
-        let value = try JSONDecoder().decode(JSONValue.self, from: Data(payload.utf8))
-        return try XCTUnwrap(SessionListChange.decode(value), "这条样本该解得出：\(payload)")
+    /// 组流的替身：`push` 就是「宿主推来一份新的组清单」。
+    ///
+    /// 用它而不是在 `FakeFetch` 上挂一份清单：组与行是两条流的两份事实，替身也分开 ——
+    /// 合成一份时，「组变了但列表没重读」这条判据根本写不出来。
+    @MainActor
+    private final class FakeWorkspaces: WorkspaceListSource {
+        private(set) var workspaces: [WorkspaceView] = []
+        private var listeners: [() -> Void] = []
+
+        func onWorkspacesChanged(_ handler: @escaping () -> Void) -> () -> Void {
+            listeners.append(handler)
+            return {}
+        }
+
+        func push(_ workspaces: [WorkspaceView]) {
+            self.workspaces = workspaces
+            for listener in listeners { listener() }
+        }
+    }
+
+    /// 一个组。只填客户端读的三格。
+    private func workspace(_ id: String, _ title: String, sessions: [String] = []) -> WorkspaceView {
+        WorkspaceView(workspaceId: id, title: title, sessionIds: sessions)
+    }
+
+    /// 一条 `api-session/*` 事件 → 列表变化。走的是线上那条路（事件名 + 参数数组）。
+    private func change(_ event: String, _ args: String) throws -> SessionListChange {
+        let value = try JSONDecoder().decode(JSONValue.self, from: Data(args.utf8))
+        return try XCTUnwrap(SessionListEvents.changeOf(event: event, args: value),
+                             "这条样本该解得出：\(event) \(args)")
+    }
+
+    /// 四个变更的构造器 —— 走的是**线上那条路**（上游事件名 + 参数数组），
+    /// 于是「事件名 → 变更」这一步也在判据里。
+    private func added(_ id: String, updatedAt: Double,
+                       blank: Bool = false, origin: String? = nil) throws -> SessionListChange {
+        let originField = origin.map { #","origin":"\#($0)""# } ?? ""
+        return try change("api-session/added", """
+        [{"sessionId":"\(id)","updatedAt":\(updatedAt),"running":false,"blank":\(blank),"agentAvailable":false\(originField)}]
+        """)
+    }
+
+    private func status(_ id: String, _ running: Bool) throws -> SessionListChange {
+        try change("api-session/status", #"["\#(id)",\#(running)]"#)
+    }
+
+    private func activity(_ id: String, _ updatedAt: Double) throws -> SessionListChange {
+        try change("api-session/activity", #"["\#(id)",\#(updatedAt)]"#)
+    }
+
+    private func removed(_ id: String) throws -> SessionListChange {
+        try change("api-session/removed", #"["\#(id)]"#)
     }
 
     /// 这一组里的多数用例不碰写动作（建会话 / 建工作空间 / 删工作空间）：三个都默认给一个
@@ -68,6 +119,7 @@ final class SessionListStateTests: XCTestCase {
 
     private func make(
         _ fetch: FakeFetch,
+        workspaces: FakeWorkspaces? = nil,
         create: @escaping (String?) async throws -> String = { _ in throw WriteNotExpected() },
         createWorkspace: @escaping (String) async throws -> WorkspaceCreated = { _ in throw WriteNotExpected() },
         deleteWorkspace: @escaping (String) async throws -> Void = { _ in throw WriteNotExpected() },
@@ -75,9 +127,12 @@ final class SessionListStateTests: XCTestCase {
         expansion: GroupExpansion = GroupExpansion(),
         persisted: @escaping (GroupExpansion) -> Void = { _ in }
     ) -> SessionListState {
-        SessionListState(fetch: { try await fetch.fetch() }, create: create,
-                         createWorkspace: createWorkspace, deleteWorkspace: deleteWorkspace,
-                         open: open, expansion: expansion, persistExpansion: persisted)
+        let state = SessionListState(fetch: { try await fetch.fetch() }, create: create,
+                                     createWorkspace: createWorkspace, deleteWorkspace: deleteWorkspace,
+                                     open: open, expansion: expansion, persistExpansion: persisted)
+        // 组流替身：默认一个空的（多数用例不关心分组，那时全部会话落「未分组」）。
+        state.attach(workspaces: workspaces ?? FakeWorkspaces())
+        return state
     }
 
     /// 让挂起的任务跑到它的第一个 await。
@@ -131,7 +186,7 @@ final class SessionListStateTests: XCTestCase {
         fetch.rows = .success([row("a", updatedAt: 100)])
         let state = make(fetch)
 
-        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":false}}"#))
+        state.apply(try added("b", updatedAt: 300))
         XCTAssertEqual(state.sessions.map(\.id), ["b"], "事件先到：列表只有它")
 
         await state.reload()
@@ -156,8 +211,8 @@ final class SessionListStateTests: XCTestCase {
         let pull = Task { await state.reload() }
         await settle()
 
-        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":false}}"#))
-        state.apply(try change(#"{"kind":"activity","id":"a","updatedAt":200}"#))
+        state.apply(try added("b", updatedAt: 300))
+        state.apply(try activity("a", 200))
         // 在途期间就已经生效：用户不必等这一发回来才看见。
         XCTAssertEqual(state.sessions.map(\.id), ["b", "a", "z"], "立即生效，而不是攒着等")
 
@@ -177,7 +232,7 @@ final class SessionListStateTests: XCTestCase {
 
         let pull = Task { await state.reload() }
         await settle()
-        state.apply(try change(#"{"kind":"removed","id":"a"}"#))
+        state.apply(try removed("a"))
 
         fetch.release()
         await pull.value
@@ -193,7 +248,7 @@ final class SessionListStateTests: XCTestCase {
 
         let pull = Task { await state.reload() }
         await settle()
-        state.apply(try change(#"{"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":false}}"#))
+        state.apply(try added("b", updatedAt: 300))
 
         fetch.release()
         await pull.value
@@ -210,17 +265,13 @@ final class SessionListStateTests: XCTestCase {
     /// 「（无标题）」，下拉之后又消失，页脚计数也跟着错。
     func testInvisibleRowsFromEventsNeverEnterTheList() throws {
         let state = make(FakeFetch())
-        state.apply(try change("""
-        {"kind":"added","row":{"id":"s1","updatedAt":100,"running":false,"blank":true}}
-        """))
+        state.apply(try added("s1", updatedAt: 100, blank: true))
         XCTAssertTrue(state.sessions.isEmpty, "blank 行不显示")
 
-        state.apply(try change("""
-        {"kind":"added","row":{"id":"s2","updatedAt":90,"running":false,"blank":false,"origin":"subagent"}}
-        """))
+        state.apply(try added("s2", updatedAt: 90, origin: "subagent"))
         XCTAssertTrue(state.sessions.isEmpty, "子会话不显示")
 
-        state.apply(try change(#"{"kind":"added","row":{"id":"s3","updatedAt":80,"running":false,"blank":false}}"#))
+        state.apply(try added("s3", updatedAt: 80))
         XCTAssertEqual(state.sessions.map(\.id), ["s3"], "普通行照常出现")
     }
 
@@ -232,9 +283,7 @@ final class SessionListStateTests: XCTestCase {
 
         let pull = Task { await state.reload() }
         await settle()
-        state.apply(try change("""
-        {"kind":"added","row":{"id":"b","updatedAt":300,"running":false,"blank":true}}
-        """))
+        state.apply(try added("b", updatedAt: 300, blank: true))
         fetch.release()
         await pull.value
 
@@ -298,7 +347,7 @@ final class SessionListStateTests: XCTestCase {
         fetch.holds = true
         let pull = Task { await state.reload() }
         await settle()
-        state.apply(try change(#"{"kind":"activity","id":"a","updatedAt":500}"#))
+        state.apply(try activity("a", 500))
         fetch.release()
         await pull.value
 
@@ -507,14 +556,16 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(asked, [Optional("w-a")], "手机点的那个组必须原样传下去")
     }
 
-    /// 造工作空间成功：名字先 trim，成功后必须重拉 —— 组清单只在拉取时更新。
-    func testCreatingAWorkspaceReloadsSoTheNewGroupShows() async {
+    /// 造工作空间成功：名字先 trim，新组**由组流推来**（不做本地插入）。
+    func testCreatingAWorkspaceShowsTheGroupTheStreamPushes() async {
         let fetch = FakeFetch()
         fetch.holds = false
+        let workspaces = FakeWorkspaces()
         var asked: [String] = []
-        let state = make(fetch, createWorkspace: { name in
+        let state = make(fetch, workspaces: workspaces, createWorkspace: { name in
             asked.append(name)
-            fetch.workspaces = [WorkspaceSummary(id: "w-new", title: name)]
+            // 宿主建好之后组流推一条 `upsert` —— 替身里就是这一下。
+            workspaces.push([self.workspace("w-new", name)])
             return WorkspaceCreated(workspaceId: "w-new", title: name, created: true)
         })
         await state.reload()
@@ -524,8 +575,9 @@ final class SessionListStateTests: XCTestCase {
 
         XCTAssertEqual(asked, ["记账"], "发出去的是 trim 过的名字 —— 首尾空白不是名字的一部分")
         XCTAssertEqual(state.workspaceCreation, .created)
-        XCTAssertEqual(fetch.calls, before + 1, "成功之后必须重拉一次：不重拉，新组不会出现在列表里")
-        XCTAssertEqual(state.workspaces.map(\.id), ["w-new"])
+        XCTAssertEqual(fetch.calls, before + 1, "成功之后仍重拉一次（行的状态可能刚被宿主动过）—— 但新组不靠它，见下一行")
+        XCTAssertEqual(state.workspaces.map(\.workspaceId), ["w-new"], "新组来自组流，不是本地插的")
+        XCTAssertEqual(state.owners, [:], "这个组里还没有会话 —— 归属表跟着组清单一起重算")
         XCTAssertFalse(state.isCreatingWorkspace, "动作结束后在飞标记要落")
     }
 
@@ -614,11 +666,12 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(asked, ["记账"])
     }
 
-    /// 重拉撞在途：在途那次拉的是**创建之前**的快照，不能当最新用 —— 必须再拉一次。
+    /// 组清单**不依赖**列表那一次读：在途期间推来的组照样出现，也不会被在途的结果盖掉。
     func testANewWorkspaceIsVisibleEvenIfAReloadWasInFlight() async {
         let fetch = FakeFetch()   // 第一次请求挂在 gate 上
-        let state = make(fetch, createWorkspace: { name in
-            fetch.workspaces = [WorkspaceSummary(id: "w-new", title: name)]
+        let workspaces = FakeWorkspaces()
+        let state = make(fetch, workspaces: workspaces, createWorkspace: { name in
+            workspaces.push([self.workspace("w-new", name)])
             return WorkspaceCreated(workspaceId: "w-new", title: name, created: true)
         })
 
@@ -630,9 +683,48 @@ final class SessionListStateTests: XCTestCase {
         await pending.value
         await creating.value
 
-        XCTAssertEqual(state.workspaces.map(\.id), ["w-new"],
-                       "在途那次的结果早于这次创建；不重拉就等于拿旧快照当最新")
+        XCTAssertEqual(state.workspaces.map(\.workspaceId), ["w-new"],
+                       "组来自组流 —— 列表那一次在途读不该把它盖掉")
         XCTAssertEqual(fetch.calls, 2, "一次在途 + 创建之后那一次")
+    }
+
+    // MARK: - 标题两源（判据 6）
+
+    /// 控制流推来标题 → 那一行换名，且**一次列表读都不多**。
+    ///
+    /// 两半缺一不可：只验「标题变了」时，重拉一次列表也能让它变；只验「没重拉」时，
+    /// 标题根本没动也绿。
+    func testTitleComesFromTheControlProjectionWithoutRefetch() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.rows = .success([row("s1", title: "旧名", updatedAt: 100)])
+        let control = ControlStream()
+        let state = make(fetch)
+        state.attach(titles: control)
+        await state.reload()
+        let before = fetch.calls
+        XCTAssertEqual(state.rows.map(\.title), ["旧名"], "前提：没有投影时标题取自行自带的那一格")
+
+        control.updateListeners.fire(("s1", .object(["title": .string("新名")]), 7))
+
+        XCTAssertEqual(state.rows.map(\.title), ["新名"], "投影覆盖行自带的标题")
+        XCTAssertEqual(fetch.calls, before, "标题变了不重拉 —— 判据 6 的另一半")
+    }
+
+    /// 非字符串（含 `null`）不覆盖：那是「投影这一格读不出」，不是「标题被清空」。
+    func testANonStringTitleDoesNotOverwriteTheKnownOne() async {
+        let fetch = FakeFetch()
+        fetch.holds = false
+        fetch.rows = .success([row("s1", title: "行里的名", updatedAt: 100)])
+        let control = ControlStream()
+        let state = make(fetch)
+        state.attach(titles: control)
+        await state.reload()
+
+        control.updateListeners.fire(("s1", .object(["title": .null]), 8))
+        control.updateListeners.fire(("s1", .object(["running": .bool(true)]), 9))
+
+        XCTAssertEqual(state.rows.map(\.title), ["行里的名"], "读不出标题的那一格不该把已知的抹掉")
     }
 
     // MARK: - 折叠状态
@@ -669,9 +761,10 @@ final class SessionListStateTests: XCTestCase {
     func testTogglingWithAKnownListDropsRecordsOfWorkspacesThatAreGone() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
+        let workspaces = FakeWorkspaces()
+        workspaces.push([workspace("w-a", "A")])
         var saved: GroupExpansion?
-        let state = make(fetch,
+        let state = make(fetch, workspaces: workspaces,
                          expansion: GroupExpansion(expanded: ["w-gone"]),
                          persisted: { saved = $0 })
         await state.reload()
@@ -690,13 +783,18 @@ final class SessionListStateTests: XCTestCase {
     func testRetainingKeepsTheUngroupedGroupWhichHasNoWorkspace() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
-        fetch.rows = .success([row("loopback", updatedAt: 100)])   // 无 workspaceId ⇒ 未分组
+        let workspaces = FakeWorkspaces()
+        workspaces.push([workspace("w-a", "A")])
+        fetch.rows = .success([row("loopback", updatedAt: 100)])   // 没有归属 ⇒ 未分组
         var saved: GroupExpansion?
-        let state = make(fetch, persisted: { saved = $0 })
+        let state = make(fetch, workspaces: workspaces, persisted: { saved = $0 })
         await state.reload()
-        XCTAssertEqual(state.sessions.map(\.workspaceId), [nil],
-                       "前提：这一份数据里有一个不属于任何工作空间的会话")
+        XCTAssertEqual(
+            SessionGrouping.groups(rows: state.rows,
+                                   workspaces: state.workspaces,
+                                   owners: state.owners).last?.id,
+            SessionGrouping.ungroupedKey,
+            "前提：这一份数据里有一行不属于任何工作空间")
 
         state.toggleExpansion(SessionGrouping.ungroupedKey)   // 点开未分组
         state.toggleExpansion("w-a")                          // 再收起一个工作空间组
@@ -707,15 +805,17 @@ final class SessionListStateTests: XCTestCase {
 
     // MARK: - 删除工作空间
 
-    /// 删完必须重拉：组消失与会话进未分组两件事都在新快照里。
-    func testDeletingAWorkspaceReloadsSoTheGroupGoesAway() async {
+    /// 删完组消失由**组流**负责；列表仍重拉一次（行可能因为组消失而改变归属）。
+    func testDeletingAWorkspaceReloadsAndTheStreamDropsTheGroup() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
+        let workspaces = FakeWorkspaces()
+        workspaces.push([workspace("w-a", "A")])
         var asked: [String] = []
-        let state = make(fetch, deleteWorkspace: {
+        let state = make(fetch, workspaces: workspaces, deleteWorkspace: {
             asked.append($0)
-            fetch.workspaces = []
+            // 宿主解除注册之后组流推一条 `remove` —— 替身里就是「新清单里没有它」。
+            workspaces.push([])
         })
         await state.reload()
         let before = fetch.calls
@@ -723,8 +823,8 @@ final class SessionListStateTests: XCTestCase {
         await state.deleteWorkspace("w-a")
 
         XCTAssertEqual(asked, ["w-a"], "删的是被点的那一个")
-        XCTAssertEqual(fetch.calls, before + 1, "删完要重拉一次 —— 不重拉，组还在列表里")
-        XCTAssertTrue(state.workspaces.isEmpty, "重拉回来的组清单里没有它了")
+        XCTAssertEqual(fetch.calls, before + 1, "删完仍重拉一次（那些会话的行状态可能刚变）—— 组的消失不靠它")
+        XCTAssertTrue(state.workspaces.isEmpty, "组流推来的清单里没有它了")
     }
 
     /// 失败时列表一动不动，说法落在顶部那一面。
@@ -734,15 +834,17 @@ final class SessionListStateTests: XCTestCase {
     func testAFailedDeletionLeavesTheListAloneAndSaysSo() async {
         let fetch = FakeFetch()
         fetch.holds = false
-        fetch.workspaces = [WorkspaceSummary(id: "w-a", title: "A")]
-        let state = make(fetch, deleteWorkspace: { _ in throw RpcClientError.badStatus(500) })
+        let workspaces = FakeWorkspaces()
+        workspaces.push([workspace("w-a", "A")])
+        let state = make(fetch, workspaces: workspaces,
+                         deleteWorkspace: { _ in throw RpcClientError.badStatus(500) })
         await state.reload()
         let before = fetch.calls
 
         await state.deleteWorkspace("w-a")
 
         XCTAssertEqual(fetch.calls, before, "失败不重拉：组清单没变，白读一次")
-        XCTAssertEqual(state.workspaces.map(\.id), ["w-a"], "组还在 —— 失败不该让界面先动")
+        XCTAssertEqual(state.workspaces.map(\.workspaceId), ["w-a"], "组还在 —— 失败不该让界面先动")
         XCTAssertNotNil(state.failureText, "失败必须有说法（落在列表顶部那条）")
     }
 }

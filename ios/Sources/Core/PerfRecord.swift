@@ -2,12 +2,17 @@ import Foundation
 
 /**
  * 性能记录 —— 与网关 `gateway/src/perf.ts` 的 `PerfRecord` 同构：`seg` / `t` /
- * `sessionId` / `seq` 是公共字段，其余按 seg 不同（iOS 侧只产 `dev` 与 `clock`）。
+ * `sessionId` / `seq` 是公共字段，其余按 seg 不同（iOS 侧只产 `dev`）。
  * 缺的字段整个缺席，不填默认值 ——「这一条不适用」与「值为零」是两件事。
  */
 struct PerfRecord {
 
-    /// 记录来自哪一端 —— 契约的四个 seg 值（iOS 侧只写 `dev` / `clock`）。
+    /// 记录来自哪一端 —— 契约的四个 seg 值。
+    ///
+    /// iOS 侧只写 `dev`；`gw` / `res` 由网关写。`clock` 是两端时钟对齐那一类，
+    /// **目前没有生产者**（它唯一的值 `serverTime` 随 `session/list` 改成转发而退场，
+    /// 那条应答不再带服务端时钟）。留着这一格是因为它是契约的四个值之一 ——
+    /// 删掉它，解析网关写来的记录时就得为 `clock` 另开一条路。
     enum Seg: String {
         case gw, dev, res, clock
     }
@@ -23,7 +28,7 @@ struct PerfRecord {
     let t: Double
     let sessionId: String?
     let seq: Int?
-    /// 按 seg 不同的附加字段（devRecv / devApply / serverTime / conn / kind…）。
+    /// 按 seg 不同的附加字段（devRecv / devApply / conn / kind…）。
     let fields: [String: FieldValue]
 
     init(seg: Seg, t: Double, sessionId: String? = nil, seq: Int? = nil, fields: [String: FieldValue] = [:]) {

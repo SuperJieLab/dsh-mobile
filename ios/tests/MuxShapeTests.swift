@@ -98,12 +98,14 @@ final class MuxShapeTests: XCTestCase {
         Data(#"{"type":"item","streamId":"s-1","value":{"type":"snapshot",\#(payload.dropFirst())}"#.utf8)
     }
 
-    /// 走产品实际走的那条路：`InboundFrame` 分派到 opening，再成形。
+    /// 走产品实际走的那条路：外壳解一次，货物由 `session/follow` 自己解，再成形。
     ///
-    /// 不直接调解码入口 —— 分派那一跳正是「一帧只解析一次」的落点，判据绕开它就守不住
-    /// 「三字段同在才归 opening」这件事。
+    /// 不直接按类型解码 —— 那两跳（外壳 → 本流的货物）正是「一帧只解析一次」与
+    /// 「按流解货物」的落点，判据绕开它们就守不住「三字段同在才归 opening」这件事。
     private func decodeOpening(_ data: Data) -> OpeningFrame? {
-        guard case .item(.follow(.opening(let shape)))? = InboundFrame.decode(data)?.payload else { return nil }
+        guard let frame = InboundFrame.decode(data),
+              let value = frame.value,
+              case .decoded(.opening(let shape)) = FollowItem.read(value) else { return nil }
         return shape.frame()
     }
 
@@ -210,6 +212,8 @@ final class MuxShapeTests: XCTestCase {
              #"{"endpoint":"$events","payload":{"args":{}},"streamId":"e1","type":"open"}"#),
             (MuxOpenFrame.control(streamId: "c1"),
              #"{"endpoint":"session/control","payload":{"args":{}},"streamId":"c1","type":"open"}"#),
+            (MuxOpenFrame.workspace(streamId: "g1"),
+             #"{"endpoint":"workspace/follow","payload":{"args":{}},"streamId":"g1","type":"open"}"#),
         ]
         for (frame, text) in cases {
             XCTAssertEqual(try frame.encoded(), text,
@@ -225,6 +229,7 @@ final class MuxShapeTests: XCTestCase {
         for make in [
             { MuxOpenFrame.events(streamId: "e1") },
             { MuxOpenFrame.control(streamId: "c1") },
+            { MuxOpenFrame.workspace(streamId: "g1") },
             { MuxOpenFrame.following(sessionId: "s-1", streamId: "f1") },
         ] {
             let texts = try (1...5).map { _ in try make().encoded() }

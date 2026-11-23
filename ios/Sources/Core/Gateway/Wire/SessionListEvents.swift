@@ -4,9 +4,8 @@
  * 解释放在客户端：`$events` 把 `emit` 原样转发，网关不解释事件名。于是两端对
  * 「一个事件意味着什么」只有一份答案 —— 而这份答案本来就是上游给的，不是我们定的。
  *
- * **`workspaceId` 这里给 `nil`**：上游事件的行里没有这个字段，而网关侧那份
- * 「会话 → 工作空间」的映射已不在流层。列表按工作空间过滤时要另找来源 ——
- * 这个缺口登记在项目的登记簿里，不在代码里补映射。
+ * **行里没有归属**：上游的摘要本来就不带 `workspaceId`，归属由组流给（`workspace/follow`
+ * 的 `items[].sessionIds`）。这条事件只负责「这一行的事实变了」，不参与分组。
  */
 import Foundation
 
@@ -38,24 +37,38 @@ enum SessionListEvents {
         }
     }
 
-    /// 上游的会话摘要 → 列表行。
-    ///
-    /// 与网关旧实现（`sessionListRowOf`）逐字段对齐：`sessionId` 是 id、`running` / `blank`
-    /// 缺席按 `false`（上游这两个是布尔，网关就是这么折的）；标题在
-    /// `projections.values.title` 那一格。
+    /// 上游的会话摘要 → 列表行。**与 `session/list` 的行同源同形** —— 两处各解一遍时，
+    /// 其中一处迟早在某个字段上分家，而症状是「拉来的行」与「事件推来的行」长得不一样。
     private static func summaryOf(_ host: JSONValue) -> SessionSummary? {
-        guard let id = host["sessionId"]?.string, !id.isEmpty,
-              let updatedAt = host["updatedAt"]?.number
+        guard let sessionId = host["sessionId"]?.string, !sessionId.isEmpty,
+              let updatedAt = host["updatedAt"]?.number,
+              // 两个布尔与 `agentAvailable` 在上游都是必填。缺失就丢这一条，
+              // 不补 `false`：补出来的行看起来完全正常，只是在屏幕上说了错的话。
+              let running = host["running"]?.bool,
+              let blank = host["blank"]?.bool,
+              let agentAvailable = host["agentAvailable"]?.bool
         else { return nil }
         return SessionSummary(
-            id: id,
-            title: host["projections"]?["values"]?["title"]?.string,
-            createdAt: nil,
+            sessionId: sessionId,
             updatedAt: updatedAt,
-            running: host["running"]?.bool ?? false,
-            blank: host["blank"]?.bool ?? false,
+            running: running,
+            blank: blank,
+            agentAvailable: agentAvailable,
+            formatStatus: host["formatStatus"]?.string,
+            parentSessionId: host["parentSessionId"]?.string,
             origin: host["origin"]?.string,
-            workspaceId: nil
+            cwd: host["cwd"]?.string,
+            projections: projectionsOf(host["projections"])
+        )
+    }
+
+    /// 投影块：`{kind, asOfSeq, values}`。整格解不出就当没有 —— 标题缺席是契约的一部分。
+    private static func projectionsOf(_ payload: JSONValue?) -> SessionProjections? {
+        guard let payload, payload.object != nil else { return nil }
+        return SessionProjections(
+            kind: payload["kind"]?.string,
+            asOfSeq: payload["asOfSeq"]?.number.map(Int.init),
+            values: payload["values"]
         )
     }
 }

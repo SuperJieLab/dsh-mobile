@@ -29,12 +29,12 @@ extension CommandDirectory {
     static let noMatchNote = "没有匹配的命令。"
 }
 
-extension CommandInfo {
+extension CommandDescriptor {
 
     /// 候选行上「这条命令怎么用」：名字，以及宿主声明的参数占位。
     /// 占位来自宿主的 `input.hint` —— 客户端不知道任何一条命令该带什么参数。
     var invocation: String {
-        guard let inputHint, !inputHint.isEmpty else { return "/\(name)" }
-        return "/\(name) \(inputHint)"
+        guard let hint = input?.hint, !hint.isEmpty else { return "/\(name)" }
+        return "/\(name) \(hint)"
     }
 }

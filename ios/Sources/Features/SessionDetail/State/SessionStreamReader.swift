@@ -57,41 +57,42 @@ enum SessionStreamReader {
     static func read(_ frame: InboundFrame, sessionId: String) -> StreamReading {
         switch frame.type {
         case "item":
-            guard case .item(let payload)? = frame.payload else {
-                // 载荷在却解不出：那一帧正是开流超时的第一现场，留痕。
-                // 四支都不匹配是另一回事 —— 那是本版不认识的新形状，静默丢弃。
-                if frame.payloadRejected {
-                    Log.warn(Log.Module.session, "opening unparsable (payload shape rejected)")
-                }
+            // 货物只在这一层按本流的形状解 —— 连接层不知道 `item` 有哪几种货物。
+            guard let value = frame.value else {
+                // 旧形状（`payload` 而不是 `value`）或这一格坏了：这是开流超时的第一现场，
+                // 要留痕，否则「对端还在说旧协议」在日志里等于什么都没发生。
+                Log.warn(Log.Module.session, "follow item has no value (payload shape rejected)")
                 return StreamReading(content: .ignored)
             }
-            switch payload {
-            case .follow(.opening(let shape)):
+            switch FollowItem.read(value) {
+            case .decoded(.opening(let shape)):
                 guard let opening = shape.frame() else {
-                    // 分派之后才发现必填字段缺了。走到这里 `payloadRejected` 必为 false ——
-                    // 上面那一行不会执行，所以这里得自己留痕：缺字段的打开帧是开流超时的
-                    // 第一现场，静默忽略会让它和「这一条流什么都没发生」长得一样。
+                    // 是本流的打开帧、但必填字段缺了（sessionId / cursor / events）。缺字段的
+                    // 打开帧是开流超时的第一现场，静默忽略会让它和「这一条流什么都没发生」
+                    // 长得一样。
                     Log.warn(Log.Module.session, "opening missing required fields (sessionId/cursor/events)")
                     return StreamReading(content: .ignored)
                 }
                 return StreamReading(content: .opening(opening))
-            case .follow(.sessionEvent(let event)):
+            case .decoded(.sessionEvent(let event)):
                 return StreamReading(content: .event(event))
-            case .follow(.transient(let inner)):
+            case .decoded(.transient(let inner)):
                 return StreamReading(content: .transient(inner))
-            case .events, .control:
-                // 连接级货物不属于会话流：串流来的，丢弃。
+            case .unparsable:
+                // 形状是本流的，字段解不出：协议漂移多从这里开始。
+                Log.warn(Log.Module.session, "follow item unparsable (payload shape rejected)")
                 return StreamReading(content: .ignored)
-            case .unknown(let cargo):
+            case .foreign(let type):
+                // 别的流的货物（串流）或本版不认识的新货物：丢掉，但留下是哪一种。
                 Log.warn(Log.Module.session, "dropped an item type this build does not know",
-                         ["type": cargo["type"]?.string ?? "?"])
+                         ["type": type ?? "?"])
                 return StreamReading(content: .ignored)
             }
 
         case "error":
-            guard case .refused(let failure)? = frame.payload else {
-                // 解不出载荷的 error 帧已在解码层兜成 internal-error，正常走不到这里。
-                // 留着是为了「type 说 error、载荷却成了别的」这种不该出现的状态不静默。
+            // 解不出 `error` 格时解码层已兜成 `internal-error`，所以正常走不到 else ——
+            // 留着是为了「type 说 error、`error` 整个不在」这种不该出现的状态不静默。
+            guard let failure = frame.failure else {
                 return StreamReading(content: .refused(GatewayFailure(
                     code: GatewayErrorCode.internalError.rawValue, message: ""
                 )))

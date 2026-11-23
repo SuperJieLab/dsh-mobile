@@ -15,14 +15,16 @@ final class SessionVisibilityTests: XCTestCase {
     /// 一行摘要。只改与本规则有关的两个字段，其余给固定值。
     private func session(blank: Bool = false, origin: String? = nil) -> SessionSummary {
         SessionSummary(
-            id: "s1",
-            title: "会话",
-            createdAt: 0,
+            sessionId: "s1",
             updatedAt: 0,
             running: false,
             blank: blank,
+            agentAvailable: false,
+            formatStatus: nil,
+            parentSessionId: nil,
             origin: origin,
-            workspaceId: nil
+            cwd: nil,
+            projections: nil
         )
     }
 

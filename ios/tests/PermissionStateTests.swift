@@ -22,12 +22,23 @@ final class PermissionStateTests: XCTestCase {
         PermissionOption(value: "danger-full-access", name: "danger-full-access"),
     ]
 
-    /// 只回一份固定视图的状态对象；`select` 回同一个值（切换成功的形状）。
-    private func readyState(_ view: PermissionView) async -> PermissionState {
-        let state = PermissionState(
-            fetch: { view },
-            select: { preset in view.options?.first { $0.value == preset }?.value }
-        )
+    /// 一份目录：三档都在。
+    private func catalog(options: [PermissionOption]? = nil) -> PermissionCatalog {
+        PermissionCatalog(options: options ?? three,
+                          defaultOptions: options ?? three,
+                          defaultPreset: "workspace-write")
+    }
+
+    /// 投影里的当前档：`{permissions: {currentValue: …}}`。
+    private func projection(_ current: String?) -> JSONValue {
+        guard let current else { return .object(["permissions": .object([:])]) }
+        return .object(["permissions": .object(["currentValue": .string(current)])])
+    }
+
+    /// 只回一份固定目录的状态对象；`select` 什么也不做（切换成功的形状）。
+    private func readyState(current: String?, options: [PermissionOption]? = nil) async -> PermissionState {
+        let state = PermissionState(fetch: { self.catalog(options: options) }, select: { _ in })
+        state.noteProjection(projection(current))
         await state.reload()
         return state
     }
@@ -114,23 +125,23 @@ final class PermissionStateTests: XCTestCase {
 
     /// 还没取过 = 等待面，那一格写 `--`；取到了 = 当前档的名字。
     func testOutcomeFaces() async {
-        let waiting = PermissionState(fetch: { PermissionView() }, select: { _ in nil })
+        let waiting = PermissionState(fetch: { self.catalog() }, select: { _ in })
         XCTAssertEqual(waiting.outcome, .waiting)
         XCTAssertNil(waiting.currentLabel, "还没取过：不猜一个档位")
         XCTAssertEqual(PermissionState.unknownLabel, "--")
 
-        let ready = await readyState(PermissionView(current: "read-only", options: three))
-        XCTAssertEqual(ready.outcome, .ready(PermissionView(current: "read-only", options: three)))
+        let ready = await readyState(current: "read-only")
+        XCTAssertEqual(ready.outcome, .ready)
         XCTAssertEqual(ready.currentLabel, .readOnly)
 
-        let failed = PermissionState(fetch: { throw RpcClientError.notActivated }, select: { _ in nil })
+        let failed = PermissionState(fetch: { throw RpcClientError.notActivated }, select: { _ in })
         await failed.reload()
         XCTAssertEqual(failed.outcome, .failed(.offline), "传输失败归到 offline 那一档")
     }
 
     /// 重拉期间不把档位闪成 `--`：等待面下仍读上一次的值。
     func testReloadKeepsTheLastKnownValue() async {
-        let state = await readyState(PermissionView(current: "workspace-write", options: three))
+        let state = await readyState(current: "workspace-write")
         // 直接再取一次会先置等待 —— 那一刻界面读的仍是上一份。
         let task = Task { await state.reload() }
         XCTAssertEqual(state.currentLabel, .workspaceWrite, "重拉开始时档位不该消失")
@@ -141,14 +152,15 @@ final class PermissionStateTests: XCTestCase {
     /// 切档失败不改变「当前是哪档」，只留一句失败原因。
     func testAFailedSwitchKeepsTheCurrentValue() async {
         let state = PermissionState(
-            fetch: { PermissionView(current: "read-only", options: self.three) },
-            select: { _ in throw RpcClientError.refused(GatewayFailure(code: "unknown-session", message: "gone")) }
+            fetch: { self.catalog() },
+            select: { _ in throw RpcClientError.refused(GatewayFailure(code: "unknown-command", message: "gone")) }
         )
+        state.noteProjection(projection("read-only"))
         await state.reload()
         let accepted = await state.choose("workspace-write")
         XCTAssertFalse(accepted)
         XCTAssertEqual(state.currentLabel, .readOnly, "失败时不乐观更新")
-        XCTAssertEqual(state.failure, .refused(GatewayFailure(code: "unknown-session", message: "gone")))
+        XCTAssertEqual(state.failure, .refused(GatewayFailure(code: "unknown-command", message: "gone")))
         XCTAssertNotNil(state.failureLine)
     }
 
@@ -156,21 +168,36 @@ final class PermissionStateTests: XCTestCase {
 
     /// `options` 缺席 = 没有权限服务（不画那一格）；空数组 = 服务在但没配（格子照画）。
     func testAbsentOptionsHidesTheCellWhileAnEmptyCatalogKeepsIt() async {
-        let absent = await readyState(PermissionView(current: "read-only", options: nil))
-        XCTAssertFalse(absent.showsCell, "没有权限服务时不画这一格")
+        let absent = await readyState(current: "read-only",
+                                      options: []) // 空数组：服务在
+        XCTAssertTrue(absent.showsCell, "空数组 = 服务在、一项没配：格子照画，点开是空的")
+        XCTAssertTrue(absent.choices.isEmpty)
 
-        let empty = await readyState(PermissionView(current: nil, options: []))
-        XCTAssertTrue(empty.showsCell, "服务在、一项没配：格子照画，点开是空的")
-        XCTAssertTrue(empty.choices.isEmpty)
+        // 三键一起缺席 = 这个装配没有权限服务。
+        let missing = PermissionState(fetch: { PermissionCatalog() }, select: { _ in })
+        await missing.reload()
+        XCTAssertFalse(missing.showsCell, "没有权限服务时不画这一格")
 
         // 等待面照画：还没拿到不等于没有这个能力。
-        let waiting = PermissionState(fetch: { PermissionView() }, select: { _ in nil })
+        let waiting = PermissionState(fetch: { self.catalog() }, select: { _ in })
         XCTAssertTrue(waiting.showsCell)
+    }
+
+    /// 当前档只从投影来：`permissions.currentValue`。
+    ///
+    /// 缺键、空串、类型不对一律 `nil`（界面显示 `--`）—— **缺席不是默认档**。
+    func testTheCurrentPresetComesFromThePermissionsProjection() {
+        XCTAssertEqual(PermissionState.currentValueOf(projection("workspace-write")), "workspace-write")
+        XCTAssertNil(PermissionState.currentValueOf(.object(["permissions": .object([:])])))
+        XCTAssertNil(PermissionState.currentValueOf(.object([:])), "整个 permissions 格缺席")
+        XCTAssertNil(PermissionState.currentValueOf(projection("")), "空串不是一档")
+        XCTAssertNil(PermissionState.currentValueOf(.object(["permissions": .object(["currentValue": .number(1)])])),
+                     "类型不对时也不猜")
     }
 
     // MARK: - O6 事件回流
 
-    /// 只有那三类事件说明「宿主的当前权限可能变了」。别的类型重读等于把会话变成一串请求。
+    /// 只有那三类事件值得重读目录。别的类型重读等于把会话变成一串请求。
     func testOnlyPermissionEventsMarkTheCurrentValueStale() {
         for type in ["permission/preset", "sandbox/mode", "approval/policy"] {
             XCTAssertTrue(PermissionState.affectsCurrent(type), type)

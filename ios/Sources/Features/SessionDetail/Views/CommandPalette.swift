@@ -10,7 +10,7 @@ struct CommandPalette: View {
     /// 过滤用的查询串（`SlashTrigger.querying` 里那一段）。
     let query: String
     /// 选中一条：把回填好的草稿交出去。
-    let onPick: (CommandInfo) -> Void
+    let onPick: (CommandDescriptor) -> Void
 
     /// 面板高度上限：给输入框与消息流都留位置，别让候选把整屏占满。
     private static let maxHeight: CGFloat = 220
@@ -74,7 +74,7 @@ struct CommandPalette: View {
     ///
     /// 参数占位来自宿主的 `input.hint`（拼法在 `CommandText.swift` 的 `invocation`）——
     /// 用户选了带参数的命令之后，才知道后面该写什么。
-    private func row(_ command: CommandInfo) -> some View {
+    private func row(_ command: CommandDescriptor) -> some View {
         Button {
             onPick(command)
         } label: {

@@ -18,9 +18,11 @@ protocol StreamBehavior: AnyObject {
     /// 换了号却不发帧，那条流就永远等不到开口帧。
     func build(_ id: StreamId) throws -> String
 
-    /// 收到一帧：外壳与已解好的载荷。返回值决定这条流下一步怎么办。
+    /// 收到一帧：外壳已解好，`item` 的货物是**原文**（`frame.value`）。
+    /// 返回值决定这条流下一步怎么办。
     ///
-    /// 载荷在连接层**只解一次**，所以这里拿不到原始字节，也不该再解 —— 那正是同一份线上文本
-    /// 被解析两遍的来源。要判断形状，看 `InboundPayload` 分到了哪一支。
+    /// 货物按**本流**的形状解（`FollowItem.read` / `EventsItem.read` / `ControlValue.read`）——
+    /// 同一个 `value.type` 在两条流上可以是两种形状，所以没有一张全局分派表可以共用。
+    /// 这里也不该再碰原始字节：那一帧已经被解析过一次了。
     func handle(_ frame: InboundFrame) -> StreamReply
 }

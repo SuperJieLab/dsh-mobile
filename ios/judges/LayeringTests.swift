@@ -1270,6 +1270,7 @@ final class LayeringTests: XCTestCase {
             ("following", "Features/SessionDetail/State/SessionBehavior.swift"),
             ("events", "Core/Gateway/LongConnection/Stream/EventsStream.swift"),
             ("control", "Core/Gateway/LongConnection/Stream/ControlStream.swift"),
+            ("workspace", "Core/Gateway/LongConnection/Stream/WorkspaceStream.swift"),
         ]
         var files: [(relative: String, code: [(Int, String)])] = []
         for file in swiftFiles(under: sourcesRoot) {
@@ -1381,7 +1382,7 @@ final class LayeringTests: XCTestCase {
         }
         let forbidden = ["newStreamId", "[StreamId:", "Map<StreamId", "openInFlight", "byId"]
 
-        XCTAssertTrue(lines.contains { $0.1.contains("\"/rpc/stream\"") },
+        XCTAssertTrue(lines.contains { $0.1.contains("\"/api/remote.mux\"") },
                       "没找到流通道路径 —— 先怀疑路径或改名")
         XCTAssertGreaterThan(lines.count, 100, "扫到的代码行太少 —— 先怀疑路径或切行")
 
@@ -1567,21 +1568,24 @@ final class LayeringTests: XCTestCase {
     ///
     /// 正控：`emit` 必须命中，否则说明扫错了文件。
     ///
-    /// 末尾那条守的是「认不出时留痕要带名字」：不带 `\(type)` 的那行 warn 现场只剩
+    /// 末尾那条守的是「认不出时留痕要带名字」：不带 `type` 的那行 warn 现场只剩
     /// 「丢了一条东西」，而版本错配时最要紧的正是**丢的是哪一种**。
+    ///
+    /// 货物由 `EventsItem.read` 按**这一条流**解（`CargoReading` 三支），所以判的是
+    /// `.decoded(.x)` 而不是从前的 `.events(.x)`：全局分派表已经拆掉了。
     func testTheEventsCargoesAreRead() throws {
         let file = sourcesRoot
             .appendingPathComponent("Core/Gateway/LongConnection/Stream/EventsStream.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let code = codeLines(in: text)
         for cargo in ["ready", "waterfall", "cancel", "emit"] {
-            let hits = code.filter { $0.1.contains(".events(.\(cargo)") }.count
+            let hits = code.filter { $0.1.contains(".decoded(.\(cargo)") }.count
             XCTAssertEqual(hits, 1, "判读器里 \(cargo) 该恰好一支，实际 \(hits) 支")
         }
-        XCTAssertTrue(code.contains { $0.1.contains("case .follow, .control") },
-                      "别的流的货物没有汇成一支丢弃 —— 每加一条流这里就多一处判断")
-        XCTAssertTrue(text.contains(#"cargo["type"]?.string"#),
-                      "认不出的货物没被写进日志 —— 版本错配时现场分不出丢的是哪一种")
+        XCTAssertTrue(code.contains { $0.1.contains("case .foreign(let type)") },
+                      "别的流（或本版不认识）的货物没有汇成一支丢弃 —— 每加一条流这里就多一处判断")
+        XCTAssertTrue(code.contains { $0.1.contains(#""type": type ?? "?""#) },
+                      "认不出的货物没把 `type` 写进日志 —— 版本错配时现场分不出丢的是哪一种")
     }
 
     /// 列表行的待审批标记撤干净了：类型、计数、渲染三样都不许留。
@@ -1611,7 +1615,35 @@ final class LayeringTests: XCTestCase {
             contentsOf: sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift"),
             encoding: .utf8
         )
-        XCTAssertTrue(listView.contains("struct SessionRow"), "行的定义没扫到 —— 判据可能扫错了树")
+        XCTAssertTrue(listView.contains("struct SessionListRow"), "行的定义没扫到 —— 判据可能扫错了树")
+    }
+
+    /// 账号失效的提示真的画在**列表**上，而不只是标志被置位。
+    ///
+    /// 判据 12 要的是「停在列表时能看到」，而 `HostNotificationsTests` 只证明标志会置位
+    /// （数据到得了）。从「标志」到「屏上有那一行」这一跳没有任何运行时症状 —— 删掉
+    /// 视图里那段 `if`，全部单测照样绿，用户却在列表上什么都看不到，要等到点进某个会话。
+    /// 这条守的正是那一跳：装配把标志传进来、视图读它、文案来自 `HostText`。
+    ///
+    /// 正控：同一份视图里「无标题」那一格必须还在 —— 否则说明文件扫错了。
+    func testTheExpiredBannerIsRenderedOnTheList() throws {
+        let listView = try String(
+            contentsOf: sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(listView.contains("loginExpired.isShowing"),
+                      "列表视图没读那个标志 —— 账号过期只在详情屏可见，判据 12 的落点没了")
+        XCTAssertTrue(listView.contains("HostText.loginExpired"),
+                      "横幅没用那句共享文案 —— 两屏说两句不同的话，用户会以为是两件事")
+        XCTAssertTrue(listView.contains("struct SessionListRow"), "扫错文件了（行视图不在这里）")
+
+        // 装配必须把它传进来，否则视图读的是一个永远为假的值。
+        let assembler = try String(
+            contentsOf: sourcesRoot.appendingPathComponent("Features/SessionList/Views/SessionListAssembler.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(assembler.contains("loginExpired: loginExpired"),
+                      "装配没把标志传给列表视图 —— 横幅永远不会出现")
     }
 
     /// 阶段类型提出去了：业务与视图读的是顶层 `ConnectionPhase`，没有谁还写 `FollowClient.Phase`。

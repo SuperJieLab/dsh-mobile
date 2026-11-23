@@ -47,6 +47,10 @@ final class SessionSync {
     /// 「宿主那边的当前权限可能变了」。判定住在权限域（`PermissionState.affectsCurrent`），
     /// 这里只转发 —— 事件名是权限域的知识，不是编排的。
     var onLiveEventType: ((String) -> Void)?
+    /// 每收到本会话的一条投影值就叫一声。**单读者**：权限那一格靠它读 `permissions.currentValue`。
+    /// 与 `onLiveEventType` 同一手法 —— 判定住在权限域（`PermissionState.currentValueOf`），
+    /// 这里只转发投影原文。
+    var onProjectionValues: ((JSONValue) -> Void)?
 
     // MARK: - 三样共享的状态与两族动作
 
@@ -184,6 +188,7 @@ final class SessionSync {
             // control 是权威：水位（事件 seq）在 `ControlStream` 里已经用来挡过重放，
             // 这里不再和快照的 `asOfSeq` 比 —— 两者不是同一条轴。
             self.applyControl(UsageView.payloadOf(values))
+            self.onProjectionValues?(values)
         }
     }
 

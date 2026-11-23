@@ -12,6 +12,9 @@ struct SessionDetailAssembler: View {
     private let approvals: ApprovalStore
     private let questions: QuestionStore
     private let control: ControlStream?
+    /// App 级的失效标志与宿主通知分派 —— 两屏共用，不由这一屏造。
+    private let loginExpired: LoginExpiredFlag
+    private let host: HostNotifications
 
     /// 首帧为 nil：容器在 `.task` 里现造。`@State` 的初值表达式每次视图重建都求值、
     /// 只采用第一个 —— 造在 `init` 里不会错（构造是纯的），但会白造好几次。
@@ -24,7 +27,9 @@ struct SessionDetailAssembler: View {
          store: MeshStore,
          approvals: ApprovalStore,
          questions: QuestionStore,
-         control: ControlStream? = nil) {
+         control: ControlStream? = nil,
+         loginExpired: LoginExpiredFlag,
+         host: HostNotifications) {
         self.sessionId = sessionId
         self.title = title
         self.client = client
@@ -33,6 +38,8 @@ struct SessionDetailAssembler: View {
         self.approvals = approvals
         self.questions = questions
         self.control = control
+        self.loginExpired = loginExpired
+        self.host = host
     }
 
     var body: some View {
@@ -57,7 +64,9 @@ struct SessionDetailAssembler: View {
                                             store: store,
                                             approvals: approvals,
                                             questions: questions,
-                                            control: control)
+                                            control: control,
+                                            loginExpired: loginExpired,
+                                            host: host)
             }
             guard let created = detail else { return }
             created.sync.startFollowing()

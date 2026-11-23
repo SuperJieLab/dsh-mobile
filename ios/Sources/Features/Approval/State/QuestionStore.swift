@@ -67,11 +67,12 @@ final class QuestionStore {
 
     /// 宿主通知（`emit`）的转发口 —— **通知不属于任何域**，由持有 sink 的这一个代收一次。
     ///
-    /// 分派仍在调用方（`SessionDetailState`）：它才认识「模型 / 命令 / 权限 / 账号」这四个
-    /// 消费方，而 Store 只认识自己的表。
+    /// 分派在调用方：它才认识「模型 / 命令 / 权限 / 账号」这几个消费方，而 Store 只认识
+    /// 自己的表。当前唯一的调用方是组合根（`AppServices`），分派落在 `HostNotifications`
+    /// —— 通知讲的是账号与目录，不属于任何一屏，所以那个听众也不该由某一屏持有。
     ///
-    /// **返回退订**：调用方是 per-screen 的容器，不退订的话每开一次详情页就多一个永久
-    /// 听众（`ListenerTable` 只靠 token 删）。
+    /// **返回退订**：调用方不退订的话，每接一次就多一个永久听众（`ListenerTable` 只按
+    /// token 删）。组合根与流同寿，所以它不退；但口子照旧返回。
     @discardableResult
     func watchNotifications(_ handler: @escaping (String, JSONValue) -> Void) -> () -> Void {
         guard let sink else {

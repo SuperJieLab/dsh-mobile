@@ -26,7 +26,8 @@ final class SessionDetailState {
     /// App 级的提问表 —— 与审批并列，同样是只读那一栏。
     let questions: QuestionStore
     /// 「登录已失效」的一次性提示 —— 只提示，不动凭证。
-    let loginExpired = LoginExpiredFlag()
+    /// **App 级持有、两屏共用**：详情里点了「知道了」，列表那条也一起收起来。
+    let loginExpired: LoginExpiredFlag
 
     /// 宿主通知的退订句柄 —— 这一屏离屏时要还回去，否则每开一次就多一个永久听众。
     @ObservationIgnored private var stopWatching: (() -> Void)?
@@ -38,41 +39,46 @@ final class SessionDetailState {
          store: MeshStore,
          approvals: ApprovalStore,
          questions: QuestionStore,
-         control: ControlStream? = nil) {
+         control: ControlStream? = nil,
+         loginExpired: LoginExpiredFlag,
+         host: HostNotifications) {
         self.sessionId = sessionId
         self.title = title
         self.store = store
         self.approvals = approvals
         self.questions = questions
+        self.loginExpired = loginExpired
         sync = SessionSync(client: client, sessionId: sessionId, link: link, control: control)
         // 先落成局部量：闭包的 `weak` 那一格只接受标识符。
         let catalogState = ModelCatalogState { try await fetchCatalog(client) }
-        let directory = CommandDirectory { try await fetchCommands(client, sessionId: sessionId) }
+        let directory = CommandDirectory { try await fetchCommands(client, agentId: sessionId) }
         let permissionState = PermissionState(
-            fetch: { try await fetchPermission(client, sessionId: sessionId) },
-            select: { try await selectPermission(client, sessionId: sessionId, preset: $0) }
+            fetch: { try await fetchPermission(client) },
+            select: { try await selectPermission(client, agentId: sessionId, preset: $0) }
         )
         catalog = catalogState
         commands = directory
         permission = permissionState
         composer = ComposerState()
-        // 宿主通知的四条去路：三条目录各自刷一次、一条提示。判断在这里，动作在各部件里 ——
-        // 容器只造不取数，所以四个动作都是同步入口（内部各起一次重拉）。
-        stopWatching = questions.watchNotifications { [weak catalogState, weak directory, weak permissionState, weak loginExpired] name, _ in
-            switch UpstreamNotification.route(name) {
+        // 宿主通知的三条去路：三条目录各自刷一次。**订阅在这一屏、分派在 App 级** ——
+        // 账号失效与「哪一屏在看」无关，所以标志不在这里置位（`HostNotifications` 管）。
+        // 容器只造不取数，所以三个动作都是同步入口（内部各起一次重拉）。
+        stopWatching = host.subscribe { [weak catalogState, weak directory, weak permissionState] route in
+            switch route {
             case .models: catalogState?.reloadSoon()
             case .commands: directory?.reloadSoon()
             case .permissions: permissionState?.noteCatalogChanged()
-            case .accountExpired: loginExpired?.note()
-            case .unhandled:
-                // 没人认领的名字也留痕：这是我们唯一会知道「宿主加了新通知」的地方。
-                Log.warn(Log.Module.gateway, "an upstream notification has no consumer", ["event": name])
+            case .accountExpired, .unhandled: break   // 前者归标志，后者分派处已留痕
             }
         }
         // 事件类型的转发接线：编排只负责「每来一条就叫一声」，判断哪几类算数归权限域。
         // 弱捕获：这一屏离屏后容器与部件一起走，闭包不该把它们吊住。
         sync.onLiveEventType = { [weak permissionState] type in
             permissionState?.noteLiveEvent(type: type)
+        }
+        // 当前档走投影：`permissions.currentValue` 到了就更新，不等目录重拉。
+        sync.onProjectionValues = { [weak permissionState] values in
+            permissionState?.noteProjection(values)
         }
     }
 

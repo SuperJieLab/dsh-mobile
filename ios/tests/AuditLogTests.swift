@@ -118,8 +118,7 @@ final class AuditLogTests: XCTestCase {
         [
             SessionPromptRequest(sessionId: "s", text: "t", promptId: "p"),
             ApprovalAnswerRequest(eventId: "e", decision: "allow", answerId: "a", clientId: "c-1"),
-            CommandExecuteRequest(sessionId: "s", line: "/clear"),
-            PermissionSelectRequest(sessionId: "s", preset: "accept-edits"),
+            CommandExecuteRequest(agentId: "s", line: "/clear"),
             ModelSelectRequest(sessionId: "s", provider: "p", model: "m"),
             SessionCreateRequest(),
             WorkspaceCreateRequest(name: "proj"),
@@ -143,8 +142,8 @@ final class AuditLogTests: XCTestCase {
     func testReadRequestsAreNotAuditable() {
         let reads: [any GatewayRequest] = [
             ModelCatalogRequest(),
-            CommandCatalogRequest(sessionId: "s"),
-            PermissionCatalogRequest(sessionId: "s"),
+            CommandCatalogRequest(agentId: "s"),
+            PermissionCatalogRequest(),
         ]
         for request in reads {
             XCTAssertNil(request as? AuditableRequest, "\(type(of: request).endpoint) 是读端点，不该进审计")

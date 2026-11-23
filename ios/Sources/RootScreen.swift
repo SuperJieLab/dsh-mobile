@@ -45,6 +45,9 @@ struct RootScreen: View {
             // 正在读会话的人不会被整屏弹走，而修配置从齿轮开始。
             SessionListAssembler(client: services.client,
                                  stream: EventsListSink(stream: services.eventsStream),
+                                 workspaces: WorkspaceListSink(stream: services.workspaceStream),
+                                 titles: services.controlStream,
+                                 loginExpired: services.loginExpired,
                                  store: services.store,
                                  navigate: { path.append($0) })
                 .navigationDestination(for: Destination.self) { route in
@@ -57,7 +60,9 @@ struct RootScreen: View {
                                                store: services.store,
                                                approvals: services.approvals,
                                                questions: services.questions,
-                                               control: services.controlStream)
+                                               control: services.controlStream,
+                                               loginExpired: services.loginExpired,
+                                               host: services.hostNotifications)
                     case .settings:
                         SettingsAssembler(store: services.store,
                                           logFile: services.logFile,

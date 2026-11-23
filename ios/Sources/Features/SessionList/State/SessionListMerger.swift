@@ -34,20 +34,19 @@ enum SessionListMerger {
     // MARK: - 行
 
     /// 事件行叠加到已有行上：它知道的那几格取新的，不知道的保留旧值。
-    /// **`title` 缺席也保留旧值**，尽管协议里「缺席」同时表示「无标题」与「投影不可用」。
     ///
-    /// `workspaceId` 同理：事件行没带归属时，已有行的那一格不被抹掉 —— 否则每收到一条
-    /// 不带归属的增量，那一行就会被赶进「未分组」。
+    /// **投影块缺席也保留旧值** —— 标题就住在那里。「缺席」在协议里同时表示「没有标题」与
+    /// 「这一行没带投影」，两者在这里同解（保留旧值）：把旧标题抹掉会让一次增量把一行
+    /// 变成「无标题」，而它其实只是没带那一格。
     private static func merge(_ incoming: SessionSummary, into rows: [SessionSummary]) -> SessionSummary {
         guard let existing = rows.first(where: { $0.id == incoming.id }) else { return incoming }
         return copy(of: existing,
-                    title: incoming.title,
-                    createdAt: incoming.createdAt,
+                    projections: incoming.projections,
                     origin: incoming.origin,
                     updatedAt: incoming.updatedAt,
                     running: incoming.running,
                     blank: incoming.blank,
-                    workspaceId: incoming.workspaceId)
+                    agentAvailable: incoming.agentAvailable)
     }
 
     /// 插到第一个 `updatedAt <= 新值` 的位置；都比它新就排最后。
@@ -68,23 +67,24 @@ enum SessionListMerger {
     }
 
     /// 从一行拷一行，只改传进来的那几格；没传的保持原值。
-    /// 这是本文件**唯一**一处构造 `SessionSummary` —— 反复抄七个字段时，「没提到的字段该保留」
+    /// 这是本文件**唯一**一处构造 `SessionSummary` —— 反复抄各字段时，「没提到的字段该保留」
     /// `nil` 在这里表示「不改」，与 `merge` 的意图逐字一致，但不能用来把一格清成 nil。
     private static func copy(of row: SessionSummary,
-                             title: String? = nil,
-                             createdAt: Double? = nil,
+                             projections: SessionProjections? = nil,
                              origin: String? = nil,
                              updatedAt: Double? = nil,
                              running: Bool? = nil,
                              blank: Bool? = nil,
-                             workspaceId: String? = nil) -> SessionSummary {
-        SessionSummary(id: row.id,
-                       title: title ?? row.title,
-                       createdAt: createdAt ?? row.createdAt,
+                             agentAvailable: Bool? = nil) -> SessionSummary {
+        SessionSummary(sessionId: row.sessionId,
                        updatedAt: updatedAt ?? row.updatedAt,
                        running: running ?? row.running,
                        blank: blank ?? row.blank,
+                       agentAvailable: agentAvailable ?? row.agentAvailable,
+                       formatStatus: row.formatStatus,
+                       parentSessionId: row.parentSessionId,
                        origin: origin ?? row.origin,
-                       workspaceId: workspaceId ?? row.workspaceId)
+                       cwd: row.cwd,
+                       projections: projections ?? row.projections)
     }
 }

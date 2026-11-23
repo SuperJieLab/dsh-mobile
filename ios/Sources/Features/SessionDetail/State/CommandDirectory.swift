@@ -15,7 +15,7 @@ final class CommandDirectory {
         /// 还没有结果，或正在重拉 —— 「等待」不是「没有命令」。
         case waiting
         /// 拿到了。空数组是成功面（这个会话真没有命令），由视图补一句。
-        case ready([CommandInfo])
+        case ready([CommandDescriptor])
         /// 没拿到。原因只有两档，分法与状态行的失败同源。
         case failed(Cause)
     }
@@ -30,12 +30,12 @@ final class CommandDirectory {
 
     private(set) var outcome: Outcome = .waiting
 
-    private let fetch: @MainActor () async throws -> [CommandInfo]
+    private let fetch: @MainActor () async throws -> [CommandDescriptor]
 
     /// 本机发起过的最新一次取数代号：打开面板与重试可能前后脚触发，晚到的旧回包不许覆盖。
     private var generation = 0
 
-    init(fetch: @escaping @MainActor () async throws -> [CommandInfo]) {
+    init(fetch: @escaping @MainActor () async throws -> [CommandDescriptor]) {
         self.fetch = fetch
     }
 
@@ -81,7 +81,7 @@ final class CommandDirectory {
     /// （宿主已按名字排好）。空查询返回全部 —— 刚敲 `/` 时应当看得见所有能用的命令。
     /// 只匹配名字、不匹配说明：说明是给人读的一句话，拿它参与匹配会让「敲了 `per` 却命中
     /// 一条名字完全无关的命令」变成常态。
-    static func match(_ commands: [CommandInfo], query: String) -> [CommandInfo] {
+    static func match(_ commands: [CommandDescriptor], query: String) -> [CommandDescriptor] {
         let needle = query.lowercased()
         guard !needle.isEmpty else { return commands }
         let prefix = commands.filter { $0.name.lowercased().hasPrefix(needle) }
@@ -92,34 +92,32 @@ final class CommandDirectory {
     }
 }
 
-/// 列该会话此刻能用的命令。**每次打开面板都拉**：命令集是 per-agent 的，
+/// 列该 agent 此刻能用的命令。**每次打开面板都拉**：命令集是 per-agent 的，
 /// 随插件装卸与作用域变，不缓存成常量。
+///
+/// @param agentId - 与 `sessionId` 同值；线上那一格叫 `agentId`（宿主的参数名）。
 @MainActor
-func fetchCommands(_ client: RpcClient, sessionId: String) async throws -> [CommandInfo] {
+func fetchCommands(_ client: RpcClient, agentId: String) async throws -> [CommandDescriptor] {
     let response: CommandCatalogResponse = try await client.perform(
-        CommandCatalogRequest(sessionId: sessionId)
+        CommandCatalogRequest(agentId: agentId)
     )
-    // 缺载荷抛错，不填空数组 —— 理由见 `RpcClientError.malformedResponse`。
-    guard let commands = response.commands else {
-        throw RpcClientError.malformedResponse(detail: "commands")
-    }
-    return commands
+    return response.commands
 }
 
 /// 执行一整行命令。`ok` = **已受理**，结果从订阅流里的
 /// `command/run` / `command/done` 来 —— 这个回包不带执行结果。
 /// 回包里的 `commandId` 不返回：这一版没有一处按它对账。
 @MainActor
-func runCommand(_ client: RpcClient, sessionId: String, line: String) async throws {
+func runCommand(_ client: RpcClient, agentId: String, line: String) async throws {
     let response: CommandExecuteResponse = try await client.perform(
-        CommandExecuteRequest(sessionId: sessionId, line: line)
+        CommandExecuteRequest(agentId: agentId, line: line)
     )
     guard response.commandId != nil else {
         throw RpcClientError.malformedResponse(detail: "commandId")
     }
     // 命令是这一屏唯一**不可撤回**的动作（可能改了文件、跑了测试）：发给谁、发了什么
     // 必须留痕，而回包只说受理 —— 之后没有别的机会补记这一刻的输入。
-    Log.info(Log.Module.session, "command-execute", ["session": sessionId, "line": line])
+    Log.info(Log.Module.session, "command-execute", ["agent": agentId, "line": line])
 
 
 

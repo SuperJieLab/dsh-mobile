@@ -9,8 +9,11 @@ import Foundation
 @MainActor
 final class WebSocketConnection: Channel {
 
-    /// 本网关提供流协议的精确路径。
-    static let streamPath = "/rpc/stream"
+    /// 本网关提供流协议的精确路径 —— 与上游同名。
+    ///
+    /// 与网关的 `STREAM_PATH` 是同一个字面量的两处写法（跨语言，没有共享常量可引）：
+    /// 单边改的表现是连接直接 404，不是解帧失败。
+    static let streamPath = "/api/remote.mux"
 
     /// 单帧上限 —— 网关承诺打开帧不超过 4 MiB，这里取两倍；系统默认 1 MiB 会让大窗口打不开。
     static let maximumMessageSize = 8 * 1024 * 1024

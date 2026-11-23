@@ -25,14 +25,32 @@ struct ModelCatalogRequest: GatewayRequest {
     static let endpoint = "session/modelCatalog"
 }
 
+/// 宿主的 `request` 容器 —— 三条写 op（`session/selectModel`、`session/create`、
+/// `workspace/delete`）的宿主形参都叫 `request`，线上因此多一层。
+///
+/// 少一层是旧客户端的形状，网关按畸形拒（`invalid-request`）；所以这里必须写出来，
+/// 不能指望「平铺也能收」。
+private enum RequestContainerKeys: String, CodingKey { case request }
+
 /// `session/selectModel` 请求：`reasoningEffort` 为 `nil` 时整个字段不出现在 JSON 里
-/// （合成编码用 `encodeIfPresent`）—— 「没指定」与「空串」是两回事（严格校验）。
+/// （`encodeIfPresent`）—— 「没指定」与「空串」是两回事（严格校验）。
 struct ModelSelectRequest: GatewayRequest {
     static let endpoint = "session/selectModel"
     let sessionId: String
     let provider: String
     let model: String
     var reasoningEffort: String? = nil
+
+    private enum PayloadKeys: String, CodingKey { case sessionId, provider, model, reasoningEffort }
+
+    func encode(to encoder: any Encoder) throws {
+        var outer = encoder.container(keyedBy: RequestContainerKeys.self)
+        var payload = outer.nestedContainer(keyedBy: PayloadKeys.self, forKey: .request)
+        try payload.encode(sessionId, forKey: .sessionId)
+        try payload.encode(provider, forKey: .provider)
+        try payload.encode(model, forKey: .model)
+        try payload.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+    }
 }
 
 /// `session/create` 请求：**至多一个工作空间**。
@@ -46,11 +64,12 @@ struct SessionCreateRequest: GatewayRequest {
     static let endpoint = "session/create"
     var workspaceId: String? = nil
 
-    private enum CodingKeys: String, CodingKey { case workspaceId }
+    private enum PayloadKeys: String, CodingKey { case workspaceId }
 
     func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encodeIfPresent(workspaceId, forKey: .workspaceId)
+        var outer = encoder.container(keyedBy: RequestContainerKeys.self)
+        var payload = outer.nestedContainer(keyedBy: PayloadKeys.self, forKey: .request)
+        try payload.encodeIfPresent(workspaceId, forKey: .workspaceId)
     }
 }
 
@@ -60,9 +79,11 @@ struct WorkspaceCreateRequest: GatewayRequest {
     let name: String
 }
 
+/// `commands/list` 请求：**宿主的参数名是 `agentId`**（`agentId` 与 `sessionId` 同值 ——
+/// 宿主把 `Agent` 序列化成一个 id）。
 struct CommandCatalogRequest: GatewayRequest {
     static let endpoint = "commands/list"
-    let sessionId: String
+    let agentId: String
 }
 
 /// `commands/execute` 请求。
@@ -71,27 +92,31 @@ struct CommandCatalogRequest: GatewayRequest {
 /// 第二份实现 —— 上游改规则时这里不会编译失败，只会在某个参数上静默错位。
 struct CommandExecuteRequest: GatewayRequest {
     static let endpoint = "commands/execute"
-    let sessionId: String
+    let agentId: String
     let line: String
+    /// 附件本期不接：线上这个键必须出现（宿主的必填形参），值恒为空数组。
+    let submittedAttachments: NoAttachments
 }
 
-/// 权限预设的读：这个会话此刻能选什么、现在是什么。
+extension CommandExecuteRequest {
+    init(agentId: String, line: String) {
+        self.init(agentId: agentId, line: line, submittedAttachments: NoAttachments())
+    }
+}
+
+/// 「这次没有附件」—— 只编码成 `[]`。
 ///
-/// 带 `sessionId` 是因为**当前值是会话级的**（选项是进程级的）—— 两样一次拿齐，
-/// 客户端就不必自己从沙箱模式与审批策略折叠出预设。
+/// 用 `[JSONValue]` 会诱使后来的人往里塞东西，而附件这条路（上传、引用、宿主侧落盘）
+/// 一期都没接；拿一个不可构造的类型顶住，缺的那一半就是看得见的。
+struct NoAttachments: Encodable {
+    func encode(to encoder: any Encoder) throws {
+        _ = encoder.unkeyedContainer()
+    }
+}
+
+/// 权限目录：**无参**。目录是进程级的；「这个会话现在是哪一档」在 `permissions` 投影里。
 struct PermissionCatalogRequest: GatewayRequest {
-    static let endpoint = "mobile/permissionCatalog"
-    let sessionId: String
-}
-
-/// 权限预设的写：**只发预设名**。
-///
-/// 不发沙箱模式与审批策略：那两格是宿主折叠出预设的输入，发出去等于邀请客户端自己算一遍。
-/// 预设名合不合法由宿主的目录说了算，客户端不维护第二份名单。
-struct PermissionSelectRequest: GatewayRequest {
-    static let endpoint = "mobile/permissionSelect"
-    let sessionId: String
-    let preset: String
+    static let endpoint = "permissionPresets/catalog"
 }
 
 /// 协议里的时刻是 **epoch 毫秒**（`1758000000000`），不是秒。
@@ -101,9 +126,23 @@ func epochMilliseconds(_ value: Double) -> Date {
 
 // MARK: - 请求（协议形状的唯一出处）
 
+/// `session/list` 请求：参数在 `_request` 这一层容器里（宿主的参数名就是它）。
+///
+/// 客户端只做一次**全量**读，不带 `cursor`：上游的 `cursor` 是增量分页用的，手机的列表
+/// 走「全量 + 事件增量」，不需要它。
 struct ListSessionsRequest: GatewayRequest {
-    static let endpoint = "mobile/listSessions"
+    static let endpoint = "session/list"
+
+    private enum CodingKeys: String, CodingKey { case request = "_request" }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(EmptyArgs(), forKey: .request)
+    }
 }
+
+/// 编码成 `{}` 的参数容器 —— `EmptyArgs()` 不带任何键。
+struct EmptyArgs: Encodable {}
 
 /// 配对：一次性配对码换设备凭证。**免票** —— 它的作用就是拿票。
 struct PairRequest: GatewayRequest {
@@ -184,6 +223,14 @@ struct SessionPromptRequest: GatewayRequest {
 struct WorkspaceDeleteRequest: GatewayRequest {
     static let endpoint = "workspace/delete"
     let workspaceId: String
+
+    private enum PayloadKeys: String, CodingKey { case workspaceId }
+
+    func encode(to encoder: any Encoder) throws {
+        var outer = encoder.container(keyedBy: RequestContainerKeys.self)
+        var payload = outer.nestedContainer(keyedBy: PayloadKeys.self, forKey: .request)
+        try payload.encode(workspaceId, forKey: .workspaceId)
+    }
 }
 
 // MARK: - 应答（`result.value` 那一格）
@@ -198,14 +245,8 @@ struct WorkspaceDeleteRequest: GatewayRequest {
 protocol GatewayResponse: Decodable {}
 
 struct ListSessionsResponse: GatewayResponse {
-    let sessions: [SessionSummary]?
-    /// 工作空间清单，顺序即显示顺序。**缺席**表示这次应答没有分组能力（只读装配），
-    /// 空数组表示宿主里一个工作空间也没有 —— 两者在界面上都表现为「全在未分组」，
-    /// 但线上不能混成一种。
-    let workspaces: [WorkspaceSummary]?
-    /// 服务端时钟（epoch ms）—— 协议承诺在；clock 采样读它估两端 offset。
-    /// 缺席按「服务端没给」处理，不猜。
-    let serverTime: Double?
+    /// 会话行。**分组不在这里**（组来自 `workspace/follow`），标题在每行的投影块里。
+    let items: [SessionSummary]?
 }
 
 /// 配对回包：设备凭证只在这里出现一次。
@@ -250,9 +291,14 @@ struct QuestionAnswerResponse: GatewayResponse {}
 /// 下发指令回包：成功即已受理。
 struct SessionPromptResponse: GatewayResponse {}
 
-/// 目录回包：转发原样，只剥了宿主私有字段。
+/// 目录回包：**宿主目录的原样**（四个键，含 `routableProviders`）。
+///
+/// `routableProviders` 客户端目前不读，但它在线上形状里 —— 声明出来是为了让「目录被裁过」
+/// 这件事看得见：少一个字段不会解码失败（JSONDecoder 容忍未知键），只会让下次要用的人
+/// 以为它不存在。
 struct ModelCatalogResponse: GatewayResponse {
     var `default`: ModelSelection? = nil
+    var routableProviders: [String]? = nil
     var groups: [ModelCatalogGroup]? = nil
     var failures: [ModelCatalogFailure]? = nil
 }
@@ -282,9 +328,21 @@ struct WorkspaceCreateResponse: GatewayResponse {
 /// 客户端要做的事完全一样（关掉确认框、重拉一次），所以没有一格要读。
 struct WorkspaceDeleteResponse: GatewayResponse {}
 
-/// 命令列表回包。
+/// 命令列表回包 —— 线上是**裸数组**（上游这条回的就是一串描述符）。
+///
+/// 不声明成 `[CommandDescriptor]` 是因为协议要求 `Decodable` 的类型；这里手写
+/// 一个从 unkeyed 容器读的壳，调用点因此仍读 `response.commands`。
 struct CommandCatalogResponse: GatewayResponse {
-    var commands: [CommandInfo]? = nil
+    let commands: [CommandDescriptor]
+
+    init(from decoder: any Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var commands: [CommandDescriptor] = []
+        while !container.isAtEnd {
+            commands.append(try container.decode(CommandDescriptor.self))
+        }
+        self.commands = commands
+    }
 }
 
 /// 执行回包。**只有受理 id，没有执行结果** —— 结果从订阅流里的
@@ -293,16 +351,12 @@ struct CommandExecuteResponse: GatewayResponse {
     var commandId: String? = nil
 }
 
-/// 权限预设的读回包。
+/// 权限目录回包。
 ///
-/// **`options` 缺席与空数组是两件事**：缺席 = 这个装配没有权限服务（界面不画那一格）；
+/// **三键一起缺席与空数组是两件事**：缺席 = 这个装配没有权限服务（界面不画那一格）；
 /// 空数组 = 服务在但一项都没配。合成一种，界面就会画一个点不开的格子。
 struct PermissionCatalogResponse: GatewayResponse {
-    var current: String? = nil
     var options: [PermissionOption]? = nil
-}
-
-/// 权限预设的写回包。`current` 是受理后**宿主重读投影**给的值，不是把发出去的那份当答案。
-struct PermissionSelectResponse: GatewayResponse {
-    var current: String? = nil
+    var defaultOptions: [PermissionOption]? = nil
+    var defaultPreset: String? = nil
 }

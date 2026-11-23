@@ -36,6 +36,8 @@ final class MuxFrameFixtureTests: XCTestCase {
         let text: String
         let type: String
         let streamId: String
+        /// 这条货物属于哪条流 —— 按流解码之后，「由谁解」必须写在样本里。
+        let kind: String?
     }
 
     private func loadFixture() throws -> (client: [ClientSample], server: [ServerSample]) {
@@ -59,7 +61,8 @@ final class MuxFrameFixtureTests: XCTestCase {
                   let text = raw["text"] as? String,
                   let type = raw["type"] as? String,
                   let streamId = raw["streamId"] as? String else { return nil }
-            return ServerSample(name: name, text: text, type: type, streamId: streamId)
+            return ServerSample(name: name, text: text, type: type, streamId: streamId,
+                                kind: raw["kind"] as? String)
         }
         return (client, server)
     }
@@ -68,12 +71,16 @@ final class MuxFrameFixtureTests: XCTestCase {
     func testFixtureCoversEveryStreamKindAndBothServerFrameKinds() throws {
         let fixture = try loadFixture()
         let kinds = Set(fixture.client.compactMap(\.kind))
-        XCTAssertEqual(kinds, Set(["follow", "events", "control"]),
-                       "三条流的开流请求都要有样本")
+        XCTAssertEqual(kinds, Set(["follow", "events", "control", "workspace"]),
+                       "四条流的开流请求都要有样本")
         let serverTypes = Set(fixture.server.map(\.type))
         for type in ["item", "end", "error"] {
             XCTAssertTrue(serverTypes.contains(type), "服务端帧缺 \(type) 的样本")
         }
+        // 按流解码之后，`item` 样本必须写明属于哪条流 —— 否则客户端不知道该用哪张表解。
+        let itemKinds = Set(fixture.server.filter { $0.type == "item" }.compactMap(\.kind))
+        XCTAssertEqual(itemKinds, Set(["follow", "events", "workspace"]),
+                       "item 样本的 kind 应覆盖三条会推货物的流")
     }
 
     /// 货物级的覆盖：`item` 的 `type` 有三种是线上会发生、且我们要读的。
@@ -131,14 +138,36 @@ final class MuxFrameFixtureTests: XCTestCase {
             let frame = try XCTUnwrap(InboundFrame.decode(data), "\(sample.name): 这一帧该解得开")
             XCTAssertEqual(frame.type, sample.type, "\(sample.name): 信封的 type")
             XCTAssertEqual(frame.streamId, sample.streamId, "\(sample.name): 编号")
-            // `end` / `error` 没有 `item` 载荷 —— 跳过，不是失败。
+            // `end` / `error` 没有货物 —— 跳过，不是失败。
             guard frame.type == "item" else { continue }
-            let payload = try XCTUnwrap(frame.payload, "\(sample.name): item 帧该有载荷")
-            guard case .item(let item) = payload else {
-                XCTFail("\(sample.name): item 帧的载荷该是 .item")
-                continue
+            let value = try XCTUnwrap(frame.value, "\(sample.name): item 帧该有货物原文")
+
+            // 货物的解由样本自己说归哪条流 —— 客户端没有一张全局表可以问。
+            switch sample.kind {
+            case "follow":
+                guard case .decoded(.opening(let shape)) = FollowItem.read(value) else {
+                    XCTFail("\(sample.name): follow 的样本该解成 opening")
+                    continue
+                }
+                XCTAssertEqual(shape.cursor, 3, "\(sample.name): 打开窗口的 cursor")
+                XCTAssertEqual(shape.sessionId, "s-1", "\(sample.name): 会话名")
+            case "events":
+                guard case .decoded(let item) = EventsItem.read(value) else {
+                    XCTFail("\(sample.name): events 的样本该解成 events 货物")
+                    continue
+                }
+                assertCargo(item, sample: sample.name)
+            case "workspace":
+                guard case .decoded(.baseline(let baseline)) = WorkspaceItem.read(value) else {
+                    XCTFail("\(sample.name): workspace 的样本该解成 baseline")
+                    continue
+                }
+                XCTAssertEqual(baseline.items.map(\.workspaceId), ["w-1"], "\(sample.name): 组清单")
+                XCTAssertEqual(baseline.items.first?.sessionIds, ["s-1"], "\(sample.name): 成员表（归属的来源）")
+                XCTAssertEqual(baseline.pinnedSessionIds, ["s-1"], "\(sample.name): 置顶集合")
+            default:
+                XCTFail("\(sample.name): item 样本缺 kind —— 不知道该由哪条流解")
             }
-            assertCargo(item, sample: sample.name)
         }
     }
 
@@ -146,13 +175,13 @@ final class MuxFrameFixtureTests: XCTestCase {
     ///
     /// `waterfall` 的载荷在客户端是裸 `JSONValue`（题目结构归第 3 期的问题卡解析），
     /// 所以这里验的是「地址三格与工具名读得出来」，不是题目内部的字段。
-    /// `ready` 只验 `clientId` —— 客户端解不出 `host`（`EventsValue.ready` 里没有这一格），
+    /// `ready` 只验 `clientId` —— 客户端解不出 `host`（`EventsItem.ready` 里没有这一格），
     /// 样本带 `host` 要证明的是「多一格也解得出」，不是「读到了」。
-    private func assertCargo(_ item: ItemPayload, sample: String) {
+    private func assertCargo(_ item: EventsItem, sample: String) {
         switch item {
-        case .events(.ready(let clientId)):
+        case .ready(let clientId):
             XCTAssertEqual(clientId, "c-1", "\(sample): ready 的 clientId 该是样本里那个固定值")
-        case .events(.waterfall(let value)):
+        case .waterfall(let value):
             let event = value["event"]?.string ?? ""
             XCTAssertTrue(["approval/request", "user-questions/request"].contains(event),
                           "\(sample): waterfall 的 event 该是上游事件名（读出来是 \(event)）")
@@ -165,16 +194,12 @@ final class MuxFrameFixtureTests: XCTestCase {
                 XCTAssertNotNil(value["request"]?["toolName"]?.string,
                                 "\(sample): request.toolName 可读 —— 客户端按它建卡")
             }
-        case .events(.emit(let event, let args)):
+        case .emit(let event, let args):
             XCTAssertEqual(event, "commands/change", "\(sample): emit 的 event")
             // `args` 缺省解成 `.null` —— 所以这条能抓「网关这一格空了」，而不是恒真。
             XCTAssertNotEqual(args, .null, "\(sample): emit 的 args 不该缺席")
-        case .unknown:
-            // 未知 `type` 也解得开（它落进 `.unknown`），所以 `XCTUnwrap` 那一步发现不了 ——
-            // 「样本的货物与解码器对不上」只能在这里喊。
-            XCTFail("\(sample): 货物落进了 .unknown —— 判别没认出来")
-        case .events, .follow, .control:
-            break
+        case .cancel:
+            XCTFail("\(sample): 样本里不该有撤回帧")
         }
     }
 
@@ -184,8 +209,9 @@ final class MuxFrameFixtureTests: XCTestCase {
         let text = #"{"type":"item","streamId":"e-1","value":{"type":"ready","clientId":"c-1"}}"#
         let data = try XCTUnwrap(text.data(using: .utf8))
         let frame = try XCTUnwrap(InboundFrame.decode(data), "不带 host 的 ready 该解得开")
-        guard case .item(.events(.ready(let clientId)))? = frame.payload else {
-            XCTFail("不带 host 的 ready 该落在 .events(.ready)")
+        let value = try XCTUnwrap(frame.value, "ready 该有货物原文")
+        guard case .decoded(.ready(let clientId)) = EventsItem.read(value) else {
+            XCTFail("不带 host 的 ready 该落在 events.ready")
             return
         }
         XCTAssertEqual(clientId, "c-1")

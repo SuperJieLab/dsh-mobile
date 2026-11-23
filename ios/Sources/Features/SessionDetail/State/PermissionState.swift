@@ -1,11 +1,12 @@
 /**
- * 权限那一格的三面、可选项与两条调用（`fetchPermission` / `selectPermission`）。
+ * 权限那一格：**两个来源**，与一条写路径。
  *
- * 三面与 `CommandDirectory` 同构，差别在两处：可选项要滤掉「自定义」（它是显示态，
- * 不是切换目标），以及收到权限相关事件时要重读一次。
+ * - 目录（进程级）来自 `permissionPresets/catalog`：这个装配能选什么。
+ * - 当前档（会话级）来自 `permissions` 投影：`session/control` 推过来，键是 `currentValue`。
+ * - 切档走 `commands/execute` 的 `/permission <preset>` —— 与 Web UI 同一条路。
  *
- * **不折叠沙箱模式与审批策略。** 当前值就是宿主给的那一个名字 —— 线上不带那两个 knob，
- * 客户端在结构上也算不出第二份答案。
+ * **两源不合成一条读**：合成过一次，结果是「目录新、当前值旧」而界面看不出哪一半是旧的。
+ * 也不折叠沙箱模式与审批策略 —— 那两个 knob 在宿主侧，客户端在结构上算不出第二份答案。
  */
 import Foundation
 
@@ -27,12 +28,13 @@ enum PermissionLabel: Equatable {
 @MainActor
 @Observable
 final class PermissionState {
-    /// 屏幕上要落成的三种面。
+    /// 屏幕上要落成的三种面。**只描述目录**那一半：当前档是另一路（`current`），
+    /// 它到了就显示，目录还在拉也照样有值。
     enum Outcome: Equatable {
         /// 还没有结果，或正在重拉 —— 「等待」不是「没有权限」。
         case waiting
-        /// 拿到了。`options` 为空数组是成功面（服务在、一项都没配）。
-        case ready(PermissionView)
+        /// 拿到了目录。`options` 为空数组是成功面（服务在、一项都没配）。
+        case ready
         /// 没拿到。原因只有两档，分法与状态行的失败同源。
         case failed(Cause)
     }
@@ -56,59 +58,66 @@ final class PermissionState {
     }
 
     private(set) var outcome: Outcome = .waiting
-    /// 上一次成功拿到的视图。**重拉期间与失败之后都还读它**：格子不该因为「重新取一次」
-    /// 把档位闪成 `--`，也不该在切档失败后变成另一个值。
-    private(set) var lastKnown: PermissionView? = nil
+    /// 上一次成功拿到的目录。**重拉期间与失败之后都还读它**：格子不该因为「重新取一次」
+    /// 把选项闪成空。
+    private(set) var catalog: PermissionCatalog? = nil
+    /// 当前档 —— 来自投影。**`nil` = 宿主还没说**（界面显示 `--`），不是「默认档」。
+    private(set) var current: String? = nil
     /// 最近一次切档失败的原因；成功后清空。与 `outcome` 分开 —— 切失败不改变「当前是哪档」。
     private(set) var failure: Cause? = nil
 
-    private let fetch: @MainActor () async throws -> PermissionView
-    private let select: @MainActor (String) async throws -> String?
+    private let fetch: @MainActor () async throws -> PermissionCatalog
+    private let select: @MainActor (String) async throws -> Void
 
     /// 本机发起过的最新一次代号：重拉与切档共用一个 —— 后发起者胜，晚到的旧回包不许覆盖。
     private var generation = 0
-    /// 一次合并窗口内只排一次重读：一次切档会连着到三条事件。
+    /// 一次合并窗口内只排一次重读：一次切档会连着到几条事件。
     private var reloadScheduled = false
     private static let mergeWindowNanos: UInt64 = 16_000_000
 
-    init(fetch: @escaping @MainActor () async throws -> PermissionView,
-         select: @escaping @MainActor (String) async throws -> String?) {
+    init(fetch: @escaping @MainActor () async throws -> PermissionCatalog,
+         select: @escaping @MainActor (String) async throws -> Void) {
         self.fetch = fetch
         self.select = select
     }
 
     // MARK: - 取数与切换
 
-    /// 取一次。重试与事件回流都走这里：先把面置回等待，避免「旧选项还挂着，看不出在重拉」。
+    /// 取一次目录。重试与方向事件回流都走这里：先把面置回等待，避免「旧选项还挂着，看不出在重拉」。
     func reload() async {
         generation += 1
         let mine = generation
         outcome = .waiting
         do {
-            let view = try await fetch()
+            let catalog = try await fetch()
             guard mine == generation else { return }
-            lastKnown = view
+            self.catalog = catalog
             failure = nil
-            outcome = .ready(view)
+            outcome = .ready
         } catch {
             guard mine == generation else { return }
             outcome = .failed(Self.cause(of: error))
         }
     }
 
-    /// 切到一档。**不乐观更新**：显示等宿主回话，失败时那一格保持原值。
+    /// 投影里到了这个会话的最新值。**只认 `permissions.currentValue`** —— 其余键是别人的事。
+    ///
+    /// 由 `SessionSync` 的投影口转发进来（它已经按会话挑过），所以这里不再判会话身份。
+    func noteProjection(_ values: JSONValue) {
+        current = Self.currentValueOf(values)
+    }
+
+    /// 切到一档。**不乐观更新**：显示等投影回来，失败时那一格保持原值。
+    ///
+    /// `ok` 只表示**宿主的命令被受理**；落地证据是投影（`permissions.currentValue`）。
     @discardableResult
     func choose(_ preset: String) async -> Bool {
         generation += 1
         let mine = generation
         do {
-            let current = try await select(preset)
+            try await select(preset)
             guard mine == generation else { return false }
             failure = nil
-            // 宿主没回当前值时把它清掉（显示 `--`），不拿发出去的那份当答案。
-            if let options = lastKnown?.options {
-                lastKnown = PermissionView(current: current, options: options)
-            }
             return true
         } catch {
             guard mine == generation else { return false }
@@ -117,12 +126,9 @@ final class PermissionState {
         }
     }
 
-    /// 流里到了一条事件。**只认三类**：一次切档会连着写 `permission/preset` 与两个 knob，
-    /// 任一到达都说明「宿主那边的当前值可能变了」—— 重读，不推导。
-    /// 宿主的预设目录变了（`permission-presets/catalog-changed`）。
+    /// 宿主的预设目录变了（`permission-presets/catalog-changed`）：重读目录。
     ///
-    /// 与 `noteLiveEvent` 分开：那个只认「会话里切了档」的三类事件，而目录变更是全局的、
-    /// 与当前会话无关。两者都要「重读一次」，所以共用同一个防重入闸。
+    /// 目录是全局的、与当前会话无关；当前档走投影，不在这里。
     func noteCatalogChanged() {
         guard !reloadScheduled else { return }
         reloadScheduled = true
@@ -133,6 +139,10 @@ final class PermissionState {
         }
     }
 
+    /// 会话里到了一条事件。只认那三类（切档与它连带的两个 knob）—— 它们同样会带来
+    /// 目录层面的变化（宿主可能换了可选项），所以重读一次目录。
+    ///
+    /// 当前档不靠这条：网关把这三类列为投影触发源，投影会自己到。
     func noteLiveEvent(type: String) {
         guard Self.affectsCurrent(type) else { return }
         guard !reloadScheduled else { return }
@@ -149,29 +159,37 @@ final class PermissionState {
 
     /// 功能条上要不要画这一格。
     ///
-    /// `options` 缺席 = 这个装配没有权限服务 —— 那是唯一一种「不画」。
+    /// 目录里 `options` 缺席 = 这个装配没有权限服务 —— 那是唯一一种「不画」。
     /// 等待与失败期间照画：它们只是「还没拿到」，不是「没有这个能力」。
     var showsCell: Bool {
-        if case .ready(let view) = outcome { return view.options != nil }
+        if case .ready = outcome { return catalog?.options != nil }
         return true
     }
 
     /// 当前档位的标签；宿主不知道时 `nil`（界面显示 `--`）。
     var currentLabel: PermissionLabel? {
-        guard let current = lastKnown?.current else { return nil }
-        let hostName = lastKnown?.options?.first { $0.value == current }?.name ?? current
+        guard let current else { return nil }
+        let hostName = catalog?.options?.first { $0.value == current }?.name ?? current
         return Self.label(of: current, hostName: hostName)
     }
 
     /// 菜单里能点的项。「自定义」永远不在其中。
     var choices: [Choice] {
-        Self.choices(from: lastKnown?.options ?? [], current: lastKnown?.current)
+        Self.choices(from: catalog?.options ?? [], current: current)
     }
 
     // MARK: - 纯规则（判据直接打这里，不构造网络）
 
     /// 「对不上任何预设」的显示态。宿主与客户端各有一份同名判定，这里只用来过滤。
     static let customValue = "custom"
+
+    /// 投影里的当前档：`{permissions: {currentValue: "…"}}`。
+    ///
+    /// 缺键、类型不对、空串一律 `nil` —— **缺席不是默认档**，界面显示 `--` 而不是猜一个。
+    static func currentValueOf(_ values: JSONValue) -> String? {
+        guard let value = values["permissions"]?["currentValue"]?.string, !value.isEmpty else { return nil }
+        return value
+    }
 
     /// 一个预设的显示标签。
     ///
@@ -194,7 +212,10 @@ final class PermissionState {
         value == "danger-full-access" || value == "auto"
     }
 
-    /// 这条事件说明「宿主那边的当前权限可能变了」。三类之外一律不重读：
+    /// 这条事件说明「宿主那边的目录或当前权限可能变了」。
+    ///
+    /// 当前档由投影推来（网关那边已把这三类事件列为投影重读的触发源），所以这里只用来
+    /// **重读目录**：目录随插件装卸变，而插件装卸不一定发投影。其余类型一律不动 ——
     /// 每一条消息都重读一次，等于把一次会话变成一串一元请求。
     static func affectsCurrent(_ eventType: String) -> Bool {
         affectingEventTypes.contains(eventType)
@@ -228,26 +249,22 @@ final class PermissionState {
     }
 }
 
-/// 拉一次权限视图。每次打开菜单与每次收到权限事件都拉：目录随插件装配变，
-/// 当前值随会话日志变，缓存成常量就会与 Web UI 分叉。
+/// 拉一次目录。每次打开菜单与每次目录变更事件都拉：目录随插件装配变。
 @MainActor
-func fetchPermission(_ client: RpcClient, sessionId: String) async throws -> PermissionView {
-    let response: PermissionCatalogResponse = try await client.perform(
-        PermissionCatalogRequest(sessionId: sessionId)
-    )
-    // 两格都缺席是合法的（没有权限服务）—— 所以这里不校验 `options` 必在。
-    return PermissionView(current: response.current, options: response.options)
+func fetchPermission(_ client: RpcClient) async throws -> PermissionCatalog {
+    let response: PermissionCatalogResponse = try await client.perform(PermissionCatalogRequest())
+    return PermissionCatalog(options: response.options,
+                             defaultOptions: response.defaultOptions,
+                             defaultPreset: response.defaultPreset)
 }
 
-/// 切一档。`ok` = **已受理**，落地证据是流里的 `permission/preset` 与两个 knob 事件；
-/// 回包里的 `current` 是宿主重读投影给的值。
+/// 切一档：发一行 `/permission <preset>`。
+///
+/// `ok` = **宿主的命令已受理**；落地证据是投影（`permissions.currentValue`），
+/// 这一发不返回「现在是什么」—— 回包里没有那一格，也就无从把发出去的那份当答案。
 @MainActor
-func selectPermission(_ client: RpcClient, sessionId: String, preset: String) async throws -> String? {
-    let response: PermissionSelectResponse = try await client.perform(
-        PermissionSelectRequest(sessionId: sessionId, preset: preset)
-    )
+func selectPermission(_ client: RpcClient, agentId: String, preset: String) async throws {
+    try await runCommand(client, agentId: agentId, line: "/permission \(preset)")
     // 与命令通道同一条理由：这是这一屏唯一能放开沙箱限制的动作，发给谁、发什么必须留痕。
-    Log.info(Log.Module.session, "permission-select",
-             ["session": sessionId, "preset": preset])
-    return response.current
+    Log.info(Log.Module.session, "permission-select", ["agent": agentId, "preset": preset])
 }

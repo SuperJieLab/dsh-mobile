@@ -171,11 +171,7 @@ extension QuestionAnswerRequest: AuditableRequest {
 }
 
 extension CommandExecuteRequest: AuditableRequest {
-    var auditTarget: String { sessionId }
-}
-
-extension PermissionSelectRequest: AuditableRequest {
-    var auditTarget: String { sessionId }
+    var auditTarget: String { agentId }
 }
 
 extension ModelSelectRequest: AuditableRequest {

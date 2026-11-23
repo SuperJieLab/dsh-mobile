@@ -63,7 +63,7 @@ final class SessionActions {
     /// 执行一整行命令；回包 ok = 已受理，结果从订阅流来。
     private func executeCommand(_ line: String) async -> Bool {
         do {
-            try await runCommand(client, sessionId: sessionId, line: line)
+            try await runCommand(client, agentId: sessionId, line: line)
             return true
         } catch {
             status.set(.failed(step: .executing, cause: .thrown(error)))

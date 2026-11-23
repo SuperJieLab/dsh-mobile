@@ -22,10 +22,17 @@ struct AppServices {
     /// 投影流的收端（`session/control`），与连接同寿。消费方：当前打开的那个会话的占用量。
     /// 与 `eventsStream` 分开是上游的形状决定的（两条独立端点），不是本地的拆分。
     let controlStream: ControlStream
+    /// 组流的收端（`workspace/follow`），与连接同寿。消费方：会话列表的分组。
+    /// 与列表应答分开：组是进程级的、自己会变，不该等一次列表重读。
+    let workspaceStream: WorkspaceStream
     /// 待答审批。不随任何一屏生死：停在会话列表时它照样在收。
     let approvals: ApprovalStore
     /// 待答提问 —— 与审批并列的 App 级表（流是 App 级的，表也得是）。
     let questions: QuestionStore
+    /// 「登录已失效」的标志。**App 级一份、两屏共用** —— 详情里点掉，列表那条也一起收。
+    let loginExpired: LoginExpiredFlag
+    /// 宿主通知的分派（账号失效与三条目录刷新）。与标志同寿，与流同源。
+    let hostNotifications: HostNotifications
     /// 端上遥测的订阅者。造好但不注册 —— 注册发生在 `start()` 里，与其余启动动作同处。
     let telemetry: MetricKitReporter
     /// 日志的落盘口。诊断包读它取「上一次跑的尾巴」。
@@ -64,8 +71,11 @@ struct AppServices {
         )
         let eventsStream = EventsStream()
         let controlStream = ControlStream()
+        let workspaceStream = WorkspaceStream()
         let approvals = ApprovalStore(answerer: GatewayApprovalAnswerer(client: client))
         let questions = QuestionStore(answerer: GatewayQuestionAnswerer(client: client))
+        let loginExpired = LoginExpiredFlag()
+        let hostNotifications = HostNotifications(loginExpired: loginExpired)
         let telemetryStore = TelemetryStore(directory: TelemetryStore.defaultDirectory())
         let telemetry = MetricKitReporter(store: telemetryStore)
 
@@ -75,8 +85,11 @@ struct AppServices {
         self.link = link
         self.eventsStream = eventsStream
         self.controlStream = controlStream
+        self.workspaceStream = workspaceStream
         self.approvals = approvals
         self.questions = questions
+        self.loginExpired = loginExpired
+        self.hostNotifications = hostNotifications
         self.telemetry = telemetry
         self.logFile = logFile
         self.telemetryStore = telemetryStore
@@ -115,6 +128,7 @@ struct AppServices {
         // 靠这一下重建 —— 而「回前台」正是它唯一会发生的时机。
         eventsStream.attach(to: link)
         controlStream.attach(to: link)
+        workspaceStream.attach(to: link)
     }
 
     /// 服务之间「A 好了 B 该动了」的两根线。只有这个类型同时认识 `store` 与 `link` ——
@@ -125,6 +139,7 @@ struct AppServices {
         let link = self.link
         let eventsStream = self.eventsStream
         let controlStream = self.controlStream
+        let workspaceStream = self.workspaceStream
         let credentials = self.credentials
 
         // 组网刚就绪 → 叫醒连接。那边不排定时器（等外部条件不该烧退避档位），只能靠这一声叫。
@@ -142,12 +157,13 @@ struct AppServices {
         // 已是 false，
         // 于是什么都不做 —— 连接层会把无票当终态自己收成 `.idle`。
         credentials.onIdentityChanged = {
-            [weak credentials, weak link, weak eventsStream, weak controlStream] in
+            [weak credentials, weak link, weak eventsStream, weak controlStream, weak workspaceStream] in
             guard let credentials, credentials.hasDeviceToken,
-                  let link, let eventsStream, let controlStream else { return }
+                  let link, let eventsStream, let controlStream, let workspaceStream else { return }
             link.activate()
             eventsStream.attach(to: link)
             controlStream.attach(to: link)
+            workspaceStream.attach(to: link)
         }
     }
 
@@ -161,11 +177,20 @@ struct AppServices {
                 let sink = EventsPendingSink(stream: eventsStream)
                 approvals.attach(sink: sink)
                 questions.attach(sink: sink)
+                // 宿主通知：一条 `emit` 进来，App 级分派。**与待答接线同批** —— 两者都
+                // 依赖同一条流，分开接会出现「审批能答、通知没人听」的半截状态。
+                //
+                // 经 `questions.watchNotifications` 而不是直接 `sink.onEmit`：那个口是
+                // 「持有 sink 的那一个代收一次」的既有约定（它还会在 sink 未挂时留痕）。
+                // 绕过它，那个口就没有消费者了 —— 而它正是「谁持有 sink」这件事的写法。
+                let host = hostNotifications
+                questions.watchNotifications { name, _ in host.receive(name) }
             case .activateLink:
                 link.activate()
             case .attachStreams:
                 eventsStream.attach(to: link)
                 controlStream.attach(to: link)
+                workspaceStream.attach(to: link)
             case .launchMesh(let config):
                 await store.start(config: config)
             case .reportDamaged:

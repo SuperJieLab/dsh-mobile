@@ -43,11 +43,11 @@ final class SlashTriggerTests: XCTestCase {
 
     // MARK: - O3 过滤
 
-    private func commands() -> [CommandInfo] {
+    private func commands() -> [CommandDescriptor] {
         [
-            CommandInfo(name: "compact", description: "Compact the conversation"),
-            CommandInfo(name: "permission", description: "Switch the permission preset", inputHint: "<preset>"),
-            CommandInfo(name: "export", description: "Export the session log"),
+            CommandDescriptor(name: "compact", description: "Compact the conversation"),
+            CommandDescriptor(name: "permission", description: "Switch the permission preset", input: CommandInput(hint: "<preset>")),
+            CommandDescriptor(name: "export", description: "Export the session log"),
         ]
     }
 
@@ -100,8 +100,10 @@ final class SlashTriggerTests: XCTestCase {
         let withoutHint = commands().first { $0.name == "compact" }
         XCTAssertEqual(withoutHint?.invocation, "/compact", "没有 hint：不凭空编一个参数")
 
-        XCTAssertEqual(CommandInfo(name: "x", description: "", inputHint: "").invocation, "/x",
-                       "空串的 hint 等同没有 —— 不要留一个悬空空格")
+        XCTAssertEqual(
+            CommandDescriptor(name: "x", description: "", input: CommandInput(hint: "")).invocation,
+            "/x",
+            "空串的 hint 等同没有 —— 不要留一个悬空空格")
     }
 
     /// 空查询返回全部（宿主给的顺序）；前缀匹配优先于包含匹配；大小写不敏感。
@@ -113,7 +115,7 @@ final class SlashTriggerTests: XCTestCase {
                        ["permission"], "大小写不敏感")
 
         // 构造一条「前缀命中优先于包含命中」的例子。
-        let ordered = [CommandInfo(name: "restore", description: ""), CommandInfo(name: "store", description: "")]
+        let ordered = [CommandDescriptor(name: "restore", description: ""), CommandDescriptor(name: "store", description: "")]
         XCTAssertEqual(CommandDirectory.match(ordered, query: "st").map(\.name),
                        ["store", "restore"], "前缀命中排在包含命中之前")
     }
@@ -121,7 +123,7 @@ final class SlashTriggerTests: XCTestCase {
     /// 过滤只看名字，不看说明 —— 说明是给人读的一句话，拿它参与匹配会让「敲了 per 却命中
     /// 一条名字完全无关的命令」变成常态。
     func testMatchIgnoresDescription() {
-        let withDescription = [CommandInfo(name: "compact", description: "permission related cleanup")]
+        let withDescription = [CommandDescriptor(name: "compact", description: "permission related cleanup")]
         XCTAssertEqual(CommandDirectory.match(withDescription, query: "per").map(\.name), [],
                        "说明里的词不该把命令捞出来")
     }

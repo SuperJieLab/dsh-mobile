@@ -63,9 +63,11 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(catalog?.groups?.first?.models.first?.reasoning?.defaultEffort == "high",
                       "D2b'' defaultEffort 落地")
         XCTAssertTrue(catalog?.failures?.first?.message == "no credentials", "D2c failures 失败隔离落地")
-        // 那条 JSON 里还带着上游私有的 `routableProviders`：上面五行全部成立即是「它被容忍」
-        // 的证据 —— 解码没炸、其余字段照常落地。不另写一条恒真的断言：`XCTAssertTrue(true)`
-        // 无论实现怎么改都绿，只会让人以为这里有判据。
+        // 上游的 `routableProviders` 在线上形状里了（网关不再裁）。客户端目前不消费它，
+        // 但回包必须声明出来 —— 否则「目录被裁过」这件事在两端都看不出来。
+        let response = try? decoder.decode(ModelCatalogResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response?.routableProviders, ["deepseek"],
+                       "D2d 回包声明了这一格：解码器读它，调用点用不用是另一件事")
 
         // 无部署默认：default 整个缺省（协议规定不送 null）。
         let bare = try? decoder.decode(
@@ -177,5 +179,22 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertTrue(selectBody.contains(#""sessionId":"s-1""#) && selectBody.contains(#""model":"v3.2""#),
                       "E1b 载荷带 sessionId 与选择")
         XCTAssertTrue(!selectBody.contains("reasoningEffort"), "E1c reasoningEffort 为 nil 时整个字段缺席（encodeIfPresent）")
+        // S3：宿主的形参是 `request`，线上照抄这一层。少一层是旧客户端的形状，网关会拒。
+        XCTAssertTrue(selectBody.hasPrefix(#"{"request":{"#),
+                      "E1d 字段在 `request` 容器里 —— 宿主的方法收一个对象")
+
+        // 另两条写 op 的容器：与 selectModel 同一个形状（容器 → 一层的字段）。
+        let create = (try? encoder.encode(SessionCreateRequest(workspaceId: "w-1")))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        XCTAssertEqual(create, #"{"request":{"workspaceId":"w-1"}}"#, "E2a session/create 也包一层 request")
+
+        let createBare = (try? encoder.encode(SessionCreateRequest()))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        XCTAssertEqual(createBare, #"{"request":{}}"#,
+                       "E2b 不带工作空间时容器仍在（空对象），不能整层缺席")
+
+        let delete = (try? encoder.encode(WorkspaceDeleteRequest(workspaceId: "w-1")))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        XCTAssertEqual(delete, #"{"request":{"workspaceId":"w-1"}}"#, "E2c workspace/delete 同形")
     }
 }

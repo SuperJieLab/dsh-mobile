@@ -25,8 +25,8 @@ struct FollowRequest: Encodable {
 
 /// 开流帧：`{type:"open", streamId, endpoint, payload:{args}}`。
 ///
-/// 端点名与上游逐字一致，且**与请求形状绑在一起**：`session/follow` 带会话名，另两条
-/// 没有入参（`args` 是空对象）。三个工厂而不是一个带参数的 —— 端点名与请求形状是同一件
+/// 端点名与上游逐字一致，且**与请求形状绑在一起**：`session/follow` 带会话名，另三条
+/// 没有入参（`args` 是空对象）。四个工厂而不是一个带参数的 —— 端点名与请求形状是同一件
 /// 事的两处写法，参数化之后它们会成为两个会漂的字符串，而漂了不会有编译错误。
 struct MuxOpenFrame: Encodable {
 
@@ -48,6 +48,11 @@ struct MuxOpenFrame: Encodable {
 
     static func control(streamId: StreamId) -> MuxOpenFrame {
         MuxOpenFrame(streamId: streamId, endpoint: "session/control", request: nil)
+    }
+
+    /// 组清单流：与 `control` 一样没有入参 —— 组是进程级的，不分会话。
+    static func workspace(streamId: StreamId) -> MuxOpenFrame {
+        MuxOpenFrame(streamId: streamId, endpoint: "workspace/follow", request: nil)
     }
 
     private enum CodingKeys: String, CodingKey { case type, streamId, endpoint, payload }
@@ -155,39 +160,46 @@ struct OpeningFrame {
     }
 }
 
-// MARK: - 入站帧：外壳与载荷一次解完
+// MARK: - 入站帧：外壳解一次，货物留原文
 
 /**
- 一条入站帧。外壳与载荷在**同一次**解码里成形。
+ 一条入站帧。**外壳在这里成形，货物只留原文。**
 
- 分派靠 key 存在性（`Container.contains(_:)`）—— 它不解值。为了判断「这是哪种形状」
- 先建一棵通用树，是同一份字节被解析两次的来源：那棵树在会话流上只被用来回答
- 「三个 key 在不在」，然后丢掉。
+ 为什么不再在这一层认货物：`item` 的 `value.type` 在两条流上可以是同一个名字而形状不同
+ （`baseline` 在 `session/control` 上是投影表、在 `workspace/follow` 上是组清单）。
+ 一张全局分派表只能容下其中一种，另一种会在解码层被当成坏帧丢掉 —— 收端连一行代码都
+ 跑不到。所以这里只回答「谁收这一帧」，是哪种货物由收端按自己那条流解（`FollowItem` /
+ `EventsItem` / `ControlValue.read`）。
 
- 认不出的载荷落到 `nil`，由判读层归成 `.ignored`；外壳坏（不是 JSON、缺 `streamId`）
- 才是整帧丢 —— 两者不是一件事。
+ 认不出的外壳（不是 JSON、缺 `streamId`）整帧丢；`item` 缺 `value` 则留给收端留痕 ——
+ 两者不是一件事：前者这条连接坏了，后者是「对端还在说旧协议」或「这一帧坏了」。
  */
 struct InboundFrame: Decodable {
 
     let type: String
     let streamId: StreamId
-    let payload: InboundPayload?
 
-    /// 载荷在、但解不出（与「本来就没有载荷」不是一回事）。判读层据此留痕：
-    /// 解不出打开帧的那一帧正是开流超时的第一现场，而 `.ignored` 不携带原因。
-    let payloadRejected: Bool
+    /// `item` 帧的货物原文（`value` 那一格，已解析成通用树，尚未择型）。
+    /// `nil` = 这一格不在（旧形状的 `payload` 就是这种）。
+    let value: JSONValue?
+
+    /// `error` 帧的失败。error 是外壳级的、与哪条流无关，所以在这一层解。
+    let failure: GatewayFailure?
 
     /// 线上字节数。只由 `decode(_:)` 补 —— `recordPerf` 用它，缺了会静默变 0。
     private(set) var byteCount: Int = 0
 
-    private enum CodingKeys: String, CodingKey { case type, streamId, value, error, payload }
+    private enum CodingKeys: String, CodingKey { case type, streamId, value, error }
 
     /// 给测试与本模块内构造用。线上帧一律走 `decode(_:)` —— 只有它带 `byteCount`。
-    init(type: String, streamId: StreamId, payload: InboundPayload? = nil) {
+    init(type: String,
+         streamId: StreamId,
+         value: JSONValue? = nil,
+         failure: GatewayFailure? = nil) {
         self.type = type
         self.streamId = streamId
-        self.payload = payload
-        self.payloadRejected = false
+        self.value = value
+        self.failure = failure
     }
 
     init(from decoder: Decoder) throws {
@@ -198,25 +210,21 @@ struct InboundFrame: Decodable {
 
         switch type {
         case "item":
-            do {
-                payload = .item(try container.decode(ItemPayload.self, forKey: .value))
-                payloadRejected = false
-            } catch {
-                // 走到这里只有两种可能：`value` 这一格不在（旧形状 `payload` 就是这种），
-                // 或者它在但解不出。**两种都要留痕** —— 前者是「对端还在说旧协议」，
-                // 后者是「这一帧坏了」，静默丢弃会让它们都变成「什么都没发生」。
-                // 与「不认识」的分界不在这里：不认识的 `type` 走 `.unknown`，不抛错。
-                payload = nil
-                payloadRejected = true
-            }
+            // 只解到通用树为止：哪种货物由收端定。`value` 缺席时留 `nil`，不在这里补默认值。
+            //
+            // 刻意不用 `decodeIfPresent`：它把 `null` 也折成 `nil`，于是「这一格不在」与
+            // 「它是 null」就分不开了 —— 前者是对端还在说旧协议（`payload`），后者是一次坏帧。
+            value = container.contains(.value)
+                ? (try? container.decode(JSONValue.self, forKey: .value))
+                : nil
+            failure = nil
         case "error":
+            value = nil
             let decoded = (try? container.decodeIfPresent(FailurePayload.self, forKey: .error)) ?? nil
-            payload = .refused(decoded?.failure
-                ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue, message: ""))
-            payloadRejected = false
+            failure = decoded?.failure ?? GatewayFailure(code: GatewayErrorCode.internalError.rawValue, message: "")
         default:
-            payload = nil
-            payloadRejected = false
+            value = nil
+            failure = nil
         }
     }
 
@@ -226,12 +234,6 @@ struct InboundFrame: Decodable {
         frame.byteCount = data.count
         return frame
     }
-}
-
-/// 外壳决定的载荷大类。
-enum InboundPayload {
-    case item(ItemPayload)
-    case refused(GatewayFailure)
 }
 
 /**
@@ -262,89 +264,55 @@ struct FailurePayload: Decodable {
     }
 }
 
+// MARK: - 按流解货物
 
 /**
- `item` 帧的四种载荷形状。
+ 一帧货物在**这条流**上的归属。三支而不是「解出来 / 解不出」，因为两件不同的事要分开：
 
- **分派顺序是契约**：同一帧同时满足两条判据时取靠前的那条。改顺序不会编译失败，
- 只会让某一类帧悄悄换支，所以有一条判据把它钉住。
+ - `.decoded`：是本流的货物且解得出；
+ - `.unparsable`：是本流的 `type`，但字段解不出 —— 这是协议漂移的第一现场，要留痕；
+ - `.foreign`：不是本流的货物（含没有 `type`）—— 串流或新版本，丢掉就好。
  */
-/// `item` 载荷解不出的两种原因 —— 与「不认识」分开：这两种要留痕，那一种静默丢弃。
-enum ItemPayloadError: Error {
-    /// 三个字段都在，但载荷解不成打开帧（类型不对）。
-    case openingShapeBroken
-    /// 载荷里没有 `type`，连是哪类货物都读不出。
-    case missingType
+enum CargoReading<Cargo> {
+    case decoded(Cargo)
+    case unparsable
+    case foreign(String?)
 }
 
-/// `item` 的货物 —— 按 `value.type` 分派，**只读这一格**。
-///
-/// 与旧实现的差别就是 S6 的全部：旧的四支靠「有没有 `seq`」「有没有 `kind`」去猜，
-/// 同一帧同时满足两条判据时取靠前的，改顺序不编译失败、只会让某类帧悄悄换支。
-/// 现在判别字段由网关写在货物上，客户端只查表。
-///
-/// 不认识的 `type` 落进 `unknown` 而不是抛错：那是新版本的货物，旧客户端该忽略它、
-/// 但不该把整条流判成坏的（S6 的「可见」—— 带原样载荷，留痕时能看出是哪一格）。
-enum ItemPayload: Decodable {
+/**
+ `session/follow` 的三种货物 —— **只有这条流认这三样**。
 
-    case follow(FollowValue)
-    case events(EventsValue)
-    case control(ControlValue)
-    case unknown(JSONValue)
+ 判别只看 `value.type` 一格（与从前同一条纪律）；不认得的落 `.foreign`，不猜。
+ */
+enum FollowItem {
 
-    private enum CodingKeys: String, CodingKey {
-        case type, event, frame, clientId, args
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard let type = try container.decodeIfPresent(String.self, forKey: .type) else {
-            throw ItemPayloadError.missingType
-        }
-        switch type {
-        case "snapshot":
-            // 解不出要换成 `ItemPayloadError`：`InboundFrame` 用「是不是这个类型的错」区分
-            // 「解不出」（留痕）与「不认识」（静默丢弃），`DecodingError` 会被当成后者。
-            do {
-                self = .follow(.opening(try OpeningFrame.Payload(from: decoder)))
-            } catch {
-                throw ItemPayloadError.openingShapeBroken
-            }
-        case "event":
-            self = .follow(.sessionEvent(try container.decode(SessionEvent.self, forKey: .event)))
-        case "assistant-stream":
-            self = .follow(.transient(try container.decodeIfPresent(JSONValue.self, forKey: .frame) ?? .null))
-        case "ready":
-            self = .events(.ready(clientId: try container.decode(String.self, forKey: .clientId)))
-        case "emit":
-            self = .events(.emit(
-                event: try container.decode(String.self, forKey: .event),
-                args: try container.decodeIfPresent(JSONValue.self, forKey: .args) ?? .null
-            ))
-        case "waterfall":
-            self = .events(.waterfall(try JSONValue(from: decoder)))
-        case "cancel":
-            self = .events(.cancel(try JSONValue(from: decoder)))
-        case "baseline", "projection":
-            self = .control(try ControlValue(from: decoder))
-        default:
-            self = .unknown(try JSONValue(from: decoder))
-        }
-    }
-}
-
-/// `session/follow` 的三种货物。
-enum FollowValue {
     /// 打开窗口（含投影基线）。
     case opening(OpeningFrame.Payload)
     /// 一条已落地的事件。
     case sessionEvent(SessionEvent)
     /// 未定稿帧 —— 一个进行中的 assistant 尝试的增量。
     case transient(JSONValue)
+
+    static func read(_ value: JSONValue) -> CargoReading<FollowItem> {
+        switch value["type"]?.string {
+        case "snapshot":
+            let payload = try? OpeningFrame.Payload(from: JSONValueDecoder(value))
+            return payload.map { .decoded(.opening($0)) } ?? .unparsable
+        case "event":
+            let event = try? SessionEvent(from: JSONValueDecoder(value["event"] ?? .null))
+            return event.map { .decoded(.sessionEvent($0)) } ?? .unparsable
+        case "assistant-stream":
+            // 缺内层 `frame` 是常态（上游没带未定稿内容）：`.null`，不是坏帧。
+            return .decoded(.transient(value["frame"] ?? .null))
+        default:
+            return .foreign(value["type"]?.string)
+        }
+    }
 }
 
-/// `$events` 的四种货物。
-enum EventsValue {
+/// `$events` 的四种货物 —— **只有这条流认这四样**。
+enum EventsItem {
+
     /// 连接级事件源就绪。`clientId` 是这条流在源那里的登记键。
     case ready(clientId: String)
     /// 上游事件，名字与参数原样 —— 这一层不解释它。
@@ -353,8 +321,24 @@ enum EventsValue {
     case waterfall(JSONValue)
     /// 撤回一条待答调用。
     case cancel(JSONValue)
-}
 
+    static func read(_ value: JSONValue) -> CargoReading<EventsItem> {
+        switch value["type"]?.string {
+        case "ready":
+            guard let clientId = value["clientId"]?.string else { return .unparsable }
+            return .decoded(.ready(clientId: clientId))
+        case "emit":
+            guard let event = value["event"]?.string else { return .unparsable }
+            return .decoded(.emit(event: event, args: value["args"] ?? .null))
+        case "waterfall":
+            return .decoded(.waterfall(value))
+        case "cancel":
+            return .decoded(.cancel(value))
+        default:
+            return .foreign(value["type"]?.string)
+        }
+    }
+}
 
 /// 一个会话的投影切取：`{asOfSeq, values}`。
 ///
@@ -369,6 +353,9 @@ struct ProjectionBlock: Decodable {
 ///
 /// **一条流装全部会话的投影**：`baseline` 给出每个会话的一次切取，之后的 `projection`
 /// 用 `sessionId` 指明是谁变了，`seq` 是引发变化的那个事件。
+///
+/// **只有这条流认 `baseline` 的这一种形状**：`workspace/follow` 也叫 `baseline`，但它是
+/// 组清单（另一片里由 `WorkspaceItem` 解）。按流解码的起因就是这一格。
 enum ControlValue: Decodable {
 
     /// 打开时的一次全量：`{[sessionId]: ProjectionBlock}`。
@@ -406,6 +393,19 @@ enum ControlValue: Decodable {
                 codingPath: container.codingPath,
                 debugDescription: "control 货物只有 baseline 与 projection 两种"
             ))
+        }
+    }
+}
+
+extension ControlValue {
+
+    static func read(_ value: JSONValue) -> CargoReading<ControlValue> {
+        switch value["type"]?.string {
+        case "baseline", "projection":
+            let decoded = try? ControlValue(from: JSONValueDecoder(value))
+            return decoded.map { .decoded($0) } ?? .unparsable
+        default:
+            return .foreign(value["type"]?.string)
         }
     }
 }

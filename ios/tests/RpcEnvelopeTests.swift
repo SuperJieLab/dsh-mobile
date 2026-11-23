@@ -47,32 +47,37 @@ final class RpcEnvelopeTests: XCTestCase {
     /// 判据 6：路径与 `method` 同值，体里只有信封的四格加 `payload.args`。
     func testTheRequestCarriesTheEndpointInPathAndEnvelope() async throws {
         ScriptedURLProtocol.reset(replies: [
-            "mobile/listSessions": .init(
+            "session/list": .init(
                 status: 200,
-                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"sessions":[],"serverTime":0}}}"#
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"items":[]}}}"#
             ),
         ])
 
         let _: ListSessionsResponse = try await client().perform(ListSessionsRequest(), authenticated: false)
 
-        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["mobile/listSessions"],
-                                 "这一发没到达 mobile/listSessions —— 先看路径")
+        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["session/list"],
+                                 "这一发没到达 session/list —— 先看路径")
         let body = try XCTUnwrap(sent.first, "没有收到请求体")
 
         XCTAssertEqual(Set(body.keys), ["type", "rpcId", "method", "payload"],
                        "体顶层恰好四格 —— 多一格（比如残留的 v）说明只改了一半")
         XCTAssertEqual(body["type"] as? String, "client-request")
-        XCTAssertEqual(body["method"] as? String, "mobile/listSessions",
+        XCTAssertEqual(body["method"] as? String, "session/list",
                        "信封里的 method 必须与路径末两段相同")
 
         let payload = try XCTUnwrap(body["payload"] as? [String: Any])
         XCTAssertEqual(Set(payload.keys), ["args"], "payload 只许一格 args")
+
+        // S2：args 的键是**宿主的参数名**，不是我们起的容器名。
+        let args = try XCTUnwrap(payload["args"] as? [String: Any])
+        XCTAssertEqual(Set(args.keys), ["_request"], "session/list 的参数在 `_request` 里，照抄宿主的参数名")
+        XCTAssertEqual((args["_request"] as? [String: Any])?.isEmpty, true, "本客户端做全量读，不带 cursor")
     }
 
     /// 判据 7 的前半：`details` 要原样解出来。
     func testRefusalCarriesDetails() async throws {
         ScriptedURLProtocol.reset(replies: [
-            "mobile/listSessions": .init(
+            "session/list": .init(
                 status: 200,
                 body: #"{"type":"server-response","rpcId":"r","result":{"ok":false,"error":{"code":"invalid-request","message":"bad","details":{"field":"workspaceId"}}}}"#
             ),
@@ -91,7 +96,7 @@ final class RpcEnvelopeTests: XCTestCase {
     /// 判据 7 的后半：缺 `details` 时补空字典，而不是把整条拒绝变成「报文畸形」。
     func testRefusalWithoutDetailsStillReads() async throws {
         ScriptedURLProtocol.reset(replies: [
-            "mobile/listSessions": .init(
+            "session/list": .init(
                 status: 200,
                 body: #"{"type":"server-response","rpcId":"r","result":{"ok":false,"error":{"code":"unknown-session","message":"gone"}}}"#
             ),

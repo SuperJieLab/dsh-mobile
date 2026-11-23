@@ -5,41 +5,56 @@
  */
 import Foundation
 
-/// 列表里的一行（协议 v2）。字段全来自会话 header 或 host 已维护的投影，没有一个读日志算出来
-/// —— 列表因而零 I/O。
-struct SessionSummary: Decodable, Identifiable, Hashable {
-    let id: String
-    /// **可选**：该会话没有标题、或那一行没有投影可用时，字段**整个缺失** ——
-    /// 既不是 `null` 也不是空串。这是契约的一部分，不是故障。
-    let title: String?
-    /// 会话创建时间。客户端不显示它，但**合并时要保留**（事件推来的行没有这一格）。
-    ///
-    /// **可选**：列表拉取给出的行都带它，而事件推来的行不带（上游 `api-session/added`
-    /// 的 summary 里没有这一格）。合并时事件不得抹掉已知行的那一格。
-    let createdAt: Double?
-    /// **最后一次用户发言的时间**，没有则等于 `createdAt`。
+/// 列表里的一行 —— 与上游 `SessionSummary` **同名字段、同形状**。
+///
+/// 网关不再自己拼这一行（它转发宿主的 `session/list`），所以这里的字段就是上游的字段：
+/// 少一格、改一个名，手机端的行就会与 Web UI 的行长得不一样。
+///
+/// **没有 `title` / `createdAt` / `workspaceId`**：
+/// - 标题在 `projections.values.title`（见 {@link title}）；
+/// - 归属在组流（`workspace/follow` 的 `sessionIds`）；
+/// - 上游的摘要本来就不带创建时间。
+struct SessionSummary: Decodable, Identifiable, Equatable {
+    let sessionId: String
+    /// **最后一次用户发言的时间**，没有则等于创建时间。
     /// ⚠️ 不是「最后一次事件的时间」—— 助手输出与工具调用不推进它。
     let updatedAt: Double
     /// 这个会话当前有 agent 在跑吗。
     let running: Bool
     /// 还没有任何 turn 的会话 —— 工作区里那行候补的「新会话」。
     let blank: Bool
+    /// 这个会话当前是否持有活着的 agent。
+    let agentAvailable: Bool
+    /// 只在**非** `current` 时出现（`migration-required`）。
+    let formatStatus: String?
+    /// 子会话的父会话；普通会话没有这一格。
+    let parentSessionId: String?
     /// `"subagent"` 表示它是另一个会话的子会话；普通会话没有这个字段。
     let origin: String?
-    /// 所属工作空间；不属于任何工作空间时这个字段**整个缺席**（不是 null，也不是空串）——
-    /// 与 `title` 同一手法。读成「没有归属」而不是「还不知道」：服务端查不到归属时
-    /// 已经有确定答案了。
-    let workspaceId: String?
+    /// 会话目录。上游用「有没有 `cwd`」判可见性，所以它随行一起给。
+    let cwd: String?
+    /// 投影块：`{kind, asOfSeq, values}`。**只有标题这一格被读**，其余原样收下不用。
+    let projections: SessionProjections?
+
+    /// `Identifiable` 要的那一格。线上叫 `sessionId`，这里不另起名字。
+    var id: String { sessionId }
+
+    /// 标题：投影里的那一格。缺席 = 没有标题（不是故障）。
+    var title: String? { projections?.title }
 }
 
-/// 工作空间清单的一行 —— 列表应答里随行的第二样东西。
+/// 一行的投影块 —— 与上游 `SessionProjectionHints` 同形。
 ///
-/// 只有两格：客户端要做的是分组，它需要标题与身份。路径、成员表、时间戳都不上线，
-/// 少发一格就少一处「两端对同一个字段有不同理解」的机会。
-struct WorkspaceSummary: Decodable, Identifiable, Hashable {
-    let id: String
-    /// 组标题。服务端保证非空（由目录名派生）。
-    let title: String
+/// `kind` 是水位所属的序列（`cached` 是持久缓存的切点，`sequenced` 是活会话的事件序列），
+/// 两者**不可比**。客户端目前不比较它，只读 `values.title`；留着是因为删掉它会让
+/// 「投影有没有到」这件事失去唯一的证据。
+struct SessionProjections: Decodable, Equatable {
+    let kind: String?
+    let asOfSeq: Int?
+    let values: JSONValue?
+
+    /// 标题。不是字符串（包括 `null`）一律视为「没有标题」。
+    var title: String? { values?["title"]?.string }
 }
 
 /// 一条会话事件。协议承诺**事件体原样透传**（不裁剪、不翻译、不改名，且日后会带我们不认识的

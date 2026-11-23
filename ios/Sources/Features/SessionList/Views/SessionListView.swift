@@ -7,6 +7,8 @@ struct SessionListView: View {
     let list: SessionListState
     /// `phase` 驱动「就绪即首载」，`meshPath` 给底部那条状态带。
     let store: MeshStore
+    /// App 级的失效标志：与详情读的是同一个，两屏一起收。
+    let loginExpired: LoginExpiredFlag
 
     /// 回前台立即刷新：App 生命周期与列表域的连接点。
     @Environment(\.scenePhase) private var scenePhase
@@ -116,7 +118,7 @@ struct SessionListView: View {
     /// 这一屏的分组。每次渲染现算：行与组清单是两份事实，缓存分组会多出两份真相
     /// （行变了要重算、清单变了要重算，漏一处的症状是某个会话停在旧组里）。
     private var groups: [SessionGroup] {
-        SessionGrouping.groups(sessions: list.sessions, workspaces: list.workspaces)
+        SessionGrouping.groups(rows: list.rows, workspaces: list.workspaces, owners: list.owners)
     }
 
     /// 组标题。未分组的组由界面给文案（判定层不放用户可见的中文）。
@@ -162,6 +164,19 @@ struct SessionListView: View {
                 }
             }
 
+            // 账号过期：**停在列表时也要说**。从前这条只在详情页里画，用户在列表上
+            // 什么都看不到，要等到点进某个会话才知道 —— 而那时每一次请求都已经被拒了。
+            if loginExpired.isShowing {
+                Section {
+                    HStack(alignment: .top, spacing: 8) {
+                        FailureBanner(text: HostText.loginExpired)
+                        Button("知道了") { loginExpired.dismiss() }
+                            .font(.footnote)
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
+
             ForEach(groups) { group in
                 let expanded = list.isExpanded(group.id)
                 // 组的标题是**卡片里的第一行**，不是 Section 的 header。
@@ -172,7 +187,7 @@ struct SessionListView: View {
                 // 在最少的形态下也成立：折叠的组就是一张只有标题行的卡。
                 Section {
                     GroupHeaderRow(title: title(of: group),
-                                   count: group.sessions.count,
+                                   count: group.rows.count,
                                    isExpanded: expanded,
                                    isRunning: group.hasRunning,
                                    isUngrouped: group.isUngrouped,
@@ -187,17 +202,17 @@ struct SessionListView: View {
                                        pendingDeletion = PendingDeletion(
                                            id: group.id,
                                            title: title(of: group),
-                                           sessionCount: group.sessions.count)
+                                           sessionCount: group.rows.count)
                                    })
                         .listRowInsets(EdgeInsets(top: 11, leading: 14, bottom: 11, trailing: 8))
 
-                    // 折叠只是不画：`list.sessions` 里那些行一个都没少，事件照常落进去。
+                    // 折叠只是不画：`list.rows` 里那些行一个都没少，事件照常落进去。
                     // 展开时看到的是最新的一份，不需要再读一次列表。
                     if expanded {
-                        ForEach(group.sessions) { session in
-                            NavigationLink(value: Destination.session(sessionId: session.id,
-                                                                      title: session.title)) {
-                                SessionRow(session: session)
+                        ForEach(group.rows) { row in
+                            NavigationLink(value: Destination.session(sessionId: row.id,
+                                                                      title: row.title)) {
+                                SessionListRow(row: row)
                             }
                         }
                     }
@@ -387,26 +402,26 @@ private struct GroupHeaderRow: View {
 ///
 /// 时间是「你上次发言」而不是「它上次动过」（协议 v2 起如此）。那三个字从视觉上去掉了 ——
 /// 每行都写一遍是纯噪声 —— 但留在 `accessibilityLabel` 里：对扫视的人多余，对读屏的人是信息。
-private struct SessionRow: View {
-    let session: SessionSummary
+private struct SessionListRow: View {
+    let row: SessionRow
 
     var body: some View {
         HStack(spacing: 8) {
             // 进行中用一个圆点，不用文字标签：标签会与长标题抢宽度，也会多出一个色块。
-            if session.running {
+            if row.running {
                 Circle()
                     .fill(Color.accentColor)
                     .frame(width: 6, height: 6)
             }
 
-            Text(session.title ?? "（无标题）")
+            Text(row.title ?? "（无标题）")
                 .font(.callout)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
 
             Spacer(minLength: 8)
 
-            Text(relativeTime(session.updatedAt))
+            Text(relativeTime(row.updatedAt))
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
         }
@@ -416,8 +431,8 @@ private struct SessionRow: View {
     }
 
     private var spokenText: String {
-        let title = session.title ?? "无标题会话"
-        let when = "最后发言于\(relativeTime(session.updatedAt))"
-        return session.running ? "\(title)，进行中，\(when)" : "\(title)，\(when)"
+        let title = row.title ?? "无标题会话"
+        let when = "最后发言于\(relativeTime(row.updatedAt))"
+        return row.running ? "\(title)，进行中，\(when)" : "\(title)，\(when)"
     }
 }
