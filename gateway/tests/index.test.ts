@@ -12,8 +12,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { connect as netConnect } from 'node:net'
 import { apply, inject } from '../src/index.ts'
@@ -553,52 +553,51 @@ test('command ops are refused as an envelope when the command service is absent'
   }
 })
 
-test('the directory browser picks up a service it never injected, and reaches it over real HTTP', async () => {
-  // 与命令通道同一个坑：`directoryPickerController` 不进 `inject`，所以只能经
-  // `ctx.reflect.get` 取。写成 `ctx.directoryPickerController` 时，启动不报错、CI 也不红 ——
-  // 这一行只在**请求到来时**跑，于是它在真机上表现成「目录读不了」，而日志里那句与
-  // 「宿主没有目录选择器」一模一样（2026-11-23 真机首用就是这么撞上的）。
-  //
-  // `install` 用的是会像真上下文那样拒读的代理：这条判据因此同时钉住「取数走的是
-  // reflect 那条路」，而不只是「转发出去了」。
+test('the directory browser lists the host file system over real HTTP', async () => {
+  // 宿主的 `directoryPickerController` 在 macOS 上只组 `native`（弹系统选择框，只有 `pick`），
+  // `list` 根本不存在 —— 所以这一条由网关自己读文件系统。判据因此打的是**真实的一层目录**：
+  // 只出子目录、点开头的标 `hidden`、`path` 是绝对路径、面包屑到这一层为止。
   const port = freshPort(46_900)
   const credentialsPath = tempCredentialsPath()
-  const asked: (string | undefined)[] = []
-  const listing = {
-    path: '/Users/x',
-    home: '/Users/x',
-    crumbs: [{ name: '/', path: '/', hidden: false }],
-    entries: [{ name: 'proj', path: '/Users/x/proj', hidden: false }],
-    truncated: false,
-  }
-  const { teardown } = install('127.0.0.1', port, credentialsPath, {
-    directoryPickerController: {
-      list: async (path: string | undefined) => {
-        asked.push(path)
-        return listing
-      },
-    },
-  })
+  const root = mkdtempSync(join(tmpdir(), 'dsh-listing-'))
+  mkdirSync(join(root, 'beta'))
+  mkdirSync(join(root, 'alpha'))
+  mkdirSync(join(root, '.hidden'))
+  writeFileSync(join(root, 'note.txt'), 'not a directory')
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    // 用 `callRaw`：这一格的值是**整个对象**，铺平之后 `crumbs` 之类会串到顶层。
-    const withPath = await callRaw(port, 'directoryPicker/list', { path: '/Users/x/proj' }, access)
-    assert.equal(withPath.ok, true, `目录读面必须取得到，实际：${JSON.stringify(withPath.error)}`)
-    assert.deepEqual(withPath.value, listing, '五格原样转发 —— 网关不裁行')
+    const listed = await callRaw(port, 'directoryPicker/list', { path: root }, access)
+    assert.equal(listed.ok, true, `列目录必须通，实际：${JSON.stringify(listed.error)}`)
+    const value = listed.value as {
+      path: string; home: string; entries: { name: string; path: string; hidden: boolean }[]
+      crumbs: { name: string; path: string }[]; truncated: boolean
+    }
+    assert.equal(value.path, root, '归一化之后就是请求的那一层')
+    assert.equal(value.home, homedir())
+    // 文件不在列表里；点开头的在，但标成 hidden；顺序按名字。
+    assert.deepEqual(value.entries.map(entry => entry.name), ['.hidden', 'alpha', 'beta'])
+    assert.deepEqual(value.entries.map(entry => entry.hidden), [true, false, false])
+    assert.deepEqual(value.entries.map(entry => entry.path),
+      [join(root, '.hidden'), join(root, 'alpha'), join(root, 'beta')],
+      '每一格都是绝对路径 —— 客户端只回声、不拼段')
+    assert.equal(value.crumbs.at(-1)?.path, root, '面包屑最后一格就是这一层')
+    assert.equal(value.truncated, false)
 
-    const home = await call(port, 'directoryPicker/list', {}, access) as UnaryAnswer & { ok: boolean }
-    assert.equal(home.ok, true, '不带 path 也是合法的一次调用（宿主据此列 home）')
-    // 缺省必须是 `undefined`，不是空串：空串会被宿主读成一个相对路径。
-    assert.deepEqual(asked, ['/Users/x/proj', undefined])
+    // 缺省 = home：不给 path 是合法的一次调用，不是畸形。
+    const atHome = await callRaw(port, 'directoryPicker/list', {}, access)
+    assert.equal(atHome.ok, true)
+    assert.equal((atHome.value as { path: string }).path, homedir())
   } finally {
     teardown()
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
-test('directoryPicker/list is refused as an envelope when the host has no picker service', async () => {
+test('directoryPicker/list is refused as an envelope when the directory cannot be read', async () => {
   const port = freshPort(47_100)
   const credentialsPath = tempCredentialsPath()
   const { teardown } = install('127.0.0.1', port, credentialsPath)
@@ -607,16 +606,15 @@ test('directoryPicker/list is refused as an envelope when the host has no picker
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const body = await call(port, 'directoryPicker/list', { path: '/Users/x' }, access) as UnaryAnswer & {
+    const body = await call(port, 'directoryPicker/list', { path: '/no-such-directory-here' }, access) as UnaryAnswer & {
       ok: boolean
       error?: { code: string; message?: string }
     }
     assert.equal(body.status, 200)
-    // 缺席发生在调用时，兑现成同一枚拒绝码 —— 手机看到的是拒答，不是死连接。
+    // 读不到折成同一枚拒绝码 —— 手机看到的是拒答，不是死连接。
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'internal-error')
-    assert.match(body.error?.message ?? '', /directoryPickerController/,
-      '说法要指到缺的是哪个服务，否则与「宿主拒绝读这个目录」分不开')
+    assert.match(body.error?.message ?? '', /ENOENT/, '说法要指到读不到，而不是一句空话')
   } finally {
     teardown()
   }
