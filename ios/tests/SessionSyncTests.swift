@@ -44,6 +44,43 @@ final class SessionSyncTests: XCTestCase {
                        "顺手钉住换算：148807 / 1000000 四舍五入是 15%")
     }
 
+    /// 判据 10：当前模型由 `modelSelection` **投影**驱动 —— 切了模型它跟着变，
+    /// 而打开帧那一份永远停在打开那一刻（第 2 期起那一份已经没有了）。
+    ///
+    /// 走的是真解码：控制帧的文本进 `ControlStream.handle`，与生产同一条路。
+    func testTheModelSelectionProjectionDrivesTheDisplayedModel() throws {
+        let control = ControlStream()
+        let sync = makeSync(control: control)
+
+        func controlItem(_ value: String) throws -> InboundFrame {
+            try XCTUnwrap(InboundFrame.decode(Data(#"{"type":"item","streamId":"c-1","value":\#(value)}"#.utf8)))
+        }
+
+        // 基线：control 打开时给整份投影表。
+        _ = control.handle(try controlItem(#"""
+        {"type":"baseline","value":{"projections":{"session-1":{"asOfSeq":7,"values":{
+          "modelSelection":{"lastUsed":{"provider":"deepseek","model":"chat"},
+                            "next":{"provider":"deepseek","model":"reasoner","reasoningEffort":"high"}}}}}}}
+        """#))
+        XCTAssertEqual(sync.displayedModel?.model, "reasoner",
+                       "投影里的 next 就是功能条上那个模型（下一轮将用的那个）")
+
+        // 增量：用户切回上一轮那个（`next` 为 null）—— 投影变了，显示跟着变。
+        _ = control.handle(try controlItem(#"""
+        {"type":"projection","sessionId":"session-1","seq":9,"changes":[
+          {"key":"modelSelection","val":{"lastUsed":{"provider":"deepseek","model":"chat"},"next":null}}]}
+        """#))
+        XCTAssertEqual(sync.displayedModel?.model, "chat",
+                       "投影一变显示就变 —— 打开帧那一份做不到这件事，所以它不能再有")
+
+        // 别的会话的投影不该动这一屏。
+        _ = control.handle(try controlItem(#"""
+        {"type":"projection","sessionId":"session-2","seq":10,"changes":[
+          {"key":"modelSelection","val":{"lastUsed":{"provider":"p","model":"other"},"next":null}}]}
+        """#))
+        XCTAssertEqual(sync.displayedModel?.model, "chat", "串会话的投影被丢掉")
+    }
+
     /// 之后的 `usage` 帧照旧生效，且水位更旧的被拒 —— 打开帧这条新接线不许破坏原有的判定。
     ///
     /// 两个方向都要：只测「新的能进」时，把水位判据整个删掉也是绿的。
@@ -89,7 +126,7 @@ final class SessionSyncTests: XCTestCase {
 
     /// 会话同步要两个真实依赖：连接（只用来取阶段）与一元客户端。
     /// 端点指向连不上的 `127.0.0.1:1`：这一组不发起请求，只喂帧。
-    private func makeSync() -> SessionSync {
+    private func makeSync(control: ControlStream? = nil) -> SessionSync {
         let link = LongConnection(
             authorization: { "ticket" },
             renewTicket: { .unavailable },
@@ -102,6 +139,6 @@ final class SessionSyncTests: XCTestCase {
         let client = RpcClient(session: { .shared },
                                baseURL: { URL(string: "http://127.0.0.1:1")! },
                                credentials: credentials)
-        return SessionSync(client: client, sessionId: "session-1", link: link)
+        return SessionSync(client: client, sessionId: "session-1", link: link, control: control)
     }
 }

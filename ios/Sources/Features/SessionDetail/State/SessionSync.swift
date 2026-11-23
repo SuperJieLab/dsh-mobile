@@ -188,6 +188,9 @@ final class SessionSync {
             // control 是权威：水位（事件 seq）在 `ControlStream` 里已经用来挡过重放，
             // 这里不再和快照的 `asOfSeq` 比 —— 两者不是同一条轴。
             self.applyControl(UsageView.payloadOf(values))
+            // 当前模型读**投影**（唯二的一格在同一个回调里顺手取走）：打开帧不再带它，
+            // 切模型走 `session/selectModel`，随后变的正是这一格。
+            self.models.absorb(projection: values["modelSelection"])
             self.onProjectionValues?(values)
         }
     }
@@ -632,8 +635,6 @@ final class SessionSync {
     private func fetchSnapshot() async -> Outcome {
         do {
             let snapshot = try await readSnapshot(client, sessionId: sessionId, since: mirror.frontier)
-            // snapshot 回应带着「下一轮用什么」，只有这一路能补上。
-            models.absorb(baseline: snapshot.model)
             // 协议回应就是状态机的输入形状 —— 同形的东西只有一份，不在此逐字段搬。
             return .received(snapshot)
         } catch let error as RpcClientError {

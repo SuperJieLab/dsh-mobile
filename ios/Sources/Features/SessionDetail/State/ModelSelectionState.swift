@@ -16,10 +16,19 @@ struct ModelSelectionState: Equatable {
     /// 本机发起过的最新选择代号。
     private var generation = 0
 
-    /// 吸收 opening 基线：服务端从**全会话**投影算出的「下一轮用什么」，
-    /// 比窗口内的推断更权威 —— 无条件落地。`nil` = 服务端不知道，不清旧值、不猜默认。
-    mutating func absorb(baseline: ModelSelection?) {
-        if let baseline { displayed = baseline }
+    /// 吸收 `modelSelection` **投影**的视图（`{lastUsed, next}`）。
+    ///
+    /// 投影是这一格的唯一权威来源：切模型走 `session/selectModel`，投影随后变 ——
+    /// 而打开帧不会（那一份是打开那一刻的旧值，第 2 期起已经没有了）。
+    ///
+    /// 取 `next ?? lastUsed`：宿主已把 `next` 算成「用户还没用掉的选择，否则上一轮用过的
+    /// 那个」（`pending ?? lastUsed`），所以这里**不再自己挑字段**。两格都空 = 不知道 ——
+    /// 不清旧值、不猜默认（界面退到目录默认）。
+    @discardableResult
+    mutating func absorb(projection: JSONValue?) -> Bool {
+        guard let selection = Self.selection(inProjection: projection) else { return false }
+        displayed = selection
+        return true
     }
 
     /// 吸收一条流事件；返回是否推进了显示。不认识的类型静默忽略 ——
@@ -47,6 +56,23 @@ struct ModelSelectionState: Equatable {
         guard generation == self.generation else { return false }
         displayed = selected
         return true
+    }
+
+    /// 投影视图里那一个选择：`next` 优先，缺席或为 `null` 时退到 `lastUsed`。
+    ///
+    /// 两格都可能给 `null`（上游 `view` 里是 `next: pending ?? lastUsed`，而两者都可能是
+    /// `null`）。形状不对的那一格跳过、看下一格 —— 猜一个空 provider 会在功能条上画出一行
+    /// 点不动的名字。
+    private static func selection(inProjection value: JSONValue?) -> ModelSelection? {
+        for key in ["next", "lastUsed"] {
+            guard let block = value?[key], block != .null,
+                  let provider = block["provider"]?.string,
+                  let model = block["model"]?.string
+            else { continue }
+            return ModelSelection(provider: provider, model: model,
+                                  reasoningEffort: block["reasoningEffort"]?.string)
+        }
+        return nil
     }
 
     // MARK: - 事件形状（照上游投影的形状逐字核实过）

@@ -104,11 +104,58 @@ final class ModelProtocolTests: XCTestCase {
         )
     }
 
-    private func followUpdates() {
-        // V1：opening 基线 A → selection B → header C，显示序列 A → B → C。
+    /// `modelSelection` 投影视图的一个样本：`{lastUsed, next}`，两格都能是 `null`。
+    private static func projection(next: (provider: String, model: String, effort: String?)? = nil,
+                                   lastUsed: (provider: String, model: String, effort: String?)? = nil) -> JSONValue {
+        func block(_ triple: (provider: String, model: String, effort: String?)?) -> JSONValue {
+            guard let triple else { return .null }
+            var fields: [String: JSONValue] = [
+                "provider": .string(triple.provider),
+                "model": .string(triple.model),
+            ]
+            if let effort = triple.effort { fields["reasoningEffort"] = .string(effort) }
+            return .object(fields)
+        }
+        return .object(["lastUsed": block(lastUsed), "next": block(next)])
+    }
+
+    /// 判据 10：投影的两格各自落地 —— `next` 优先，缺席时退到 `lastUsed`，两格都空 = 不知道。
+    private func projectionSource() {
+        // `next` 在：它才是「下一轮将用什么」。
         var state = ModelSelectionState()
-        state.absorb(baseline: ModelSelection(provider: "p", model: "A"))
-        XCTAssertTrue(state.displayed?.model == "A", "V1a opening 基线直接落地")
+        state.absorb(projection: Self.projection(next: ("p", "reasoner", "high"), lastUsed: ("p", "chat", nil)))
+        XCTAssertTrue(state.displayed?.model == "reasoner" && state.displayed?.reasoningEffort == "high",
+                      "`next` 优先 —— 那是下一轮将用的那个")
+
+        // `next` 为 null：退到上一轮用过的。
+        state = ModelSelectionState()
+        state.absorb(projection: Self.projection(next: nil, lastUsed: ("p", "chat", nil)))
+        XCTAssertTrue(state.displayed?.model == "chat", "`next` 为空时退到 `lastUsed`")
+
+        // 两格都空 / 整格不在：不知道，且**不清**已知值（界面的回退靠 `displayed == nil`）。
+        state = ModelSelectionState()
+        state.absorb(projection: Self.projection(next: ("p", "A", nil)))
+        state.absorb(projection: Self.projection(next: nil, lastUsed: nil))
+        XCTAssertTrue(state.displayed?.model == "A", "投影说不出话时不清旧值")
+        state = ModelSelectionState()
+        state.absorb(projection: nil)
+        XCTAssertNil(state.displayed, "投影缺席 = 不知道，界面退到目录默认")
+
+        // 形状不对的那一格跳过、看下一格：猜一个空 provider 会在功能条上画出点不动的名字。
+        state = ModelSelectionState()
+        state.absorb(projection: .object([
+            "next": .object(["model": .string("half")]),
+            "lastUsed": .object(["provider": .string("p"), "model": .string("ok")]),
+        ]))
+        XCTAssertTrue(state.displayed?.model == "ok", "残缺的 `next` 跳过，退到 `lastUsed`")
+    }
+
+    private func followUpdates() {
+        projectionSource()
+        // V1：投影 A → selection B → header C，显示序列 A → B → C。
+        var state = ModelSelectionState()
+        state.absorb(projection: Self.projection(next: ("p", "A", nil)))
+        XCTAssertTrue(state.displayed?.model == "A", "V1a 投影里的选择直接落地")
         state.absorb(event: selectionEvent(10, "p", "B"))
         XCTAssertTrue(state.displayed?.model == "B", "V1b selection 事件覆盖基线")
         state.absorb(event: headerEvent(11, "p", "C"))
