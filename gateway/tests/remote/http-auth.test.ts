@@ -16,7 +16,6 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { isWriteEndpoint, registeredEndpointNames } from '../../src/protocol/unary-endpoints.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
@@ -28,10 +27,8 @@ const records: Omit<AuditEntry, 'at'>[] = []
 const deps = (): RpcListenerDeps => ({
   sessionPort: {
     list: async () => [],
-    read: async () => undefined,
-    readAll: async () => undefined,
+    page: async () => ({ records: [], hasMore: false, cursor: -1 }),
   },
-  limits: DEFAULT_LIMITS,
   vault: {
     authenticate: (header: string | undefined) => (header === 'Bearer good' ? { id: 'test-identity', canAnswer: true } : undefined),
     pair: (code: unknown) => (code === '123456'

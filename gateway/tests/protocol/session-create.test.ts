@@ -12,7 +12,7 @@ import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WritePort } from '../../src/ports/write.ts'
 
-const PORT: SessionPort = { list: async () => ({ items: [] }), read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => ({ items: [] }), page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 
 /** 只要一个能答 `createSession` 的写端口；另外两个方法在这一组里不会被走到。 */
 function writeReturning(make: () => Promise<string>): WritePort {

@@ -8,7 +8,7 @@
  * **它只做路由与上下文装配**，不加任何判定：真路径上「这个名字认不认得」「票够不够」
  * 由 `remote/http.ts` 判，那些由 `http-routing` / `http-auth` 两个测试守。
  */
-import { DEFAULT_LIMITS, type Limits, type Ports, type StreamOwners } from '../../src/protocol/rpc.ts'
+import type { Ports, StreamOwners } from '../../src/protocol/rpc.ts'
 import { invokeEndpoint } from '../../src/protocol/unary-endpoints.ts'
 import type { AuthPort } from '../../src/protocol/auth-ops.ts'
 import type { Identity } from '../../src/protocol/auth.ts'
@@ -47,13 +47,12 @@ export async function invoke(
   args: Record<string, unknown>,
   ports: Ports,
   now: () => number = Date.now,
-  limits: Limits = DEFAULT_LIMITS,
   caller: Identity | undefined = TEST_CALLER,
   owners: StreamOwners = defaultOwners,
 ): Promise<RemoteResult> {
   // 走 `invokeEndpoint` 而不是查表后直接调：异常折叠也必须在这里生效，
   // 否则「处理器抛错折成 internal-error」那几条判据在绕过 HTTP 时会红在未处理的异常上。
-  return invokeEndpoint(endpoint, args, { ports, now, limits, auth: unusedAuth, caller, owners })
+  return invokeEndpoint(endpoint, args, { ports, now, auth: unusedAuth, caller, owners })
 }
 
 /**

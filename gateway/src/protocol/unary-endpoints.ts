@@ -11,7 +11,8 @@
  * 所以映射写在表里，不另建一张。
  */
 import { readErrorOf } from './error-codes.ts'
-import { refused, type Limits, type Ports, type StreamOwners } from './rpc.ts'
+import { describeError, isNotFound } from '../ports/errors.ts'
+import { refused, type Ports, type StreamOwners } from './rpc.ts'
 import { pairOf, refreshOf } from './auth-ops.ts'
 import { sessionCreateTargetOf } from '../wire/write.ts'
 import type { AuthPort } from './auth-ops.ts'
@@ -22,12 +23,10 @@ import {
   commandExecuteOf,
   modelCatalogOf,
   modelSelectOf,
-  pageOf,
   permissionCatalogOf,
   questionAnswerValue,
   sessionCreateOf,
   sessionPromptValue,
-  snapshotOf,
   workspaceCreateOf,
   workspaceDeleteOf,
 } from './rpc.ts'
@@ -51,7 +50,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export interface UnaryContext {
   readonly ports: Ports
   readonly now: () => number
-  readonly limits: Limits
   /** 两条免票端点要它；其余端点用不到，但它们共用同一个上下文。 */
   readonly auth: AuthPort
   /**
@@ -103,18 +101,25 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
       return { ok: true, value: await ctx.ports.session.list(request, UNCANCELLED) }
     },
   },
-  'mobile/snapshot': {
-    legacyOp: 'snapshot',
-    write: false,
-    invoke(args, ctx) {
-      return snapshotOf(args, ctx.ports.session, ctx.limits)
-    },
-  },
-  'mobile/page': {
+  'session/page': {
     legacyOp: 'page',
     write: false,
-    invoke(args, ctx) {
-      return pageOf(args, ctx.ports.session)
+    async invoke(args, ctx) {
+      // 容器名是**宿主形参名**：`controller.page(request, signal)`。少一层就拒 ——
+      // 静默当空对象收下会让「客户端少发一层容器」看起来生效了，而宿主的四个水位键
+      // 一个都没收到。
+      const request = args.request
+      if (!isPlainObject(request)) {
+        return refused('invalid-request', 'session/page takes its arguments under "request"')
+      }
+      try {
+        return { ok: true, value: await ctx.ports.session.page(request, UNCANCELLED) }
+      } catch (error) {
+        // 只折一种：宿主说「没有这个会话」。折在这里而不是让 `readErrorOf` 兜底，
+        // 是因为它是**正常的答案**（客户端该换一个 id），不是故障。
+        if (isNotFound(error)) return refused('unknown-session', describeError(error))
+        throw error
+      }
     },
   },
   'session/modelCatalog': {

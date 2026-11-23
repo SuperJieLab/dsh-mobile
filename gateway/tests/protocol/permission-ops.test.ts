@@ -18,7 +18,7 @@ import type { PermissionCatalog, PermissionOption } from '../../src/wire/permiss
 
 // -- helpers -----------------------------------------------------------------
 
-const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => [], page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 
 const OPTIONS: readonly PermissionOption[] = [
   { value: 'read-only', name: 'read-only' },

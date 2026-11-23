@@ -1248,8 +1248,8 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   {
     home: 'protocol/rpc.ts',
     values: [
-      'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'positiveOrDefault', 'refused',
-      'snapshotOf', 'pageOf', 'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
+      'DEFAULT_LIMITS', 'positiveOrDefault', 'refused',
+      'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
       'modelSelectOf', 'commandExecuteOf', 'sessionCreateOf',
       'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'questionAnswerValue',
       'ownedAnswerOf', 'sessionPromptValue',
@@ -1263,7 +1263,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
   },
   {
     home: 'protocol/window.ts',
-    values: ['LogNotDenseError', 'CursorPastEndError', 'pageWindow', 'fitOpeningToBytes'],
+    values: ['fitOpeningToBytes'],
     types: ['OpeningShrink'],
   },
   { home: 'protocol/usage.ts', values: ['usageIsTrigger'], types: [] },
@@ -1441,7 +1441,7 @@ test('the silent-refusal list only names endpoints the table actually registers'
   // 第二份名单与第一份一起漂，正是这条判据要防的东西。
   const known = new Set(registeredEndpointNames())
   // 活性锚：表读空时下面的差集会「通过」。
-  assert.ok(known.size >= 16, `端点表只读到 ${known.size} 个名字 —— 先怀疑这里，别信差集`)
+  assert.ok(known.size >= 15, `端点表只读到 ${known.size} 个名字 —— 先怀疑这里，别信差集`)
 
   const module = await import(pathToFileURL(join(SRC, 'remote/http.ts')).href) as {
     SILENT_REFUSALS?: ReadonlySet<string>

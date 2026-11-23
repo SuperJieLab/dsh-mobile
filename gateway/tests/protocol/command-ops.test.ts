@@ -19,7 +19,7 @@ import { commandExecuteRequestOf } from '../../src/wire/command.ts'
 
 // -- helpers -----------------------------------------------------------------
 
-const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => [], page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 
 /** 假命令端口：记下每次调用的实参，便于断言「有没有真的到宿主」。 */
 function fakeCommand(overrides: Partial<CommandPort> = {}): CommandPort & { calls: { agentId: string; line: string }[] } {

@@ -9,9 +9,9 @@
  * 参数合不合法，是 `protocol/` 的事 —— 分开放的理由：名字与处理器住在 `protocol/`，
  * 而 `wire/` 不许认识它们（`structure.test.ts` 的「wire/ does not reach outside itself」）。
  *
- * 端点名分两片：照上游的七个（`session/modelCatalog` 等）与我们自造的九个
- * （一律挂 `mobile/`）。分开是为了将来对齐时知道该搬哪些 —— 混用上游命名空间会让
- * 「同名不同义」写进契约，读上游文档的人会读错。
+ * 端点名分两片：照上游的七个（`session/modelCatalog` 等，加上本期的 `session/page`）
+ * 与我们自造的（一律挂 `mobile/`）。分开是为了将来对齐时知道该搬哪些 —— 混用上游
+ * 命名空间会让「同名不同义」写进契约，读上游文档的人会读错。
  */
 
 import { nonEmptyString } from './fields.ts'
@@ -19,8 +19,8 @@ import { nonEmptyString } from './fields.ts'
 /**
  * 我们开的一元端点名，两段式。
  *
- * 前七个与上游逐字一致（参数与返回内容仍是我们的，见方案 1.1 的映射表）；
- * 其余挂在 `mobile/` 下：五个「上游只有近似端点」、两个「上游没有」、以及两条鉴权。
+ * 前八个与上游逐字一致（参数与返回内容仍是我们的，见方案 1.1 的映射表）；
+ * 其余挂在 `mobile/` 下：四个「上游只有近似端点」、两个「上游没有」、以及两条鉴权。
  */
 export type UnaryEndpointName =
   | 'session/modelCatalog'
@@ -31,8 +31,7 @@ export type UnaryEndpointName =
   | 'commands/execute'
   | 'workspace/delete'
   | 'session/list'
-  | 'mobile/snapshot'
-  | 'mobile/page'
+  | 'session/page'
   | 'permissionPresets/catalog'
   | 'mobile/workspaceCreate'
   | 'mobile/approvalAnswer'
@@ -50,8 +49,7 @@ export const UNARY_ENDPOINT_NAMES: readonly UnaryEndpointName[] = [
   'commands/execute',
   'workspace/delete',
   'session/list',
-  'mobile/snapshot',
-  'mobile/page',
+  'session/page',
   'permissionPresets/catalog',
   'mobile/workspaceCreate',
   'mobile/approvalAnswer',

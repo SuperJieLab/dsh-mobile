@@ -14,7 +14,6 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { createRpcListener } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
 import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
@@ -27,8 +26,7 @@ async function withListener(
   run: (post: (path: string, options?: { body: string }) => Promise<Response>) => Promise<void>,
 ): Promise<void> {
   const server = createRpcListener({
-    sessionPort: { list: async () => [], read: async () => undefined, readAll: async () => undefined },
-    limits: DEFAULT_LIMITS,
+    sessionPort: { list: async () => [], page: async () => ({ records: [], hasMore: false, cursor: -1 }) },
     vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
     registry: new IdentityRegistry(),
     writePort: { createSession: unused, promptSession: unused, answerApproval: unused, answerQuestion: unused },
@@ -82,15 +80,18 @@ test('两段但表里没有的名字也是 404 纯文本', async () => {
   })
 })
 
-test('本期的三个退场端点名在 HTTP 上就是 404 纯文本，没有别名期', async () => {
+test('退场端点名在 HTTP 上就是 404 纯文本，没有别名期', async () => {
   await withListener(async (post) => {
     // 名字写在这里是**断言的对象**，不是还在用的端点：判据要能证明它们已被摘掉，
-    // 就不得不写出它们。块标记只盖这个数组 —— 出了这一块，这三个名字照样会红。
+    // 就不得不写出它们。块标记只盖这个数组 —— 出了这一块，这些名字照样会红。
     // terms-ok:start 退场端点名：本数组是断言对象
     const gone = [
       '/api/mobile/listSessions',
       '/api/mobile/permissionCatalog',
       '/api/mobile/permissionSelect',
+      // 第 2 期：两条自造读端点被 session/page 与打开帧取代。
+      '/api/mobile/snapshot',
+      '/api/mobile/page',
     ]
     // terms-ok:end
     for (const path of gone) {
@@ -106,8 +107,12 @@ test('本期的三个退场端点名在 HTTP 上就是 404 纯文本，没有别
 
 test('合法的两段路径不是 404 —— 正控，防止「全都 404」蒙混过关', async () => {
   await withListener(async (post) => {
-    const response = await post('/api/session/list')
-    assert.notEqual(response.status, 404, '这条路真的在表里，必须走到处理器那一层')
+    const listed = await post('/api/session/list')
+    assert.notEqual(listed.status, 404, '这条路真的在表里，必须走到处理器那一层')
+    // 判据 2 的正控：`session/page` 是**换掉**那两条的那一个 —— 只证明旧的没了、
+    // 没证明新的在，等于把「分页没了」当成「分页换名了」。
+    const paged = await post('/api/session/page', { body: '{}' })
+    assert.notEqual(paged.status, 404, 'session/page 必须在表里')
   })
 })
 

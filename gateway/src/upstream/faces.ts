@@ -14,7 +14,6 @@ import type { CommandPort } from '../ports/command.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { ModelCatalog, ModelSelection } from '../wire/model.ts'
 
-import { nextOf, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
 import { createWorkspaceIn, deleteWorkspaceIn, type WorkspaceCreateFace, type WorkspaceDeleteFace } from './workspace.ts'
 import { makeWorkspaceDirectory } from './workspace-root.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
@@ -66,6 +65,30 @@ export function sessionListFace(ctx: HostContext): SessionPort['list'] {
 /** 本模块用到的 `ctx.sessionController.list` 部分。 */
 interface SessionListControllerLike {
   list(request: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<unknown>
+}
+
+/**
+ * 一页历史：**直呼宿主的 `sessionController.page(request, signal)`**，入参与应答都不动。
+ *
+ * 上一版网关自己按 `maxMessages` 切窗口（`protocol/window.ts` 的 `pageWindow`），
+ * 等于把宿主的规则抄了一遍 —— 宿主改规则时网关不会红，症状是「同一屏在 Web UI 与
+ * 手机上长度不同」。判据见 `tests/protocol/page-forward.test.ts`。
+ *
+ * 宿主没有这个切面时抛错（装配错误），由协议层折成 `internal-error`。
+ */
+export function sessionPageFace(ctx: HostContext): SessionPort['page'] {
+  return async (request, signal) => {
+    const controller = ctx.sessionController as unknown as Partial<SessionPageControllerLike>
+    if (typeof controller.page !== 'function') {
+      throw new Error('sessionController has no page face — session/page cannot be served')
+    }
+    return await controller.page(request, signal)
+  }
+}
+
+/** 本模块用到的 `ctx.sessionController.page` 部分 —— 签名与运行时逐字一致。 */
+interface SessionPageControllerLike {
+  page(request: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<unknown>
 }
 
 /**
@@ -171,29 +194,6 @@ interface ProjectionsLike {
 interface ProjectionSnapshotLike {
   asOfSeq: number
   values: Readonly<Record<string, unknown>>
-}
-
-/**
- * 单个会话下一轮将用哪个模型 —— snapshot 基线与跟流开场的 `model` 字段共用的那次读取。
- *
- * 宿主给的是 `{lastUsed, next}` 两格的视图，而这里只交出 `next`（{@link nextOf}）：
- * 出参就是线上要发的那个选择，装配处没有余地塞进别的形状。缺席（会话不存活、投影
- * 未装、`next` 为空）是诚实的 —— 字段保持缺席而非猜默认值。
- */
-function modelBaselineOf(ctx: HostContext, sessionId: string): ModelSelection | undefined {
-  const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
-  if (session === undefined) return undefined
-  const read = ctx.sessionProjections as unknown as ProjectionsLike
-  const snapshot = read.snapshot(session, ['modelSelection'])
-  const view = snapshot?.values.modelSelection
-  if (typeof view !== 'object' || view === null) return undefined
-  return nextOf(view as HostModelSelectionView)
-}
-
-export function modelSelectionSourceOver(ctx: HostContext): ModelSelectionSource {
-  return {
-    of: (sessionId) => modelBaselineOf(ctx, sessionId),
-  }
 }
 
 /**

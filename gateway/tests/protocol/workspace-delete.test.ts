@@ -15,7 +15,7 @@ import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WorkspacePort } from '../../src/ports/workspace.ts'
 
-const PORT: SessionPort = { list: async () => ({ items: [] }), read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => ({ items: [] }), page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 
 /** 一个只会 `delete` 的工作空间端口，并记下它被问过的 id。 */
 function workspacePort(remove: (id: string) => Promise<void>): {

@@ -15,7 +15,7 @@ import { invoke, valueOf } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 
 function portWith(list: SessionPort['list']): SessionPort {
-  return { list, read: async () => undefined, readAll: async () => undefined }
+  return { list, page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 }
 
 /** 上游 `SessionListValue` 的一份样本：`items` 里那一行的字段就是它的全部字段。 */

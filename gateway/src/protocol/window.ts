@@ -1,102 +1,15 @@
 /**
- * 反向窗口算术。两个导出各服务一条路径，别把它们当成同一件事：
+ * 打开帧的字节收窄。**这是本文件唯一剩下的判定。**
  *
- *   pageWindow          在整条日志上切一个窗口 —— 只有 `page` 调用它
- *   fitOpeningToBytes   把**宿主切好的窗口**按字节二次收窄 —— 流 opening 调用它
+ * 窗口本身不由网关切：`session/follow` 与 `session/page` 都把上游的请求原样转给宿主，
+ * 「哪些记录算这一屏」于是只有一份规则。网关能施加的只有一条 —— WSS 一帧有字节上限，
+ * 而上游的客户端没有这回事。
  *
- * 窗口本身不再由网关切：`session/follow` 与 `session/page` 都把上游的请求原样转给
- * 宿主，规则只有一份。剩下的只有字节这一条约束 —— 宿主按消息数切、不保证字节，
- * 而上游的客户端没有 4 MiB 的消息上界这回事。
- *
- * `maxMessages` 是**目标**，不是承诺：调用方拿到的窗口**始于 turn 边界** ——
- * 一轮中间打开没有折叠头，只能平摊，回翻到该轮的打开处会把同一轮整体折起
- * （同内容、两形状）。目标的两倍即终止走查，够不到的边界因此不会无界撑大窗口。
+ * `pageWindow` / `upstreamWindow` / 两个日志错误随两条自造读端点一起删了：它们把宿主的
+ * 窗口规则抄了一遍，宿主改规则时不会红，症状是「同一屏在 Web UI 与手机上长度不同」。
  */
 
 import type { SessionRecord } from '../wire/rpc.ts'
-import type { WireEvent } from '../wire/rpc.ts'
-import type { PageWindow } from '../wire/window.ts'
-
-/** 回走找 `turn/start` 时，窗口允许比目标宽多少。 */
-const TURN_ALIGN_CEILING = 2
-
-/**
- * 画页边界时算作一条消息的事件类型。这是画边界的规则，不是展示规则：
- * 客户端画得更少（注入的 `user/message` 有 `source.kind !== "user"`），
- * 窗口可以比画出的更宽，绝不会更窄。
- */
-const MESSAGE_EVENT_TYPES: ReadonlySet<string> = new Set(['user/message', 'assistant/message'])
-
-/**
- * {@link pageWindow} 在日志 seq 不从 0 稠密时抛出。
- *
- * **层次与去向**：这是**窗口算术层**的错误（既不是协议拒绝，也不是传输失败）；唯一的
- * 消费者 `./rpc.ts` 把它映射为协议码 `unreadable-session`。名字读作「被违反的不变量」。
- */
-export class LogNotDenseError extends Error {
-  constructor(sessionId: string, index: number, seq: string) {
-    super(`session "${sessionId}" log is not dense: index ${index} holds seq ${seq}`)
-    this.name = 'LogNotDenseError'
-  }
-}
-
-/** {@link pageWindow} 在 `beforeSeq` 指向日志末端之后时抛出。 */
-export class CursorPastEndError extends Error {
-  constructor(sessionId: string, beforeSeq: number, length: number) {
-    super(`beforeSeq ${beforeSeq} is past the end of session "${sessionId}" (${length} events)`)
-    this.name = 'CursorPastEndError'
-  }
-}
-
-/**
- * 在整条日志上取一个反向窗口。按*消息数*约束，但按整个区间交付，因为被画 seq 的
- * 邻居常常不是消息。**起点**回退到最近的 `turn/start`，因此绝不会在一轮中间打开
- * —— {@link TURN_ALIGN_CEILING} 说明原因与幅度。
- *
- * 唯一的调用方是 `page`。流 opening 不调它：那条路径把同一个目标交给宿主
- * （见 {@link upstreamWindow}），窗口由宿主切好交回来。
- *
- * @throws {@link LogNotDenseError} 当 seq 不是 `0..n-1`：算术把位置当 seq 读，
- *   稠密是前置条件。
- */
-export function pageWindow(
-  sessionId: string,
-  events: readonly WireEvent[],
-  beforeSeq: number | undefined,
-  maxMessages: number,
-): PageWindow {
-  const lastIndex = events.findIndex((event, index) => event.seq !== index)
-  if (lastIndex !== -1) {
-    throw new LogNotDenseError(sessionId, lastIndex, String(events[lastIndex]?.seq))
-  }
-
-  const end = beforeSeq ?? events.length
-  if (end > events.length) {
-    // 与 `snapshot` 不同，此处的界是可知的 —— 整条日志在手 —— 末端之后的
-    // 位置直接拒绝，不以空窗口作答。
-    throw new CursorPastEndError(sessionId, end, events.length)
-  }
-
-  let start = 0
-  let counted = 0
-  for (let index = end - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    // turn 边界优先于计数：目标达成后，继续走到*最近的* `turn/start`。
-    // `turn/start` 不是消息，计数不受影响。
-    if (event?.type === 'turn/start' && counted >= maxMessages) {
-      start = index
-      break
-    }
-    if (event === undefined || !MESSAGE_EVENT_TYPES.has(event.type)) continue
-    counted += 1
-    if (counted >= maxMessages * TURN_ALIGN_CEILING) {
-      start = index
-      break
-    }
-  }
-
-  return { pageStart: start, asOfSeq: end, hasOlder: start > 0, events: events.slice(start, end) }
-}
 
 /** {@link fitOpeningToBytes} 的结果：收窄后的起点，或「连最小窗口都装不下」。 */
 export type OpeningShrink =
@@ -107,8 +20,8 @@ export type OpeningShrink =
  * 把一个已切好的窗口收窄到字节上界之内 —— 装帧前的二次约束。
  * 起点相对 `window` 本身（下标 0 是传进来那个窗口的起点）。
  *
- * 它收的是**宿主交回来的窗口**（流 opening 那条路），不是 `pageWindow` 的输出：
- * 后者只服务 `page`，那条路径上没有字节上界这回事。
+ * 它收的是**宿主交回来的记录**（打开帧那条路）：分页那一条没有字节上界这回事 ——
+ * 它是 HTTP 应答，不占 WSS 的一帧。
  *
  * **两个口径各管一件事**：界由**字节**定（按内容单位切不保证有界 —— 按消息数切、
  * 按轮切都只是换位置撞墙），切点由**轮**定（起点落在轮次中段会让同一段过程在

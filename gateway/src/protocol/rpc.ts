@@ -5,12 +5,10 @@
  * 传输层（`remote/http.ts`）与测试辅助都经 `protocol/unary-endpoints.ts` 的表找到
  * 这里 —— **本文件不认识 URL**，也不认识信封，它只回答「这次调用成没成、值是什么」。
  *
- * 水位：两个边界均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没有」）；
- * `asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或重取。
- * 两种不重叠的读取：`snapshot` 自 cursor 前向，`page` 反向取一个用于打开的窗口。
- *
- * 应答上限：单条应答 ≤ `maxDeltaEvents` 条事件，软性再受 `maxDeltaBytes` 约束；
- * 提前截停用 `hasMore` 说明。上限约束的是单条应答，从不是序列的累计。
+ * **两条读端点已不再在这里**：`session/list`、`session/page` 都是转发（各自的
+ * 表项在 `./unary-endpoints.ts`），窗口怎么切、水位怎么算都由宿主回答。本文件只剩
+ * 写面的判定与两条目录/当前值的读。`snapshot`/`page` 的水位算术随它们一起退场 ——
+ * 抄一份宿主的规则，在宿主改规则时不会红。
  */
 
 import type { SessionPort } from '../ports/session.ts'
@@ -20,14 +18,11 @@ import type { CommandPort } from '../ports/command.ts'
 import type { PermissionPort } from '../ports/permission.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import type { RemoteResult } from '../wire/unary.ts'
-import type { WireEvent } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
 import { approvalAnswerOf, questionAnswerOf, sessionPromptOf, type QuestionAnswerMessage } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
-import { LogNotDenseError, CursorPastEndError, pageWindow } from './window.ts'
-import type { PageWindow } from '../wire/window.ts'
 import type { Identity } from './auth.ts'
 
 /**
@@ -42,18 +37,17 @@ export interface StreamOwners {
 }
 
 /**
- * 一条 `snapshot` 应答可能有多大；只约束单条应答，从不是客户端的视图。
+ * 传输层的字节上界。
+ *
+ * **只剩一格**：两条一元读端点退场之后，「一条应答至多多少事件 / 多少字节」不再
+ * 是网关的事 —— 分页的窗口由宿主切（`session/page`），网关能施加的只有 WSS 一帧的
+ * 尺寸。`maxDeltaEvents` / `maxDeltaBytes` 随 `mobile/snapshot` 一起删了：留着就是
+ * 两个没有读者的旋钮，而配置文档会继续承诺一个并不存在的截断。
  */
 export interface Limits {
-  /** 单条应答至多携带的事件数。必须为正。 */
-  maxDeltaEvents: number
-  /** 单条应答 `events` 序列化尺寸的软上限。 */
-  maxDeltaBytes: number
   /**
-   * follow 打开那一帧的字节上界（R9 期1）。它与上面两个不同：**不经过一元端点，
-   * 而且是硬上限** —— 装不下就按轮边界收窄，连一轮都装不下则拒绝。
-   * HTTP 路径的软上限允许首条事件独自超限放行（否则客户端无法前进），那条规则
-   * 在这里等于必然断连，不能照搬。
+   * follow 打开那一帧的字节上界（R9 期1）。**硬上限** —— 装不下就按轮边界收窄，
+   * 连一轮都装不下则拒绝。它约束的是传输，不是会话内容。
    */
   maxOpeningBytes: number
 }
@@ -62,13 +56,7 @@ export interface Limits {
  * LAN 演示的上限：宽到很少生效，小到确实有界。`maxOpeningBytes` 取 4 MiB ——
  * 比一个典型会话的整条窗口宽出数倍，于是普通会话根本不进收窄路径。
  */
-export const DEFAULT_LIMITS: Limits = { maxDeltaEvents: 500, maxDeltaBytes: 1_048_576, maxOpeningBytes: 4 * 1024 * 1024 }
-
-/**
- * 调用方不指定时一条 `page` 返回的消息数；对照参考客户端的页大小。
- * 这是*窗口*，不是上限：这里没有 `hasMore` 循环。
- */
-export const DEFAULT_PAGE_MESSAGES = 50
+export const DEFAULT_LIMITS: Limits = { maxOpeningBytes: 4 * 1024 * 1024 }
 
 
 /**
@@ -414,138 +402,16 @@ export async function permissionCatalogOf(
   return { ok: true, value: catalog === undefined ? {} : catalog }
 }
 
-/** 读路径：一个会话自客户端水位之后的事件。 */
-export async function snapshotOf(
-  args: Record<string, unknown>,
-  port: SessionPort,
-  limits: Limits,
-): Promise<RemoteResult> {
-  const sessionId = args.sessionId
-  if (typeof sessionId !== 'string' || sessionId === '') {
-    // 用 `unknown-session` 而非新码：不是非空字符串的 id 永远不可能命名
-    // 已存储的会话，调用方的补救相同。
-    return refused('unknown-session', 'sessionId must be a non-empty string')
-  }
-
-  const since = normalizeSince(args.since)
-  const slice = await port.read(sessionId, since, limits.maxDeltaEvents)
-  if (slice === undefined) return refused('unknown-session', `no stored session "${sessionId}"`)
-
-  if (slice.staleCursor) {
-    // 用错误码，不用静默空应答：整个视图已不可信，布尔会被吞掉。
-    return refused('resync-required', `since ${since} cannot exist: this session's log is empty`)
-  }
-
-  const events = fitToByteCap(slice.events, limits.maxDeltaBytes)
-  const last = events.at(-1)
-  return {
-    ok: true,
-    value: {
-      sessionId,
-      asOfSeq: last === undefined ? since : last.seq + 1,
-      hasMore: slice.hasMore || events.length < slice.events.length,
-      events: [...events],
-      // 基线随每条 snapshot 应答随行；缺省仍是缺省。
-      ...slice.model === undefined ? {} : { model: slice.model },
-    },
-  }
-}
-
 /**
- * 反向窗口：最新 `maxMessages` 条消息，或恰好终止于 `beforeSeq` 之前的
- * 一轮 —— 边界规则见 `./window.ts` 的 `pageWindow`。
+ * 无意义的上限不得变成卡死：非正或非整数即回退默认值。
+ *
+ * 唯一读者是打开帧的字节上界（`remote/connection.ts`）—— 一个非正的界会让每一次
+ * 打开都被判成「装不下」。
  */
-export async function pageOf(
-  args: Record<string, unknown>,
-  port: SessionPort,
-): Promise<RemoteResult> {
-  const sessionId = args.sessionId
-  if (typeof sessionId !== 'string' || sessionId === '') {
-    return refused('unknown-session', 'sessionId must be a non-empty string')
-  }
-
-  const maxMessages = isPositiveInteger(args.maxMessages)
-    ? args.maxMessages
-    : DEFAULT_PAGE_MESSAGES
-
-  // 畸形 `beforeSeq` 退化为最新窗口，正如畸形 `since` 退化为 `0`：
-  // 是合法应答，至多多付一个窗口。
-  const requested = args.beforeSeq
-  const beforeSeq = Number.isSafeInteger(requested) && (requested as number) >= 0
-    ? requested as number
-    : undefined
-
-  const events = await port.readAll(sessionId)
-  if (events === undefined) return refused('unknown-session', `no stored session "${sessionId}"`)
-
-  let window: PageWindow
-  try {
-    window = pageWindow(sessionId, events, beforeSeq, maxMessages)
-  } catch (error) {
-    // 两种拒绝：不可解读的日志是 `unreadable-session`，cursor 越过末端是
-    // `resync-required`（M1 判据 P4）。
-    if (error instanceof LogNotDenseError) return refused('unreadable-session', error.message)
-    if (error instanceof CursorPastEndError) return refused('resync-required', error.message)
-    throw error
-  }
-
-  return {
-    ok: true,
-    value: {
-      sessionId,
-      pageStart: window.pageStart,
-      asOfSeq: window.asOfSeq,
-      hasOlder: window.hasOlder,
-      events: [...window.events],
-    },
-  }
-}
-
-/**
- * 保留 `events` 在字节上限内能装下的最长前缀。上限是软的：把事件全丢掉
- * 会让客户端无法前进，所以第一条事件即使独自超限也要放行 —— 恰是这一点
- * 约束住病态应答。
- */
-function fitToByteCap(events: readonly WireEvent[], maxBytes: number): readonly WireEvent[] {
-  const kept: WireEvent[] = []
-  let bytes = 0
-  for (const event of events) {
-    const size = wireBytesOf(event)
-    if (kept.length > 0 && bytes + size > maxBytes) break
-    kept.push(event)
-    bytes += size
-  }
-  return kept
-}
-
-/**
- * 一条事件的序列化尺寸。用 `TextEncoder` 而非 `Buffer`：不依赖宿主特有
- * API，消息走到哪里就能在哪里运行。
- */
-function wireBytesOf(event: WireEvent): number {
-  return ENCODER.encode(JSON.stringify(event)).length
-}
-
-const ENCODER = new TextEncoder()
-
-/** 无意义的上限不得变成卡死：非正或非整数即回退默认值。 */
 export function positiveOrDefault(value: number | undefined, fallback: number): number {
   return value !== undefined && isPositiveInteger(value) ? value : fallback
 }
 
-/**
- * 三条上限各自归一化。无意义的值绝不产生任何客户端都读不完的应答 ——
- * 在流通道上后果更重：一个非正的上界会让每一次打开都被判成「装不下」。
- */
-/**
- * 缺失或无意义的 `since` 读作 `0` —— 「把一切发我」—— 而非新错误码：
- * 客户端按 `seq` 去重，宽容的代价只是冗余载荷，绝不是错误视图。
- */
-function normalizeSince(value: unknown): number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
-}
-
-/** 纯对象，区别于数组、null 或原始值。 */
 /**
  * 一次失败的形状（三格，`details` 恒为对象）。
  *

@@ -13,7 +13,7 @@ import type { SessionPort } from '../../src/ports/session.ts'
 import type { WritePort } from '../../src/ports/write.ts'
 import type { ApprovalAnswerMessage, SessionPromptMessage } from '../../src/wire/write.ts'
 
-const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => [], page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 
 /** A fake write port that records what it was asked to do. */
 function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; prompts: SessionPromptMessage[] } {

@@ -18,8 +18,8 @@ import type { ModelPort } from '../../src/ports/model.ts'
 
 const PORT: SessionPort = {
   list: async () => ({ items: [] }),
-  read: async () => undefined,
-  readAll: async () => undefined,
+  // 读日志那条路已退场（`session/page` 是转发）：这层只需要形状齐。
+  page: async () => ({ records: [], hasMore: false, cursor: -1 }),
 }
 
 /**

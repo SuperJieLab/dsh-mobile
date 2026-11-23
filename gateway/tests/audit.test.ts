@@ -22,7 +22,6 @@ import {
   formatAuditEntry,
   parseAuditEntry,
 } from '../src/audit.ts'
-import { DEFAULT_LIMITS } from '../src/protocol/rpc.ts'
 import { createRpcListener } from '../src/remote/http.ts'
 import type { CredentialVault } from '../src/remote/credentials.ts'
 import { IdentityRegistry } from '../src/remote/identity-registry.ts'
@@ -183,10 +182,8 @@ test('a real request through the listener leaves a record', { timeout: 10_000 },
   const server = createRpcListener({
     sessionPort: {
       list: async () => [],
-      read: async () => undefined,
-      readAll: async () => undefined,
+      page: async () => ({ records: [], hasMore: false, cursor: -1 }),
     },
-    limits: DEFAULT_LIMITS,
     vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
     registry: new IdentityRegistry(),
     writePort: { createSession: unused, promptSession: unused, answerApproval: unused, answerQuestion: unused },

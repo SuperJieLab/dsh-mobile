@@ -12,7 +12,6 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
 import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
@@ -29,10 +28,8 @@ function deps(): RpcListenerDeps {
       list: async () => ({
         items: [{ sessionId: 's-1', updatedAt: 5, running: false, blank: false, agentAvailable: true }],
       }),
-      read: async () => undefined,
-      readAll: async () => undefined,
+      page: async () => ({ records: [], hasMore: false, cursor: -1 }),
     },
-    limits: DEFAULT_LIMITS,
     vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
     registry: new IdentityRegistry(),
     writePort: { createSession: unused, promptSession: unused, answerApproval: unused, answerQuestion: unused },

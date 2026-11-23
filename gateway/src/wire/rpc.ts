@@ -5,16 +5,11 @@
  * **改这个文件的任何字段，那边必须同改**。这正是 `wire/` 存在的理由：把它与
  * 服务端算法放在一起时，读者无法从目录名判断「改它要不要动手机端」。
  *
- * 水位：两个边界均为半开。`since` 是客户端*下一个期望的 seq*（`0` = 「我什么都没
- * 有」）；`asOfSeq` 是「已覆盖到、不含」，并作为 `since` 回传，因此永远不会漏取或
- * 重取。两种不重叠的读取：`snapshot` 自 cursor 前向，`page` 反向取一个用于打开的
- * 窗口。
- *
- * 应答上限：单条应答 ≤ `maxDeltaEvents` 条事件，软性再受 `maxDeltaBytes` 约束；
- * 提前截停用 `hasMore` 说明。上限约束单条应答，从不是序列的累计。
+ * 水位只有一个说法：打开帧的 `cursor` 与 `session/page` 的 `cursor`/`throughSeq`
+ * **含端**（覆盖到的最后一个 seq），`beforeSeq` **排他**（这一页往前到哪）。
+ * 「下一个期望的 seq」是客户端入口处的一次换算（`cursor + 1`），不进线上形状 ——
+ * 两套口径并存时，任何一处 `±1` 漏掉都会让最后一条事件重复或丢失，而两者都不报错。
  */
-
-import type { ModelSelection } from './model.ts'
 
 /**
  * 线上的一条会话事件：DSH 事件对象原样，未知字段一并保留。协议承诺下列
@@ -72,26 +67,4 @@ export interface SessionWireHeader {
 export interface ProjectionBaseline {
   asOfSeq: number
   values: Readonly<Record<string, unknown>>
-}
-
-/** 一次读出的会话日志切片，以及它到达的水位。 */
-export interface SessionSlice {
-  /** 下一个期望的 seq —— 见上文的半开规则。 */
-  asOfSeq: number
-  /** `seq >= since` 的事件，按 seq 排序，至多请求的限额。 */
-  events: readonly WireEvent[]
-  /** 本切片之后日志是否还有事件。 */
-  hasMore: boolean
-  /**
-   * 客户端的 cursor 指向一个不可能存在的位置：`since` 为正而日志为空。
-   * 这是数据源唯一能证明的错误 cursor —— 越过水位的 `since` 会读成
-   * 「已追平」。
-   */
-  staleCursor: boolean
-  /**
-   * 会话的模型基线：*下一个*请求将用的模型，读自宿主的
-   * `modelSelection` 投影。未知时缺省 —— 客户端回退到目录默认值，
-   * 绝不猜测。
-   */
-  model?: ModelSelection
 }

@@ -12,13 +12,12 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { approvalAnswerValue, DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
+import { approvalAnswerValue } from '../../src/protocol/rpc.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
 import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
 import type { Duplex } from 'node:stream'
 
-const events = [{ type: 'user/message', seq: 0, time: 1, data: {} }]
 
 /**
  * 一条已经登记好的流：本文件的「自己的流」就是它。
@@ -38,10 +37,8 @@ function registryWithOwnStream(): IdentityRegistry {
 const deps = (): RpcListenerDeps => ({
   sessionPort: {
     list: async () => [{ id: 's-1', createdAt: 1, updatedAt: 2, running: false, blank: false }],
-    read: async (id, since) => (id === 's-1' ? { asOfSeq: since + events.length, events, hasMore: false, staleCursor: false } : undefined),
-    readAll: async (id) => (id === 's-1' ? events : undefined),
+    page: async () => ({ records: [], hasMore: false, cursor: -1 }),
   },
-  limits: DEFAULT_LIMITS,
   vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
   registry: registryWithOwnStream(),
   writePort: {
@@ -200,10 +197,12 @@ test('每个写端点的拒绝码与旧路径一致 —— 拒了就不能说 ok
 
 test('判据 8：未知键不被拒，`promptId` 不改名', async () => {
   await withListener(async (post) => {
-    // 多余的键被忽略而不是拒答：`since` / `maxMessages` 这些靠的正是这份宽松，
+    // 多余的键被忽略而不是拒答：容器里那些宿主认得的键靠的正是这份宽松，
     // 收紧成「未知键一律拒」会把所有旧客户端一次打死。
-    const snapshot = resultOf(await post('/api/mobile/snapshot', { sessionId: 's-1', somethingElse: 1 }))
-    assert.equal(snapshot.ok, true, '未知键该被忽略')
+    const page = resultOf(await post('/api/session/page', {
+      request: { address: { kind: 'session', sessionId: 's-1' }, somethingElse: 1 },
+    }))
+    assert.equal(page.ok, true, '未知键该被忽略')
 
     // 上游把这一格叫 `requestId`，我们仍叫 `promptId` —— 本期只换信封，不改 wire 名。
     const withPromptId = resultOf(await post('/api/session/prompt', { sessionId: 's-1', promptId: 'p-1', text: 'hi' }))

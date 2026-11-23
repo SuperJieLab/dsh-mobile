@@ -1,5 +1,5 @@
 /**
- * 六个读端点在**新路径**上的行为（判据 3 的读半边、判据 5）。
+ * 五个读端点在**新路径**上的行为（判据 3 的读半边、判据 5）。
  *
  * 两条口径：
  * - 每个端点各发一次合法请求必须 `ok:true` —— 少一个登记的名字就是「客户端打得到、
@@ -14,7 +14,6 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
 import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
@@ -23,31 +22,15 @@ const unused = async (): Promise<never> => {
   throw new Error('not used by this test')
 }
 
-const events = [
-  { type: 'user/message', seq: 0, time: 1, data: {} },
-  { type: 'assistant/message', seq: 1, time: 2, data: {} },
-]
-
-/** 一份够六个读端点跑的装配：会话有两条事件、模型与命令与权限端口都在。 */
+/** 一份够五个读端点跑的装配：两个会话端口、模型与命令与权限端口都在。 */
 const deps = (): RpcListenerDeps => ({
   sessionPort: {
     list: async () => [{
       id: 's-1', title: 'first', createdAt: 1, updatedAt: 5, running: false, blank: false,
     }],
-    read: async (id, since, limit) => {
-      if (id !== 's-1') return undefined
-      const page = events.filter(event => event.seq >= since).slice(0, limit)
-      const last = page.at(-1)
-      return {
-        asOfSeq: last === undefined ? since : last.seq + 1,
-        events: page,
-        hasMore: page.length < events.filter(event => event.seq >= since).length,
-        staleCursor: false,
-      }
-    },
-    readAll: async (id) => (id === 's-1' ? events : undefined),
+    // 一页历史：宿主的形状，网关只转达（判据在 `page-forward.test.ts`）。
+    page: async () => ({ records: [], hasMore: false, cursor: -1 }),
   },
-  limits: DEFAULT_LIMITS,
   vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
   registry: new IdentityRegistry(),
   writePort: { createSession: unused, promptSession: unused, answerApproval: unused, answerQuestion: unused },
@@ -103,11 +86,10 @@ function resultOf(envelope: Record<string, unknown>): Record<string, unknown> {
   return envelope.result as Record<string, unknown>
 }
 
-test('六个读端点各发一次合法请求全部 ok', async () => {
+test('五个读端点各发一次合法请求全部 ok', async () => {
   const calls: [string, unknown][] = [
     ['/api/session/list', { _request: {} }],
-    ['/api/mobile/snapshot', { sessionId: 's-1' }],
-    ['/api/mobile/page', { sessionId: 's-1' }],
+    ['/api/session/page', { request: { address: { kind: 'session', sessionId: 's-1' } } }],
     ['/api/session/modelCatalog', {}],
     ['/api/commands/list', { agentId: 's-1' }],
     ['/api/permissionPresets/catalog', {}],
@@ -124,10 +106,9 @@ test('六个读端点各发一次合法请求全部 ok', async () => {
 test('拒绝码与旧路径逐字相同 —— 迁移的是信封，不是语义', async () => {
   await withListener(async (post) => {
     const cases: [string, unknown, string][] = [
-      ['/api/mobile/snapshot', {}, 'unknown-session'],
-      ['/api/mobile/snapshot', { sessionId: 'nope' }, 'unknown-session'],
-      ['/api/mobile/page', {}, 'unknown-session'],
-      ['/api/mobile/page', { sessionId: 'nope' }, 'unknown-session'],
+      // 少了 `request` 容器：宿主的参数名就是容器名，少一层就是这条请求坏了。
+      // 容器**里面**的字段网关不看（转发）—— 水位合法与否由宿主判，不由网关抄一遍。
+      ['/api/session/page', {}, 'invalid-request'],
       ['/api/commands/list', {}, 'unknown-session'],
       ['/api/commands/list', { agentId: 'nope' }, 'unknown-session'],
     ]
@@ -179,14 +160,4 @@ test('判据 3 的另一半：无参的端点在装配缺件时也要回一条�
     server.closeAllConnections()
     server.close()
   }
-})
-
-test('判据 5：畸形 beforeSeq 退化为最新窗口，不拒答', async () => {
-  await withListener(async (post) => {
-    const result = resultOf(await post('/api/mobile/page', { sessionId: 's-1', beforeSeq: 'oops' }))
-    assert.equal(result.ok, true, '畸形 beforeSeq 是合法请求，至多多付一个窗口')
-    const value = result.value as Record<string, unknown>
-    assert.equal(typeof value.asOfSeq, 'number')
-    assert.ok(Array.isArray(value.events))
-  })
 })

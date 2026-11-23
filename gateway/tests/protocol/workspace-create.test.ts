@@ -13,7 +13,7 @@ import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WorkspacePort } from '../../src/ports/workspace.ts'
 
-const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => [], page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 
 /** 一个只会 `create` 的工作空间端口，并记下它被问过的名字。 */
 function workspacePort(

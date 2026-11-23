@@ -9,7 +9,6 @@
  */
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
-import type { Limits } from '../protocol/rpc.ts'
 import { invokeEndpoint, unaryEndpointOf } from '../protocol/unary-endpoints.ts'
 import type { SessionPort } from '../ports/session.ts'
 import type { CommandPort } from '../ports/command.ts'
@@ -42,8 +41,7 @@ const MAX_BODY_BYTES = 1_048_576
  */
 export const SILENT_REFUSALS: ReadonlySet<string> = new Set([
   'session/list',
-  'mobile/snapshot',
-  'mobile/page',
+  'session/page',
 ])
 
 /**
@@ -64,7 +62,6 @@ function requestIdOf(headers: IncomingMessage['headers']): string {
 /** 监听器应答一条请求所需的依赖。 */
 export interface RpcListenerDeps {
   sessionPort: SessionPort
-  limits: Limits
   vault: CredentialVault
   /**
    * 流归属的查询口 —— 审批应答要判「这条流是不是你的」。
@@ -244,7 +241,6 @@ async function answerEndpoint(
       permission: deps.permissionPort,
     },
     now: Date.now,
-    limits: deps.limits,
     auth: deps.vault,
     // 身份与归属：判定在 `protocol/rpc.ts`，这里只把两者递进去。
     caller: identity,
