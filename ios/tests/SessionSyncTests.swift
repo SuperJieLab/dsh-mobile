@@ -188,7 +188,8 @@ final class SessionSyncTests: XCTestCase {
     }
 
     /// 一份最小的打开帧夹具 —— 只给判据要用的四格。
-    private func snapshot(cursor: Int, records: [SessionRecord]) -> SnapshotFrame {
+    private func snapshot(cursor: Int, records: [SessionRecord],
+                          projections: JSONValue = .object([:])) -> SnapshotFrame {
         SnapshotFrame(
             header: SessionWireHeader(version: 1, id: "session-1", createdAt: 0, cwd: nil,
                                       parentSession: nil, isSeeded: false, origin: nil,
@@ -196,9 +197,32 @@ final class SessionSyncTests: XCTestCase {
             cursor: cursor,
             records: records,
             hasMore: false,
-            projections: ProjectionBlock(asOfSeq: cursor, values: .object([:])),
+            projections: ProjectionBlock(asOfSeq: cursor, values: projections),
             assistantStream: nil
         )
+    }
+
+    /// 打开帧带的投影块是这一屏的初值 —— 当前模型与当前权限都从它起。
+    ///
+    /// control 是 App 级、开机就订上的；这一屏晚打开时它的 baseline 早已过去。只在 control
+    /// 上取那两格的结果是它们一直显示 `--`，要等一次真正的变化才出现 —— 真机上「权限只剩
+    /// 目录、当前档不显示」就是这个缺口。
+    func testTheOpeningProjectionsSeedTheModelAndPermissionCells() {
+        let sync = makeSync()
+        var seeded: JSONValue?
+        sync.onProjectionValues = { seeded = $0 }
+
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 1, records: [], projections: .object([
+            "modelSelection": .object([
+                "lastUsed": .object(["provider": .string("deepseek"), "model": .string("chat")]),
+                "next": .object(["provider": .string("deepseek"), "model": .string("reasoner")]),
+            ]),
+            "permissions": .object(["currentValue": .string("workspace-write")]),
+        ])))))
+
+        XCTAssertEqual(sync.displayedModel?.model, "reasoner", "当前模型从打开帧的投影起")
+        XCTAssertEqual(seeded?["permissions"]?["currentValue"]?.string, "workspace-write",
+                       "当前权限也从它起 —— 只靠 control 会让这一格一直是 --")
     }
 
     /// 走真传输的 `SessionSync`（脚本化 URLProtocol）——「受理」这条分支需要真的回包。

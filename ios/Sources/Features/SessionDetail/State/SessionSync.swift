@@ -599,6 +599,13 @@ final class SessionSync {
     /// 之后 control 的 `projection` 会按水位覆盖它（`UsageState` 只认严格更高的水位）。
     func applyOpeningProjections(_ block: ProjectionBlock) {
         applyUsage(UsageView.snapshotOf(block.values, asOfSeq: block.asOfSeq))
+        // 同一块也是**这一屏的初值**：当前模型与当前权限都从这里起，control 的增量之后覆盖。
+        //
+        // 只在 control 上取会漏掉一种常见的顺序：control 是 App 级的、开机就订上了，
+        // 而这一屏是之后才打开的 —— baseline 早已过去，于是那两格一直显示 `--`，
+        // 要等一次真正的变化（切模型、切档位）才会出现。真机上「权限只剩目录」就是这个缺口。
+        models.absorb(projection: block.values["modelSelection"])
+        onProjectionValues?(block.values)
     }
 
     private func applyUsage(_ snapshot: UsageSnapshot) {
