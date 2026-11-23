@@ -19,8 +19,8 @@ import { nonEmptyString } from './fields.ts'
 /**
  * 我们开的一元端点名，两段式。
  *
- * 前八个与上游逐字一致（参数与返回内容仍是我们的，见方案 1.1 的映射表）；
- * 其余挂在 `mobile/` 下：四个「上游只有近似端点」、两个「上游没有」、以及两条鉴权。
+ * 十一个与上游逐字一致（参数与返回内容见各期方案）；剩下三个挂在 `mobile/` 下：
+ * 一个「上游只有近似端点」（`workspaceCreate`），以及两条移动端鉴权。
  */
 export type UnaryEndpointName =
   | 'session/modelCatalog'
@@ -34,8 +34,7 @@ export type UnaryEndpointName =
   | 'session/page'
   | 'permissionPresets/catalog'
   | 'mobile/workspaceCreate'
-  | 'mobile/approvalAnswer'
-  | 'mobile/questionAnswer'
+  | '$events/result'
   | 'mobile/pair'
   | 'mobile/refresh'
 
@@ -52,8 +51,7 @@ export const UNARY_ENDPOINT_NAMES: readonly UnaryEndpointName[] = [
   'session/page',
   'permissionPresets/catalog',
   'mobile/workspaceCreate',
-  'mobile/approvalAnswer',
-  'mobile/questionAnswer',
+  '$events/result',
   'mobile/pair',
   'mobile/refresh',
 ]

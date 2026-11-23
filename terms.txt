@@ -56,6 +56,16 @@ mobile/page;mobile/page;session/page;同上
 pageStart;pageStart;窗口起点（records.first.seq）;随 mobile/page 退场（F3 第 2 期）
 hasOlder;hasOlder;hasMore;随 mobile/page 退场（F3 第 2 期）
 
+# ── 写与应答的退场名（F3 第 3 期：三条写 op 换成上游的形）──────────────
+# `answerId` 的幂等由上游 waterfall 的一次性消费承担；`promptId` 换成上游的
+# `requestId`（同一格，客户端铸、宿主写进 source.rpcId）。两条自造应答端点
+# 换成一条 `$events/result`，结局词汇由客户端直接给上游的那两个词。
+mobile/approvalAnswer;mobile/approvalAnswer;\$events/result;两条自造应答端点退场（F3 第 3 期）
+mobile/questionAnswer;mobile/questionAnswer;\$events/result;同上
+answerId;answerId;（删除）;幂等改由 waterfall 一次性消费承担（F3 第 3 期）
+promptId;promptId;requestId;上游的关联 id 名（F3 第 3 期）
+unknown-approval;unknown-approval;（删除）;上游对已结算事件是幂等 no-op（F3 第 3 期）
+
 # ── 自查样本：规则被改坏时这里先红，不必等仓库真的回潮 ──────────────────
 expect-hit;正在生成的打字机内容
 expect-hit;瞬态帧不进水位
@@ -92,3 +102,10 @@ expect-hit;hasOlder 为假表示到头了
 expect-pass;POST /api/session/page
 expect-pass;窗口起点取 records.first.seq
 expect-pass;hasMore 为真表示上面还有
+expect-hit;POST /api/mobile/approvalAnswer
+expect-hit;answerId 同键重试回放第一次的结论
+expect-hit;promptId 是幂等键
+expect-hit;已经答过了会回 unknown-approval
+expect-pass;POST /api/$events/result
+expect-pass;requestId 用于乐观插入对账
+expect-pass;outcome 的 kind 是 result

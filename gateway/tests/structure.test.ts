@@ -700,7 +700,7 @@ test('the identity scanners tell a call and an endpoint apart from a member read
 
 test('the upstream $events identity has exactly one holder', () => {
   // 宿主的挂起问题会投给**每一个** owner 客户端：两份身份会让同一份审批各存一遍，
-  // 而症状（手机上的卡片消失又出现、应答报 unknown-approval）离成因很远。
+  // 而症状（手机上的卡片消失又出现、应答报一个「已不在」的码）离成因很远。  // terms-ok: 描述症状，不是现役词汇
   const callers = filesUnder(SRC).flatMap(file => {
     const count = openerCallsIn(readFileSync(file, 'utf8'))
     return count === 0 ? [] : [`${where(file)}: ${count}`]
@@ -743,8 +743,7 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'mux.ts', name: 'openRequestOf', shape: 'OpenRequest' },
   { file: 'model.ts', name: 'modelSelectRequestOf', shape: 'ModelSelectMessage' },
   { file: 'command.ts', name: 'commandExecuteRequestOf', shape: 'CommandExecuteMessage' },
-  { file: 'write.ts', name: 'approvalAnswerOf', shape: 'ApprovalAnswerMessage' },
-  { file: 'write.ts', name: 'questionAnswerOf', shape: 'QuestionAnswerMessage' },
+  { file: 'write.ts', name: 'remoteEventResultOf', shape: 'RemoteEventResultMessage' },
   { file: 'write.ts', name: 'sessionPromptOf', shape: 'SessionPromptMessage' },
   { file: 'write.ts', name: 'sessionCreateTargetOf', shape: 'SessionCreateTarget' },
   { file: 'workspace.ts', name: 'workspaceNameOf', shape: 'WorkspaceCreatePayload' },
@@ -1251,7 +1250,7 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
       'DEFAULT_LIMITS', 'positiveOrDefault', 'refused',
       'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
       'modelSelectOf', 'commandExecuteOf', 'sessionCreateOf',
-      'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'questionAnswerValue',
+      'workspaceCreateOf', 'workspaceDeleteOf', 'remoteEventResultValue',
       'ownedAnswerOf', 'sessionPromptValue',
     ],
     types: ['Limits', 'Ports', 'StreamOwners'],
@@ -1441,7 +1440,7 @@ test('the silent-refusal list only names endpoints the table actually registers'
   // 第二份名单与第一份一起漂，正是这条判据要防的东西。
   const known = new Set(registeredEndpointNames())
   // 活性锚：表读空时下面的差集会「通过」。
-  assert.ok(known.size >= 15, `端点表只读到 ${known.size} 个名字 —— 先怀疑这里，别信差集`)
+  assert.ok(known.size >= 14, `端点表只读到 ${known.size} 个名字 —— 先怀疑这里，别信差集`)
 
   const module = await import(pathToFileURL(join(SRC, 'remote/http.ts')).href) as {
     SILENT_REFUSALS?: ReadonlySet<string>
@@ -1560,11 +1559,10 @@ test('L2: broadcast is gone and clientCount survived it', () => {
  * 上行只有一条路（HTTP 一元 op），流是单向的推。给一条流加一种「应答货物」会让同一次应答
  * 有两个入口，而两个入口的失败处置至今不同（一元 op 有错误回包，流里没有）。
  */
-test('L6: approval answers never travel on a stream', () => {
-  // 一条审批应答是**一元调用**（`mobile/approvalAnswer`），不是流的货物。流上只走
-  // 「问题来了」与「问题撤了」，答案从另一条路回去 —— 混在一起会让「谁在等这个答案」
-  // 有两个来源。
-  const endpoint = 'mobile/approvalAnswer'
+test('L6: interactive answers never travel on a stream', () => {
+  // 一条应答是**一元调用**（`$events/result`），不是流的货物。流上只走「问题来了」
+  // 与「问题撤了」，答案从另一条路回去 —— 混在一起会让「谁在等这个答案」有两个来源。
+  const endpoint = '$events/result'
   const streamFiles = filesUnder(join(SRC, 'remote'))
   assert.ok(streamFiles.length >= 3, `only scanned ${streamFiles.length} transport files`)
   for (const file of streamFiles) {

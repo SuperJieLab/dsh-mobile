@@ -1,5 +1,5 @@
 /**
- * 八个写端点在新路径上的行为（判据 3 的写半边、判据 8）。
+ * 七个写端点在新路径上的行为（判据 3 的写半边、判据 8）。
  *
  * 写端点比读端点多一条要守的：**拒绝不能变成受理**。`ok` 在这些 op 上的含义是
  * 「已投递 / 已受理 / 已装好」，不是「执行成功」—— 把它们混起来，客户端会在一次
@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { approvalAnswerValue } from '../../src/protocol/rpc.ts'
+import { remoteEventResultValue } from '../../src/protocol/rpc.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
 import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
@@ -44,14 +44,9 @@ const deps = (): RpcListenerDeps => ({
   writePort: {
     createSession: async () => 's-new',
     promptSession: async (prompt) => (prompt.sessionId === 's-1' ? 'accepted' : 'unknown-session'),
-    // 三个结局各给一个 id：已知 → delivered；上游拒 → undelivered；其余 → 没有这条挂起项。
-    answerApproval: async (answer) => {
-      if (answer.eventId === 'e-1') return 'delivered'
-      if (answer.eventId === 'e-reject') return 'undelivered'
-      return 'unknown-approval'
-    },
-    answerQuestion: async (answer) => (answer.eventId === 'q-1' ? 'delivered'
-      : answer.eventId === 'q-bad' ? 'invalid-answers' : 'unknown-approval'),
+    // 两个结局各给一个 id：已知 → delivered；上游拒 → undelivered。
+    // 「不在暂存表里」不是网关的结局 —— 上游对已结算事件是 no-op。
+    answerEvent: async (result) => (result.eventId === 'e-reject' ? 'undelivered' : 'delivered'),
   },
   modelPort: {
     catalog: async () => ({ groups: [], failures: [] }) as never,
@@ -110,40 +105,26 @@ function resultOf(envelope: Record<string, unknown>): Record<string, unknown> {
   return envelope.result as Record<string, unknown>
 }
 
-test('questionAnswer：形状、越权、没这条、与卡不匹配各回各的码，成功时回 eventId', async () => {
+test('$events/result：形状、越权、上游拒各回各的码，成功时回 {ok:true}', async () => {
   await withListener(async (post) => {
-    const good = { id: 'q-1-1', selected: ['A'] }
-    const ok = resultOf(await post('/api/mobile/questionAnswer', {
-      eventId: 'q-1', answerId: 'a-1', clientId: OWN_CLIENT_ID, answers: [good],
-    }))
-    assert.deepEqual(ok, { ok: true, value: { eventId: 'q-1' } })
+    const okArgs = {
+      clientId: OWN_CLIENT_ID, eventId: 'e-1',
+      outcome: { kind: 'result', value: { answers: [{ id: 'q-1-1', selected: ['A'] }] } },
+    }
+    const ok = resultOf(await post('/api/$events/result', okArgs))
+    assert.deepEqual(ok, { ok: true, value: { ok: true } },
+      '内容不进网关的应答 —— 上游的 {ok:true} 原样当 value 交出去')
 
-    const emptyList = resultOf(await post('/api/mobile/questionAnswer', {
-      eventId: 'q-1', answerId: 'a-2', clientId: OWN_CLIENT_ID, answers: [],
-    }))
-    assert.equal((emptyList.error as { code: string }).code, 'invalid-request', '空数组不是一批答案')
+    const malformed = resultOf(await post('/api/$events/result', { clientId: OWN_CLIENT_ID, eventId: 'e-1' }))
+    assert.equal((malformed.error as { code: string }).code, 'invalid-request', '缺 outcome 不是一次应答')
 
-    const unanswered = resultOf(await post('/api/mobile/questionAnswer', {
-      eventId: 'q-1', answerId: 'a-3', clientId: OWN_CLIENT_ID, answers: [{ id: 'q-1-1', selected: [] }],
-    }))
-    assert.equal((unanswered.error as { code: string }).code, 'invalid-request', '既没选也没填的一项不算作答')
-
-    const intruder = resultOf(await post('/api/mobile/questionAnswer', {
-      eventId: 'q-1', answerId: 'a-4', clientId: 'c-someone-else', answers: [good],
-    }))
+    const intruder = resultOf(await post('/api/$events/result', { ...okArgs, clientId: 'c-someone-else' }))
     assert.equal((intruder.error as { code: string }).code, 'not-owner',
-      '与审批同一处判定 —— 别人的流答不了')
+      '归属判定还是那一处 —— 别人的流答不了')
 
-    const gone = resultOf(await post('/api/mobile/questionAnswer', {
-      eventId: 'q-gone', answerId: 'a-5', clientId: OWN_CLIENT_ID, answers: [good],
-    }))
-    assert.equal((gone.error as { code: string }).code, 'unknown-approval', '沿用既有码，不为问题新造')
-
-    const mismatch = resultOf(await post('/api/mobile/questionAnswer', {
-      eventId: 'q-bad', answerId: 'a-6', clientId: OWN_CLIENT_ID, answers: [good],
-    }))
-    assert.equal((mismatch.error as { code: string }).code, 'invalid-request',
-      '「答案与卡不匹配」对客户端说的与「载荷形状不对」是同一件事')
+    // 上游拒了：问题还挂着，不能说 ok。
+    const refused = resultOf(await post('/api/$events/result', { ...okArgs, eventId: 'e-reject' }))
+    assert.equal((refused.error as { code: string }).code, 'internal-error')
   })
 })
 
@@ -154,8 +135,8 @@ test('七个写端点各发一次合法请求全部 ok，且 value 带着这次�
     ['/api/session/create', { request: {} }, { sessionId: 's-new' }],
     ['/api/mobile/workspaceCreate', { name: 'proj' }, { workspaceId: 'w-proj', title: 'proj', created: true }],
     ['/api/workspace/delete', { request: { workspaceId: 'w-1' } }, {}],
-    ['/api/mobile/approvalAnswer', { eventId: 'e-1', decision: 'allow', answerId: 'a-1', clientId: OWN_CLIENT_ID }, { eventId: 'e-1' }],
-    ['/api/session/prompt', { sessionId: 's-1', promptId: 'p-1', text: 'hi' }, { sessionId: 's-1' }],
+    ['/api/$events/result', { clientId: OWN_CLIENT_ID, eventId: 'e-1', outcome: { kind: 'result', value: 'allowed-once' } }, { ok: true }],
+    ['/api/session/prompt', { request: { requestId: 'r-1', sessionId: 's-1', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } }, { accepted: true }],
   ]
   await withListener(async (post) => {
     for (const [path, args, expected] of calls) {
@@ -180,9 +161,9 @@ test('每个写端点的拒绝码与旧路径一致 —— 拒了就不能说 ok
       ['/api/mobile/workspaceCreate', { name: ' ' }, 'invalid-request'],
       ['/api/workspace/delete', {}, 'invalid-request'],
       ['/api/workspace/delete', { workspaceId: 'w-1' }, 'invalid-request'],
-      ['/api/mobile/approvalAnswer', { eventId: 'e-9', decision: 'allow', answerId: 'a-1', clientId: OWN_CLIENT_ID }, 'unknown-approval'],
-      ['/api/mobile/approvalAnswer', {}, 'invalid-request'],
-      ['/api/session/prompt', { sessionId: 's-9', promptId: 'p-1', text: 'hi' }, 'unknown-session'],
+      ['/api/$events/result', { clientId: OWN_CLIENT_ID, eventId: 'e-reject', outcome: { kind: 'result', value: 'rejected' } }, 'internal-error'],
+      ['/api/$events/result', {}, 'invalid-request'],
+      ['/api/session/prompt', { request: { requestId: 'r-1', sessionId: 's-9', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } }, 'unknown-session'],
       ['/api/session/prompt', {}, 'invalid-request'],
       ['/api/session/create', { request: { workspaceId: '' } }, 'invalid-request'],
       ['/api/session/create', { workspaceId: 'w-1' }, 'invalid-request'],
@@ -195,7 +176,7 @@ test('每个写端点的拒绝码与旧路径一致 —— 拒了就不能说 ok
   })
 })
 
-test('判据 8：未知键不被拒，`promptId` 不改名', async () => {
+test('判据 8：未知键不被拒 —— 容器里多一格照样受理', async () => {
   await withListener(async (post) => {
     // 多余的键被忽略而不是拒答：容器里那些宿主认得的键靠的正是这份宽松，
     // 收紧成「未知键一律拒」会把所有旧客户端一次打死。
@@ -204,13 +185,18 @@ test('判据 8：未知键不被拒，`promptId` 不改名', async () => {
     }))
     assert.equal(page.ok, true, '未知键该被忽略')
 
-    // 上游把这一格叫 `requestId`，我们仍叫 `promptId` —— 本期只换信封，不改 wire 名。
-    const withPromptId = resultOf(await post('/api/session/prompt', { sessionId: 's-1', promptId: 'p-1', text: 'hi' }))
-    assert.equal(withPromptId.ok, true, '`promptId` 仍是这个名字')
+    const prompt = resultOf(await post('/api/session/prompt', {
+      request: {
+        requestId: 'r-1', sessionId: 's-1', mode: 'queue',
+        content: [{ type: 'text', text: 'hi' }], somethingElse: 1,
+      },
+    }))
+    assert.equal(prompt.ok, true, 'prompt 容器里的未知键同样忽略')
 
-    const withRequestId = resultOf(await post('/api/session/prompt', { sessionId: 's-1', requestId: 'p-1', text: 'hi' }))
-    assert.equal(withRequestId.ok, false, '照上游改名会让旧客户端全挂 —— 这一格不许被当成 promptId')
-    assert.equal((withRequestId.error as Record<string, unknown>).code, 'invalid-request')
+    // 上一期的扁平形状：少一层容器就是畸形，不是「旧键名」。
+    const flat = resultOf(await post('/api/session/prompt', { sessionId: 's-1', requestId: 'r-1', text: 'hi' }))
+    assert.equal(flat.ok, false)
+    assert.equal((flat.error as Record<string, unknown>).code, 'invalid-request')
   })
 })
 
@@ -221,26 +207,25 @@ test('判据 8：可应答标记被读 —— canAnswer 为假的身份答不了
   const write = {
     createSession: async () => 's-unused',
     promptSession: async () => 'accepted' as const,
-    answerApproval: async (answer: { eventId: string }) => {
-      delivered.push(answer.eventId)
+    answerEvent: async (result: { eventId: string }) => {
+      delivered.push(result.eventId)
       return 'delivered' as const
     },
-    answerQuestion: async () => 'delivered' as const,
   }
   const owners = { ownerOf: () => 'i-owner' }
-  const args = { eventId: 'e-1', decision: 'allow', answerId: 'a-1', clientId: 'c-1' }
+  const args = { clientId: 'c-1', eventId: 'e-1', outcome: { kind: 'result', value: 'allowed-once' } }
 
-  const muted = await approvalAnswerValue(args, write, { id: 'i-owner', canAnswer: false }, owners)
+  const muted = await remoteEventResultValue(args, write, { id: 'i-owner', canAnswer: false }, owners)
   assert.equal(muted.ok, false)
   assert.equal(muted.ok ? '' : muted.error.code, 'not-owner')
   assert.deepEqual(delivered, [], '不可应答的身份一个字节都不该投递')
 
-  const allowed = await approvalAnswerValue(args, write, { id: 'i-owner', canAnswer: true }, owners)
+  const allowed = await remoteEventResultValue(args, write, { id: 'i-owner', canAnswer: true }, owners)
   assert.equal(allowed.ok, true)
   assert.deepEqual(delivered, ['e-1'])
 
   // 同一条流、另一个身份：流在，但不是你的（真端口上的版本是判据 7）。
-  const intruder = await approvalAnswerValue(args, write, { id: 'i-other', canAnswer: true }, owners)
+  const intruder = await remoteEventResultValue(args, write, { id: 'i-other', canAnswer: true }, owners)
   assert.equal(intruder.ok, false)
   assert.equal(intruder.ok ? '' : intruder.error.code, 'not-owner')
   assert.deepEqual(delivered, ['e-1'], '越权那次也没到上游')

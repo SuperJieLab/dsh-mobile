@@ -6,6 +6,9 @@
  * to `ForwardedEvents` (judged on its own in `remote-events.test.ts`) and tells listeners
  * what changed — the frame's shell belongs to the stream pump (`remote/stream.ts`).
  * Here the source is a fake stream and the door is a fake recorder.
+ *
+ * 第 3 期之后中继**不再解释应答**：`outcome` 由客户端给出，原样转发；「还在不在」
+ * 由上游判（对已结算事件是幂等 no-op），本地那张重放表与词汇映射都删了。
  */
 
 import assert from 'node:assert/strict'
@@ -14,8 +17,9 @@ import { test } from 'node:test'
 import { ForwardedEvents } from '../../src/upstream/remote-events.ts'
 import type { HeldApproval } from '../../src/ports/approval.ts'
 import type { UpstreamWireFrame } from '../../src/ports/events.ts'
+import type { RemoteEventResultMessage } from '../../src/wire/write.ts'
 import {
-  ApprovalRelay, ReplayTable, outcomeOfDecision, pumpPrompt, refusalOf,
+  ApprovalRelay, pumpPrompt, refusalOf,
   type RemoteEventAnswerLike,
 } from '../../src/upstream/write.ts'
 import { fakeEventStream, until } from './fake-events.ts'
@@ -62,6 +66,11 @@ async function liveRelay(options: { refuse?: unknown } = {}) {
 
 function waterfallFrame(eventId: string, toolName = 'shell', agentId = 'agent-1'): UpstreamWireFrame {
   return { type: 'waterfall', event: 'approval/request', eventId, agentId, request: { toolName, reason: 'needs write' } }
+}
+
+/** 一条审批应答 —— 三键，没有 `answerId`。  // terms-ok: 说明已退场的键 */
+function approvalAnswer(eventId: string, value: 'allowed-once' | 'rejected'): RemoteEventResultMessage {
+  return { clientId: 'c-test', eventId, outcome: { kind: 'result', value } }
 }
 
 /**
@@ -137,156 +146,78 @@ test('relay: a request with no session is neither held nor broadcast, and the lo
   }
 })
 
-test('relay: wire answer reaches the result door with the one-shot outcome; second answer is unknown', async () => {
+test('relay: 应答的 outcome 原样到达结果门，身份换成网关自己的那一个', async () => {
   const { feed, results, relay, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
 
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k', clientId: 'c-test' }), 'delivered')
+    assert.equal(await relay.answerEvent(approvalAnswer('e1', 'rejected')), 'delivered')
     assert.deepEqual(results, [{ clientId: 'client-1', eventId: 'e1', outcome: { kind: 'result', value: 'rejected' } }],
-      'the answer carries the source’s identity — the relay does not mint one')
+      '网关不翻译词汇、不铸身份 —— 它只把手机那条换成自己的上游身份')
 
-    // One-shot: the question is gone; a different answer meets unknown-approval.
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2', clientId: 'c-test' }), 'unknown-approval')
+    // 本地暂存项跟着这次结算走：不等 cancel 帧。
+    assert.deepEqual(relay.held(), [], 'answered questions do not wait for the cancel frame to leave the replay set')
   } finally {
     stop()
   }
 })
 
-test('relay: a retried answerId replays the first outcome without a second delivery', async () => {
+test('relay: 同一条再答一次照样投出去 —— 由上游判 no-op，网关不判「还在不在」', async () => {
   const { feed, results, relay, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
 
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'same', clientId: 'c-test' }), 'delivered')
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'same', clientId: 'c-test' }), 'delivered',
-      'the first outcome is what a retry must see')
-    assert.equal(results.length, 1)
+    assert.equal(await relay.answerEvent(approvalAnswer('e1', 'rejected')), 'delivered')
+    assert.equal(await relay.answerEvent(approvalAnswer('e1', 'allowed-once')), 'delivered',
+      '上游对已结算事件是幂等 no-op，不是错误')
+    assert.equal(results.length, 2, '两次都真的发出去了 —— 本地替上游下结论就是第二份判据')
   } finally {
     stop()
   }
 })
 
-function questionFrame(eventId: string, agentId = 'agent-1') {
-  return {
-    type: 'waterfall' as const, event: 'user-questions/request', eventId, agentId,
-    request: {
-      questions: [
-        { id: 'q-1', question: '用哪条？', options: [{ label: 'A' }, { label: 'B' }] },
-        { id: 'q-2', question: '同时改测试吗？', options: [{ label: '要' }], multiSelect: true },
-      ],
-    },
-  }
-}
-
-test('relay: 问题应答编码成上游的 answers 形状 —— 不借用审批的结论词汇', async () => {
+test('relay: 问题答案整批原样转发，网关不再读卡上问了几问', async () => {
   const { feed, relay, results, stop } = await liveRelay()
   try {
-    feed.push(questionFrame('q1'))
+    feed.push({
+      type: 'waterfall', event: 'user-questions/request', eventId: 'q1', agentId: 'agent-1',
+      request: { questions: [{ id: 'q-1' }, { id: 'q-2' }] },
+    })
     await until(() => relay.held().length === 1, '问题被收下')
 
-    const outcome = await relay.answerQuestion({
-      eventId: 'q1', answerId: 'k1', clientId: 'c-test',
-      answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: [], custom: '要' }],
+    const outcome = await relay.answerEvent({
+      clientId: 'c-test', eventId: 'q1',
+      // 少一项也照转：完整性的判定在客户端提交前，不在这里。
+      outcome: { kind: 'result', value: { answers: [{ id: 'q-1', selected: ['A'] }] } },
     })
 
     assert.equal(outcome, 'delivered')
-    assert.deepEqual(results[0]?.outcome, {
-      kind: 'result',
-      value: { answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: [], custom: '要' }] },
-    })
+    assert.deepEqual(results[0]?.outcome,
+      { kind: 'result', value: { answers: [{ id: 'q-1', selected: ['A'] }] } })
   } finally {
     stop()
   }
 })
 
-test('relay: 答案没覆盖卡上全部问题就不投递，且这次拒收不占用幂等键', async () => {
+test('relay: next 不给其它投递方结算，所以它不删本地暂存项', async () => {
   const { feed, relay, results, stop } = await liveRelay()
   try {
-    feed.push(questionFrame('q1'))
-    await until(() => relay.held().length === 1, '问题被收下')
+    feed.push(waterfallFrame('e1'))
+    await until(() => relay.held().length === 1, 'the question is held')
 
-    const missing = await relay.answerQuestion({
-      eventId: 'q1', answerId: 'k1', clientId: 'c-test', answers: [{ id: 'q-1', selected: ['A'] }],
-    })
-    assert.equal(missing, 'invalid-answers', '半张卡不投 —— 上游会把它当成整批的答案')
-    assert.equal(results.length, 0, '一次都不该投')
-
-    const extra = await relay.answerQuestion({
-      eventId: 'q1', answerId: 'k2', clientId: 'c-test',
-      answers: [
-        { id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: ['要'] }, { id: 'q-3', selected: ['X'] },
-      ],
-    })
-    assert.equal(extra, 'invalid-answers', '多一项同样不算覆盖 —— 一个不缺、一个不多')
-    assert.equal(results.length, 0, '也不该投')
-
-    const fixed = await relay.answerQuestion({
-      eventId: 'q1', answerId: 'k1', clientId: 'c-test',
-      answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: ['要'] }],
-    })
-    assert.equal(fixed, 'delivered', '改对之后用同一个 answerId 必须投得上去 —— 拒收不该占住这个键')
+    assert.equal(await relay.answerEvent({ clientId: 'c-test', eventId: 'e1', outcome: { kind: 'next' } }), 'delivered')
     assert.equal(results.length, 1)
-  } finally {
-    stop()
-  }
-})
-
-test('relay: 用错端点回 invalid-answers，且不往上投 —— 静默编错词汇比拒绝更坏', async () => {
-  const { feed, relay, results, stop } = await liveRelay()
-  try {
-    feed.push(questionFrame('q1'))
-    await until(() => relay.held().length === 1, '问题被收下')
-
-    const wrong = await relay.answerApproval({ eventId: 'q1', decision: 'allow', answerId: 'k9', clientId: 'c-test' })
-    assert.equal(wrong, 'invalid-answers', '拿审批的 decision 去答一条问题，上游会拒；那说的不是事实')
-    assert.equal(results.length, 0)
-  } finally {
-    stop()
-  }
-})
-
-test('relay: 两类共用同一张重放表 —— 同一个 answerId 跨类只投一次', async () => {
-  const { feed, relay, results, stop } = await liveRelay()
-  try {
-    feed.push(waterfallFrame('a1'))
-    feed.push(questionFrame('q1'))
-    await until(() => relay.held().length === 2, '两类都在表里')
-
-    assert.equal(await relay.answerApproval({ eventId: 'a1', decision: 'allow', answerId: 'k', clientId: 'c-test' }), 'delivered')
-    // 同一个键答另一条 —— 拿到的是第一次的结局，不是第二次投递。
-    assert.equal(await relay.answerQuestion({
-      eventId: 'q1', answerId: 'k', clientId: 'c-test',
-      answers: [{ id: 'q-1', selected: ['A'] }, { id: 'q-2', selected: ['要'] }],
-    }), 'delivered')
-    assert.equal(results.length, 1, '两张独立的表会让这里变成 2 —— 那正是这条要排除的形态')
-  } finally {
-    stop()
-  }
-})
-
-test('relay: 答得太早得到的 unknown-approval 会被重放 —— 同一 answerId 不再投第二次', async () => {
-  const { feed, relay, results, stop } = await liveRelay()
-  try {
-    // 客户端在挂起项到达之前就答了：这是一种真实交错（重连后先发后收）。
-    const early = await relay.answerApproval({ eventId: 'e-late', decision: 'allow', answerId: 'k', clientId: 'c-test' })
-    assert.equal(early, 'unknown-approval')
-
-    feed.push(waterfallFrame('e-late'))
-    await until(() => relay.held().length === 1, '那条之后到了')
-
-    const retried = await relay.answerApproval({ eventId: 'e-late', decision: 'allow', answerId: 'k', clientId: 'c-test' })
-    assert.equal(retried, 'unknown-approval', '同一 answerId 重放第一次的结局 —— 契约只豁免 invalid-answers')
-    assert.equal(results.length, 0, '重放不是交付：一次都不该投')
+    assert.deepEqual(relay.held().map(held => held.eventId), ['e1'],
+      '还有别的投递方没答，这一条不该从重放集合里消失')
   } finally {
     stop()
   }
 })
 
 test('relay: a refused answer is not reported as delivered, and the question stays held', async () => {
-  // What the runtime does now (`dsh-api-gateway/lib/index.js:961-977` at 0.2.1-alpha.3):
+  // What the runtime does (`dsh-api-gateway/lib/index.js:961-977` at 0.2.1-alpha.3):
   // the `$events/result` door validates the Peer, so a mismatch comes back as a value,
   // not a throw. Treating that as "delivered" hides a turn that is still waiting.
   const { feed, results, relay, stop } = await liveRelay({
@@ -296,13 +227,10 @@ test('relay: a refused answer is not reported as delivered, and the question sta
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
 
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'deny', answerId: 'k', clientId: 'c-test' }), 'undelivered')
+    assert.equal(await relay.answerEvent(approvalAnswer('e1', 'rejected')), 'undelivered')
     assert.equal(results.length, 1, 'the answer still goes out exactly once')
     assert.deepEqual(relay.held().map(held => held.eventId), ['e1'],
       'the question is still open upstream — dropping it here would leave the phone with no way to retry')
-
-    // A second attempt is a second delivery attempt, not a replay of a success.
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k2', clientId: 'c-test' }), 'undelivered')
   } finally {
     stop()
   }
@@ -319,8 +247,8 @@ test('refusalOf: reads the gateway’s encoded failure, and only that', () => {
   assert.equal(refusalOf({ ok: false }), 'unknown', 'a refusal without a readable code still counts as one')
 })
 
-test('relay: a cancel frame clears the question; late answer meets unknown-approval and the phone is told', async () => {
-  const { feed, sink, relay, stop } = await liveRelay()
+test('relay: a cancel frame clears the question; a late answer still goes out and upstream no-ops it', async () => {
+  const { feed, sink, results, relay, stop } = await liveRelay()
   try {
     feed.push(waterfallFrame('e1'))
     await until(() => relay.held().length === 1, 'the question is held')
@@ -328,7 +256,9 @@ test('relay: a cancel frame clears the question; late answer meets unknown-appro
     await until(() => sink.changes.length === 2, 'the cancel is announced')
 
     assert.deepEqual(sink.changes.at(-1), { type: 'cancel', eventId: 'e1' })
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k', clientId: 'c-test' }), 'unknown-approval')
+    assert.equal(await relay.answerEvent(approvalAnswer('e1', 'allowed-once')), 'delivered',
+      '迟到的应答照发：上游知道这条已经结算，回一个 no-op')
+    assert.equal(results.length, 1)
   } finally {
     stop()
   }
@@ -412,7 +342,7 @@ test('relay: the source dying drops held questions, and the next generation star
     feed.end()
     await until(() => !events.ready, 'the source is gone')
     assert.deepEqual(relay.held(), [], 'the previous identity’s questions are not carried over')
-    assert.equal(await relay.answerApproval({ eventId: 'e1', decision: 'allow', answerId: 'k', clientId: 'c-test' }), 'unknown-approval',
+    assert.equal(await relay.answerEvent(approvalAnswer('e1', 'allowed-once')), 'undelivered',
       'and an answer that arrives afterwards cannot be delivered to an identity that is gone')
   } finally {
     stop()
@@ -421,17 +351,39 @@ test('relay: the source dying drops held questions, and the next generation star
 
 // -- prompt 泵 ---------------------------------------------------------------
 
-test('pump: accepted prompt forwards through the controller door', async () => {
+test('pump: the five fields go through the controller door verbatim', async () => {
   const seen: unknown[] = []
   const controller = { async prompt(request: unknown) { seen.push(request); return { accepted: true as const } } }
-  const outcome = await pumpPrompt(controller, { sessionId: 's', text: 'hi', promptId: 'p' })
+  const outcome = await pumpPrompt(controller, {
+    requestId: 'r-1',
+    sessionId: 's',
+    mode: 'steer',
+    content: [{ type: 'text', text: 'hi' }, { type: 'text', text: 'again' }],
+    clientTimeZone: 'Asia/Shanghai',
+  })
   assert.equal(outcome, 'accepted')
-  assert.deepEqual(seen, [{ requestId: 'p', sessionId: 's', mode: 'queue', content: [{ type: 'text', text: 'hi' }] }])
+  assert.deepEqual(seen, [{
+    requestId: 'r-1',
+    sessionId: 's',
+    mode: 'steer',
+    content: [{ type: 'text', text: 'hi' }, { type: 'text', text: 'again' }],
+    clientTimeZone: 'Asia/Shanghai',
+  }], '网关不拼内容、不固定 queue、不丢时区')
+})
+
+test('pump: an absent time zone stays absent — never null, never a guess', async () => {
+  const seen: Record<string, unknown>[] = []
+  const controller = { async prompt(request: Record<string, unknown>) { seen.push(request); return { accepted: true as const } } }
+  await pumpPrompt(controller, {
+    requestId: 'r-1', sessionId: 's', mode: 'queue',
+    content: [{ type: 'text', text: 'hi' }],
+  })
+  assert.equal('clientTimeZone' in (seen[0] ?? {}), false)
 })
 
 test('pump: any not-found namespace folds to unknown-session; other failures rethrow', async () => {
   const failing = (thrown: unknown) => ({ async prompt() { throw thrown } })
-  const prompt = { sessionId: 's', text: 'hi', promptId: 'p' }
+  const prompt = { requestId: 'r-1', sessionId: 's', mode: 'queue' as const, content: [{ type: 'text' as const, text: 'hi' }] }
   const remote = (code: string) => Object.assign(new Error(code), { isDSHRemoteError: true, code })
 
   // The predicate is the shared `/not-found` one, not a hard-coded session code: the
@@ -443,22 +395,4 @@ test('pump: any not-found namespace folds to unknown-session; other failures ret
   // client's to fix by resending.
   await assert.rejects(pumpPrompt(failing(remote('session/busy')), prompt), /session\/busy/)
   await assert.rejects(pumpPrompt(failing(new Error('boom')), prompt), /boom/)
-})
-
-// -- 幂等簿记 ---------------------------------------------------------------
-
-test('decision maps onto the one-shot upstream vocabulary only', () => {
-  assert.equal(outcomeOfDecision('allow'), 'allowed-once')
-  assert.equal(outcomeOfDecision('deny'), 'rejected')
-})
-
-test('replay table: first produce runs once, retries replay the first outcome', () => {
-  const table = new ReplayTable<string>()
-  let runs = 0
-  const first = table.remember('k', () => { runs += 1; return 'first' })
-  assert.equal(first.fresh, true)
-  const retry = table.remember('k', () => { runs += 1; return 'second' })
-  assert.equal(retry.fresh, false)
-  assert.equal(retry.value, 'first')
-  assert.equal(runs, 1)
 })

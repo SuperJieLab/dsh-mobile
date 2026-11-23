@@ -33,7 +33,7 @@ const deps = (): RpcListenerDeps => ({
   },
   vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
   registry: new IdentityRegistry(),
-  writePort: { createSession: unused, promptSession: unused, answerApproval: unused, answerQuestion: unused },
+  writePort: { createSession: unused, promptSession: unused, answerEvent: unused },
   modelPort: {
     catalog: async () => ({ groups: [], failures: [] }) as never,
     select: unused,

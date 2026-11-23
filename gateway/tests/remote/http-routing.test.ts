@@ -29,7 +29,7 @@ async function withListener(
     sessionPort: { list: async () => [], page: async () => ({ records: [], hasMore: false, cursor: -1 }) },
     vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
     registry: new IdentityRegistry(),
-    writePort: { createSession: unused, promptSession: unused, answerApproval: unused, answerQuestion: unused },
+    writePort: { createSession: unused, promptSession: unused, answerEvent: unused },
     modelPort: undefined,
     commandPort: undefined,
     workspacePort: undefined,
@@ -92,6 +92,9 @@ test('退场端点名在 HTTP 上就是 404 纯文本，没有别名期', async 
       // 第 2 期：两条自造读端点被 session/page 与打开帧取代。
       '/api/mobile/snapshot',
       '/api/mobile/page',
+      // 第 3 期：两条自造应答端点被一条 $events/result 取代。
+      '/api/mobile/approvalAnswer',
+      '/api/mobile/questionAnswer',
     ]
     // terms-ok:end
     for (const path of gone) {
@@ -113,6 +116,10 @@ test('合法的两段路径不是 404 —— 正控，防止「全都 404」蒙�
     // 没证明新的在，等于把「分页没了」当成「分页换名了」。
     const paged = await post('/api/session/page', { body: '{}' })
     assert.notEqual(paged.status, 404, 'session/page 必须在表里')
+    // 判据 2 的另一半：`$events/result` 是**换掉**那两条的那一个。带 `$` 的名字要能路由 ——
+    // 它在 URL 里合法，但拼接与分段都容易写错，所以这条正控直接打它。
+    const answered = await post('/api/$events/result', { body: '{}' })
+    assert.notEqual(answered.status, 404, '$events/result 必须在表里')
   })
 })
 

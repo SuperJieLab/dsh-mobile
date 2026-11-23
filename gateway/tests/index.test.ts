@@ -757,10 +757,11 @@ test('判据 7：别人的 clientId 答不了审批，自己的可以；越权�
 
     const stream = await openEventsStream(port, access)
     const send = (args: Record<string, unknown>): Promise<UnaryAnswer> =>
-      call(port, 'mobile/approvalAnswer', args, access)
+      call(port, '$events/result', args, access)
+    const answer = (value: string) => ({ kind: 'result', value })
 
     // ① 一个从未下发过的 clientId：这条流不存在，所以答不了。
-    const stranger = await send({ eventId: 'wire-1', decision: 'allow', answerId: 'a0', clientId: 'c-never-issued' })
+    const stranger = await send({ eventId: 'wire-1', outcome: answer('allowed-once'), clientId: 'c-never-issued' })
     assert.equal(stranger.status, 200, '业务拒绝是 200 —— 身份没问题，只是这条审批不是你的')
     assert.equal(stranger.ok, false)
     assert.equal(stranger.error?.code, 'not-owner')
@@ -771,7 +772,7 @@ test('判据 7：别人的 clientId 答不了审批，自己的可以；越权�
     )
 
     // ② 自己流上的 clientId：放行，问题被消费。
-    const own = await send({ eventId: 'wire-1', decision: 'allow', answerId: 'a1', clientId: stream.clientId })
+    const own = await send({ eventId: 'wire-1', outcome: answer('allowed-once'), clientId: stream.clientId })
     assert.equal(own.status, 200)
     assert.equal(own.ok, true)
     assert.deepEqual(gateway.results, [{
@@ -780,11 +781,11 @@ test('判据 7：别人的 clientId 答不了审批，自己的可以；越权�
       outcome: { kind: 'result', value: 'allowed-once' },
     }], 'the outcome must reach the gateway result door in the upstream vocabulary')
 
-    // ③ 归属判定先于「这条问题还在不在」：同一 clientId 再答一次，得到的是
-    //    unknown-approval（它已经过去了），而不是 not-owner（你不是主人）。
-    const consumed = await send({ eventId: 'wire-1', decision: 'deny', answerId: 'a2', clientId: stream.clientId })
-    assert.equal(consumed.ok, false)
-    assert.equal(consumed.error?.code, 'unknown-approval')
+    // ③ 同一条再答一次：网关不再判「已经过去了」—— 上游对已结算事件是幂等 no-op，
+    //    所以这一发照样放行（第二个到者不会拿到一个与上游相反的结论）。
+    const consumed = await send({ eventId: 'wire-1', outcome: answer('rejected'), clientId: stream.clientId })
+    assert.equal(consumed.ok, true)
+    assert.equal(gateway.results.length, 2, '两次都到了上游，由它决定谁生效')
 
     stream.socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
@@ -905,7 +906,7 @@ test('a write op without an access token is refused exactly like a read', { time
 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
-    const body = await call(port, 'session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }) as UnaryAnswer & { error?: { code?: string } }
+    const body = await call(port, 'session/prompt', { request: { requestId: 'r', sessionId: 's', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } }) as UnaryAnswer & { error?: { code?: string } }
     assert.equal(body.status, 401)
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
@@ -921,7 +922,7 @@ test('session-prompt without a controller behind the port fails as an envelope, 
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
-    const body = await call(port, 'session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'session/prompt', { request: { requestId: 'r', sessionId: 's', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } }, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
     assert.equal(body.status, 200)
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'internal-error')

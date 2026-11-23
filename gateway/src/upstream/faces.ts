@@ -205,8 +205,7 @@ interface ProjectionSnapshotLike {
  */
 export function writePortOver(ctx: HostContext, relay: ApprovalRelay): WritePort {
   return {
-    answerApproval: (answer) => relay.answerApproval(answer),
-    answerQuestion: (answer) => relay.answerQuestion(answer),
+    answerEvent: (result) => relay.answerEvent(result),
     promptSession: async (prompt) => pumpPrompt(promptControllerOver(ctx), prompt),
     createSession: (workspaceId) => createSession(ctx, workspaceId),
   }

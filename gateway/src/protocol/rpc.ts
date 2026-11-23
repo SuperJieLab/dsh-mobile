@@ -20,7 +20,7 @@ import type { WorkspacePort } from '../ports/workspace.ts'
 import type { RemoteResult } from '../wire/unary.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
-import { approvalAnswerOf, questionAnswerOf, sessionPromptOf, type QuestionAnswerMessage } from '../wire/write.ts'
+import { remoteEventResultOf, sessionPromptOf } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
 import type { Identity } from './auth.ts'
@@ -29,7 +29,7 @@ import type { Identity } from './auth.ts'
  * 流归属的查询口 —— 判定侧要看的**唯一一面**。
  *
  * 机制（谁占着 socket、哪条流是谁的）在 `remote/identity-registry.ts`；这里只要
- * 「这条 clientId 的主人是谁」。接口归消费方：`approvalAnswerValue` 是唯一的消费者。
+ * 「这条 clientId 的主人是谁」。接口归消费方：`remoteEventResultValue` 是唯一的消费者。
  */
 export interface StreamOwners {
   /** 这条流的主人（身份 id）；没有这条流时为 `undefined`。 */
@@ -218,77 +218,41 @@ export function ownedAnswerOf(
 }
 
 /**
- * 投递一条 approval 应答。`ok` 意为*已投递给挂起的问题* —— 权威结论
- * 是客户端从流中对账的 `approval/decided` 审计事件。
- */
-export async function approvalAnswerValue(
-  args: Record<string, unknown>,
-  write: WritePort | undefined,
-  caller: Identity | undefined,
-  owners: StreamOwners,
-): Promise<RemoteResult> {
-  if (write === undefined) return refused('internal-error', 'write channel not wired for "approval-answer"')
-  const answer = approvalAnswerOf(args)
-  if (answer === undefined) {
-    return refused('invalid-request', 'approval-answer needs eventId, decision ("allow" | "deny"), answerId and clientId')
-  }
-  const ownership = ownedAnswerOf(answer, caller, owners)
-  if (!ownership.ok) return ownership.refusal
-
-  const outcome = await write.answerApproval(answer)
-  if (outcome === 'invalid-answers') {
-    return refused('invalid-request', `"${answer.eventId}" is not a pending approval — it may be a question`)
-  }
-  if (outcome === 'unknown-approval') {
-    return refused('unknown-approval', `no pending approval answers to "${answer.eventId}" — already decided, cancelled, or never asked`)
-  }
-  if (outcome === 'undelivered') {
-    // 上游拒了这条回答：问题仍挂在它那里等着，所以这里不能说 `ok`（`ok` 意为
-    // 「已投递给挂起的问题」）。原因在上游的 code 里，网关日志已记。
-    return refused('internal-error', `the gateway refused the answer for "${answer.eventId}" — see the gateway log for its code`)
-  }
-  return { ok: true, value: { eventId: answer.eventId } }
-}
-
-/**
- * 一张卡的整批答案。与审批共用归属判定，载荷与结局词汇各走各的。
+ * 投递一条 `$events/result`。
  *
- * `invalid-answers` 有两个来路（中继里判的：答案与卡不匹配、或这条挂起项不是问题），
- * 都翻成 `invalid-request` —— 对客户端是同一件事：你发的这个请求不对。
+ * `ok` 意为**上游收下了这次应答**（结算了 waterfall，或对已结算事件做了幂等 no-op）。
+ * 网关不判「这条还在不在」—— 上游对不存在的 `eventId` 是 no-op，本地判会把它写成
+ * `unknown-approval`，而那与上游的结论相反（F3 第 3 期删掉了那条本地判定）。  // terms-ok: 说明被删的那条判定
+ *
+ * `outcome` 原样交给端口：网关不解释结局词汇，也不按交互种类分派。
  */
-export async function questionAnswerValue(
+export async function remoteEventResultValue(
   args: Record<string, unknown>,
   write: WritePort | undefined,
   caller: Identity | undefined,
   owners: StreamOwners,
 ): Promise<RemoteResult> {
-  if (write === undefined) return refused('internal-error', 'write channel not wired for "question-answer"')
-  const answer: QuestionAnswerMessage | undefined = questionAnswerOf(args)
-  if (answer === undefined) {
+  if (write === undefined) return refused('internal-error', 'write channel not wired for "$events/result"')
+  const result = remoteEventResultOf(args)
+  if (result === undefined) {
     return refused('invalid-request',
-      'question-answer needs eventId, answers (each with an id and a selected list or custom text), answerId and clientId')
+      '$events/result needs clientId, eventId, and outcome{kind:"next"|"result"|"rejected"}')
   }
-  const ownership = ownedAnswerOf(answer, caller, owners)
+  const ownership = ownedAnswerOf(result, caller, owners)
   if (!ownership.ok) return ownership.refusal
 
-  const outcome = await write.answerQuestion(answer)
-  if (outcome === 'invalid-answers') {
-    return refused('invalid-request',
-      `the answers do not match the pending question "${answer.eventId}" — or it is not a question`)
-  }
-  if (outcome === 'unknown-approval') {
-    return refused('unknown-approval',
-      `no pending question answers to "${answer.eventId}" — already answered, cancelled, or never asked`)
-  }
+  const outcome = await write.answerEvent(result)
   if (outcome === 'undelivered') {
     return refused('internal-error',
-      `the gateway refused the answer for "${answer.eventId}" — see the gateway log for its code`)
+      `the gateway refused the answer for "${result.eventId}" — see the gateway log for its code`)
   }
-  return { ok: true, value: { eventId: answer.eventId } }
+  return { ok: true, value: { ok: true } }
 }
 
 /**
  * 收纳一条 prompt。`ok` 意为*已接受进收件箱* —— 回复本体经流到达。
+ *
+ * 五个字段原样交给宿主：`mode` 不再固定成 `queue`，`content` 不再由网关拼一段文本。
  */
 export async function sessionPromptValue(
   args: Record<string, unknown>,
@@ -297,13 +261,14 @@ export async function sessionPromptValue(
   if (write === undefined) return refused('internal-error', 'write channel not wired for "session-prompt"')
   const prompt = sessionPromptOf(args)
   if (prompt === undefined) {
-    return refused('invalid-request', 'session-prompt needs sessionId, promptId, and non-whitespace text')
+    return refused('invalid-request',
+      'session-prompt needs request{requestId, sessionId, mode ("queue" | "steer"), content ([{type:"text",text}])}')
   }
   const outcome = await write.promptSession(prompt)
   if (outcome === 'unknown-session') {
     return refused('unknown-session', `no stored session "${prompt.sessionId}"`)
   }
-  return { ok: true, value: { sessionId: prompt.sessionId } }
+  return { ok: true, value: { accepted: true } }
 }
 
 /**

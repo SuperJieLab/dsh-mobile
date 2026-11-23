@@ -1,48 +1,32 @@
 /**
- * 装配边界：两条写 op 所依赖的能力，由宿主适配层实现。
+ * 装配边界：写路径所依赖的能力，由宿主适配层实现。
  *
- * 接口与「结局词汇」一起住这里：结局是**上游失败的说法**，不是线上形状 ——
- * 手机端只看到 `ok` 或协议错误码，从来看不见 `delivered` / `undelivered`。
+ * 接口与「交付结局」一起住这里：结局是**网关这一层失败的说法**，不是线上形状 ——
+ * 手机端只看到 `ok` 或协议错误码，从来见不到 `delivered` / `undelivered`。
+ *
+ * 上游的结局词汇（`allowed-once` / `rejected` / `{answers:[…]}`）**不经过这里**：
+ * 它在 `wire/write.ts` 的形状里，网关原样转发，没有映射表。
  */
 
-import type { ApprovalAnswerMessage, QuestionAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
+import type { RemoteEventResultMessage, SessionPromptMessage } from '../wire/write.ts'
 
 /**
- * 一条 approval 应答的三个结局，见 {@link WritePort.answerApproval}。
+ * 一次应答交付的两个结局。
  *
- * 具名的理由是可判的：这组字面量要同时出现在端口签名、中继、重放表与协议映射里，
- * 手抄一遍就多一处会漂的地方（漏掉一个值不会报错，只会在某个分支上静默走错）。
+ * 没有「不在暂存表里」这一支：上游对已结算的 `eventId` 是幂等 no-op 并返回成功，
+ * 网关不替它下结论（F3 第 3 期删掉了本地的 `unknown-approval` 判定）。  // terms-ok: 说明被删的那条判定
  */
-export type ApprovalOutcome = 'delivered' | 'unknown-approval' | 'undelivered'
+export type AnswerDelivery = 'delivered' | 'undelivered'
 
-/**
- * 一条问题应答的结局 = 审批那三个 + 一种它独有的失败。
- *
- * `invalid-answers` 是「答案与卡不匹配」或「用错端点」：它发生在中继里（只有那里有
- * `request.questions`，也只有那里知道这条挂起项是哪一类），对客户端说的与「载荷形状不对」
- * 是同一件事，所以协议层把它翻成 `invalid-request`。
- */
-export type QuestionOutcome = ApprovalOutcome | 'invalid-answers'
-
-/** 两条写 op 所依赖的数据源 —— 写契约的唯一依赖。 */
+/** 两条写路径所依赖的数据源 —— 写契约的唯一依赖。 */
 export interface WritePort {
   /**
-   * 把一条回答投递给挂起的 approval。
+   * 把一条 `$events/result` 投递给上游。
    *
-   * 三个结局：`delivered` = 上游收下了（它随后自己结算并记审计）；`unknown-approval` =
-   * 没有挂起 approval 对应该 id（已消费 / 已取消 / 从未问过）；**`undelivered` = 上游
-   * 拒了这条回答**（身份、准入或形状不合适）—— 此时问题仍挂在上游等着，客户端该看到
-   * 一个失败而不是 `ok`。
+   * `delivered` = 上游收下了（结算或幂等 no-op）；`undelivered` = 上游拒了，或网关此刻
+   * 没有上游身份（它认不出这条应答属于谁）。后者该让客户端看到一个失败，而不是 `ok`。
    */
-  answerApproval(answer: ApprovalAnswerMessage): Promise<QuestionOutcome>
-  /**
-   * 把一张卡的整批答案投递给挂起的问题。
-   *
-   * 比审批多一种结局：`invalid-answers` —— 答案与卡不匹配（少一项、多一项、或没有与
-   * `request.questions` 对齐），或者这条挂起项根本不是问题（用错端点）。此时**不投递**，
-   * 也不占用幂等键：客户端改对之后可以用同一个 `answerId` 重发。
-   */
-  answerQuestion(answer: QuestionAnswerMessage): Promise<QuestionOutcome>
+  answerEvent(result: RemoteEventResultMessage): Promise<AnswerDelivery>
   /**
    * 把一条 prompt 收进会话的 agent 收件箱；会话不存在时报告之。
    * 其余上游失败归调用方的 `internal-error`。

@@ -18,13 +18,12 @@ import { sessionCreateTargetOf } from '../wire/write.ts'
 import type { AuthPort } from './auth-ops.ts'
 import type { Identity } from './auth.ts'
 import {
-  approvalAnswerValue,
   commandCatalogOf,
   commandExecuteOf,
   modelCatalogOf,
   modelSelectOf,
   permissionCatalogOf,
-  questionAnswerValue,
+  remoteEventResultValue,
   sessionCreateOf,
   sessionPromptValue,
   workspaceCreateOf,
@@ -58,7 +57,7 @@ export interface UnaryContext {
    * 是因为两条免票端点共用同一个上下文。
    */
   readonly caller: Identity | undefined
-  /** 流归属的查询口 —— 只有审批应答读它。 */
+  /** 流归属的查询口 —— 只有 `$events/result` 读它。 */
   readonly owners: StreamOwners
 }
 
@@ -187,18 +186,11 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
       return workspaceDeleteOf(args, ctx.ports.workspace)
     },
   },
-  'mobile/approvalAnswer': {
-    legacyOp: 'approval-answer',
+  '$events/result': {
+    legacyOp: 'events-result',
     write: true,
     invoke(args, ctx) {
-      return approvalAnswerValue(args, ctx.ports.write, ctx.caller, ctx.owners)
-    },
-  },
-  'mobile/questionAnswer': {
-    legacyOp: 'question-answer',
-    write: true,
-    invoke(args, ctx) {
-      return questionAnswerValue(args, ctx.ports.write, ctx.caller, ctx.owners)
+      return remoteEventResultValue(args, ctx.ports.write, ctx.caller, ctx.owners)
     },
   },
   'session/prompt': {

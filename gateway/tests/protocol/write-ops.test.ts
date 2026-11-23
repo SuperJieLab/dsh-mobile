@@ -1,8 +1,8 @@
 /**
- * 两条写 op 经 `handle` 的分派：写通道没接线时的拒绝、上游结论怎么变成协议应答。
+ * 两条写 op 经端点表的分派：写通道没接线时的拒绝、上游结论怎么变成协议应答。
  *
- * 这里只问「分派对不对」：载荷解析在 `wire/write.ts`，重放表在 `upstream/write.ts`。
- * 三条路径各有一处自己的判据，混在一个文件里时哪一层坏了都指不出。
+ * 这里只问「分派对不对」：载荷解析在 `wire/write.ts`，交付与上游身份在
+ * `upstream/write.ts`。三条路径各有一处自己的判据，混在一个文件里时哪一层坏了都指不出。
  */
 
 import assert from 'node:assert/strict'
@@ -11,24 +11,21 @@ import { test } from 'node:test'
 import { invoke, TEST_CLIENT_ID } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WritePort } from '../../src/ports/write.ts'
-import type { ApprovalAnswerMessage, SessionPromptMessage } from '../../src/wire/write.ts'
+import type { RemoteEventResultMessage, SessionPromptMessage } from '../../src/wire/write.ts'
 
 const PORT: SessionPort = { list: async () => [], page: async () => ({ records: [], hasMore: false, cursor: -1 }) }
 
 /** A fake write port that records what it was asked to do. */
-function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; prompts: SessionPromptMessage[] } {
-  const answers: ApprovalAnswerMessage[] = []
+function fakeWrite(): { port: WritePort; answers: RemoteEventResultMessage[]; prompts: SessionPromptMessage[] } {
+  const answers: RemoteEventResultMessage[] = []
   const prompts: SessionPromptMessage[] = []
   return {
     answers,
     prompts,
     port: {
-      async answerApproval(answer) {
-        answers.push(answer)
-        return answer.eventId === '' ? 'unknown-approval' : 'delivered'
-      },
-      async answerQuestion(answer) {
-        return answer.eventId === '' ? 'unknown-approval' : 'delivered'
+      async answerEvent(result) {
+        answers.push(result)
+        return result.eventId === '' ? 'undelivered' : 'delivered'
       },
       async promptSession(prompt) {
         prompts.push(prompt)
@@ -41,35 +38,55 @@ function fakeWrite(): { port: WritePort; answers: ApprovalAnswerMessage[]; promp
   }
 }
 
-test('handle dispatches approval-answer to the write port and answers delivered', async () => {
-  const { port } = fakeWrite()
-  const answer = await invoke('mobile/approvalAnswer', { eventId: 'a', decision: 'allow', answerId: 'k', clientId: TEST_CLIENT_ID }, { session: PORT, write: port })
-  assert.deepEqual(answer, { ok: true, value: { eventId: 'a'} })
+test('the table dispatches $events/result to the write port and answers {ok:true}', async () => {
+  const { port, answers } = fakeWrite()
+  const args = { clientId: TEST_CLIENT_ID, eventId: 'a', outcome: { kind: 'result', value: 'allowed-once' } }
+  const answer = await invoke('$events/result', args, { session: PORT, write: port })
+  assert.deepEqual(answer, { ok: true, value: { ok: true } })
+  assert.deepEqual(answers, [{ clientId: TEST_CLIENT_ID, eventId: 'a', outcome: { kind: 'result', value: 'allowed-once' } }],
+    'outcome 原样到端口 —— 网关不改这一格')
 })
 
-test('handle: unknown-approval and invalid-request come back as protocol refusals', async () => {
+test('an undelivered answer and a malformed request come back as protocol refusals', async () => {
   const { port } = fakeWrite()
-  const unknown = await invoke('mobile/approvalAnswer', { eventId: 'gone', decision: 'allow', answerId: 'k', clientId: TEST_CLIENT_ID }, { session: PORT, write: { ...port, async answerApproval() { return 'unknown-approval' } } })
-  assert.equal(unknown.ok, false)
-  assert.equal(unknown.ok ? '' : unknown.error.code, 'unknown-approval')
+  const undelivered = await invoke(
+    '$events/result',
+    { clientId: TEST_CLIENT_ID, eventId: 'gone', outcome: { kind: 'result', value: 'rejected' } },
+    // 上游拒了：问题还挂着，这一发不能说 ok。
+    { session: PORT, write: { ...port, answerEvent: async () => 'undelivered' } },
+  )
+  assert.equal(undelivered.ok, false)
+  assert.equal(undelivered.ok ? '' : undelivered.error.code, 'internal-error')
 
-  const malformed = await invoke('mobile/approvalAnswer', { eventId: 'a' }, { session: PORT, write: port })
+  const malformed = await invoke('$events/result', { eventId: 'a' }, { session: PORT, write: port })
   assert.equal(malformed.ok, false)
   assert.equal(malformed.ok ? '' : malformed.error.code, 'invalid-request')
 })
 
-test('handle dispatches session-prompt; unknown session keeps the read-path code', async () => {
-  const { port } = fakeWrite()
-  const ok = await invoke('session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }, { session: PORT, write: port })
-  assert.deepEqual(ok, { ok: true, value: { sessionId: 's'} })
+test('the table dispatches session-prompt; unknown session keeps the read-path code', async () => {
+  const { port, prompts } = fakeWrite()
+  const args = {
+    request: { requestId: 'r', sessionId: 's', mode: 'queue', content: [{ type: 'text', text: 'hi' }] },
+  }
+  const ok = await invoke('session/prompt', args, { session: PORT, write: port })
+  assert.deepEqual(ok, { ok: true, value: { accepted: true } })
+  assert.equal(prompts[0]?.requestId, 'r', '宿主收到的就是客户端铸的那个关联 id')
 
-  const missing = await invoke('session/prompt', { sessionId: 'missing', text: 'hi', promptId: 'p' }, { session: PORT, write: port })
+  const missing = await invoke(
+    'session/prompt',
+    { request: { ...args.request, sessionId: 'missing' } },
+    { session: PORT, write: port },
+  )
   assert.equal(missing.ok, false)
   assert.equal(missing.ok ? '' : missing.error.code, 'unknown-session')
 })
 
 test('write ops without a wired channel refuse as internal-error, not unknown-op', async () => {
-  const reply = await invoke('session/prompt', { sessionId: 's', text: 'hi', promptId: 'p' }, { session: PORT })
+  const reply = await invoke(
+    'session/prompt',
+    { request: { requestId: 'r', sessionId: 's', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } },
+    { session: PORT },
+  )
   assert.equal(reply.ok, false)
   assert.equal(reply.ok ? '' : reply.error.code, 'internal-error')
 })

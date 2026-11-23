@@ -194,13 +194,14 @@ function auditTargetOf(op: string, message: Record<string, unknown>): string {
   const request = requestContainerOf(message) ?? {};
   switch (op) {
     case 'session-prompt':
-      return identifierOf(message.sessionId);
+      return identifierOf(request.sessionId);
     case 'model-select':
       return identifierOf(request.sessionId);
     case 'command-execute':
       // 命令域在线上叫 `agentId`（宿主的参数名）；值与会话 id 同。
       return identifierOf(message.agentId);
-    case 'approval-answer':
+    case 'events-result':
+      // `$events/result` 的参数是平铺的三键（上游的形），目标就是那条挂起项。
       return identifierOf(message.eventId);
     case 'workspace-create':
       return identifierOf(message.name);

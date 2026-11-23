@@ -34,13 +34,13 @@ function tempDir(): string {
 // ── 记的是结果，不是意图 ─────────────────────────────────────────────
 
 test('the result comes from the answer, the target from the request', () => {
-  const accepted = auditEntryOf('session-prompt', { sessionId: 's-1' }, { ok: true, value: {} })
+  const accepted = auditEntryOf('session-prompt', { request: { sessionId: 's-1' } }, { ok: true, value: {} })
   assert.equal(accepted.result, 'ok')
   assert.equal(accepted.target, 's-1')
 
   const refused = auditEntryOf(
     'session-prompt',
-    { sessionId: 's-1' },
+    { request: { sessionId: 's-1' } },
     { ok: false, error: { code: 'unknown-session', message: 'no stored session', details: {} } },
   )
   assert.equal(refused.result, 'refused')
@@ -59,8 +59,8 @@ test('a request without a target records a dash, not a blank', () => {
 
 test('each write op maps to its own target field', () => {
   const cases: [string, Record<string, unknown>, string][] = [
-    ['session-prompt', { sessionId: 's-1' }, 's-1'],
-    ['approval-answer', { eventId: 'e-1' }, 'e-1'],
+    ['session-prompt', { request: { sessionId: 's-1' } }, 's-1'],
+    ['events-result', { eventId: 'e-1' }, 'e-1'],
     ['command-execute', { agentId: 's-2' }, 's-2'],
     // 三条跟着宿主的 `request` 容器走：线上多一层，目标在那层里面。
     ['model-select', { request: { sessionId: 's-4' } }, 's-4'],
@@ -186,7 +186,7 @@ test('a real request through the listener leaves a record', { timeout: 10_000 },
     },
     vault: { authenticate: () => ({ id: 'test-identity', canAnswer: true }) } as unknown as CredentialVault,
     registry: new IdentityRegistry(),
-    writePort: { createSession: unused, promptSession: unused, answerApproval: unused, answerQuestion: unused },
+    writePort: { createSession: unused, promptSession: unused, answerEvent: unused },
     modelPort: undefined,
     commandPort: undefined,
     workspacePort: {

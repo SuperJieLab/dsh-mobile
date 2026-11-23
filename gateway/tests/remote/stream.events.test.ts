@@ -15,7 +15,7 @@ import test from 'node:test'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { attachStreamHandler } from '../../src/remote/server.ts'
-import { approvalAnswerValue } from '../../src/protocol/rpc.ts'
+import { remoteEventResultValue } from '../../src/protocol/rpc.ts'
 import type { ApprovalSource, HeldApproval } from '../../src/ports/approval.ts'
 import type { Server } from 'node:http'
 import { connect, fakeFeed, fakeSource, receive, send } from './harness.ts'
@@ -273,16 +273,15 @@ test('判据 5：换代不换 clientId，登记仍指着同一个身份', { time
     // 客户端唯一在意的那件事：换代之后，手里这个 id 还能答。plan 判据 5 写的就是这一句 ——
     // 只断言 `ownerOf` 是它的前半，走一遍判定与投递才是后半。
     const delivered: string[] = []
-    const answer = await approvalAnswerValue(
-      { eventId: 'e-1', decision: 'allow', answerId: 'a-1', clientId: firstId! },
+    const answer = await remoteEventResultValue(
+      { clientId: firstId!, eventId: 'e-1', outcome: { kind: 'result', value: 'allowed-once' } },
       {
         createSession: async () => 's-unused',
         promptSession: async () => 'accepted' as const,
-        answerApproval: async (message) => {
-          delivered.push(message.eventId)
+        answerEvent: async (result) => {
+          delivered.push(result.eventId)
           return 'delivered' as const
         },
-        answerQuestion: async () => 'delivered' as const,
       },
       { id: 'i-1', canAnswer: true },
       handler.registry,

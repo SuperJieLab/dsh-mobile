@@ -42,8 +42,7 @@ const deps = (): RpcListenerDeps => ({
   writePort: {
     createSession: async () => 's-new',
     promptSession: async () => 'accepted',
-    answerApproval: async () => 'delivered',
-    answerQuestion: async () => 'delivered',
+    answerEvent: async () => 'delivered',
   },
   modelPort: undefined,
   commandPort: undefined,
@@ -129,7 +128,7 @@ test('无票打 mobile/refresh 同理，且续期被拒是 unauthenticated', asy
 
 test('写端点在新路径上进审计，且记的是旧 op 名', async () => {
   await withListener(async (post) => {
-    await post('/api/session/prompt', { sessionId: 's-1', promptId: 'p-1', text: 'hi' })
+    await post('/api/session/prompt', { request: { requestId: 'r-1', sessionId: 's-1', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } })
     assert.equal(records.length, 1, '一次写 op 恰好一条审计')
     assert.equal(records[0].op, 'session-prompt', '审计的 op 字段沿用旧名，历史文件才是同一套词汇')
     assert.equal(records[0].result, 'ok')
@@ -156,8 +155,7 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
     'session/create',
     'mobile/workspaceCreate',
     'workspace/delete',
-    'mobile/approvalAnswer',
-    'mobile/questionAnswer',
+    '$events/result',
     'session/prompt',
   ]
   assert.deepEqual([...writes].sort(), [...expectedWrites].sort(),
@@ -172,10 +170,10 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
       assert.equal(records.length, before + 1, `${name} 是写端点，一次调用必须恰好一条审计`)
     }
 
-    // 新端点专用的那一条：**审计的 op 是旧名**（`question-answer`），不是端点名 ——
+    // 新端点专用的那一条：**审计的 op 是旧名**（`events-result`），不是端点名 ——
     // 换名会让同一件事在历史审计与 `/metrics` 曲线里有两个写法。
-    const answerRecord = records.find(record => record.op === 'question-answer')
-    assert.ok(answerRecord !== undefined, '一次 questionAnswer 调用必须记成 op=question-answer')
+    const answerRecord = records.find(record => record.op === 'events-result')
+    assert.ok(answerRecord !== undefined, '一次 $events/result 调用必须记成 op=events-result')
     assert.equal(answerRecord.result, 'refused', '参数留空会被拒，但拒绝也要记')
 
     const afterWrites = records.length
@@ -191,7 +189,7 @@ test('无票且 method 与路径不一致 → 401，不是 200 的 invalid-reque
   // 而契约 §4.5 说「除 pair/refresh 之外的一切请求必须带 Authorization」。
   await withListener(async (post) => {
     const response = await post(
-      '/api/session/prompt', { sessionId: 's', promptId: 'p', text: 'hi' }, '', 'session/prompt-nope',
+      '/api/session/prompt', { request: {} }, '', 'session/prompt-nope',
     )
     assert.equal(response.status, 401, '先判身份：没有票就没有业务答复')
     const result = (await response.json() as { result: Record<string, unknown> }).result

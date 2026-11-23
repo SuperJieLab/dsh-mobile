@@ -1,153 +1,167 @@
 /**
  * 两端共守的写载荷形状与它的编解码。手机端有一份对应定义
- * （`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift`）—— 改字段那边必须同改。
+ * （`ios/Sources/Core/Gateway/Rpc/Wire/RpcMessages.swift`）—— 改字段那边必须同改。
  *
  * 写载荷从严校验，与读路径不同：畸形决定被静默执行，等于凭猜测运行一条远程
  * 命令，因此每条畸形写都以 `invalid-request` 拒绝。
  *
  * 这里**只有形状与解析**。答应的结局词汇住在 `ports/write.ts`（装配边界），
- * 结论词映射住在 `upstream/write.ts`（上游的词汇）。
+ * 结论是否有地方翻译：**没有**。`allowed-once` / `rejected` / `{answers:[…]}` 是
+ * 上游的词汇，客户端直接发、网关原样转 —— 一张映射表就是第二份词汇（F3 第 3 期删掉了
+ * 那张 `allow`→`allowed-once` 的表）。
  *
- * `answerId` 的幂等语义是**协议承诺**：同键重试必须得到第一次的结论。实现那张
- * 重放表在宿主机侧（`upstream/write.ts` 的 `ReplayTable`），手机端看不见表，
- * 但可以依赖它的效果。
+ * `answerId` 已经退场（F3 第 3 期）：幂等由上游 waterfall 的一次性消费承担 ——  // terms-ok: 说明已退场的键
+ * 对已结算的事件再答一次是**幂等 no-op**，不是错误。客户端不再需要铸键。
  */
 import { nonEmptyString, requestContainerOf } from './fields.ts'
 
-/** 校验通过的 `approval-answer` 消息。 */
-export interface ApprovalAnswerMessage {
-  /**
-   * 本回答针对的 `$events` waterfall 帧 `eventId` —— 手机看到的
-   * `approval-request` 帧所带的 id（投影出的请求没有审计 id，这是唯一的
-   * 端到端地址）。
-   */
-  eventId: string
-  /** 客户端的选择；投递时映射到上游的结论词汇。 */
-  decision: 'allow' | 'deny'
-  /** 客户端铸造的幂等键。同键重试重放第一次的结果。 */
-  answerId: string
-  /**
-   * 这条审批是**在哪条流上看到的** —— 网关据此判「这次应答是不是这条流的主人在答」。
-   *
-   * 必填而不是可选：缺一格就无法归属，而「缺了当没带」会让归属判定静默失效 ——
-   * 宁可整条 `invalid-request`，也不要一条没有主人的应答。
-   */
-  clientId: string
+/** 上游应答里的一种结局。三种都收，客户端目前只发 `result`。 */
+export type RemoteEventOutcome =
+  | { readonly kind: 'next' }
+  | { readonly kind: 'result'; readonly value?: unknown }
+  | { readonly kind: 'rejected'; readonly error: RemoteEventRejection }
+
+/** `rejected` 携带的错误。`code` 与 `details` 原样透传，不解释。 */
+export interface RemoteEventRejection {
+  readonly name: string
+  readonly message: string
+  readonly code?: string
+  readonly details?: unknown
 }
 
 /**
- * 解析并校验一条 `approval-answer` 载荷，完全不像回答时返回 `undefined`。
+ * 校验通过的 `$events/result` 消息。
+ *
+ * `eventId` 指向上游 `waterfall` 帧上的那一个；`clientId` 是**手机在网关这条流上**
+ * 的登记键（`ready` 帧发的那个），不是上游的身份 —— 那个换算只发生在
+ * `upstream/write.ts`，协议层不碰。
+ */
+export interface RemoteEventResultMessage {
+  readonly clientId: string
+  readonly eventId: string
+  readonly outcome: RemoteEventOutcome
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function rejectionOf(raw: unknown): RemoteEventRejection | undefined {
+  if (!isPlainObject(raw)) return undefined
+  const name = nonEmptyString(raw.name)
+  const message = nonEmptyString(raw.message)
+  if (name === undefined || message === undefined) return undefined
+  const code = raw.code === undefined ? undefined : nonEmptyString(raw.code)
+  if (raw.code !== undefined && code === undefined) return undefined
+  return {
+    name,
+    message,
+    ...(code === undefined ? {} : { code }),
+    ...(raw.details === undefined ? {} : { details: raw.details }),
+  }
+}
+
+/** 把 `outcome` 收成三支之一；不认识的 kind 或残缺的形状一律无。 */
+function outcomeOf(raw: unknown): RemoteEventOutcome | undefined {
+  if (!isPlainObject(raw)) return undefined
+  switch (raw.kind) {
+    case 'next':
+      return { kind: 'next' }
+    case 'result':
+      // `value` 缺席是合法的（结算成 `undefined`）；显式给 `undefined` 不是。
+      // 后者只在直接调用本函数时构造得出来，但两者在线上会变成同一个形状 ——
+      // 于是「带了 value」这件事静默消失。
+      if ('value' in raw && raw.value === undefined) return undefined
+      return 'value' in raw ? { kind: 'result', value: raw.value } : { kind: 'result' }
+    case 'rejected': {
+      const error = rejectionOf(raw.error)
+      return error === undefined ? undefined : { kind: 'rejected', error }
+    }
+    default:
+      return undefined
+  }
+}
+
+/**
+ * 解析并校验一条 `$events/result` 载荷，完全不像应答时返回 `undefined`。
  * 刻意从严 —— 见模块注释。
  */
-export function approvalAnswerOf(message: Record<string, unknown>): ApprovalAnswerMessage | undefined {
-  const eventId = nonEmptyString(message.eventId)
-  const decision = message.decision === 'allow' || message.decision === 'deny' ? message.decision : undefined
-  const answerId = nonEmptyString(message.answerId)
+export function remoteEventResultOf(message: Record<string, unknown>): RemoteEventResultMessage | undefined {
   const clientId = nonEmptyString(message.clientId)
-  if (eventId === undefined || decision === undefined || answerId === undefined || clientId === undefined) {
-    return undefined
-  }
-  return { eventId, decision, answerId, clientId }
+  const eventId = nonEmptyString(message.eventId)
+  if (clientId === undefined || eventId === undefined) return undefined
+  const outcome = outcomeOf(message.outcome)
+  if (outcome === undefined) return undefined
+  return { clientId, eventId, outcome }
 }
 
-/** 一个问题的一道答案。`selected` 可为空数组（只填了自定义文本）。 */
-export interface QuestionAnswerItem {
-  /** 对应 `question.id`。 */
-  readonly id: string
-  /** 选中的选项 label；多选时可多项。 */
-  readonly selected: readonly string[]
-  /** 「其它」的自由文本，可与选项并存。 */
-  readonly custom?: string
+/** prompt 里的一段内容。本期只有文本 —— 附件在 spec 范围外。 */
+export interface PromptTextPart {
+  readonly type: 'text'
+  readonly text: string
 }
 
 /**
- * 校验通过的问题应答消息。
+ * 校验通过的 `session/prompt` 消息 —— 上游 `SessionPromptRequest` 的形。
  *
- * 与审批的载荷**不共用一格**：`decision` 在问题场景没有对应物，`answers` 在审批场景也没有。
- * 塞进一个载荷就得让校验为另一套放行，那是两处判断、一处漏洞。
+ * `requestId` 是客户端铸的**关联 id**（不是幂等键）：宿主把它写进持久消息的
+ * `source.rpcId`，客户端据此把乐观插入的那一行与落定的那一行对上。
  */
-export interface QuestionAnswerMessage {
-  /** 本回答针对的 `$events` waterfall 帧 `eventId`。 */
-  readonly eventId: string
-  /** 一张卡的整批答案 —— 键是卡，不是单个问题。 */
-  readonly answers: readonly QuestionAnswerItem[]
-  /** 客户端铸造的幂等键。同键重试重放第一次的结果。 */
-  readonly answerId: string
-  /** 这条问题是在哪条流上看到的 —— 归属判定用。 */
-  readonly clientId: string
-}
-
-function questionAnswerItemOf(raw: unknown): QuestionAnswerItem | undefined {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
-  const record = raw as Record<string, unknown>
-  const id = nonEmptyString(record.id)
-  if (id === undefined) return undefined
-  if (!Array.isArray(record.selected)) return undefined
-  const selected: string[] = []
-  for (const entry of record.selected) {
-    if (typeof entry !== 'string') return undefined
-    // 空白串不是 label —— 与 `custom` 用同一条规则（那里也 trim），两处宽严不一会让
-    // 「只填了空格」在两个字段上一个算答过、一个不算。
-    if (entry.trim() === '') return undefined
-    selected.push(entry)
-  }
-  let custom: string | undefined
-  if ('custom' in record) {
-    if (typeof record.custom !== 'string') return undefined
-    custom = record.custom.trim() === '' ? undefined : record.custom
-  }
-  // 一项既没选任何选项、也没填自定义文本 —— 它不是一次作答。
-  if (selected.length === 0 && custom === undefined) return undefined
-  return custom === undefined ? { id, selected } : { id, selected, custom }
-}
-
-/**
- * 解析并校验一条 `question-answer` 载荷，完全不像回答时返回 `undefined`。
- *
- * 从严的理由与审批相同：畸形决定被静默执行等于凭猜测答了一个问题。**只判形状** ——
- * 「答案有没有覆盖卡上全部问题」需要卡的内容，那在中继那层判。
- */
-export function questionAnswerOf(message: Record<string, unknown>): QuestionAnswerMessage | undefined {
-  const eventId = nonEmptyString(message.eventId)
-  const answerId = nonEmptyString(message.answerId)
-  const clientId = nonEmptyString(message.clientId)
-  if (eventId === undefined || answerId === undefined || clientId === undefined) return undefined
-  if (!Array.isArray(message.answers) || message.answers.length === 0) return undefined
-
-  const answers: QuestionAnswerItem[] = []
-  for (const raw of message.answers) {
-    const item = questionAnswerItemOf(raw)
-    if (item === undefined) return undefined
-    answers.push(item)
-  }
-  return { eventId, answers, answerId, clientId }
-}
-
-/** 校验通过的 `session-prompt` 消息。 */
 export interface SessionPromptMessage {
-  /** 目标会话。 */
-  sessionId: string
-  /** prompt 文本；空或纯空白无法成为上游的 prompt。 */
-  text: string
-  /** 客户端铸造的幂等键，作为 prompt 的 `requestId` 传给上游。 */
-  promptId: string
+  readonly requestId: string
+  readonly sessionId: string
+  readonly mode: 'queue' | 'steer'
+  readonly content: readonly PromptTextPart[]
+  readonly clientTimeZone?: string
+}
+
+function textPartOf(raw: unknown): PromptTextPart | undefined {
+  if (!isPlainObject(raw)) return undefined
+  if (raw.type !== 'text') return undefined
+  if (typeof raw.text !== 'string') return undefined
+  return { type: 'text', text: raw.text }
 }
 
 /**
- * 解析并校验一条 `session-prompt` 载荷，不像时返回 `undefined`。`sessionId`
- * 不在此校验：读路径已把畸形 id 映射到 `unknown-session`，写路径沿用
- * 该约定。
+ * 解析并校验一条 `session/prompt` 载荷（**含宿主的 `request` 容器**）。
+ *
+ * 五个键逐格校验，容器缺席即拒。`content` 至少一段非空白文本 —— 与上游
+ * `hasPromptContent` 同一条底线；附件不在本期范围内，所以只收 `type:"text"`。
  */
-export function sessionPromptOf(message: Record<string, unknown>): SessionPromptMessage | undefined {
-  const sessionId = nonEmptyString(message.sessionId)
-  const text = typeof message.text === 'string' ? message.text : undefined
-  const promptId = nonEmptyString(message.promptId)
-  if (sessionId === undefined || promptId === undefined || text === undefined || text.trim() === '') {
-    return undefined
-  }
-  return { sessionId, text, promptId }
-}
+export function sessionPromptOf(args: Record<string, unknown>): SessionPromptMessage | undefined {
+  const request = requestContainerOf(args)
+  if (request === undefined) return undefined
 
+  const requestId = nonEmptyString(request.requestId)
+  const sessionId = nonEmptyString(request.sessionId)
+  const mode = request.mode === 'queue' || request.mode === 'steer' ? request.mode : undefined
+  if (requestId === undefined || sessionId === undefined || mode === undefined) return undefined
+
+  if (!Array.isArray(request.content) || request.content.length === 0) return undefined
+  const content: PromptTextPart[] = []
+  let hasText = false
+  for (const raw of request.content) {
+    const part = textPartOf(raw)
+    if (part === undefined) return undefined
+    if (part.text.trim() !== '') hasText = true
+    content.push(part)
+  }
+  if (!hasText) return undefined
+
+  let clientTimeZone: string | undefined
+  if ('clientTimeZone' in request) {
+    clientTimeZone = nonEmptyString(request.clientTimeZone)
+    if (clientTimeZone === undefined) return undefined
+  }
+
+  return {
+    requestId,
+    sessionId,
+    mode,
+    content,
+    ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
+  }
+}
 
 /**
  * `session-create` 的目标：交给宿主的默认目录、指定一个工作空间，或一条畸形载荷。

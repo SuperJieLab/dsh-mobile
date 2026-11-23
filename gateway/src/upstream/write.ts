@@ -6,22 +6,24 @@
  * 在场。那个身份归 `ForwardedEvents`（`remote-events.ts`，进程一份）；中继只是它的
  * 一个订阅者：把每一条待答调用**通知**给订阅者（外壳由流泵组，中继不碰帧），并在
  * 点击时通过 `dispatchRpc("$events/result")` 应答。手机与浏览器是对等方：第一个应答
- * 终结 waterfall，落败方得到 `unknown-approval`（fail-closed）。
+ * 终结 waterfall，落败方的那一次是上游的**幂等 no-op**（不是错误）。
  *
  * 手机从未见过的问题由**开流时的重放**补齐：流泵取一次 `held()`，把此刻还待答的全部
  * 排在 `ready` 之后。中继保持其待答集合直到上游 `cancel` 到达 —— 或者身份换代（源断了，
- * 宿主会把仍在等待的问题重投一遍，沿用旧集合就是重放已消费的应答）。构造上即一次性：
- * 已交付的应答只在网关接受后才移除待答项，且每次交付都映射到一次性词汇
- * （`allowed-once` / `rejected`）—— 中继绝不推断持久授权。
+ * 宿主会把仍在等待的问题重投一遍，沿用旧集合就是重放已消费的应答）。
  *
- * 泵把 prompt 转发给 controller 的 `prompt`（web UI 自己的门）；
- * `promptId` 即请求 id，controller 会去重。
+ * **两个 `clientId` 不是同一个身份。** 手机在网关这条流上的登记键由 `pumpEvents` 铸，
+ * 上游只认网关自己的 `ForwardedEvents.clientId`。换算只有一处：`answerEvent` 里的
+ * 那一行 —— 别在调用点各写一遍，否则「用哪个 id」会随路径漂。
+ *
+ * 泵把 prompt 原样转发给 controller 的 `prompt`（web UI 自己的门）；`requestId` 由客户端
+ * 铸，controller 按它去重，并把它写进持久消息的 `source.rpcId`。
  */
 
 import { isNotFound } from '../ports/errors.ts'
 import type { ApprovalSource, HeldApproval } from '../ports/approval.ts'
-import type { QuestionOutcome } from '../ports/write.ts'
-import type { ApprovalAnswerMessage, QuestionAnswerMessage, SessionPromptMessage } from '../wire/write.ts'
+import type { AnswerDelivery } from '../ports/write.ts'
+import type { RemoteEventResultMessage, SessionPromptMessage } from '../wire/write.ts'
 import { nonEmptyString } from '../wire/fields.ts'
 import type { UpstreamWireFrame } from '../ports/events.ts'
 import type { ForwardedEvents } from './remote-events.ts'
@@ -39,10 +41,9 @@ export interface RemoteEventAnswerLike {
 }
 
 /**
- * 上游在 `$events` 上挂起的两类调用。
+ * 上游在 `$events` 上挂起的两类调用 —— `#hold` 只收这两类。
  *
- * **收下的判据与应答的编码分派都读这一张**：两个 `===` 会漂成两组，而漂了不会编译失败，
- * 只会让「加了一类、另一处没跟上」在运行时表现为「答上去了但上游没接」。
+ * 应答**不再按类别分派**：`outcome` 由客户端给出，网关原样转发（第 3 期）。
  */
 const APPROVAL_EVENT = 'approval/request'
 const QUESTION_EVENT = 'user-questions/request'
@@ -62,8 +63,6 @@ export class ApprovalRelay implements ApprovalSource {
   readonly #heldListeners = new Set<(held: HeldApproval) => void>()
   /** 一条被撤回的听众。 */
   readonly #cancelListeners = new Set<(eventId: string) => void>()
-  /** 存的是**这一次交付**（一个 Promise），不是它的结局 —— 重试的 `answerId` 因此共用同一次交付。 */
-  readonly #replay = new ReplayTable<Promise<QuestionOutcome>>()
   /** 应答门与中继同寿：插件拆除时一并取消在途交付。 */
   readonly #lifetime: AbortSignal
 
@@ -186,109 +185,40 @@ export class ApprovalRelay implements ApprovalSource {
   }
 
   /**
-   * 线路侧：通过网关的结果门交付一条应答；重试的 `answerId` 重放首个结果，
-   * 未指向已暂存问题的一律拒绝。
-   */
-  async answerApproval(answer: ApprovalAnswerMessage): Promise<QuestionOutcome> {
-    // 先查重放表：命中就返回第一次的结局，**不回头查待答表** —— 第一次交付成功后
-    // 那条已经从表里删了，回头看会把它读成 unknown-approval，幂等就断了。
-    const replayed = this.#replay.peek(answer.answerId)
-    if (replayed !== undefined) return replayed
-    const entry = this.#pending.get(answer.eventId)
-    // 用错端点：拿审批的 `decision` 去答一条问题，上游会拒。那说的不是事实 ——
-    // 事实是「客户端打错了端点」，所以在这里就回绝，不往上投。**拒收不占幂等键。**
-    //
-    // 但「没有这条挂起项」不在这里早退：`unknown-approval` 是这条应答的**结局**，
-    // 契约要求同一个 `answerId` 重放它（只豁免 `invalid-answers`）。所以它必须进
-    // `remember` —— 早退会让「第一次答早了、重试时那条已到」变成一次真实投递。
-    if (entry !== undefined && entry.event !== APPROVAL_EVENT) {
-      log.warn('answer: this pending request is not an approval — invalid-answers',
-        { event: entry.event, approval: answer.eventId })
-      return 'invalid-answers'
-    }
-    const { value } = this.#replay.remember(answer.answerId, () => this.deliver(answer, entry))
-    return value
-  }
-
-  /**
-   * 线路侧：交付一张卡的整批答案。
+   * 线路侧：把一条应答交给上游的结果门。
    *
-   * **完整性与类别判定都在 `remember` 之外** —— 它们没交付任何东西，不该占住这个幂等键：
-   * 占住之后，客户端把答案改对、用同一个 `answerId` 重发，会永远拿回第一次的拒绝。
+   * 三件事，顺序固定：
+   *   1. 没有上游身份 ⇒ `undelivered`（上游认不出这条应答，等于没送出去）；
+   *   2. 身份换成网关自己的那个，再投；
+   *   3. 上游以返回值报拒（不抛）⇒ `undelivered`。
+   *
+   * **不判「这条还在不在」**：上游对已结算事件是幂等 no-op 并回 `{ok:true}`；本地判会
+   * 把「别处先答」写成失败，而那正是我们要如实转达的「已经有人答了」。
    */
-  async answerQuestion(answer: QuestionAnswerMessage): Promise<QuestionOutcome> {
-    const replayed = this.#replay.peek(answer.answerId)
-    if (replayed !== undefined) return replayed
-    const entry = this.#pending.get(answer.eventId)
-    // 与审批同理：「没有这条」进 `remember`（结局要被重放），类别不符早退（拒收不占键）。
-    if (entry !== undefined && entry.event !== QUESTION_EVENT) {
-      log.warn('answer: this pending request is not a question — invalid-answers',
-        { event: entry.event, approval: answer.eventId })
-      return 'invalid-answers'
-    }
-    // 读不出「卡上有几问」时不拦：中继不解释 `request`，读不出就不是「答案不对」的
-    // 确凿依据，让上游自己拒比猜一个更接近事实。
-    const expected = entry === undefined ? undefined : questionIdsOf(entry.request.questions)
-    if (entry !== undefined && expected === undefined) {
-      log.warn('answer: cannot read the question ids — completeness is left to the upstream',
-        { event: entry.event, approval: answer.eventId })
-    } else if (expected !== undefined && !sameIds(expected, answer.answers.map(item => item.id))) {
-      log.warn('answer: the answers do not cover this card — invalid-answers',
-        { approval: answer.eventId, count: String(answer.answers.length) })
-      return 'invalid-answers'
-    }
-    const { value } = this.#replay.remember(answer.answerId, () => this.deliver(answer, entry))
-    return value
-  }
-
-  /** 实际的一次性交付。运行在 `ReplayTable.remember` 内部。 */
-  private async deliver(
-    message: ApprovalAnswerMessage | QuestionAnswerMessage,
-    entry: HeldApproval | undefined,
-  ): Promise<QuestionOutcome> {
-    // 没有这条挂起项（已消费 / 已取消 / 还没到）：这是一个结局，会被重放。
-    if (entry === undefined) {
-      const eventId = message.eventId
-      log.info('answer: no held question — unknown-approval', { approval: eventId })
-      return 'unknown-approval'
-    }
-    // 身份不住了 ⇒ 上游无从认出这次应答，答案送不到任何地方。
+  async answerEvent(result: RemoteEventResultMessage): Promise<AnswerDelivery> {
     const clientId = this.#events.clientId
     if (clientId === undefined) {
-      log.info('answer: no held question — unknown-approval', { approval: entry.eventId })
-      return 'unknown-approval'
-    }
-    // 进表的只有两类（`#hold` 保证），但类型上 `event` 是 `string`：这里收窄一次。
-    if (!isPendingEvent(entry.event)) {
-      log.warn('answer: no encoding for this request kind — invalid-answers',
-        { event: entry.event, approval: entry.eventId })
-      return 'invalid-answers'
-    }
-    const value = outcomeValueOf(message, entry.event)
-    if (value === undefined) {
-      log.warn('answer: no encoding for this request kind — invalid-answers',
-        { event: entry.event, approval: entry.eventId })
-      return 'invalid-answers'
+      log.info('answer: no live $events identity — undelivered', { approval: result.eventId })
+      return 'undelivered'
     }
     const reply = await this.#door.dispatchRpc('$events/result', {
-      args: {
-        clientId,
-        eventId: entry.eventId,
-        outcome: { kind: 'result', value },
-      },
+      args: { clientId, eventId: result.eventId, outcome: result.outcome },
     }, this.#lifetime)
     // 上游把失败**编码进返回值**而不是抛出 —— 不看它就区分不出「答上了」与
     // 「上游拒了」，而后者的现场是：我们还以为答完，轮次其实卡在原地等应答。
     const refusal = refusalOf(reply)
     if (refusal !== undefined) {
       log.error(
-        'answer refused by the gateway — question stays held, the turn is still waiting',
-        { approval: entry.eventId, reason: refusal },
+        'answer refused by the gateway — the question stays held, the turn is still waiting',
+        { approval: result.eventId, reason: refusal },
       )
       return 'undelivered'
     }
-    this.#pending.delete(entry.eventId)
-    log.info('answer delivered', { event: entry.event, approval: entry.eventId })
+    // 本地暂存项跟着这次结算走：不等 `cancel` 帧，免得重连时把已答的那条重放一遍。
+    // `next` 不给其它投递方结算，所以它不删本地项。
+    if (result.outcome.kind !== 'next' && this.#pending.delete(result.eventId)) {
+      log.info('answer delivered', { approval: result.eventId, kind: result.outcome.kind })
+    }
     return 'delivered'
   }
 }
@@ -308,13 +238,14 @@ export function refusalOf(reply: unknown): string | undefined {
   return `${code}${message}`
 }
 
-/** 本泵调用的 controller prompt 门部分。 */
+/** 本泵调用的 controller prompt 门部分 —— 上游 `SessionPromptRequest` 的形状。 */
 export interface PromptControllerLike {
   prompt(request: {
     requestId: string
     sessionId: string
     mode: 'queue' | 'steer'
     content: readonly { type: 'text'; text: string }[]
+    clientTimeZone?: string
   }, signal: AbortSignal): Promise<{ accepted: true }>
 }
 
@@ -331,92 +262,25 @@ export async function pumpPrompt(controller: PromptControllerLike, prompt: Sessi
   // 排队后回合即继续。
   const signal = AbortSignal.timeout(30_000)
   try {
+    // 五个字段原样交出去：`content` 不再由网关拼、`mode` 不再固定 `queue`、
+    // 时区缺了就不出现（不补 `null`）。
     await controller.prompt({
-      requestId: prompt.promptId,
+      requestId: prompt.requestId,
       sessionId: prompt.sessionId,
-      mode: 'queue',
-      content: [{ type: 'text', text: prompt.text }],
+      mode: prompt.mode,
+      content: prompt.content,
+      ...(prompt.clientTimeZone === undefined ? {} : { clientTimeZone: prompt.clientTimeZone }),
     }, signal)
     // 写链路的另一半（与 relay 的 delivered 对称）：受理即返回，回答从流里来。
-    log.info('prompt accepted',
-      { session: prompt.sessionId, request: prompt.promptId, chars: prompt.text.length })
+    log.info('prompt accepted', {
+      session: prompt.sessionId,
+      request: prompt.requestId,
+      mode: prompt.mode,
+      parts: prompt.content.length,
+    })
     return 'accepted'
   } catch (error) {
     if (isNotFound(error)) return 'unknown-session'
     throw error
   }
-}
-
-/**
- * 记住每个幂等键的第一次结果，此后永远重放它：`produce` 每键至多运行一次，
- * 其副作用因此只发生一次。
- *
- * **幂等这条保证属于协议**：键是客户端铸造的 `answerId`（`wire/write.ts` 里写明
- * 「同键重试重放第一次的结果」），所以「重发得到同一个结论」是两端约定的一部分。
- * 这张表只是它的**实现** —— 手机端看不见表，但它依赖表的效果。
- *
- * 它住宿主适配层，理由是实现层面的：表里存的是 `QuestionOutcome`（上游词汇，住
- * `ports/write.ts`），唯一消费者是 `ApprovalRelay`，而状态必须跟着交付它的中继走。
- * 放进 `protocol/` 会让 `upstream/` 必须 import `protocol/`，撞「宿主适配不认识判定层」。
- */
-export class ReplayTable<V> {
-  readonly #entries = new Map<string, V>()
-
-  /** 先看有没有 —— 有就重放，**不做任何前置判定**。拒收不该占住这个键，见 `answerQuestion`。 */
-  peek(key: string): V | undefined {
-    return this.#entries.get(key)
-  }
-
-  remember(key: string, produce: () => V): { value: V; fresh: boolean } {
-    const existing = this.#entries.get(key)
-    if (existing !== undefined) return { value: existing, fresh: false }
-    const value = produce()
-    this.#entries.set(key, value)
-    return { value, fresh: true }
-  }
-}
-
-/** 按挂起项的类别选编码 —— **这是唯一的分派点**，两个端点都走它。 */
-function outcomeValueOf(
-  message: ApprovalAnswerMessage | QuestionAnswerMessage,
-  event: PendingEvent,
-): unknown | undefined {
-  switch (event) {
-    case APPROVAL_EVENT:
-      return 'decision' in message ? outcomeOfDecision(message.decision) : undefined
-    case QUESTION_EVENT:
-      return 'answers' in message ? { answers: message.answers } : undefined
-    default: {
-      // 加第三类却漏了这里时，`event` 不再是 `never`，这一行编译报错 ——
-      // 这是「表只有一个作者」唯一的构建期护栏（tsconfig 没开 `noImplicitReturns`）。
-      const unreachable: never = event
-      throw new Error(`no encoding for ${String(unreachable)}`)
-    }
-  }
-}
-
-/** 从 `request.questions` 读题目 id；结构不对时返回 `undefined`（不拦，交给上游）。 */
-function questionIdsOf(raw: unknown): string[] | undefined {
-  if (!Array.isArray(raw)) return undefined
-  const ids: string[] = []
-  for (const item of raw) {
-    if (typeof item !== 'object' || item === null) return undefined
-    const id = (item as Record<string, unknown>).id
-    if (typeof id !== 'string' || id === '') return undefined
-    ids.push(id)
-  }
-  return ids
-}
-
-/** 两个 id 序列是否相等：顺序无关，数量与内容都要对上（重复因此算不相等）。 */
-function sameIds(expected: readonly string[], actual: readonly string[]): boolean {
-  if (expected.length !== actual.length) return false
-  const sortedExpected = [...expected].sort()
-  const sortedActual = [...actual].sort()
-  return sortedExpected.every((id, index) => id === sortedActual[index])
-}
-
-/** 把客户端的两键词汇映射到上游的结论词汇。 */
-export function outcomeOfDecision(decision: 'allow' | 'deny'): 'allowed-once' | 'rejected' {
-  return decision === 'allow' ? 'allowed-once' : 'rejected'
 }
