@@ -10,6 +10,7 @@
  * 三种都只有真机才露出来，而真机上分不清是哪一处判错。
  */
 import Foundation
+import Network
 import XCTest
 
 @testable import DshMobile
@@ -21,12 +22,81 @@ final class WebSocketConnectionTests: XCTestCase {
     ///
     /// ⚠️ 握手失败之后传输层会按退避换届次（250–500ms 一拍），每一代都重开所有流。
     /// 所以只写不跨越退避窗口的断言；要等编排跑起来的地方显式等够一拍。
-    private func transport() -> WebSocketConnection {
+    /// @param port - 默认 1（那个端口**立刻拒连**）；判据若需要一条「在役」的连接，
+    ///   用 `SilentEndpoint` 给一个只接受、不回话的端口。
+    private func transport(port: UInt16 = 1) -> WebSocketConnection {
         let transport = WebSocketConnection()
-        transport.baseURLProvider = { URL(string: "http://127.0.0.1:1")! }
+        transport.baseURLProvider = { URL(string: "http://127.0.0.1:\(port)")! }
         transport.authorizationProvider = { "ticket" }
         transport.sessionProvider = { .shared }
         return transport
+    }
+
+    /// 一个**只接受、不回话**的本地端口。
+    ///
+    /// 用途单一：让 `URLSessionWebSocketTask` 的握手停在「在连」而不是「失败」。
+    /// 失败会推代次、把相位打回 `.waiting`，而有些判据要的是一个在役的连接
+    /// （`127.0.0.1:1` 会立刻拒连，那条路验不了「就绪之后」的行为）。
+    private enum SilentEndpointError: Error { case notReady }
+
+    /// 静默端点的连接账：接受之后要有人持着，否则连接立刻释放。
+    private final class ConnectionStore {
+        private let lock = NSLock()
+        private var connections: [NWConnection] = []
+
+        func add(_ connection: NWConnection) {
+            lock.lock(); connections.append(connection); lock.unlock()
+        }
+
+        func drain() -> [NWConnection] {
+            lock.lock()
+            let held = connections
+            connections = []
+            lock.unlock()
+            return held
+        }
+    }
+
+    /// 一个**只接受、不回话**的本地端口。
+    ///
+    /// 用途单一：让 `URLSessionWebSocketTask` 的握手停在「在连」而不是「失败」。
+    /// 失败会推代次、把相位打回 `.waiting`，而有些判据要的是一个在役的连接
+    /// （`127.0.0.1:1` 会立刻拒连，那条路验不了「就绪之后」的行为）。
+    private final class SilentEndpoint {
+        let port: UInt16
+        private let listener: NWListener
+        private let store: ConnectionStore
+
+        init() throws {
+            // 闭包捕 `store` 这个局部引用，而不是 `self` —— `port` 还没赋值时
+            // 捕 self 编译不过，而这一点正是「初始化顺序」要求的样子。
+            let store = ConnectionStore()
+            self.store = store
+            listener = try NWListener(using: .tcp, on: .any)
+
+            let ready = DispatchSemaphore(value: 0)
+            listener.stateUpdateHandler = { state in
+                if case .ready = state { ready.signal() }
+            }
+            listener.newConnectionHandler = { connection in
+                connection.start(queue: .global())
+                store.add(connection)
+            }
+            listener.start(queue: .global())
+
+            guard ready.wait(timeout: .now() + 2) == .success,
+                  let port = listener.port?.rawValue else {
+                listener.cancel()
+                // 不起就红：跳过会让这条判据静默消失，而它守的是「就绪之后」的行为。
+                throw SilentEndpointError.notReady
+            }
+            self.port = port
+        }
+
+        func stop() {
+            listener.cancel()
+            for connection in store.drain() { connection.cancel() }
+        }
     }
 
     /// 一个只记事的判读：收到帧就算一条，答复可配。
@@ -540,8 +610,14 @@ final class WebSocketConnectionTests: XCTestCase {
     }
 
     /// 适配器那一半：`reconnectNow` 在就绪且静默时真的会重连。
-    func testForegroundReconnectWakesASilentReadyConnection() async {
-        let silent = transport()
+    ///
+    /// 端点必须是**只接受、不回话**的那一个：用 `127.0.0.1:1` 时拒连回包会把代次推进、
+    /// 相位打回 `.waiting`，于是「刚有证据」那条断言取决于拒连与提交谁先到 —— 本机必红、
+    /// CI 偶绿，验的就不是 `reconnectNow` 了。
+    func testForegroundReconnectWakesASilentReadyConnection() async throws {
+        let endpoint = try SilentEndpoint()
+        defer { endpoint.stop() }
+        let silent = transport(port: endpoint.port)
         silent.activate()
         silent.handleMessage(.string(#"{"type":"item","streamId":"nobody","value":{}}"#),
                              generation: 1)

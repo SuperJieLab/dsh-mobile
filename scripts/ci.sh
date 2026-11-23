@@ -170,9 +170,19 @@ run_judges() {
   hr; say "判据 · xcodebuild test（macOS）"; hr
   local log="$OUT/judges.log"
 
+  # 本机补丁：外层已有沙箱时，xcodebuild 自己再起的那两层 `sandbox-exec` 必然失败
+  # （`sandbox_apply: Operation not permitted`）：
+  #   ① SwiftPM 解析包时编 manifest 的沙箱 —— 两个 IDE 开关关掉它（未公开，见下）；
+  #   ② Run Script 阶段的用户脚本沙箱 —— `ENABLE_USER_SCRIPT_SANDBOXING=NO`。
+  # CI 上不需要（runner 里没有外层沙箱），加了只是多几条无意义的覆盖。
   local -a extra=()
   if [[ -z "${CI:-}" ]]; then
-    extra=(OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox')
+    extra=(
+      OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox'
+      -IDEPackageSupportDisableManifestSandbox=1
+      -IDEPackageSupportDisablePluginExecutionSandbox=1
+      ENABLE_USER_SCRIPT_SANDBOXING=NO
+    )
   fi
 
   xcodebuild test \
@@ -283,11 +293,19 @@ run_ios() {
   fi
   say "模拟器：${udid}"
 
-  # 本机沙箱（WorkBuddy 的 Bash）会拦 Swift 宏插件，要关掉编译器沙箱；
-  # CI 的 runner 没有那层嵌套沙箱，加上只会得到一条查不出原因的警告。
+  # 本机沙箱（agent 的 Bash）会拦两层 `sandbox-exec`，与判据那节同一个补丁：
+  #   ① SwiftPM 的 manifest 沙箱（两个未公开的 IDE 开关）；
+  #   ② Run Script 阶段的用户脚本沙箱（`ENABLE_USER_SCRIPT_SANDBOXING=NO`）。
+  # 另加 `-Xfrontend -disable-sandbox` 关掉编译器插件（宏）那一层。
+  # CI 的 runner 没有外层沙箱，加这些只会多几条覆盖。
   local -a extra=()
   if [[ -z "${CI:-}" ]]; then
-    extra=(OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox')
+    extra=(
+      OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox'
+      -IDEPackageSupportDisableManifestSandbox=1
+      -IDEPackageSupportDisablePluginExecutionSandbox=1
+      ENABLE_USER_SCRIPT_SANDBOXING=NO
+    )
   fi
 
   local project="$ROOT/ios/DshMobile.xcodeproj"
@@ -315,7 +333,8 @@ run_ios() {
   fi
 
   xcodebuild test-without-building \
-    -project "$project" -scheme DshMobile -destination "$dest" >"$test_log" 2>&1
+    -project "$project" -scheme DshMobile -destination "$dest" \
+    ${extra[@]+"${extra[@]}"} >"$test_log" 2>&1
   local test_status=$?
 
   # 一份日志里每个 suite 各打一行「Executed N tests」，总数取其中最大那一行
