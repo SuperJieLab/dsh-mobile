@@ -553,6 +553,75 @@ test('command ops are refused as an envelope when the command service is absent'
   }
 })
 
+test('the directory browser picks up a service it never injected, and reaches it over real HTTP', async () => {
+  // 与命令通道同一个坑：`directoryPickerController` 不进 `inject`，所以只能经
+  // `ctx.reflect.get` 取。写成 `ctx.directoryPickerController` 时，启动不报错、CI 也不红 ——
+  // 这一行只在**请求到来时**跑，于是它在真机上表现成「目录读不了」，而日志里那句与
+  // 「宿主没有目录选择器」一模一样（2026-11-23 真机首用就是这么撞上的）。
+  //
+  // `install` 用的是会像真上下文那样拒读的代理：这条判据因此同时钉住「取数走的是
+  // reflect 那条路」，而不只是「转发出去了」。
+  const port = freshPort(46_900)
+  const credentialsPath = tempCredentialsPath()
+  const asked: (string | undefined)[] = []
+  const listing = {
+    path: '/Users/x',
+    home: '/Users/x',
+    crumbs: [{ name: '/', path: '/', hidden: false }],
+    entries: [{ name: 'proj', path: '/Users/x/proj', hidden: false }],
+    truncated: false,
+  }
+  const { teardown } = install('127.0.0.1', port, credentialsPath, {
+    directoryPickerController: {
+      list: async (path: string | undefined) => {
+        asked.push(path)
+        return listing
+      },
+    },
+  })
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    // 用 `callRaw`：这一格的值是**整个对象**，铺平之后 `crumbs` 之类会串到顶层。
+    const withPath = await callRaw(port, 'directoryPicker/list', { path: '/Users/x/proj' }, access)
+    assert.equal(withPath.ok, true, `目录读面必须取得到，实际：${JSON.stringify(withPath.error)}`)
+    assert.deepEqual(withPath.value, listing, '五格原样转发 —— 网关不裁行')
+
+    const home = await call(port, 'directoryPicker/list', {}, access) as UnaryAnswer & { ok: boolean }
+    assert.equal(home.ok, true, '不带 path 也是合法的一次调用（宿主据此列 home）')
+    // 缺省必须是 `undefined`，不是空串：空串会被宿主读成一个相对路径。
+    assert.deepEqual(asked, ['/Users/x/proj', undefined])
+  } finally {
+    teardown()
+  }
+})
+
+test('directoryPicker/list is refused as an envelope when the host has no picker service', async () => {
+  const port = freshPort(47_100)
+  const credentialsPath = tempCredentialsPath()
+  const { teardown } = install('127.0.0.1', port, credentialsPath)
+
+  try {
+    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
+    const access = await accessTokenFor(port)
+
+    const body = await call(port, 'directoryPicker/list', { path: '/Users/x' }, access) as UnaryAnswer & {
+      ok: boolean
+      error?: { code: string; message?: string }
+    }
+    assert.equal(body.status, 200)
+    // 缺席发生在调用时，兑现成同一枚拒绝码 —— 手机看到的是拒答，不是死连接。
+    assert.equal(body.ok, false)
+    assert.equal(body.error?.code, 'internal-error')
+    assert.match(body.error?.message ?? '', /directoryPickerController/,
+      '说法要指到缺的是哪个服务，否则与「宿主拒绝读这个目录」分不开')
+  } finally {
+    teardown()
+  }
+})
+
 // MARK: - the bind address (M8 T2: the exposed surface is withdrawn)
 
 test('the listener binds only to the configured address: another local address is unreachable', { timeout: 10_000 }, async () => {
