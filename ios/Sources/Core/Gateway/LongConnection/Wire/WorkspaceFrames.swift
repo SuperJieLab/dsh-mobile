@@ -33,7 +33,7 @@ struct WorkspaceBaseline: Decodable, Equatable {
 
 /// 组流的七种货物 —— **只有这条流认这七样**。
 ///
-/// `baseline` 与 `replace` 同形不同义：前者是一代的开口，后者替换这一代里此前发过的一切。
+/// `baseline` 与 `replace` 同形不同义：前者是一代的开口，后者替换这一代里已经发过的一切。
 /// 两者在客户端都按「整份替换」处理 —— 组没有可增量合并的稳定身份（顺序会变），
 /// 合并只会把已经删掉的组留在屏上。
 enum WorkspaceItem {

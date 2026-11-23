@@ -31,26 +31,33 @@ final class SourceLevelTests: XCTestCase {
 
     /// `SessionFollowing` 里没有「等了几秒就改走 HTTP」的兜底。
     ///
-    /// 从前这里有一个 2.5 秒的定时器：WS 迟迟不给窗口就调一次 `sync()`，把那一次 HTTP
-    /// 读到的窗口并进同一个镜像。两条来源各自算一份水位，于是「我读到 12」与「我读到 13」
-    /// 迟早同时存在，而两者都不报错。第 2 期起打开帧是唯一来源，兜底连同 `readSnapshot`
-    /// 一起删了 —— 这条判据守的是它别以别的名字长回来。
+    /// 失败形态是两条来源各自算一份水位（「我读到 12」与「我读到 13」同时存在，而两者都
+    /// 不报错）。第 2 期起打开帧是唯一来源，兜底连同 `readSnapshot` 一起删了 —— 这条判据
+    /// 守的是它别以别的名字长回来。
     ///
-    /// **判据是「没有第二条取数路」这件事本身**，所以扫的是「取数」的标记：定时器
-    /// （`Task.sleep` / `Timer`）、HTTP 客户端（`RpcClient` / `readSnapshot` / `readPage`）、
-    /// 以及那个闭包（`syncNow`）。`start()` 必须在（正控：切块没切错）。
+    /// **判据是「没有第二条取数路」这件事本身**，所以扫的是「取数」的标记：
+    ///
+    /// - 快照读、那个闭包、以及 `Timer` **全目录禁**（它们只服务兜底）；流开关上再禁
+    ///   HTTP 客户端（`RpcClient` / `readPage`）。
+    /// - `Task.sleep` 只放行**合并窗口**那一种：参数写成 `*WindowNanos`（`RefreshGate` 的
+    ///   批窗口、草稿同帧合并、权限目录合并），它们不取数，只是把一个渲染帧内的多次变化
+    ///   并成一次重算。兜底那种「等几秒」写的是裸纳秒数，照样被抓。
+    ///
+    /// `start()` 必须在（正控：切块没切错）。
     func testTheSecondScreenNeverComesOverHTTP() throws {
         let root = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/State")
         let files = Self.swiftFiles(under: root)
         // 活性锚：目录扫空了下面的差集也会「通过」。
         XCTAssertGreaterThan(files.count, 5, "只扫到 \(files.count) 个状态文件 —— 路径推算错了？")
 
-        // 两档禁词，因为「第二条取数路」在两个地方会长：
-        //  ① 整个状态目录都不许出现 —— 快照读、定时器、那个闭包（它们只服务兜底）；
-        //  ② 只有流开关不许出现 —— `RpcClient` / `readPage`（翻页是读侧编排的事，
-        //     流开关不该自己发请求）。
-        let bannedEverywhere = ["readSnapshot", "syncNow", "Task.sleep", "Timer"]
+        // 禁词分两档，因为「第二条取数路」在两个地方会长：
+        //  ① 整个状态目录都不许出现 —— 快照读、那个闭包、`Timer`（它们只服务兜底）；
+        //  ② 只有流开关不许出现 —— HTTP 客户端（`RpcClient` / `readPage`：翻页是读侧编排
+        //     的事，流开关不该自己发请求）。
+        // `Task.sleep` 单独判：只放行合并窗口（参数是 `*WindowNanos`），见下。
+        let bannedEverywhere = ["readSnapshot", "syncNow", "Timer"]
         let bannedInFollowing = ["RpcClient", "readPage"]
+        let windowSleep = "WindowNanos"
 
         var hits: [String] = []
         for file in files {
@@ -60,6 +67,10 @@ final class SourceLevelTests: XCTestCase {
                 let code = String(line)
                 for banned in bannedEverywhere where code.contains(banned) {
                     hits.append("\(name):\(number + 1) \(banned)")
+                }
+                // 定时器只放行合并窗口：裸纳秒数的 sleep 就是「等几秒」的兜底形态。
+                if code.contains("Task.sleep") && !code.contains(windowSleep) {
+                    hits.append("\(name):\(number + 1) Task.sleep 不是合并窗口")
                 }
                 if name == "SessionFollowing.swift" {
                     for banned in bannedInFollowing where code.contains(banned) {

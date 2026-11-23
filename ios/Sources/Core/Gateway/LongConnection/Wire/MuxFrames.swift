@@ -18,9 +18,9 @@ typealias StreamId = String
 
 /// 开一条订阅流的请求体 —— 上游 `SessionFollowRequest` 逐字（网关侧同名接口）。
 ///
-/// **窗口参数由客户端决定**：网关不再替我们换算。上一版它把 `maxMessages` 乘二、
-/// `minTurns` 改成 1，于是同一屏在手机上比 Web UI 长一倍 —— 两份窗口规则里外各一份，
-/// 谁也不会红。这里的四个数就是上游浏览器客户端用的那一组。
+/// **窗口参数由客户端决定**：网关只搬运、不换算。这四个数就是上游浏览器客户端用的
+/// 那一组 —— 让网关另算一份（`maxMessages` 乘二、`minTurns` 压成 1）会让同一屏在手机上
+/// 比 Web UI 长一倍，而两份窗口规则互不报错。
 struct FollowRequest: Encodable {
 
     let address: SessionAddress

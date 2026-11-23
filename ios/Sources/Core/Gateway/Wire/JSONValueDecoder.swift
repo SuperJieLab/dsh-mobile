@@ -14,7 +14,9 @@
  */
 import Foundation
 
-/// 一棵已解析的 JSON 树 → 任何 `Decodable`。用法与 `JSONDecoder` 同：`T(from: JSONValueDecoder(value))`。
+/// 一棵已解析的 JSON 树 → 任何 `Decodable`。
+///
+/// 用法与 `JSONDecoder` 同：`T(from: JSONValueDecoder(value))`。
 struct JSONValueDecoder: Decoder {
 
     let value: JSONValue

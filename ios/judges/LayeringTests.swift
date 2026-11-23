@@ -716,7 +716,7 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, 0, "线上形状里出现了显示口径的符号")
     }
 
-    /// 三件线上形状各只有一处声明，且都在 `Wire/MuxFrames.swift` —— 与网关 `wire/mux.ts` 按名对看。
+    /// 八件线上形状各只有一处声明，家写在 `homes` 表里 —— 与网关的 wire 文件按名对看。
     ///
     /// 失败模式是「另写一份刚好够用的」：形状散在使用处时，两端各写一份且互不相认，改字段
     /// 那一侧靠回忆或 grep 发现。判据按**声明**数，不按引用数 —— 引用本来就会有多处，
@@ -727,29 +727,38 @@ final class LayeringTests: XCTestCase {
     /// 某个类型里**（不同作用域，编译器不报重复声明）。顶格的同名重复由编译器挡（`invalid
     /// redeclaration`），嵌套的那一份只有这条判据看得见。
     ///
-    /// 声明位置的断言与网关的文件名对应：形状出现在 `Wire/` 之外就红。
-    /// 判据自带正控：三个名字一个都没扫到时，下面的比较会以一个空的实测值对上一份非空期望。
+    /// 家分两处，因为形状有两个使用面：信封与开流请求只在流上，归流那边的 `MuxFrames.swift`；
+    /// 打开帧与它装的两条（窗口、单条记录）同时被 `session/page` 的应答使用，归根 `Wire/`。
+    /// 判据自带正控：八个名字一个都没扫到时，下面的比较会以一个空的实测值对上一份非空期望。
     ///
     /// 盲区：只认 `struct`。写成 `typealias FollowRequest = …` 或包在条件编译分支里认不出
     /// （漏报方向，靠评审）。
     func testWireShapesAreDeclaredOnce() throws {
-        let shapes = ["InboundFrame", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest",
-                      "SnapshotFrame", "FailurePayload", "SessionWindow", "SessionRecord"]
-        var homes: [String: [String]] = [:]
+        let homes = [
+            "InboundFrame": "Core/Gateway/LongConnection/Wire/MuxFrames.swift",
+            "MuxOpenFrame": "Core/Gateway/LongConnection/Wire/MuxFrames.swift",
+            "MuxCancelFrame": "Core/Gateway/LongConnection/Wire/MuxFrames.swift",
+            "FollowRequest": "Core/Gateway/LongConnection/Wire/MuxFrames.swift",
+            "SnapshotFrame": "Core/Gateway/LongConnection/Wire/MuxFrames.swift",
+            "FailurePayload": "Core/Gateway/LongConnection/Wire/MuxFrames.swift",
+            "SessionWindow": "Core/Gateway/Wire/SessionMessages.swift",
+            "SessionRecord": "Core/Gateway/Wire/SessionMessages.swift",
+        ]
+        var found: [String: [String]] = [:]
 
         for file in swiftFiles(under: sourcesRoot) {
             let text = try String(contentsOf: file, encoding: .utf8)
             let relative = file.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "")
             for (_, code) in codeLines(in: text) {
-                for shape in shapes where Self.declaresStruct(shape, in: code) {
-                    homes[shape, default: []].append(relative)
+                for shape in homes.keys where Self.declaresStruct(shape, in: code) {
+                    found[shape, default: []].append(relative)
                 }
             }
         }
 
-        for shape in shapes {
-            XCTAssertEqual(homes[shape], ["Core/Gateway/LongConnection/Wire/MuxFrames.swift"],
-                           "\(shape) 应只有一处声明且在 Wire/MuxFrames.swift，实际：\(homes[shape] ?? [])")
+        for (shape, home) in homes.sorted(by: { $0.key < $1.key }) {
+            XCTAssertEqual(found[shape], [home],
+                           "\(shape) 应只有一处声明且在 \(home)，实际：\(found[shape] ?? [])")
         }
     }
 

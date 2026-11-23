@@ -68,7 +68,8 @@ final class SessionDetailState {
             case .models: catalogState?.reloadSoon()
             case .commands: directory?.reloadSoon()
             case .permissions: permissionState?.noteCatalogChanged()
-            case .accountExpired, .unhandled: break   // 前者归标志，后者分派处已留痕
+            // 账号失效归标志（`HostNotifications` 管），未处理的分派处已留痕 —— 这里都不做事。
+            case .accountExpired, .unhandled: break
             }
         }
         // 事件类型的转发接线：编排只负责「每来一条就叫一声」，判断哪几类算数归权限域。
