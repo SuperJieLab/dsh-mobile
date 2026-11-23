@@ -191,9 +191,14 @@ final class SourceLevelTests: XCTestCase {
     func testDroppedListChangeLeavesAVisibleTrace() throws {
         let lines = Self.codeLines(in: try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionList/State/SessionListState.swift")))
+        // 留痕只留给**这一族里认不出**的那一条。少了前缀分流，`$events` 上那些别的
+        // 命名空间（插件装卸、设置文档）会被当成「本版不认识的列表事件」刷警告。
+        XCTAssertTrue(
+            lines.contains { $0.1.contains("SessionListEvents.claims(") },
+            "前缀分流不在了 —— 别的命名空间的事件会被当成坏增量")
         XCTAssertTrue(
             lines.contains {
-                $0.1.contains("Log.warn(") && $0.1.contains("dropped a session event this build does not know")
+                $0.1.contains("Log.warn(") && $0.1.contains("a session event this build cannot read")
             },
             "留痕句不在了（或只剩注释）—— 坏增量被丢弃时现场只剩这一行")
     }
