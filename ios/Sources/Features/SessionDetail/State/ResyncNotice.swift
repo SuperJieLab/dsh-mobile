@@ -23,8 +23,14 @@ struct ResyncNotice: Equatable {
     let reason: ResetReason
 }
 
-/// 告知的置位与清除 —— 判定全在这里，视图只读结果（项目分层红线：视图不写判定）。
-/// 置位只有两条路（`observe` 的 `.resetRequired` 与 `didReset`），清除只有 `clear`。
+/// 告知的置位 —— 判定全在这里，视图只读结果（项目分层红线：视图不写判定）。
+///
+/// **只有置位，没有清除**：一条告警一旦成立，在这一屏里就一直是真的 ——「中间有事件没拿到」
+/// 不会因为后来接得上而变成假（那一段仍然是缺的）。清除发生在**离开再进入**：那一屏的
+/// `SessionSync` 整个重建。
+///
+/// 从前还有 `didReset`（编排自己重置后改记「已重置」）与 `clear`，它们的唯一调用者随
+/// HTTP 读路一起删了（2026-11-23 精简，见本期 checks）。
 struct ResyncNoticeState {
 
     private(set) var notice: ResyncNotice?
@@ -36,16 +42,5 @@ struct ResyncNoticeState {
             kind: reason.invalidatesLocalContent ? .reset : .unresolved,
             reason: reason
         )
-    }
-
-    /// 编排**自己**执行了一次重置 —— 如实记成「已重置」。
-    /// 为什么不复用 `observe(_:)`：那里按 `invalidatesLocalContent` 分档，是给**订阅路径**
-    mutating func didReset(_ reason: ResetReason) {
-        notice = ResyncNotice(kind: .reset, reason: reason)
-    }
-
-    /// 重新建立 —— 说明唯一的清除点。
-    mutating func clear() {
-        notice = nil
     }
 }

@@ -221,7 +221,7 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertTrue(notices.notice == ResyncNotice(kind: .unresolved, reason: .gap),
                   "SM20 随后一次接得上的重连不清除它 —— 洞还在，界面不该假装没事")
 
-    // MARK: SM21 重置的说明由 clear() 清除；接得上的判定不置位
+    // MARK: SM21 接得上的判定不置位；置位之后只由「离开再进入」清除
 
     var resetNotices = ResyncNoticeState()
     resetNotices.observe(.merged(added: 3))
@@ -229,19 +229,8 @@ final class SessionMirrorTests: XCTestCase {
     resetNotices.observe(.resetRequired(.waterMarkWentBack))
     XCTAssertTrue(resetNotices.notice == ResyncNotice(kind: .reset, reason: .waterMarkWentBack),
                   "SM21 位置被否定 ⇒ 说明是「已重置」，并带上原因")
-    resetNotices.clear()
-    XCTAssertTrue(resetNotices.notice == nil, "SM21 重新建立是说明唯一的清除点")
-
-    // MARK: SM22 编排自己执行的重置也如实记成「已重置」
-
-    // `sync()`（用户显式下拉「重新同步」）撞上缺口时也走到重置 —— 那时「保留」无法收敛
-    // （下一次拉到的增量仍接不上），所以它不能按 `observe(verdict)` 分档：那条规则是给
-    // 订阅路径（opening / 往回翻）的。界面必须说「做过的」，不能只说「该做的」。
-    var synced = ResyncNoticeState()
-    synced.observe(.resetRequired(.gap))
-    XCTAssertTrue(synced.notice?.kind == .unresolved, "SM22 订阅路径的缺口先记为「未接上」")
-    synced.didReset(.gap)
-    XCTAssertTrue(synced.notice == ResyncNotice(kind: .reset, reason: .gap),
-                  "SM22 编排自己重置过之后改记「已重置」—— 否则界面说的与做的不一致")
+    resetNotices.observe(.merged(added: 1))
+    XCTAssertTrue(resetNotices.notice == ResyncNotice(kind: .reset, reason: .waterMarkWentBack),
+                  "SM21 没有清除口 —— 一条告警在这一屏里一直是真的，清除靠整屏重建")
   }
 }
