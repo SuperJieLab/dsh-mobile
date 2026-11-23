@@ -12,7 +12,7 @@ import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WritePort } from '../../src/ports/write.ts'
 
-const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => ({ items: [] }), read: async () => undefined, readAll: async () => undefined }
 
 /** 只要一个能答 `createSession` 的写端口；另外两个方法在这一组里不会被走到。 */
 function writeReturning(make: () => Promise<string>): WritePort {
@@ -31,7 +31,7 @@ test('session-create answers the id the host handed back', async () => {
     return 's-test'
   })
 
-  const answer = await invoke('session/create', {}, { session: PORT, write: port }, Date.now)
+  const answer = await invoke('session/create', { request: {} }, { session: PORT, write: port }, Date.now)
 
   assert.equal(calls, 1, '一次 op 只该问宿主一次')
   assert.deepEqual(answer, { ok: true, value: { sessionId: 's-test'} },
@@ -43,7 +43,7 @@ test('session-create folds a host refusal into internal-error', async () => {
     throw new Error('host said no')
   })
 
-  const answer = await invoke('session/create', {}, { session: PORT, write: port }, Date.now)
+  const answer = await invoke('session/create', { request: {} }, { session: PORT, write: port }, Date.now)
 
   assert.equal(answer.ok, false, '宿主拒绝不得变成 ok')
   assert.equal((answer as { error?: { code?: string } }).error?.code, 'internal-error',
@@ -51,7 +51,7 @@ test('session-create folds a host refusal into internal-error', async () => {
 })
 
 test('session-create refuses when the write channel is not wired', async () => {
-  const answer = await invoke('session/create', {}, { session: PORT })
+  const answer = await invoke('session/create', { request: {} }, { session: PORT })
 
   assert.equal(answer.ok, false)
   assert.equal((answer as { error?: { code?: string } }).error?.code, 'internal-error',
@@ -78,7 +78,7 @@ function writeRecording(): { port: WritePort; targets: (string | undefined)[] } 
 test('session-create hands the workspace to the host when the request names one', async () => {
   const { port, targets } = writeRecording()
 
-  await invoke('session/create', { workspaceId: 'w-a' }, { session: PORT, write: port }, Date.now)
+  await invoke('session/create', { request: { workspaceId: 'w-a' } }, { session: PORT, write: port }, Date.now)
 
   assert.deepEqual(targets, ['w-a'], '手机点的那个组必须原样传到宿主')
 })
@@ -86,7 +86,7 @@ test('session-create hands the workspace to the host when the request names one'
 test('session-create without a target keeps the host default', async () => {
   const { port, targets } = writeRecording()
 
-  await invoke('session/create', {}, { session: PORT, write: port }, Date.now)
+  await invoke('session/create', { request: {} }, { session: PORT, write: port }, Date.now)
 
   assert.deepEqual(targets, [undefined],
     '不带就是不带 —— 传空串会假装「指定了一个工作空间」，而宿主会用空 cwd 去建会话')
@@ -95,11 +95,21 @@ test('session-create without a target keeps the host default', async () => {
 test('a malformed workspace target is refused before the host is asked', async () => {
   for (const workspaceId of ['', 42, null, {}]) {
     const { port, targets } = writeRecording()
-    const answer = await invoke('session/create', { workspaceId }, { session: PORT, write: port }, Date.now)
+    const answer = await invoke('session/create', { request: { workspaceId } }, { session: PORT, write: port }, Date.now)
 
     assert.equal(answer.ok, false, `${JSON.stringify(workspaceId)} 该被拒`)
     assert.equal((answer as { error?: { code?: string } }).error?.code, 'invalid-request',
       '写载荷从严：畸形不得凭猜测执行')
     assert.deepEqual(targets, [], '畸形载荷不得触达宿主')
   }
+})
+
+test('a payload without the request container is refused, not read as an empty request', async () => {
+  const { port, targets } = writeRecording()
+
+  const answer = await invoke('session/create', {}, { session: PORT, write: port }, Date.now)
+
+  assert.equal(answer.ok, false, '少一层容器的客户端是旧客户端 —— 它发的字段一格都没到')
+  assert.equal((answer as { error?: { code?: string } }).error?.code, 'invalid-request')
+  assert.deepEqual(targets, [], '畸形不得触达宿主')
 })

@@ -13,7 +13,7 @@
  */
 
 import type { CommandExecuteOutcome, CommandPort } from '../ports/command.ts'
-import type { CommandInfo } from '../wire/command.ts'
+import type { CommandDescriptor } from '../wire/command.ts'
 import { signatureNoteOf } from './call-through.ts'
 import { createLogger, LogModule } from '../log.ts'
 
@@ -25,6 +25,7 @@ const log = createLogger(LogModule.command)
  */
 export interface CommandsLike {
   list(agent: unknown): readonly {
+    definitionId?: string
     name: string
     description: string
     input?: { hint: string; attachments?: boolean }
@@ -61,22 +62,19 @@ export function commandPortOver(commands: CommandsLike, agents: LiveAgentsLike):
   }
 
   return {
-    async list(sessionId: string): Promise<readonly CommandInfo[] | undefined> {
-      const agent = agents.get(sessionId)
-      // 会话不存活 = 这份列表没有意义（不是空列表）：没有 agent 就没有 per-agent 的命令集。
+    async list(agentId: string): Promise<readonly CommandDescriptor[] | undefined> {
+      const agent = agents.get(agentId)
+      // agent 不在 = 这份列表没有意义（不是空列表）：命令集是 per-agent 的。
       if (agent === undefined) return undefined
-      return commands.list(agent).map(descriptor => ({
-        name: descriptor.name,
-        description: descriptor.description,
-        // 只转达宿主声明的那一格；缺席就是缺席，不补空串。
-        ...descriptor.input === undefined ? {} : { inputHint: descriptor.input.hint },
-      }))
+      // **原样转发**：宿主的描述符就是线上形状。裁字段（比如只留 name/description/inputHint）
+      // 会让上游新加的一格永远到不了客户端，且不会编译失败。
+      return [...commands.list(agent)]
     },
 
-    async execute(sessionId: string, line: string): Promise<CommandExecuteOutcome> {
-      const agent = agents.get(sessionId)
+    async execute(agentId: string, line: string): Promise<CommandExecuteOutcome> {
+      const agent = agents.get(agentId)
       if (agent === undefined) {
-        return { ok: false, code: 'unknown-session', message: `no live session "${sessionId}"` }
+        return { ok: false, code: 'unknown-session', message: `no live session "${agentId}"` }
       }
       const execution = await commands.execute(agent, line, [], AbortSignal.timeout(EXECUTE_TIMEOUT_MS))
       // `undefined` 是上游的「语法或名字解析不了」—— 不是异常，也不是成功。
@@ -84,7 +82,7 @@ export function commandPortOver(commands: CommandsLike, agents: LiveAgentsLike):
         return { ok: false, code: 'unknown-command', message: `no such command: ${line}` }
       }
       log.info('command accepted',
-        { session: sessionId, command: execution.commandId, line })
+        { session: agentId, command: execution.commandId, line })
       return { ok: true, commandId: execution.commandId }
     },
   }

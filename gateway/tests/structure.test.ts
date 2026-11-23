@@ -566,8 +566,9 @@ test('the endpoint envelope has exactly one home, and transport does not build i
  * 那一册讲实时流的文档必须与线上的流表一致。
  *
  * 为什么这条判据存在：`docs/system/04-realtime-stream.md` 是「这一层为什么长这样」的唯一
- * 长文，而它最容易与代码脱节 —— 改了 op 名而没改文档，读者会照着一段已不存在的东西理解
- * 整个通道。断言「三个 op 名都在」是最便宜的一致性检查：少一个就说明文档还停在旧形状上。
+ * 长文，而它最容易与代码脱节 —— 改了端点名而没改文档，读者会照着一段已不存在的东西理解
+ * 整个通道。断言「三个不绑会话的端点名都在」是最便宜的一致性检查：少一个就说明文档还停在
+ * 旧形状上（旧形状里审批、列表、宿主事件各占一条流）。
  *
  * 盲区：它只查名字在不在，查不到「说法对不对」。后者靠读，不靠这条。
  */
@@ -581,19 +582,21 @@ test('the realtime-stream chapter names the three connection streams', () => {
     return
   }
   const text = readFileSync(chapter, 'utf8')
-  for (const op of ['approvals', 'session-list', 'host-events']) {
-    assert.ok(text.includes(op), `那一册没提 ${op} —— 文档与代码的流表脱节了`)
+  for (const endpoint of ['session/control', '$events', 'workspace/follow']) {
+    assert.ok(text.includes(endpoint), `那一册没提 ${endpoint} —— 文档与代码的流表脱节了`)
   }
-  // 旧形状：一条不绑会话的流叫 events，三种货物混在里面。
-  assert.ok(!text.includes('"op": "events"'), '那一册还在说 events 这条流')
-
-  // `host-events` 有货物、没有客户端订阅者。这件事必须写在两个地方，否则下一个人读代码时
-  // 会以为它坏了或者忘了接线 —— 而它坏没坏没有任何运行时症状。
-  assert.ok(text.includes('没有客户端订阅者'),
-    '那一册没说 host-events 这条流没有订阅者 —— 读者会把它当成一条废弃的通道')
+  // 旧形状：审批与列表各占一条连接级流，流用 `op` 标识、货物叫 `payload`。
+  for (const gone of ['host-events', 'session-list']) {
+    assert.ok(!text.includes(gone), `那一册还在说 ${gone} 这条流 —— 它已经被 $events 与组流取代`)
+  }
+  // 同名不同形是按流解码的起因；册子不讲它，读者就无法解释客户端为什么要按流解货物。
+  assert.ok(text.includes('同名不同形'),
+    '那一册没写两条流都叫 baseline 却形状不同 —— 那是按流解码的理由')
+  // 泵那一侧同样要能读出全局：四条泵各自的货物与拒绝路径。
   const pump = readFileSync(join(SRC, 'remote', 'stream.ts'), 'utf8')
-  assert.ok(pump.includes('本期没有客户端订阅者'),
-    '泵上的注释没写「没有订阅者」—— 读这一处的人看不到全局')
+  for (const endpoint of ['session/follow', 'session/control', '$events', 'workspace/follow']) {
+    assert.ok(pump.includes(endpoint), `泵上的注释没提 ${endpoint} —— 读这一处的人看不到全局`)
+  }
 })
 
 /**
@@ -740,13 +743,13 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
   { file: 'mux.ts', name: 'openRequestOf', shape: 'OpenRequest' },
   { file: 'model.ts', name: 'modelSelectRequestOf', shape: 'ModelSelectMessage' },
   { file: 'command.ts', name: 'commandExecuteRequestOf', shape: 'CommandExecuteMessage' },
-  { file: 'permission.ts', name: 'permissionSelectRequestOf', shape: 'PermissionSelectMessage' },
   { file: 'write.ts', name: 'approvalAnswerOf', shape: 'ApprovalAnswerMessage' },
   { file: 'write.ts', name: 'questionAnswerOf', shape: 'QuestionAnswerMessage' },
   { file: 'write.ts', name: 'sessionPromptOf', shape: 'SessionPromptMessage' },
   { file: 'write.ts', name: 'sessionCreateTargetOf', shape: 'SessionCreateTarget' },
   { file: 'workspace.ts', name: 'workspaceNameOf', shape: 'WorkspaceCreatePayload' },
   { file: 'workspace.ts', name: 'workspaceIdOf', shape: 'WorkspaceDeletePayload' },
+  { file: 'workspace-stream.ts', name: 'parseWorkspaceArgs', shape: 'WorkspaceFollowArgs' },
   { file: 'unary.ts', name: 'parseClientRequest', shape: 'ClientRequest' },
   { file: 'unary.ts', name: 'encodeServerResponse', shape: 'ServerResponse' },
 ]
@@ -765,6 +768,7 @@ const WIRE_CODECS: readonly { file: string; name: string; shape: string }[] = [
 const WIRE_FIELD_GUARDS: readonly { file: string; name: string }[] = [
   { file: 'fields.ts', name: 'nonEmptyString' },
   { file: 'fields.ts', name: 'isPositiveInteger' },
+  { file: 'fields.ts', name: 'requestContainerOf' },
 ]
 
 /**
@@ -1245,8 +1249,8 @@ const JUDGEMENT_SURFACE: readonly { home: string; values: readonly string[]; typ
     home: 'protocol/rpc.ts',
     values: [
       'DEFAULT_LIMITS', 'DEFAULT_PAGE_MESSAGES', 'positiveOrDefault', 'refused',
-      'listSessionsOf', 'snapshotOf', 'pageOf', 'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
-      'modelSelectOf', 'commandExecuteOf', 'permissionSelectOf', 'sessionCreateOf',
+      'snapshotOf', 'pageOf', 'modelCatalogOf', 'commandCatalogOf', 'permissionCatalogOf',
+      'modelSelectOf', 'commandExecuteOf', 'sessionCreateOf',
       'workspaceCreateOf', 'workspaceDeleteOf', 'approvalAnswerValue', 'questionAnswerValue',
       'ownedAnswerOf', 'sessionPromptValue',
     ],

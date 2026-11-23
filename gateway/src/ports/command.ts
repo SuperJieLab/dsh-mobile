@@ -6,7 +6,7 @@
  * `unknown-session` 表示会话不在。其余失败向上抛，由协议层折成 `internal-error`。
  */
 
-import type { CommandInfo } from '../wire/command.ts'
+import type { CommandDescriptor } from '../wire/command.ts'
 
 /** 一次 execute 的结果：已受理，或那两类可归因的拒绝。 */
 export type CommandExecuteOutcome =
@@ -16,12 +16,14 @@ export type CommandExecuteOutcome =
 /** 命令 op 所依赖的数据源 —— 契约的唯一依赖。 */
 export interface CommandPort {
   /**
-   * 该会话此刻能用的命令。会话不在时返回 `undefined`。
+   * 该 agent 此刻能用的命令。agent 不在时返回 `undefined`。
    *
    * 「此刻」是字面意思：命令集是 per-agent 的，受作用域遮蔽与插件装卸影响，
    * 所以这里不缓存、也不承诺两次调用给同一份。
+   *
+   * 描述符**原样**交出（`definitionId` 与 `input` 都不裁）：裁一次就是第二份形状。
    */
-  list(sessionId: string): Promise<readonly CommandInfo[] | undefined>
+  list(agentId: string): Promise<readonly CommandDescriptor[] | undefined>
   /**
    * 把一整行交给宿主执行。
    *
@@ -29,5 +31,5 @@ export interface CommandPort {
    * 结果从流里来。回包里没有、也不该有执行结果：两处都带就会出现「流里说失败、
    * 回包说成功」。
    */
-  execute(sessionId: string, line: string): Promise<CommandExecuteOutcome>
+  execute(agentId: string, line: string): Promise<CommandExecuteOutcome>
 }

@@ -35,8 +35,10 @@ export type PerfSeg = 'gw' | 'dev' | 'res' | 'clock'
 /**
  * 一条性能记录。`seg` / `t` / `sessionId` / `seq` 是公共字段；其余按 seg 不同：
  * `gw` 带 evTime / gwRecv / gwSend / bytes，`dev` 带 devRecv / devApply，
- * `clock` 带 serverTime，`res` 带 loopLagP50 / loopLagP99 / rssMB / heapMB /
- * wsClients。缺的字段就是「这一条不适用」，不填默认值。
+ * `res` 带 loopLagP50 / loopLagP99 / rssMB / heapMB / wsClients。
+ * `clock`（两端时钟对齐）目前**两端都没有生产者**：它唯一的值 `serverTime` 随
+ * `session/list` 改成转发而退场。这一格留着是因为它是契约的四个 seg 值之一。
+ * 缺的字段就是「这一条不适用」，不填默认值。
  */
 export interface PerfRecord {
   readonly seg: PerfSeg

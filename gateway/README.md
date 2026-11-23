@@ -15,7 +15,7 @@
 
 两条通道共用同一个端口，只在两处汇合：同一道认证闸门、同一批 ports。
 
-### 一元通道 `POST /rpc`
+### 一元通道 `POST /api/<命名空间>/<方法>`
 
 ```
 src/index.ts          apply(ctx) 里 createRpcListener(...)
@@ -39,7 +39,7 @@ protocol/rpc.ts       handle(message, …ports) —— switch 按 op 分派
 upstream/             ports 的实现：读宿主投影、读日志、把写泵到宿主、把命令整行交给宿主
 ```
 
-### 流通道 `/rpc/stream`
+### 流通道 `/api/remote.mux`
 
 ```
 src/index.ts          apply(ctx) 里 attachStreamHandler(server, ...)

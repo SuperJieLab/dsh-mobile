@@ -41,7 +41,7 @@ const MAX_BODY_BYTES = 1_048_576
  * 既没有日志、也没人知道它本该静默（`tests/structure.test.ts` 守这一条）。
  */
 export const SILENT_REFUSALS: ReadonlySet<string> = new Set([
-  'mobile/listSessions',
+  'session/list',
   'mobile/snapshot',
   'mobile/page',
 ])

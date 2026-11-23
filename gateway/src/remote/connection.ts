@@ -17,6 +17,7 @@ import type { ApprovalSource } from '../ports/approval.ts'
 import { DEFAULT_LIMITS, positiveOrDefault } from '../protocol/rpc.ts'
 import { describeError } from '../ports/errors.ts'
 import type { FollowSource } from '../ports/follow.ts'
+import type { WorkspacePort } from '../ports/workspace.ts'
 import type { ForwardedSource } from '../ports/events.ts'
 import {
   WsFrameParser,
@@ -32,8 +33,13 @@ import { createLogger, LogModule, perfRecord } from '../log.ts'
 
 const log = createLogger(LogModule.ws)
 
-/** 本网关提供流协议的精确路径。 */
-export const STREAM_PATH = '/rpc/stream'
+/**
+ * 本网关提供流协议的精确路径 —— 与上游同名。
+ *
+ * 这是纯字面量：改它不影响任何帧的形状，但两端各写一份，所以客户端那一份
+ * （`WebSocketConnection.streamPath`）必须同轮改 —— 单边改的表现是连接直接 404。
+ */
+export const STREAM_PATH = '/api/remote.mux'
 
 /** 心跳节拍，对齐参考服务端。 */
 const PING_INTERVAL_MS = 2_000
@@ -150,12 +156,13 @@ export interface StreamOptions {
    */
   approvals?: ApprovalSource
   /**
-   * 工作空间注册表的读口。会话列表的增量行要带归属，而归属不是会话的事实 ——
-   * 它来自这份注册表。
+   * 组清单的来源（`workspace/follow` 流）。
    *
-   * 缺席不是降级：那时增量行不带归属，客户端把它们放进「未分组」；只有一元的
-   * 列表路径被接上、而流没有的装配才会这样，属于装配错误。
+   * 缺席不是降级：那时这条流要拿到一条显式的拒绝，而不是一条永远等不到 `baseline`
+   * 的流 —— 后者的表现是客户端 45 秒后把**整条连接**判死。只在「这台网关不提供
+   * 组流」的测试里才该缺席。
    */
+  workspace?: WorkspacePort
   /** 打开帧的字节上界；缺省即 {@link DEFAULT_OPENING_BYTES}。 */
   openingCapBytes?: number
   /**
@@ -281,7 +288,7 @@ function runSocket(
           socket.end()
           break
         case 'text': {
-          const outcome = onClientText(socket, source, options.events, options.approvals, registry, streams, frame.text, openingCapBytes)
+          const outcome = onClientText(socket, source, options.events, options.approvals, options.workspace, registry, streams, frame.text, openingCapBytes)
           if (outcome.ok) break
           // 两档都在这里关连接，但原因不同，日志必须分得开：
           //   重复编号 —— 客户端坏了，这条连接上的一切都不再可信；

@@ -1,31 +1,17 @@
 /**
- * DSH 适配器：唯一知道工作空间注册表存在的模块。
+ * DSH 适配器：唯一知道工作空间控制器写面的模块。
  *
- * 它把注册表的实体翻成「组清单 + 归属表」两样东西。归属**按实体的成员表**给，
- * 不按目录路径比 —— 注册表自己已经按规范化后的目录建过索引（它的
- * `candidateMatches`），再比一遍等于把同一件事做两遍，而两份判据迟早分叉；
- * 客户端看到的组就会与 Mac 上的 Web UI 不一样。
+ * 只有两件事：把一条已存在的路径注册成工作空间，以及解除一个注册。**读面不在这里** ——
+ * 组清单与归属由宿主的 `workspace/follow` 流给出（`upstream/faces.ts` 的
+ * `workspaceFollowFace`），网关再自己折一遍就等于把同一件事做两遍，而两份判据迟早分叉。
  *
  * 形状在本文件自行声明，因为真实类型在 dsh 安装目录之外无法解析。
  */
 
 import { describeError, isNotFound } from '../ports/errors.ts'
 import { createLogger, LogModule } from '../log.ts'
-import type { WorkspaceSnapshot } from '../ports/workspace.ts'
 
 const log = createLogger(LogModule.workspace)
-
-/** 本适配器读取的工作空间实体。成员表已由宿主按目录索引过滤过。 */
-export interface WorkspaceLike {
-  readonly id: string
-  readonly title: string
-  readonly sessionIds: readonly string[]
-}
-
-/** 本适配器用到的注册表部分。同步：持久顺序在内存里，不读盘。 */
-export interface RegistryLike {
-  list(): readonly WorkspaceLike[]
-}
 
 /**
  * 本适配器用到的工作空间控制器写面 —— 宿主的公开入口，用它而不是自己组合
@@ -42,28 +28,6 @@ export interface WorkspaceCreateFace {
 /** 同一个控制器的删除面。拆成两个窄面：每个适配函数只声明自己用的那一个方法。 */
 export interface WorkspaceDeleteFace {
   delete(request: { workspaceId: string }): Promise<{ deleted: true }>
-}
-
-/**
- * 注册表 → 组清单与归属表。
- *
- * @param registry - 宿主的工作空间注册表。
- * @returns 保序的组清单，以及每个会话的归属；没有归属的会话不在表里。
- */
-export function workspaceSnapshotOf(registry: RegistryLike): WorkspaceSnapshot {
-  const workspaces = registry.list()
-  const owners = new Map<string, string>()
-  const rows = workspaces.map((workspace) => {
-    // **先来的那个胜出**（`has` 守住），不是后来的：参照界面找的是清单里**第一个**成员表
-    // 含它的工作空间。正常数据下一个会话只属于一个组，两种写法同解；一旦注册表里出现重复
-    // 成员（`attachSession` 只加不减，历史数据也可能被手改过），取后者会把同一批会话在
-    // 手机与 Web UI 上分到不同的组 —— 而那正是这条判据要防的事。
-    for (const sessionId of workspace.sessionIds) {
-      if (!owners.has(sessionId)) owners.set(sessionId, workspace.id)
-    }
-    return { id: workspace.id, title: workspace.title }
-  })
-  return { rows, owners }
 }
 
 /**

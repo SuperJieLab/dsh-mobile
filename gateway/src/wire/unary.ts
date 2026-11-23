@@ -30,11 +30,10 @@ export type UnaryEndpointName =
   | 'commands/list'
   | 'commands/execute'
   | 'workspace/delete'
-  | 'mobile/listSessions'
+  | 'session/list'
   | 'mobile/snapshot'
   | 'mobile/page'
-  | 'mobile/permissionCatalog'
-  | 'mobile/permissionSelect'
+  | 'permissionPresets/catalog'
   | 'mobile/workspaceCreate'
   | 'mobile/approvalAnswer'
   | 'mobile/questionAnswer'
@@ -50,11 +49,10 @@ export const UNARY_ENDPOINT_NAMES: readonly UnaryEndpointName[] = [
   'commands/list',
   'commands/execute',
   'workspace/delete',
-  'mobile/listSessions',
+  'session/list',
   'mobile/snapshot',
   'mobile/page',
-  'mobile/permissionCatalog',
-  'mobile/permissionSelect',
+  'permissionPresets/catalog',
   'mobile/workspaceCreate',
   'mobile/approvalAnswer',
   'mobile/questionAnswer',

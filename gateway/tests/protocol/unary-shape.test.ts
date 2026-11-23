@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 
-import { DEFAULT_LIMITS, listSessionsOf } from '../../src/protocol/rpc.ts'
+import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { createRpcListener, type RpcListenerDeps } from '../../src/remote/http.ts'
 import type { CredentialVault } from '../../src/remote/credentials.ts'
 import { IdentityRegistry } from '../../src/remote/identity-registry.ts'
@@ -25,14 +25,10 @@ const unused = async (): Promise<never> => {
 function deps(): RpcListenerDeps {
   return {
     sessionPort: {
-      list: async () => [{
-        id: 's-1',
-        title: 'first',
-        createdAt: 1,
-        updatedAt: 5,
-        running: false,
-        blank: false,
-      }],
+      // 宿主的形状原样（这一层不认识它，只负责搬）。
+      list: async () => ({
+        items: [{ sessionId: 's-1', updatedAt: 5, running: false, blank: false, agentAvailable: true }],
+      }),
       read: async () => undefined,
       readAll: async () => undefined,
     },
@@ -43,7 +39,6 @@ function deps(): RpcListenerDeps {
     modelPort: undefined,
     commandPort: undefined,
     workspacePort: {
-      snapshot: () => ({ rows: [{ id: 'w-1', title: 'group' }], owners: new Map([['s-1', 'w-1']]) }) as never,
       create: unused,
       delete: async () => {},
     },
@@ -75,16 +70,16 @@ async function withListener(
   }
 }
 
-const request = (method: string, rpcId = 'r-1'): unknown => ({
+const request = (method: string, rpcId = 'r-1', args: Record<string, unknown> = {}): unknown => ({
   type: 'client-request',
   rpcId,
   method,
-  payload: { args: {} },
+  payload: { args },
 })
 
-test('新路径回 server-response，值就是装配函数的产出', async () => {
+test('新路径回 server-response，值就是数据源的产出', async () => {
   await withListener(async (post, built) => {
-    const fresh = await post('/api/mobile/listSessions', request('mobile/listSessions'))
+    const fresh = await post('/api/session/list', request('session/list', 'r-1', { _request: {} }))
     assert.equal(fresh.status, 200)
     assert.match(fresh.headers.get('content-type') ?? '', /application\/json/)
 
@@ -96,28 +91,20 @@ test('新路径回 server-response，值就是装配函数的产出', async () =
     const result = envelope.result as Record<string, unknown>
     assert.equal(result.ok, true)
 
-    // 直调装配函数：同一套端口，时钟固定。`serverTime` 是「这一刻」的读数，
-    // 走 HTTP 那次用的是真时钟，所以比之前把它抹掉 —— 要证的是「别的字段没被改」。
-    const direct = await listSessionsOf(built.sessionPort, built.workspacePort, () => 0)
-    const value = result.value as Record<string, unknown>
-    assert.equal(typeof value.serverTime, 'number', '应答该带这个读数')
-    const withoutClock = (body: Record<string, unknown>): Record<string, unknown> => {
-      const { serverTime: _time, ...rest } = body
-      return rest
-    }
-    assert.deepEqual(withoutClock(value), withoutClock(direct as Record<string, unknown>),
-      '传输层只该搬：HTTP 拿到的值必须与装配函数直调逐字相同')
+    // 直调数据源：同一套端口。要证的是「传输层只该搬」—— 值必须与端口给的逐字相同。
+    const direct = await built.sessionPort.list({}, new AbortController().signal)
+    assert.deepEqual(result.value, direct, '传输层只该搬：HTTP 拿到的值必须与直调数据源逐字相同')
   })
 })
 
 test('请求里的 method 与路径不一致 → invalid-request，且不落到处理器', async () => {
   await withListener(async (post) => {
-    const response = await post('/api/mobile/listSessions', request('mobile/snapshot'))
+    const response = await post('/api/session/list', request('mobile/snapshot', 'r-1', { _request: {} }))
     assert.equal(response.status, 200, '已归到一条端点的事，用信封而不是状态码表达')
     const body = await response.json() as { result: { ok: boolean; error: { code: string; details: unknown } } }
     assert.equal(body.result.ok, false)
     assert.equal(body.result.error.code, 'invalid-request')
-    assert.deepEqual(body.result.error.details, { method: 'mobile/snapshot', endpoint: 'mobile/listSessions' })
+    assert.deepEqual(body.result.error.details, { method: 'mobile/snapshot', endpoint: 'session/list' })
   })
 })
 

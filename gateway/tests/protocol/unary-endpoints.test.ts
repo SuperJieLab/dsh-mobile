@@ -56,13 +56,16 @@ const deps = (): RpcListenerDeps => ({
     select: unused,
   },
   commandPort: {
-    list: async (id) => (id === 's-1' ? [{ name: 'permission', description: 'switch preset' }] : undefined),
+    list: async (agentId: string) => (agentId === 's-1' ? [{ name: 'permission', description: 'switch preset' }] : undefined),
     execute: unused,
   },
   workspacePort: undefined,
   permissionPort: {
-    catalog: async (id) => (id === 's-1' ? { current: 'ask', options: [{ value: 'ask', name: 'Ask' }] } : {}),
-    select: unused,
+    catalog: async () => ({
+      options: [{ value: 'ask', name: 'Ask' }],
+      defaultOptions: [{ value: 'ask', name: 'Ask' }],
+      defaultPreset: 'ask',
+    }),
   },
   auditLog: undefined,
 })
@@ -102,12 +105,12 @@ function resultOf(envelope: Record<string, unknown>): Record<string, unknown> {
 
 test('六个读端点各发一次合法请求全部 ok', async () => {
   const calls: [string, unknown][] = [
-    ['/api/mobile/listSessions', {}],
+    ['/api/session/list', { _request: {} }],
     ['/api/mobile/snapshot', { sessionId: 's-1' }],
     ['/api/mobile/page', { sessionId: 's-1' }],
     ['/api/session/modelCatalog', {}],
-    ['/api/commands/list', { sessionId: 's-1' }],
-    ['/api/mobile/permissionCatalog', { sessionId: 's-1' }],
+    ['/api/commands/list', { agentId: 's-1' }],
+    ['/api/permissionPresets/catalog', {}],
   ]
   await withListener(async (post) => {
     for (const [path, args] of calls) {
@@ -126,8 +129,7 @@ test('拒绝码与旧路径逐字相同 —— 迁移的是信封，不是语义
       ['/api/mobile/page', {}, 'unknown-session'],
       ['/api/mobile/page', { sessionId: 'nope' }, 'unknown-session'],
       ['/api/commands/list', {}, 'unknown-session'],
-      ['/api/commands/list', { sessionId: 'nope' }, 'unknown-session'],
-      ['/api/mobile/permissionCatalog', {}, 'unknown-session'],
+      ['/api/commands/list', { agentId: 'nope' }, 'unknown-session'],
     ]
     for (const [path, args, code] of cases) {
       const result = resultOf(await post(path, args))
@@ -140,19 +142,13 @@ test('拒绝码与旧路径逐字相同 —— 迁移的是信封，不是语义
   })
 })
 
-test('判据 3 的另一半：没有必填 args 的两个端点，也要有一个「服务端会拒」的样本', async () => {
-  // `mobile/listSessions` 与 `session/modelCatalog` 收的是空对象，参数上拒不了它们。
+test('判据 3 的另一半：无参的端点在装配缺件时也要回一条拒绝，而不是断开连接', async () => {
+  // `session/modelCatalog` 收的是空对象，参数上拒不了它。
   // 但「拒」不等于「参数非法」：端口缺席、数据源抛错都该折成拒绝而不是断开连接。
-  // 这两条各喂一次那种情形 —— 少了它们，判据 3 的「每个端点各一次拒绝」只覆盖 12/14。
+  // 少了这一条，判据 3 的「每个端点各一次拒绝」就漏掉了「装配缺件」这一整类。
   const broken: RpcListenerDeps = {
     ...deps(),
     modelPort: undefined,
-    // 宿主读列表时抛：`listSessionsOf` 不折异常，折在 `invokeEndpoint` 那一层。
-    sessionPort: {
-      list: async () => { throw new Error('listing exploded') },
-      read: async () => undefined,
-      readAll: async () => undefined,
-    },
   }
   const server = createRpcListener(broken)
   server.listen(0)
@@ -170,7 +166,9 @@ test('判据 3 的另一半：没有必填 args 的两个端点，也要有一�
       return (await response.json() as { result: Record<string, unknown> }).result
     }
 
-    for (const endpoint of ['mobile/listSessions', 'session/modelCatalog']) {
+    // `session/list` 现在要 `_request` 这一层容器，所以它不再属于「无需 args 的端点」；
+    // 无参的只剩目录那一条，用它证明「装配缺件折成 internal-error」。
+    for (const endpoint of ['session/modelCatalog']) {
       const result = await send(endpoint)
       assert.equal(result.ok, false, `「${endpoint}」在这种装配下该拒`)
       const error = result.error as Record<string, unknown>

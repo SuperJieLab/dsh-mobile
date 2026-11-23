@@ -1,11 +1,11 @@
 /**
- * 两条权限 op 经 `handle` 的分派与应答形状。权限端口是假件：无网络、无 DSH 运行时。
+ * 权限目录经 `handle` 的分派与应答形状。权限端口是假件：无网络、无 DSH 运行时。
  *
- * 分派与处理器在 `protocol/rpc.ts`；载荷解析在 `wire/permission.ts`；目录怎么读、
- * 切换怎么落到命令上在 `upstream/permission.ts`，另有其测试。
+ * **这条应答里只有目录**。当前值是会话级的事实，住在 `permissions` 投影里（随
+ * `session/control` 到客户端）；把它塞回目录应答，就会出现「目录是新的、当前值是旧的」
+ * 而没人分得清——判据把这条按 deepEqual 钉死：多一格 `current` 就红。
  *
- * 这里钉的三件事最容易被写错：**应答里不带 knob**（带了客户端就会自己折叠出第二份
- * 判定）、**`current` 缺席不等于默认档**、**端口缺席与权限服务缺席是两件事**。
+ * **切档不在这里**：走 `commands/execute` 的 `/permission <preset>`（判据 10）。
  */
 
 import assert from 'node:assert/strict'
@@ -14,7 +14,7 @@ import { test } from 'node:test'
 import { invoke, valueOf } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { PermissionPort } from '../../src/ports/permission.ts'
-import type { PermissionOption } from '../../src/wire/permission.ts'
+import type { PermissionCatalog, PermissionOption } from '../../src/wire/permission.ts'
 
 // -- helpers -----------------------------------------------------------------
 
@@ -26,127 +26,64 @@ const OPTIONS: readonly PermissionOption[] = [
   { value: 'danger-full-access', name: 'danger-full-access' },
 ]
 
-/** 假权限端口：记下每次调用的实参，便于断言「有没有真的到端口」。 */
-function fakePermission(overrides: Partial<PermissionPort> = {}): PermissionPort & {
-  selects: { sessionId: string; preset: string }[]
-} {
-  const selects: { sessionId: string; preset: string }[] = []
-  return {
-    selects,
-    async catalog() {
-      return { current: 'workspace-write', options: OPTIONS }
-    },
-    async select(sessionId, preset) {
-      selects.push({ sessionId, preset })
-      return { ok: true, current: preset }
-    },
-    ...overrides,
-  }
+const CATALOG: PermissionCatalog = {
+  options: [...OPTIONS],
+  defaultOptions: [...OPTIONS],
+  defaultPreset: 'workspace-write',
 }
 
-/** 只给权限端口的一条消息 —— 其余七个端口一律不给（它们的 op 与本文件无关）。 */
-function ask(endpoint: string, args: Record<string, unknown>, permission?: PermissionPort) {
-  return invoke(endpoint, args, { session: PORT, permission: permission })
+/** 假权限端口：只有目录。切档已经不在这条域里。传 `null` 表示这个装配没有权限服务。 */
+function fakePermission(catalog: PermissionCatalog | null = CATALOG): PermissionPort {
+  return { catalog: async () => (catalog === null ? undefined : catalog) }
 }
 
-// -- permission-catalog ------------------------------------------------------
+function ask(permission?: PermissionPort) {
+  return invoke('permissionPresets/catalog', {}, { session: PORT, permission })
+}
 
-test('permission-catalog: the current value and the catalog come back verbatim', async () => {
-  const reply = await ask('mobile/permissionCatalog', { sessionId: 's' }, fakePermission())
-  // 整份 deepEqual，不是逐字段：多一个 `sandbox` 或 `approval` 字段就红 ——
-  // 那两个 knob 一旦发出去，客户端就能自己折叠出预设，而宿主才是折叠的唯一出处。
-  assert.deepEqual(reply, { ok: true, value: { current: 'workspace-write',
-    options: [
-      { value: 'read-only', name: 'read-only' },
-      { value: 'workspace-write', name: 'workspace-write' },
-      { value: 'danger-full-access', name: 'danger-full-access' },
-    ]} })
+// -- permissionPresets/catalog -----------------------------------------------
+
+test('permissionPresets/catalog: the three catalog keys come back verbatim', async () => {
+  const reply = await ask(fakePermission())
+  // 整份 deepEqual：多一格 `current`、`sandbox` 或 `approval` 就红 ——
+  // 那几格一旦发出去，客户端就会自己折叠出第二份判定，而宿主才是唯一出处。
+  assert.deepEqual(reply, { ok: true, value: CATALOG })
 })
 
-test('permission-catalog: an unknown current value omits the key instead of guessing a default', async () => {
-  const permission = fakePermission({ catalog: async () => ({ options: OPTIONS }) })
-  const reply = await ask('mobile/permissionCatalog', { sessionId: 's' }, permission)
+test('permissionPresets/catalog: an empty catalog is a success — the service is there, nothing configured', async () => {
+  const empty: PermissionCatalog = { options: [], defaultOptions: [], defaultPreset: 'read-only' }
+  const reply = await ask(fakePermission(empty))
   assert.equal(reply.ok, true)
-  if (!reply.ok) return
-  // 缺键而不是 null 或默认档：客户端据此显示 `--`，而补一个默认档会与 Web UI 显示的分叉。
-  const body = valueOf<{ current?: string; options?: unknown[] }>(reply)
-  assert.equal('current' in body, false)
-  assert.deepEqual(body.options, [...OPTIONS])
+  assert.deepEqual(valueOf(reply), empty)
 })
 
-test('permission-catalog: an empty catalog still answers ok — that is not a missing service', async () => {
-  const permission = fakePermission({ catalog: async () => ({ current: 'custom', options: [] }) })
-  const reply = await ask('mobile/permissionCatalog', { sessionId: 's' }, permission)
-  assert.equal(reply.ok, true)
-  if (!reply.ok) return
-  // 空数组 = 服务在、一项都没配（客户端画一个点不开的格子）；
-  // 服务缺席是 `options` 整个缺键。两者混成一种，客户端就分不出该不该画这一格。
-  const body = valueOf<{ current?: string; options?: unknown[] }>(reply)
-  assert.deepEqual(body.options, [])
-  assert.equal(body.current, 'custom')
+test('permissionPresets/catalog: a service that is not there answers an empty value, not a guess', async () => {
+  // 三键一起缺席：客户端据「没有 options」不画那一格。空数组是另一件事（服务在、没配）。
+  const reply = await ask(fakePermission(null))
+  assert.deepEqual(reply, { ok: true, value: {} })
 })
 
-test('permission-catalog: a missing session id is unknown-session, not an empty view', async () => {
-  const reply = await ask('mobile/permissionCatalog', {  }, fakePermission())
+test('permissionPresets/catalog: no arguments are required and extra ones are ignored', async () => {
+  // 一元的 args 宽松：这条端点一个参数都不要。给一个多余的键不该改变结果。
+  const reply = await invoke('permissionPresets/catalog', { sessionId: 'ignored' },
+    { session: PORT, permission: fakePermission() })
+  assert.deepEqual(reply, { ok: true, value: CATALOG })
+})
+
+test('permission ops: an unwired port is internal-error', async () => {
+  const reply = await ask()
   assert.equal(reply.ok, false)
-  if (!reply.ok) assert.equal(reply.error.code, 'unknown-session')
+  if (!reply.ok) assert.equal(reply.error.code, 'internal-error')
 })
 
-// -- permission-select -------------------------------------------------------
+// -- 旧的两条已经退场 --------------------------------------------------------
 
-test('permission-select: the preset name reaches the port exactly once', async () => {
-  const permission = fakePermission()
-  const reply = await ask('mobile/permissionSelect', { sessionId: 's', preset: 'danger-full-access' }, permission)
-  assert.deepEqual(permission.selects, [{ sessionId: 's', preset: 'danger-full-access' }])
-  // 回包里的值是受理后重读投影拿到的那个，不是把发出去的那份当答案。
-  assert.deepEqual(reply, { ok: true, value: { current: 'danger-full-access'} })
-})
-
-test('permission-select: a malformed payload is invalid-request and never reaches the port', async () => {
-  for (const bad of [
-    {},
-    { sessionId: 's' },
-    { preset: 'read-only' },
-    { sessionId: '', preset: 'read-only' },
-    { sessionId: 's', preset: '' },
-    { sessionId: 's', preset: 7 },
-  ]) {
-    const permission = fakePermission()
-    const reply = await ask('mobile/permissionSelect', { ...bad }, permission)
-    assert.equal(reply.ok, false, JSON.stringify(bad))
-    if (!reply.ok) assert.equal(reply.error.code, 'invalid-request', JSON.stringify(bad))
-    assert.deepEqual(permission.selects, [], `畸形载荷绝不进端口：${JSON.stringify(bad)}`)
-  }
-})
-
-test('permission-select: a refusal keeps the upstream code and its own words', async () => {
-  const permission = fakePermission({
-    select: async () => ({ ok: false, code: 'unknown-preset', message: 'no preset "nope" in this catalog' }),
-  })
-  const reply = await ask('mobile/permissionSelect', { sessionId: 's', preset: 'nope' }, permission)
-  assert.deepEqual(reply, { ok: false,
-    error: { code: 'unknown-preset', message: 'no preset "nope" in this catalog', details: {} }, })
-})
-
-test('permission-select: a session without a live agent is unknown-session, not a silent success', async () => {
-  const permission = fakePermission({
-    select: async () => ({ ok: false, code: 'unknown-session', message: 'no live session "gone"' }),
-  })
-  const reply = await ask('mobile/permissionSelect', { sessionId: 'gone', preset: 'read-only' }, permission)
-  assert.equal(reply.ok, false)
-  if (!reply.ok) assert.equal(reply.error.code, 'unknown-session')
-})
-
-// -- 端口缺席 ----------------------------------------------------------------
-
-test('permission ops: an unwired port is internal-error on both', async () => {
-  const calls: [string, Record<string, unknown>][] = [
-    ['mobile/permissionCatalog', { sessionId: 's' }],
-    ['mobile/permissionSelect', { sessionId: 's', preset: 'read-only' }],
-  ]
-  for (const [endpoint, args] of calls) {
-    const reply = await ask(endpoint, args)
+test('the old permission endpoints are gone', async () => {
+  // 这两个名字写在这里是**断言的对象**，不是还在用的端点：判据要能证明它们已被摘掉，
+  // 就不得不写出它们。HTTP 那一层另有一条（`http-routing.test.ts`）测同一件事的 404 形态。
+  for (const endpoint of ['mobile/permissionCatalog', 'mobile/permissionSelect']) { // terms-ok: 退场端点名，本行是断言对象
+    const reply = await invoke(endpoint, {}, { session: PORT, permission: fakePermission() })
     assert.equal(reply.ok, false, endpoint)
-    if (!reply.ok) assert.equal(reply.error.code, 'internal-error', endpoint)
+    if (!reply.ok) assert.equal(reply.error.code, 'unknown-endpoint', endpoint)
   }
 })

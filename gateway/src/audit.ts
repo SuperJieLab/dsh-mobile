@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { formatLogFields } from './log.ts'
+import { requestContainerOf } from './wire/fields.ts'
 import type { RemoteResult } from './wire/unary.ts';
 import { logTimestamp } from './timestamp.ts';
 
@@ -188,21 +189,26 @@ export function auditEntryOf(
  * 而它们要查的地方不同。
  */
 function auditTargetOf(op: string, message: Record<string, unknown>): string {
+  // 三条写 op 的宿主签名都收一个 `request` 对象，线上因此多一层容器；
+  // 目标在那层里面。容器缺席时 `{}` —— 于是目标记成 `-`，与「没带目标」同形。
+  const request = requestContainerOf(message) ?? {};
   switch (op) {
     case 'session-prompt':
-    case 'command-execute':
-    case 'permission-select':
-    case 'model-select':
       return identifierOf(message.sessionId);
+    case 'model-select':
+      return identifierOf(request.sessionId);
+    case 'command-execute':
+      // 命令域在线上叫 `agentId`（宿主的参数名）；值与会话 id 同。
+      return identifierOf(message.agentId);
     case 'approval-answer':
       return identifierOf(message.eventId);
     case 'workspace-create':
       return identifierOf(message.name);
     case 'workspace-delete':
-      return identifierOf(message.workspaceId);
+      return identifierOf(request.workspaceId);
     case 'session-create':
       // 不带 `workspaceId` 意为「交给宿主当前目录」：不是缺失，是一个明确的「未指定」。
-      return message.workspaceId === undefined ? '-' : identifierOf(message.workspaceId);
+      return request.workspaceId === undefined ? '-' : identifierOf(request.workspaceId);
     default:
       return '-';
   }

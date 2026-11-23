@@ -19,7 +19,7 @@ import { attachStreamHandler } from '../src/remote/server.ts'
 import { STREAM_PATH } from '../src/remote/connection.ts'
 import type { FollowSource } from '../src/ports/follow.ts'
 import { modelSelectionSourceOver, streamSourceOver } from '../src/upstream/faces.ts'
-import { createSessionPort, type ListRecord, type PersistenceLike } from '../src/upstream/sessions.ts'
+import { createSessionPort, type PersistenceLike } from '../src/upstream/sessions.ts'
 import type { ModelSelection } from '../src/wire/model.ts'
 
 /** 宿主 `modelSelection` 投影的原样视图：两格都在，`next` 与 `lastUsed` 不同 ——
@@ -84,19 +84,10 @@ function oneEventPersistence(): PersistenceLike {
   }
 }
 
-const LISTING = {
-  async records(): Promise<readonly ListRecord[]> {
-    return []
-  },
-  liveValues: () => undefined,
-  storedValues: () => undefined,
-  isRunning: () => false,
-}
-
 /** HTTP 那条出口的基线。 */
 async function baselineOverHttp(view: unknown): Promise<unknown> {
   const ctx = fakeHost(view)
-  const port = createSessionPort(oneEventPersistence(), LISTING, modelSelectionSourceOver(ctx))
+  const port = createSessionPort(oneEventPersistence(), modelSelectionSourceOver(ctx))
   const slice = await port.read('s1', 0, 10)
   assert.ok(slice !== undefined, 'the read must find the session')
   return 'model' in slice ? slice.model : undefined

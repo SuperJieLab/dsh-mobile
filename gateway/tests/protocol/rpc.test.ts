@@ -10,20 +10,22 @@ import { DEFAULT_LIMITS } from '../../src/protocol/rpc.ts'
 import { invoke, valueOf } from '../helpers/unary.ts'
 import type { Limits } from '../../src/protocol/rpc.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
-import type { SessionRow, WireEvent } from '../../src/wire/rpc.ts'
+import type { WireEvent } from '../../src/wire/rpc.ts'
 
-/** One fake session: the row the list path sees, and the log the read path sees. */
+/** One fake session: the log the read path sees. */
 interface FakeSession {
-  row: SessionRow
+  /** 默认 `s-1` —— 本层的用例只有一条日志。 */
+  id?: string
   events: readonly WireEvent[]
 }
 
 /** An in-memory {@link SessionPort} — the contract's only dependency, fully controlled. */
 function fakePort(sessions: readonly FakeSession[] = []): SessionPort {
-  const byId = new Map(sessions.map(session => [session.row.id, session]))
+  const byId = new Map(sessions.map(session => [session.id ?? 's-1', session]))
   return {
+    // 列表是转发，判据在 `list-forward.test.ts`；本层的用例只读日志。
     async list() {
-      return sessions.map(session => session.row)
+      return { items: [] }
     },
     async read(id, since, limit) {
       const found = byId.get(id)
@@ -94,18 +96,6 @@ function turnedLog(turns: number): WireEvent[] {
   return events
 }
 
-/** A list row with the optional field made explicit. */
-function row(id: string, updatedAt: number, title?: string): SessionRow {
-  return {
-    id,
-    ...(title === undefined ? {} : { title }),
-    createdAt: 1_758_000_000_000,
-    updatedAt,
-    running: false,
-    blank: false,
-  }
-}
-
 const CLOCK = () => 1_758_000_999_999
 
 /** Reply caps, small enough that every case below can observe them. */
@@ -113,40 +103,9 @@ function limits(maxDeltaEvents: number, maxDeltaBytes = DEFAULT_LIMITS.maxDeltaB
   return { maxDeltaEvents, maxDeltaBytes, maxOpeningBytes: DEFAULT_LIMITS.maxOpeningBytes }
 }
 
-test('list-sessions answers with serverTime and every field a v2 row promises', async () => {
-  const response = await invoke('mobile/listSessions', {}, { session: fakePort([
-    { row: row('s-1', 100, 'First'), events: [event(0), event(1)] },
-  ]) }, CLOCK)
-
-  assert.deepEqual(response, { ok: true, value: { serverTime: 1_758_000_999_999,
-    sessions: [{ id: 's-1', title: 'First', createdAt: 1_758_000_000_000, updatedAt: 100, running: false, blank: false }]} })
-})
-
-test('a session without a title omits the field instead of sending null', async () => {
-  const response = await invoke('mobile/listSessions', {}, { session: fakePort([
-    { row: row('s-1', 100), events: [] },
-  ]) }, CLOCK)
-
-  assert.equal(response.ok, true)
-  const sessions = response.ok ? valueOf<{ sessions: unknown[] }>(response).sessions : []
-  assert.deepEqual(sessions, [{ id: 's-1', createdAt: 1_758_000_000_000, updatedAt: 100, running: false, blank: false }])
-  assert.equal('title' in (sessions[0] as object), false)
-})
-
-test('sessions are ordered most-recently-updated first', async () => {
-  const response = await invoke('mobile/listSessions', {}, { session: fakePort([
-    { row: row('older', 100), events: [] },
-    { row: row('newest', 300), events: [] },
-    { row: row('middle', 200), events: [] },
-  ]) }, CLOCK)
-
-  const sessions = response.ok ? valueOf<{ sessions: { id: string }[] }>(response).sessions : []
-  assert.deepEqual(sessions.map(session => session.id), ['newest', 'middle', 'older'])
-})
-
 test('snapshot with since 0 returns the whole log and reports the next expected seq', async () => {
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: fakePort([
-    { row: row('s-1', 100), events: [event(0), event(1), event(2)] },
+    { events: [event(0), event(1), event(2)] },
   ]) }, CLOCK)
 
   assert.equal(response.ok, true)
@@ -158,7 +117,7 @@ test('snapshot with since 0 returns the whole log and reports the next expected 
 
 test('snapshot returns only seq >= since', async () => {
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 2 }, { session: fakePort([
-    { row: row('s-1', 100), events: [event(0), event(1), event(2), event(3)] },
+    { events: [event(0), event(1), event(2), event(3)] },
   ]) }, CLOCK)
 
   const events = response.ok ? valueOf<{ events: WireEvent[] }>(response).events : []
@@ -167,7 +126,7 @@ test('snapshot returns only seq >= since', async () => {
 })
 
 test('the water-mark invariant: replaying asOfSeq as since yields nothing and moves nothing', async () => {
-  const port = fakePort([{ row: row('s-1', 100), events: [event(0), event(1), event(2)] }])
+  const port = fakePort([{ events: [event(0), event(1), event(2)] }])
 
   const first = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: port }, CLOCK)
   const waterMark = first.ok ? valueOf<{ asOfSeq: number }>(first).asOfSeq : -1
@@ -179,7 +138,7 @@ test('the water-mark invariant: replaying asOfSeq as since yields nothing and mo
 })
 
 test('an absent or nonsense since is treated as 0 rather than inventing an error code', async () => {
-  const port = fakePort([{ row: row('s-1', 100), events: [event(0), event(1)] }])
+  const port = fakePort([{ events: [event(0), event(1)] }])
 
   for (const since of [undefined, -5, 1.5, 'x', null]) {
     const response = await invoke('mobile/snapshot', { sessionId: 's-1', since }, { session: port }, CLOCK)
@@ -215,26 +174,14 @@ test('a session the runtime cannot interpret is refused with unreadable-session'
 test('events are passed through verbatim, unknown fields included', async () => {
   const enriched: WireEvent = { ...event(0), ignorable: true, futureField: { nested: [1, 2] } }
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: fakePort([
-    { row: row('s-1', 100), events: [enriched] },
+    { events: [enriched] },
   ]) }, CLOCK)
 
   assert.deepEqual(valueOf<{ events: WireEvent[] }>(response).events, [enriched])
 })
 
-test('an unexpected data-source failure surfaces as a refusal, not a crash', async () => {
-  const broken = async (): Promise<never> => { throw new Error('disk on fire') }
-  const port: SessionPort = { list: broken, read: broken, readAll: broken }
-  const listed = await invoke('mobile/listSessions', {}, { session: port }, CLOCK)
-  assert.equal(listed.ok, false)
-  assert.equal('error' in listed && listed.error.code, 'internal-error')
-
-  const read = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: port }, CLOCK)
-  assert.equal(read.ok, false)
-  assert.equal('error' in read && read.error.code, 'internal-error')
-})
-
 test('a reply is capped at maxDeltaEvents and says so with hasMore', async () => {
-  const port = fakePort([{ row: row('s-1', 100), events: [event(0), event(1), event(2)] }])
+  const port = fakePort([{ events: [event(0), event(1), event(2)] }])
 
   const first = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: port }, CLOCK, limits(2))
   assert.deepEqual(first, { ok: true, value: { sessionId: 's-1',
@@ -251,7 +198,7 @@ test('a reply is capped at maxDeltaEvents and says so with hasMore', async () =>
 
 test('chunked reads covering the log produce exactly the same view as one full read', async () => {
   const events = [event(0), event(1), event(2), event(3), event(4)]
-  const port = fakePort([{ row: row('s-1', 100), events }])
+  const port = fakePort([{ events }])
 
   const whole = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: port }, CLOCK)
   const wholeEvents = whole.ok ? valueOf<{ events: WireEvent[] }>(whole).events : []
@@ -277,7 +224,7 @@ test('chunked reads covering the log produce exactly the same view as one full r
 test('the byte cap is soft: the first event is delivered even when it alone exceeds it', async () => {
   const oversized: WireEvent = { ...event(0), data: { body: 'x'.repeat(4096) } }
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: fakePort([
-    { row: row('s-1', 100), events: [oversized, event(1)] },
+    { events: [oversized, event(1)] },
   ]) }, CLOCK, limits(100, 64))
 
   assert.equal(response.ok, true)
@@ -289,7 +236,7 @@ test('the byte cap is soft: the first event is delivered even when it alone exce
 test('the byte cap trims the tail of a batch and reports hasMore', async () => {
   const bulky = (seq: number): WireEvent => ({ ...event(seq), data: { body: 'y'.repeat(200) } })
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: fakePort([
-    { row: row('s-1', 100), events: [bulky(0), bulky(1), bulky(2)] },
+    { events: [bulky(0), bulky(1), bulky(2)] },
   ]) }, CLOCK, limits(100, 250))
 
   const batch = valueOf<{ events: WireEvent[]; hasMore: boolean; asOfSeq: number }>(response)
@@ -300,7 +247,7 @@ test('the byte cap trims the tail of a batch and reports hasMore', async () => {
 
 test('an empty log with a positive since is refused with resync-required', async () => {
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 1 }, { session: fakePort([
-    { row: row('s-1', 100), events: [] },
+    { events: [] },
   ]) }, CLOCK)
 
   assert.equal(response.ok, false)
@@ -309,7 +256,7 @@ test('an empty log with a positive since is refused with resync-required', async
 
 test('an empty log with since 0 is an ordinary empty answer, not a resync', async () => {
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: fakePort([
-    { row: row('s-1', 100), events: [] },
+    { events: [] },
   ]) }, CLOCK)
 
   assert.deepEqual(response, { ok: true, value: { sessionId: 's-1',
@@ -320,7 +267,7 @@ test('an empty log with since 0 is an ordinary empty answer, not a resync', asyn
 
 test('a since past the water mark is answered, not refused — it is indistinguishable from caught up', async () => {
   const response = await invoke('mobile/snapshot', { sessionId: 's-1', since: 999999 }, { session: fakePort([
-    { row: row('s-1', 100), events: [event(0), event(1)] },
+    { events: [event(0), event(1)] },
   ]) }, CLOCK)
 
   assert.equal(response.ok, true)
@@ -338,7 +285,7 @@ test('a since past the water mark is answered, not refused — it is indistingui
 test('page with no beforeSeq hands back the newest message window', async () => {
   const log = mixedLog(10)
   const response = await invoke('mobile/page', { sessionId: 's-1', maxMessages: 2 }, { session: fakePort([
-    { row: row('s-1', 100), events: log },
+    { events: log },
   ]) }, CLOCK)
 
   assert.deepEqual(response, { ok: true, value: { sessionId: 's-1',
@@ -355,7 +302,7 @@ test('page with no beforeSeq hands back the newest message window', async () => 
 test('a window that would start mid-turn backs up to where the turn does', async () => {
   const log = turnedLog(6) // 54 events, 3 messages per turn
   const response = await invoke('mobile/page', { sessionId: 's-1', maxMessages: 5 }, { session: fakePort([
-    { row: row('s-1', 100), events: log },
+    { events: log },
   ]) }, CLOCK)
 
   const page = valueOf<{ pageStart: number; events: WireEvent[] }>(response)
@@ -371,7 +318,7 @@ test('a window that would start mid-turn backs up to where the turn does', async
 
 test('walking pages backwards covers the log exactly once', async () => {
   const log = turnedLog(6)
-  const port = fakePort([{ row: row('s-1', 100), events: log }])
+  const port = fakePort([{ events: log }])
 
   const collected: number[] = []
   const starts: number[] = []
@@ -402,7 +349,7 @@ test('walking pages backwards covers the log exactly once', async () => {
 test('a log with no messages at all is still a window, not an empty one', async () => {
   const log: WireEvent[] = [0, 1, 2].map(seq => ({ type: 'policy/marker', seq, time: 1, data: {} }))
   const response = await invoke('mobile/page', { sessionId: 's-1', maxMessages: 2 }, { session: fakePort([
-    { row: row('s-1', 100), events: log },
+    { events: log },
   ]) }, CLOCK)
 
   const page = valueOf<{ pageStart: number; asOfSeq: number; hasOlder: boolean; events: WireEvent[] }>(response)
@@ -412,7 +359,7 @@ test('a log with no messages at all is still a window, not an empty one', async 
 
 test('an empty log is an empty window rather than a refusal', async () => {
   const response = await invoke('mobile/page', { sessionId: 's-1' }, { session: fakePort([
-    { row: row('s-1', 100), events: [] },
+    { events: [] },
   ]) }, CLOCK)
 
   assert.deepEqual(response, { ok: true, value: { sessionId: 's-1',
@@ -426,7 +373,7 @@ test('page defaults to the protocol page size when maxMessages is absent', async
   // 120 messages: more than the default, so an absent maxMessages is observable.
   const log: WireEvent[] = Array.from({ length: 120 }, (_, seq) => event(seq))
   const response = await invoke('mobile/page', { sessionId: 's-1' }, { session: fakePort([
-    { row: row('s-1', 100), events: log },
+    { events: log },
   ]) }, CLOCK)
 
   const page = valueOf<{ pageStart: number; hasOlder: boolean }>(response)
@@ -438,7 +385,7 @@ test('page defaults to the protocol page size when maxMessages is absent', async
 
 test('a beforeSeq past the end of the log is refused, not silently clamped', async () => {
   const response = await invoke('mobile/page', { sessionId: 's-1', beforeSeq: 999 }, { session: fakePort([
-    { row: row('s-1', 100), events: mixedLog(10) },
+    { events: mixedLog(10) },
   ]) }, CLOCK)
 
   assert.equal(response.ok, false)
@@ -448,7 +395,7 @@ test('a beforeSeq past the end of the log is refused, not silently clamped', asy
 test('a malformed beforeSeq falls back to the newest window rather than failing', async () => {
   for (const beforeSeq of [-1, 1.5, 'x', null]) {
     const response = await invoke('mobile/page', { sessionId: 's-1', beforeSeq, maxMessages: 2 }, { session: fakePort([
-      { row: row('s-1', 100), events: mixedLog(10) },
+      { events: mixedLog(10) },
     ]) }, CLOCK)
     assert.equal(response.ok, true, `beforeSeq=${String(beforeSeq)} should degrade, not fail`)
     assert.equal(valueOf<{ pageStart: number }>(response).pageStart, 2)
@@ -465,47 +412,11 @@ test('page on an unknown session is the same refusal the read path uses', async 
 // `list-sessions` — the v2 row shape: header facts plus host-kept projections, never a log read
 // ---------------------------------------------------------------------------
 
-test('a list row carries running and blank, and never an event count', async () => {
-  const response = await invoke('mobile/listSessions', {}, { session: fakePort([
-    {
-      row: { id: 's-1', title: '聊过的题目', createdAt: 1000, updatedAt: 2000, running: true, blank: false },
-      events: [],
-    },
-  ]) }, CLOCK)
-
-  assert.deepEqual(response, { ok: true, value: { serverTime: CLOCK(),
-    sessions: [{ id: 's-1', title: '聊过的题目', createdAt: 1000, updatedAt: 2000, running: true, blank: false }]} })
-})
-
-test('a row without a title omits the field rather than sending an empty one', async () => {
-  const response = await invoke('mobile/listSessions', {}, { session: fakePort([
-    { row: { id: 's-1', createdAt: 1000, updatedAt: 1000, running: false, blank: true }, events: [] },
-  ]) }, CLOCK)
-
-  const sessions = valueOf<{ sessions: Record<string, unknown>[] }>(response).sessions
-  const first = sessions[0] ?? {}
-  assert.equal('title' in first, false, 'no title is an absent key')
-  // v1 promised this from the log, which is exactly what v2 gave up to stop reading it.
-  assert.equal('eventCount' in first, false, 'an event count would put the log back on the list path')
-  assert.equal(first.blank, true)
-})
-
-test('a subagent origin travels with the row so the client can hide it', async () => {
-  const response = await invoke('mobile/listSessions', {}, { session: fakePort([
-    { row: { id: 's-1', createdAt: 1000, updatedAt: 1000, running: false, blank: false, origin: 'subagent' }, events: [] },
-    { row: row('s-2', 2000), events: [] },
-  ]) }, CLOCK)
-
-  const sessions = valueOf<{ sessions: Record<string, unknown>[] }>(response).sessions
-  assert.equal(sessions.find(s => s.id === 's-1')?.origin, 'subagent')
-  assert.equal('origin' in (sessions.find(s => s.id === 's-2') ?? {}), false, 'an ordinary session carries no origin')
-})
-
 // MARK: - the opening model baseline rides the snapshot reply (M7 T4)
 
 test('a slice carrying a model baseline publishes it; a bare slice leaves the field absent', async () => {
   const portWithModel: SessionPort = {
-    ...fakePort([{ row: { id: 's-1', createdAt: 1, updatedAt: 1, running: false, blank: false }, events: [event(0)] }]),
+    ...fakePort([{ events: [event(0)] }]),
     async read() {
       return { events: [event(0)], asOfSeq: 1, hasMore: false, staleCursor: false, model: { provider: 'deepseek', model: 'v3.2' } }
     },
@@ -514,7 +425,7 @@ test('a slice carrying a model baseline publishes it; a bare slice leaves the fi
   assert.ok(withModel.ok)
   assert.deepEqual(valueOf<{ model?: unknown }>(withModel).model, { provider: 'deepseek', model: 'v3.2' })
 
-  const withoutModel = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: fakePort([{ row: { id: 's-1', createdAt: 1, updatedAt: 1, running: false, blank: false }, events: [event(0)] }]) }, CLOCK)
+  const withoutModel = await invoke('mobile/snapshot', { sessionId: 's-1', since: 0 }, { session: fakePort([{ events: [event(0)] }]) }, CLOCK)
   assert.ok(withoutModel.ok)
   assert.equal('model' in valueOf(withoutModel), false)
 })
@@ -523,10 +434,10 @@ test('page refuses a sparse log and a cursor past the end with distinct codes', 
   // 两种拒绝，客户端应对不同：越过末端是「重同步」，日志不可解读是「展示不了」。
   // 合并成一个码会让客户端在一种情况下做错事。
   const log = mixedLog(10)
-  const pastEnd = await invoke('mobile/page', { sessionId: 's-1', beforeSeq: 999 }, { session: fakePort([{ row: row('s-1', 100), events: log }]) }, CLOCK)
+  const pastEnd = await invoke('mobile/page', { sessionId: 's-1', beforeSeq: 999 }, { session: fakePort([{ events: log }]) }, CLOCK)
   assert.ok(!pastEnd.ok && pastEnd.error.code === 'resync-required', JSON.stringify(pastEnd))
 
   const sparse = log.map((item, index) => index === 5 ? { ...item, seq: 99 } : item)
-  const sparseReply = await invoke('mobile/page', { sessionId: 's-1' }, { session: fakePort([{ row: row('s-1', 100), events: sparse }]) }, CLOCK)
+  const sparseReply = await invoke('mobile/page', { sessionId: 's-1' }, { session: fakePort([{ events: sparse }]) }, CLOCK)
   assert.ok(!sparseReply.ok && sparseReply.error.code === 'unreadable-session', JSON.stringify(sparseReply))
 })

@@ -7,7 +7,7 @@
  *
  * 表里除了「谁处理」还记着两件事：这条是不是写操作（审计据此决定记不记），以及
  * 它的**旧 op 名**（审计与 `/metrics` 的历史词汇 —— 换名字会让已写下的文件与累积的
- * 曲线对不上）。名字与旧 op 不是一一对应（`mobile/listSessions` ↔ `list-sessions`），
+ * 曲线对不上）。名字与旧 op 不是一一对应（`session/list` ↔ `list-sessions`），
  * 所以映射写在表里，不另建一张。
  */
 import { readErrorOf } from './error-codes.ts'
@@ -20,12 +20,10 @@ import {
   approvalAnswerValue,
   commandCatalogOf,
   commandExecuteOf,
-  listSessionsOf,
   modelCatalogOf,
   modelSelectOf,
   pageOf,
   permissionCatalogOf,
-  permissionSelectOf,
   questionAnswerValue,
   sessionCreateOf,
   sessionPromptValue,
@@ -34,6 +32,20 @@ import {
   workspaceDeleteOf,
 } from './rpc.ts'
 import type { RemoteResult, UnaryEndpointName } from '../wire/unary.ts'
+
+/**
+ * 转发用的取消信号：**永不中止**。
+ *
+ * HTTP 的断开目前不接到这里（方案「明确不做」）：宿主侧那次读会跑完，代价只是一次
+ * 白读。接上去需要给 `remote/http.ts` 加一条 `aborted` → `AbortController` 的线，
+ * 而那条线没有任何判据在等它。
+ */
+const UNCANCELLED = new AbortController().signal
+
+/** `{}` 才算是参数容器；数组、`null` 与裸值都不是。 */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
 
 /** 处理器需要的全部外部输入。`now` 注入是为了判据能钉住时间。 */
 export interface UnaryContext {
@@ -77,11 +89,18 @@ export interface UnaryEndpoint {
  * 故障，前者说明两端说不到一处，后者说明同一处说错了东西。
  */
 const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
-  'mobile/listSessions': {
+  'session/list': {
     legacyOp: 'list-sessions',
     write: false,
-    async invoke(_args, ctx) {
-      return { ok: true, value: await listSessionsOf(ctx.ports.session, ctx.ports.workspace, ctx.now) }
+    async invoke(args, ctx) {
+      // `_request` 是**宿主的参数名**（`SessionListRequest`），不是我们起的容器名 ——
+      // 照抄它。缺了或形状不对就拒：静默当空对象收下，会让「客户端少发一层容器」
+      // 这件事看起来生效了，而两种补救（改客户端 / 改网关）完全不同。
+      const request = args._request
+      if (!isPlainObject(request)) {
+        return refused('invalid-request', 'session/list takes its arguments under "_request"')
+      }
+      return { ok: true, value: await ctx.ports.session.list(request, UNCANCELLED) }
     },
   },
   'mobile/snapshot': {
@@ -112,7 +131,7 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
       return commandCatalogOf(args, ctx.ports.command)
     },
   },
-  'mobile/permissionCatalog': {
+  'permissionPresets/catalog': {
     legacyOp: 'permission-catalog',
     write: false,
     invoke(args, ctx) {
@@ -131,13 +150,6 @@ const ENDPOINTS: Partial<Record<UnaryEndpointName, UnaryEndpoint>> = {
     write: true,
     invoke(args, ctx) {
       return commandExecuteOf(args, ctx.ports.command)
-    },
-  },
-  'mobile/permissionSelect': {
-    legacyOp: 'permission-select',
-    write: true,
-    invoke(args, ctx) {
-      return permissionSelectOf(args, ctx.ports.permission)
     },
   },
   'session/create': {

@@ -48,6 +48,32 @@ export async function postEndpoint(
 }
 
 /**
+ * 发一条一元调用，**不铺平**：`value` 原样放在 `value` 那一格。
+ *
+ * 铺平只对「业务字段是对象」的应答成立。`commands/list` 回的是**裸数组** ——
+ * 展开成对象会变成 `{0:…, 1:…}`，读 `row.name` 就成了 undefined。
+ */
+export async function callRaw(
+  base: number | string,
+  endpoint: string,
+  args: Record<string, unknown> = {},
+  access?: string,
+): Promise<{ status: number; ok: boolean; value?: unknown; error?: UnaryAnswer['error'] }> {
+  const url = typeof base === 'number' ? `http://127.0.0.1:${base}` : base
+  const response = await postEndpoint(url, endpoint, args, access)
+  const body = await response.json() as {
+    result?: { ok?: boolean; value?: unknown; error?: UnaryAnswer['error'] }
+  }
+  const result = body.result ?? { ok: false }
+  return {
+    status: response.status,
+    ok: result.ok === true,
+    ...result.error === undefined ? {} : { error: result.error },
+    ...result.ok === true ? { value: result.value } : {},
+  }
+}
+
+/**
  * 发一条一元调用并按 `result` 铺平。
  *
  * `base` 收端口号或基址两种写法：这个仓库的测试一半从 `install()` 拿到端口、

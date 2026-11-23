@@ -19,11 +19,13 @@ import { apply } from '../../src/index.ts'
 /** 假宿主必须提供的九个宿主服务名（与 `src/index.ts` 的 `inject` 同一张单）。 */
 export const REQUIRED_FACES = [
   'sessionPersistence',
-  'sessionQuery',
   'sessionProjections',
   'sessionProjectionCache',
   'sessions',
   'agents',
+  // 工作空间的写面（`create` / `delete`）与组流（`follow`）都走它。
+  // 列表**不**需要 `sessionQuery`：`session/list` 是转发宿主的 `list`，网关不再自己拼行。
+  'workspaceController',
   'sessionController',
   'typertGateway',
   'connection',
@@ -58,14 +60,25 @@ export function defaultBenchFaces(): Record<string, unknown> {
         close: async () => {},
       }),
     },
-    // 列表路径的记录来源。
-    sessionQuery: { listSessions: async () => [] },
     // 投影读数：缺席是诚实答案（无占用、无基线帧）。
     sessionProjections: { cachedSnapshot: () => undefined, snapshot: () => undefined },
     sessionProjectionCache: { cachedSnapshot: () => undefined, cachedPredecessorTitle: () => undefined },
     sessions: { get: () => undefined },
     agents: { get: () => undefined },
     sessionController: idleFollowController,
+    // 工作空间：两条写面 + 组流。组流给一份空 baseline 后挂住，与 follow 源同形 ——
+    // 压测关心的是「流开得起来、帧发得出去」，不是组里有什么。
+    workspaceController: {
+      create: async ({ path }: { path: string }) => ({
+        workspace: { workspaceId: `w-${path}`, title: path },
+        created: true,
+      }),
+      delete: async () => {},
+      follow: async function* (signal: AbortSignal) {
+        yield { type: 'baseline', value: { items: [], archivedSessionIds: [], pinnedSessionIds: [] } }
+        while (!signal.aborted) await new Promise(resolve => setTimeout(resolve, 50))
+      },
+    },
     // 中继的 `$events` 流与应答门（签名照抄 `tests/index.test.ts` 对运行时
     // 0.2.1-alpha 的复刻：peer 必需、先解引用 signal）。
     typertGateway: {

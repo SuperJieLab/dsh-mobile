@@ -82,9 +82,31 @@ test('两段但表里没有的名字也是 404 纯文本', async () => {
   })
 })
 
+test('本期的三个退场端点名在 HTTP 上就是 404 纯文本，没有别名期', async () => {
+  await withListener(async (post) => {
+    // 名字写在这里是**断言的对象**，不是还在用的端点：判据要能证明它们已被摘掉，
+    // 就不得不写出它们。块标记只盖这个数组 —— 出了这一块，这三个名字照样会红。
+    // terms-ok:start 退场端点名：本数组是断言对象
+    const gone = [
+      '/api/mobile/listSessions',
+      '/api/mobile/permissionCatalog',
+      '/api/mobile/permissionSelect',
+    ]
+    // terms-ok:end
+    for (const path of gone) {
+      // 404 发生在解 body 之前，所以不带载荷 —— 判的是路径这一层。
+      const response = await post(path)
+      assert.equal(response.status, 404,
+        `「${path}」该 404 —— 留一条别名就等于留两份名字知识，而两份迟早说不同的话`)
+      assert.match(response.headers.get('content-type') ?? '', /text\/plain/, '还没成为消息，不给信封')
+      assert.equal(await response.text(), 'not found\n')
+    }
+  })
+})
+
 test('合法的两段路径不是 404 —— 正控，防止「全都 404」蒙混过关', async () => {
   await withListener(async (post) => {
-    const response = await post('/api/mobile/listSessions')
+    const response = await post('/api/session/list')
     assert.notEqual(response.status, 404, '这条路真的在表里，必须走到处理器那一层')
   })
 })
@@ -101,21 +123,21 @@ test('旧的 POST /rpc 已经不存在 —— 它返回 404 纯文本，不是�
 test('体不是 JSON / 外壳不合格 → 400 纯文本；超限 → 413', async () => {
   await withListener(async (post) => {
     // 1) 体不是 JSON：连「一条消息」都不是。
-    const notJson = await post('/api/mobile/listSessions', { body: 'not json at all' })
+    const notJson = await post('/api/session/list', { body: 'not json at all' })
     assert.equal(notJson.status, 400)
     assert.match(await notJson.text(), /malformed request/)
 
     // 2) 是 JSON 但外壳不合格（这里是少了 `rpcId`）：包不出可归属的信封，所以不套信封。
-    const noId = await post('/api/mobile/listSessions', {
-      body: JSON.stringify({ type: 'client-request', method: 'mobile/listSessions', payload: { args: {} } }),
+    const noId = await post('/api/session/list', {
+      body: JSON.stringify({ type: 'client-request', method: 'session/list', payload: { args: {} } }),
     })
     assert.equal(noId.status, 400)
     assert.match(await noId.text(), /not a client-request/)
 
     // 3) 超过 1 MiB：413。传输层的守卫，不是协议内的拒绝。
-    const huge = await post('/api/mobile/listSessions', {
+    const huge = await post('/api/session/list', {
       body: JSON.stringify({
-        type: 'client-request', rpcId: 'r', method: 'mobile/listSessions',
+        type: 'client-request', rpcId: 'r', method: 'session/list',
         payload: { args: { padding: 'x'.repeat(1_100_000) } },
       }),
     })

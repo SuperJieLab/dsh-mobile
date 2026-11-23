@@ -12,7 +12,7 @@
  * 重放表在宿主机侧（`upstream/write.ts` 的 `ReplayTable`），手机端看不见表，
  * 但可以依赖它的效果。
  */
-import { nonEmptyString } from './fields.ts'
+import { nonEmptyString, requestContainerOf } from './fields.ts'
 
 /** 校验通过的 `approval-answer` 消息。 */
 export interface ApprovalAnswerMessage {
@@ -161,12 +161,17 @@ export type SessionCreateTarget =
   | { kind: 'invalid' }
 
 /**
- * 解析 `session-create` 的载荷。**缺省是合法的一种**：不带 `workspaceId` 就走宿主的
- * 当前目录 —— 那是这条 op 在本功能之前唯一的行为，老客户端仍在用。
+ * 解析 `session-create` 的载荷（**含宿主的 `request` 容器**）。
  *
- * @param message - 解析后的请求体。
+ * **缺省是合法的一种**：不带 `workspaceId` 就走宿主的当前目录 —— 那是这条 op 在本功能
+ * 之前唯一的行为，老客户端仍在用。但**容器本身不能缺**：少一层是旧客户端，
+ * 按畸形拒（它的 `workspaceId` 一格都没送到）。
+ *
+ * @param args - `payload.args`；宿主的形参是 `request`，所以容器键名也是它。
  */
-export function sessionCreateTargetOf(message: Record<string, unknown>): SessionCreateTarget {
+export function sessionCreateTargetOf(args: Record<string, unknown>): SessionCreateTarget {
+  const message = requestContainerOf(args)
+  if (message === undefined) return { kind: 'invalid' }
   if (!('workspaceId' in message)) return { kind: 'default' }
   const workspaceId = nonEmptyString(message.workspaceId)
   return workspaceId === undefined ? { kind: 'invalid' } : { kind: 'workspace', workspaceId }

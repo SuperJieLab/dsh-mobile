@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { apply, inject, name } from '../src/index.ts'
-import { call } from './helpers/http.ts'
+import { call, callRaw } from './helpers/http.ts'
 
 /** 装配时种下的设备令牌；下面用它走真实的鉴权路取一枚访问令牌。 */
 const DEVICE_TOKEN = 'assembly-test-device-token-0123456789'
@@ -124,7 +124,7 @@ test('the plugin starts on a real cordis context and never reads a service it di
     // 两个方向都要：缺席 → 拒答（不足为证，`reflect` 本身不可读也会折成同一个码），
     // 补上服务 → 真的列出来。只有正向那一半能证明那条取数路是通的。
     const access = await deviceAccess(port)
-    const absent = await call(port, 'commands/list', { sessionId: 's' }, access)
+    const absent = await call(port, 'commands/list', { agentId: 's' }, access)
     assert.equal(absent.error?.code, 'internal-error',
       'no command service yet: a refusal, not a dead connection')
 
@@ -140,10 +140,10 @@ test('the plugin starts on a real cordis context and never reads a service it di
     })
 
     // 命令插件晚到（真实启动顺序里就是如此）：下一次调用自己接上，不必重启网关。
-    const present = await call(port, 'commands/list', { sessionId: 's' }, access)
+    const present = await callRaw(port, 'commands/list', { agentId: 's' }, access)
     assert.equal(present.ok, true,
       `the channel must pick up a service that arrives after assembly: ${JSON.stringify(present.error)}`)
-    assert.deepEqual((present['commands'] as { name: string }[]).map(row => row.name), ['compact'])
+    assert.deepEqual((present.value as { name: string }[]).map(row => row.name), ['compact'])
   } finally {
     fiber.dispose?.()
     rmSync(credentialsDir, { recursive: true, force: true })

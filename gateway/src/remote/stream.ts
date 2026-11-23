@@ -50,6 +50,7 @@ import { streamErrorOf } from '../protocol/error-codes.ts'
 import type { WireEvent } from '../wire/rpc.ts'
 import type { ModelSelection } from '../wire/model.ts'
 import type { FollowSource, ProjectionBaseline } from '../ports/follow.ts'
+import type { WorkspacePort } from '../ports/workspace.ts'
 import type { ForwardedSource } from '../ports/events.ts'
 import type { Duplex } from 'node:stream'
 import { encodeTextFrame } from './frames.ts'
@@ -93,6 +94,7 @@ export function onClientText(
   source: FollowSource,
   feed: ForwardedSource | undefined,
   approvals: ApprovalSource | undefined,
+  workspace: WorkspacePort | undefined,
   registry: IdentityRegistry,
   streams: Map<StreamId, { abort: AbortController }>,
   text: string,
@@ -151,6 +153,12 @@ export function onClientText(
     pumpControl(socket, source, frame.streamId, abort.signal, done)
     return { ok: true }
   }
+  if (request.kind === 'workspace') {
+    const follow = workspace?.follow
+    if (follow === undefined) return refuse('this gateway has no workspace follow source')
+    void pumpWorkspace(socket, follow, frame.streamId, abort.signal, done)
+    return { ok: true }
+  }
 
   void pumpFollow(socket, source, frame.streamId, request, abort.signal, done, openingCapBytes)
   return { ok: true }
@@ -176,20 +184,24 @@ function excerptOf(text: string): string {
 
 
 /**
- * 三种连接级流各自的泵。三条流的故障域不同，所以各开一个泵、各订一次源：
+ * 四条流各自的泵。故障域不同，所以各开一个泵、各订一次源：
  *
- *   approvals    只有它会**拒绝开流**（`approvals.ready` 为假时给不出可信集合）。
- *                把它与另外两条绑在一起，等于让最脆的那个决定全体的可用性。
- *   session-list 列表增量。每次都从头建立，靠客户端收到 `ready` 后发一次 list-sessions 追上。
- *   host-events  宿主侧其余通知（命令/模型/权限目录、登录失效）。本期没有客户端订阅者，
- *                但通道要真的通 —— 帧必须挂在流上，`emit` 才有 `streamId` 可带。
+ *   session/follow    一个会话的窗口与事件。开流即给整份 `snapshot`。
+ *   session/control   投影表。带 `baseline`（每个会话的一次切取），之后按 `seq` 推增量。
+ *                    它同时是「标题」「权限当前值」「用量」三类读数的来源 —— 一条投影、
+ *                     多个消费者，各自只认自己那一格。
+ *   $events           待答集合与宿主通知。`ready` 只说「这一代订阅装好了」，集合本身随后
+ *                     整份重放；`emit`（命令/模型/权限目录、登录失效）不重放 —— 它讲的是
+ *                     「刚刚发生了什么」，补一条十分钟前的没有意义。
+ *   workspace/follow  组清单与归属。带 `baseline`（整份切取），之后七种增量。网关不加工
+ *                     任何一个字段：可见性过滤在宿主那一侧。
  *
- * **开口帧三态**：带集合的就绪（approvals）、只有就绪（session-list / host-events）。
- * 「就绪不建立存在性」这条对后两条成立：`ready` 只说「服务端开好了这条流、源此刻是哪一代」，
- * 客户端要的状态自己另读。
+ * **谁先就绪不连坐**：任一条被拒（源这一代没就绪、装配里没有那个面）只作用于那条流，
+ * 连接与别的流不动。`workspace/follow` 缺源时回一条 `internal-error` 而不是静默开流 ——
+ * 静默的代价是客户端 45 秒后把**整条连接**判死。
  *
- * **共用一份源**：`ForwardedSource` 是多订阅者，三条流各订一次、各取自己那一类。归属由
- * 名字的判别归客户端 —— 泵不认上游事件名，只按 `type` 分派。
+ * **两条带 `baseline` 的流同名不同形**（投影表 vs 组清单），所以客户端的货物解码按流做，
+ * 不共用一张全局表；串流来的货物丢弃并留痕，不因此断开连接。
  */
 
 
@@ -327,6 +339,49 @@ function pumpControl(
     off()
     done()
   }, { once: true })
+}
+
+/**
+ * `workspace/follow`：宿主给什么就发什么 —— 七种帧一个字段都不动。
+ *
+ * 网关在这一条上**没有判定**：组清单、归属（`items[].sessionIds`）、归档与置顶两个
+ * 集合都由宿主算好，连可见性过滤（`remoteAccess`）也在那一侧。这里只做三件事：
+ * 把每帧包成 `item`、把源的失败折成一条 `error`、把中止收成 `end`。
+ *
+ * 不做增量合并、不缓存上一份：`baseline` 与 `replace` 都是整份替换，客户端按
+ * 「后到覆盖」处理。网关存一份就成了第二个状态，而两份状态迟早不一致。
+ */
+async function pumpWorkspace(
+  socket: Duplex,
+  follow: NonNullable<WorkspacePort['follow']>,
+  streamId: StreamId,
+  signal: AbortSignal,
+  done: () => void,
+): Promise<void> {
+  // 已经取消过：`addEventListener('abort')` 不会补发，先收尾。
+  if (signal.aborted) {
+    done()
+    return
+  }
+  // **取消时不在这里删表**：`done` 会从 `streams` 里摘掉条目，而「取消只停泵、不动表」
+  // 是这个通道的不变量（`onClientText` 上那条注释说了为什么：取消即删会让之后同号的
+  // `open` 落进空档，而旧泵退出时的收尾删掉的是**新**条目）。条目由 `finally` 在源真的
+  // 退出后删 —— 与 `pumpFollow` 同一形态（它也是 async 泵、也只在 finally 里收尾）。
+  // 代价是：源若永不响应 `signal`，条目会留着。两害相权取此 —— 留一条已取消的条目只占
+  // 一个键，而删错条目会让一条活流关不掉。
+  try {
+    for await (const frame of follow(signal)) {
+      if (signal.aborted) break
+      send(socket, { type: 'item', streamId, value: frame })
+    }
+    if (!signal.aborted) send(socket, { type: 'end', streamId })
+  } catch (error) {
+    if (!signal.aborted) {
+      send(socket, { type: 'error', streamId, error: { ...streamErrorOf(error), details: {} } })
+    }
+  } finally {
+    done()
+  }
 }
 
 /**

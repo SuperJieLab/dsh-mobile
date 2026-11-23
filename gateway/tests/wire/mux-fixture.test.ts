@@ -28,6 +28,8 @@ interface ServerSample {
   text: string
   type: 'item' | 'end' | 'error'
   streamId: string
+  /** 这条货物属于哪条流 —— 客户端按它选解码表（按流解码之后没有全局表可问）。 */
+  kind?: string
 }
 
 interface Fixture {
@@ -84,6 +86,18 @@ const SERVER_FRAMES: Record<string, MuxServerFrame> = {
     // `clientId` 在这里是固定的：这一侧的语义是**手写**的，不走 `openStream` 那条现造 UUID 的路。
     value: { type: 'ready', clientId: 'c-1', host: { home: '/Users/x/proj' } },
   },
+  'item-workspace-baseline': {
+    type: 'item',
+    streamId: 'g-1',
+    value: {
+      type: 'baseline',
+      value: {
+        items: [{ workspaceId: 'w-1', path: '/Users/x/记账', title: '记账', sessionIds: ['s-1'] }],
+        archivedSessionIds: [],
+        pinnedSessionIds: ['s-1'],
+      },
+    },
+  },
   'item-events-waterfall': {
     type: 'item',
     streamId: 'e-1',
@@ -100,12 +114,17 @@ test('the fixture covers every stream kind and both server frame kinds', () => {
   // 活性锚：样本少一条时下面的循环会静默少测一格，而「少测一格」在测试报告里
   // 长得跟「全绿」一模一样。
   const kinds = new Set(fixture.client.map(sample => sample.kind).filter(Boolean))
-  assert.deepEqual([...kinds].sort(), ['control', 'events', 'follow'],
-    '三条流的开流请求都要有样本')
+  assert.deepEqual([...kinds].sort(), ['control', 'events', 'follow', 'workspace'],
+    '四条流的开流请求都要有样本')
   const serverTypes = new Set(fixture.server.map(sample => sample.type))
   for (const type of ['item', 'end', 'error']) {
     assert.ok(serverTypes.has(type as ServerSample['type']), `服务端帧缺 ${type} 的样本`)
   }
+  const itemKinds = new Set(
+    fixture.server.filter(sample => sample.type === 'item').map(sample => sample.kind),
+  )
+  assert.deepEqual([...itemKinds].sort(), ['events', 'follow', 'workspace'],
+    'item 样本要写明属于哪条流 —— 客户端据此选解码表')
   for (const sample of fixture.server) {
     assert.ok(sample.name in SERVER_FRAMES, `样本 ${sample.name} 在这一侧没有对应的构造`)
   }

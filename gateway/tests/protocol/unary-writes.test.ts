@@ -70,7 +70,6 @@ const deps = (): RpcListenerDeps => ({
       : { ok: false, code: 'unknown-command', message: 'not a command' }),
   } as never,
   workspacePort: {
-    snapshot: () => ({ rows: [], owners: new Map() }) as never,
     create: async (name) => ({ workspaceId: `w-${name}`, title: name, created: true }),
     delete: async () => {},
   },
@@ -151,14 +150,13 @@ test('questionAnswer：形状、越权、没这条、与卡不匹配各回各的
   })
 })
 
-test('八个写端点各发一次合法请求全部 ok，且 value 带着这次的标识', async () => {
+test('七个写端点各发一次合法请求全部 ok，且 value 带着这次的标识', async () => {
   const calls: [string, unknown, Record<string, unknown>][] = [
-    ['/api/session/selectModel', { sessionId: 's-1', provider: 'p', model: 'm-1' }, { selected: { provider: 'p', model: 'm-1' } }],
-    ['/api/commands/execute', { sessionId: 's-1', line: '/permission ask' }, { commandId: 'c-1' }],
-    ['/api/mobile/permissionSelect', { sessionId: 's-1', preset: 'ask' }, { current: 'ask' }],
-    ['/api/session/create', {}, { sessionId: 's-new' }],
+    ['/api/session/selectModel', { request: { sessionId: 's-1', provider: 'p', model: 'm-1' } }, { selected: { provider: 'p', model: 'm-1' } }],
+    ['/api/commands/execute', { agentId: 's-1', line: '/permission ask', submittedAttachments: [] }, { commandId: 'c-1' }],
+    ['/api/session/create', { request: {} }, { sessionId: 's-new' }],
     ['/api/mobile/workspaceCreate', { name: 'proj' }, { workspaceId: 'w-proj', title: 'proj', created: true }],
-    ['/api/workspace/delete', { workspaceId: 'w-1' }, {}],
+    ['/api/workspace/delete', { request: { workspaceId: 'w-1' } }, {}],
     ['/api/mobile/approvalAnswer', { eventId: 'e-1', decision: 'allow', answerId: 'a-1', clientId: OWN_CLIENT_ID }, { eventId: 'e-1' }],
     ['/api/session/prompt', { sessionId: 's-1', promptId: 'p-1', text: 'hi' }, { sessionId: 's-1' }],
   ]
@@ -174,21 +172,23 @@ test('八个写端点各发一次合法请求全部 ok，且 value 带着这次�
 test('每个写端点的拒绝码与旧路径一致 —— 拒了就不能说 ok', async () => {
   await withListener(async (post) => {
     const cases: [string, unknown, string][] = [
-      ['/api/session/selectModel', { sessionId: 's-1', provider: 'p', model: 'm-9' }, 'session/model-unavailable'],
+      ['/api/session/selectModel', { request: { sessionId: 's-1', provider: 'p', model: 'm-9' } }, 'session/model-unavailable'],
       ['/api/session/selectModel', {}, 'invalid-request'],
+      // 少一层容器同样是畸形：字段一格都没送到。
+      ['/api/session/selectModel', { sessionId: 's-1', provider: 'p', model: 'm-1' }, 'invalid-request'],
       // 没有斜杠是形状不对（`invalid-request`）；有斜杠但不在目录里才是 `unknown-command`。
-      ['/api/commands/execute', { sessionId: 's-1', line: 'no slash' }, 'invalid-request'],
-      ['/api/commands/execute', { sessionId: 's-1', line: '/nope' }, 'unknown-command'],
+      ['/api/commands/execute', { agentId: 's-1', line: 'no slash', submittedAttachments: [] }, 'invalid-request'],
+      ['/api/commands/execute', { agentId: 's-1', line: '/nope', submittedAttachments: [] }, 'unknown-command'],
       ['/api/commands/execute', {}, 'invalid-request'],
-      ['/api/mobile/permissionSelect', { sessionId: 's-1', preset: 'nope' }, 'unknown-preset'],
-      ['/api/mobile/permissionSelect', {}, 'invalid-request'],
       ['/api/mobile/workspaceCreate', { name: ' ' }, 'invalid-request'],
       ['/api/workspace/delete', {}, 'invalid-request'],
+      ['/api/workspace/delete', { workspaceId: 'w-1' }, 'invalid-request'],
       ['/api/mobile/approvalAnswer', { eventId: 'e-9', decision: 'allow', answerId: 'a-1', clientId: OWN_CLIENT_ID }, 'unknown-approval'],
       ['/api/mobile/approvalAnswer', {}, 'invalid-request'],
       ['/api/session/prompt', { sessionId: 's-9', promptId: 'p-1', text: 'hi' }, 'unknown-session'],
       ['/api/session/prompt', {}, 'invalid-request'],
-      ['/api/session/create', { workspaceId: '' }, 'invalid-request'],
+      ['/api/session/create', { request: { workspaceId: '' } }, 'invalid-request'],
+      ['/api/session/create', { workspaceId: 'w-1' }, 'invalid-request'],
     ]
     for (const [path, args, code] of cases) {
       const result = resultOf(await post(path, args))

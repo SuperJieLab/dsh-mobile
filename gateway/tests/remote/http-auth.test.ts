@@ -84,14 +84,20 @@ async function withListener(
 
 test('无票打普通端点 → 401，体仍是 server-response 的 unauthenticated', async () => {
   await withListener(async (post) => {
-    const response = await post('/api/session/modelCatalog', {}, 'Bearer stale')
-    assert.equal(response.status, 401)
-    const body = await response.json() as Record<string, unknown>
-    assert.equal(body.type, 'server-response')
-    assert.equal(body.rpcId, 'r-1')
-    const result = body.result as Record<string, unknown>
-    assert.equal(result.ok, false)
-    assert.equal((result.error as Record<string, unknown>).code, 'unauthenticated')
+    // 打的是**本期改过名的**两条，而不是随便挑一条：改名顺手把票丢了，只有打它们才看得见。
+    for (const [path, args] of [
+      ['/api/session/list', { _request: {} }],
+      ['/api/permissionPresets/catalog', {}],
+    ] as const) {
+      const response = await post(path, args, 'Bearer stale')
+      assert.equal(response.status, 401, `${path}：没票就该在握手层被拒`)
+      const body = await response.json() as Record<string, unknown>
+      assert.equal(body.type, 'server-response')
+      assert.equal(body.rpcId, 'r-1')
+      const result = body.result as Record<string, unknown>
+      assert.equal(result.ok, false)
+      assert.equal((result.error as Record<string, unknown>).code, 'unauthenticated')
+    }
   })
 })
 
@@ -150,7 +156,6 @@ test('端点表里每个写端点各留一条审计，读端点一条不留', as
   const expectedWrites = [
     'session/selectModel',
     'commands/execute',
-    'mobile/permissionSelect',
     'session/create',
     'mobile/workspaceCreate',
     'workspace/delete',

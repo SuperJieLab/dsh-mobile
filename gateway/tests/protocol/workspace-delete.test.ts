@@ -15,7 +15,7 @@ import { invoke } from '../helpers/unary.ts'
 import type { SessionPort } from '../../src/ports/session.ts'
 import type { WorkspacePort } from '../../src/ports/workspace.ts'
 
-const PORT: SessionPort = { list: async () => [], read: async () => undefined, readAll: async () => undefined }
+const PORT: SessionPort = { list: async () => ({ items: [] }), read: async () => undefined, readAll: async () => undefined }
 
 /** 一个只会 `delete` 的工作空间端口，并记下它被问过的 id。 */
 function workspacePort(remove: (id: string) => Promise<void>): {
@@ -27,7 +27,6 @@ function workspacePort(remove: (id: string) => Promise<void>): {
     asked,
     port: {
       // 这组用例不读列表；分组链路的判据在 `list-workspaces.test.ts`。
-      snapshot: () => ({ rows: [], owners: new Map() }),
       create: async () => { throw new Error('create is not expected in a delete test') },
       delete: async (workspaceId) => {
         asked.push(workspaceId)
@@ -37,9 +36,9 @@ function workspacePort(remove: (id: string) => Promise<void>): {
   }
 }
 
-/** 发一条 `workspace-delete`。端口按位置追加在 `handle` 的末尾。 */
+/** 发一条 `workspace-delete`（宿主的 `request` 容器就是线上那一层）。 */
 function ask(workspaceId: unknown, port: WorkspacePort | undefined) {
-  return invoke('workspace/delete', { workspaceId }, { session: PORT, workspace: port }, Date.now)
+  return invoke('workspace/delete', { request: { workspaceId } }, { session: PORT, workspace: port }, Date.now)
 }
 
 interface Answer {
@@ -66,6 +65,16 @@ test('a malformed id is refused before the host is asked', async () => {
     assert.equal(answer.error?.code, 'invalid-request', '写路径从严')
     assert.deepEqual(asked, [], '畸形载荷不得触达宿主')
   }
+})
+
+test('a payload without the request container is refused, not read as a malformed id', async () => {
+  const { port, asked } = workspacePort(async () => undefined)
+
+  const answer = await invoke('workspace/delete', { workspaceId: 'w-a' }, { session: PORT, workspace: port }, Date.now) as Answer
+
+  assert.equal(answer.ok, false, '少一层容器的客户端是旧客户端 —— 它的 id 根本没送到')
+  assert.equal(answer.error?.code, 'invalid-request')
+  assert.deepEqual(asked, [], '畸形载荷不得触达宿主')
 })
 
 test('a host failure folds into internal-error', async () => {

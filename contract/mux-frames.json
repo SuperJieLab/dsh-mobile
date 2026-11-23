@@ -32,6 +32,13 @@
       "kind": "control"
     },
     {
+      "name": "workspace",
+      "text": "{\"endpoint\":\"workspace/follow\",\"payload\":{\"args\":{}},\"streamId\":\"g-1\",\"type\":\"open\"}",
+      "type": "open",
+      "streamId": "g-1",
+      "kind": "workspace"
+    },
+    {
       "name": "cancel",
       "text": "{\"streamId\":\"s-9\",\"type\":\"cancel\"}",
       "type": "cancel",
@@ -43,31 +50,43 @@
       "name": "item-follow-opening",
       "text": "{\"type\":\"item\",\"streamId\":\"s-9\",\"value\":{\"type\":\"snapshot\",\"sessionId\":\"s-1\",\"cursor\":3,\"pageStart\":1,\"hasOlder\":false,\"events\":[]}}",
       "type": "item",
-      "streamId": "s-9"
+      "streamId": "s-9",
+      "kind": "follow"
     },
     {
       "name": "item-events-question",
       "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"waterfall\",\"event\":\"user-questions/request\",\"eventId\":\"ev-2\",\"agentId\":\"s-1\",\"request\":{\"questions\":[{\"id\":\"q-1\",\"header\":\"选择方案\",\"question\":\"用哪一条？\",\"options\":[{\"label\":\"A\",\"description\":\"快\"},{\"label\":\"B\"}]},{\"id\":\"q-2\",\"question\":\"同时改测试吗？\",\"options\":[{\"label\":\"要\"},{\"label\":\"不要\"}],\"multiSelect\":true}]}}}",
       "type": "item",
-      "streamId": "e-1"
+      "streamId": "e-1",
+      "kind": "events"
     },
     {
       "name": "item-events-emit",
       "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"emit\",\"event\":\"commands/change\",\"args\":[]}}",
       "type": "item",
-      "streamId": "e-1"
+      "streamId": "e-1",
+      "kind": "events"
     },
     {
       "name": "item-events-ready",
       "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"ready\",\"clientId\":\"c-1\",\"host\":{\"home\":\"/Users/x/proj\"}}}",
       "type": "item",
-      "streamId": "e-1"
+      "streamId": "e-1",
+      "kind": "events"
     },
     {
       "name": "item-events-waterfall",
       "text": "{\"type\":\"item\",\"streamId\":\"e-1\",\"value\":{\"type\":\"waterfall\",\"event\":\"approval/request\",\"eventId\":\"ev-1\",\"agentId\":\"s-1\",\"request\":{\"toolName\":\"Bash\",\"reason\":\"需要读写工作区\"}}}",
       "type": "item",
-      "streamId": "e-1"
+      "streamId": "e-1",
+      "kind": "events"
+    },
+    {
+      "name": "item-workspace-baseline",
+      "text": "{\"type\":\"item\",\"streamId\":\"g-1\",\"value\":{\"type\":\"baseline\",\"value\":{\"items\":[{\"workspaceId\":\"w-1\",\"path\":\"/Users/x/记账\",\"title\":\"记账\",\"sessionIds\":[\"s-1\"]}],\"archivedSessionIds\":[],\"pinnedSessionIds\":[\"s-1\"]}}}",
+      "type": "item",
+      "streamId": "g-1",
+      "kind": "workspace"
     },
     {
       "name": "end",

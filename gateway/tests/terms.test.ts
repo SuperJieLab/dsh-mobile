@@ -25,6 +25,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { UNARY_ENDPOINT_NAMES } from '../src/wire/unary.ts'
+
 /** 仓库根：本文件在 `gateway/tests/`，向上两级。 */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -166,4 +168,79 @@ test('术语回潮检查：网关源码、测试、工具与活文档里不出�
   const { hits, exempted } = scan(files, rules)
   if (exempted.length) console.warn(`ℹ️ 行内豁免 ${exempted.length} 处：${exempted.join('、')}`)
   assert.equal(hits.length, 0, `发现已退役的写法（改成建议列里的说法）：\n${hits.join('\n')}`)
+})
+
+// ── 判据 13：契约与文档里写的端点名，必须是代码里真有的名字 ─────────────────
+//
+// 两端各写一份实现的协议里，「文档写了一个不存在的端点」是最常见也最无声的错：
+// 读文档的人照着打，得到 404，然后怀疑网关坏了。这一组只钉**名字与 args 键**，
+// 钉不住语义 —— 语义靠真打一次的判据（`list-forward` / `command-ops` / `model-ops` 等）。
+
+/**
+ * 本期的端点与它们的 args 键。
+ *
+ * 无参的写空串：只要求契约里有这一段，不要求里面出现某个键（空对象的形状就是 `{}`）。
+ * 这张表是**手写的**，不从代码里推 —— 从代码推就只能证明「代码等于代码」；手写才对得上
+ * 「契约承诺了什么」。
+ */
+const PHASE_ONE_ENDPOINTS: readonly (readonly [endpoint: string, argsKey: string])[] = [
+  ['session/list', '_request'],
+  ['commands/list', 'agentId'],
+  ['commands/execute', 'agentId'],
+  ['permissionPresets/catalog', ''],
+  ['session/modelCatalog', ''],
+  ['session/selectModel', 'request'],
+  ['session/create', 'request'],
+  ['workspace/delete', 'request'],
+]
+
+test('判据 13 前半：契约里本期的每个端点都有一个 POST /api/<名> 段落，且写着它的 args 键', () => {
+  const contract = join(ROOT, 'dev/contract/protocol.md')
+  if (!existsSync(contract)) {
+    // 与术语判据同一条纪律：`dev/` 不进仓库，干净 clone 里没有它 —— 跳过并告警，
+    // 而不是让一次 checkout 缺文件把整套判据打红。代价是这条只在本地生效。
+    console.warn('⚠️ dev/ 不在工作区（干净 clone），跳过契约的端点段检查')
+    return
+  }
+  const text = readFileSync(contract, 'utf8')
+  const problems: string[] = []
+  for (const [endpoint, argsKey] of PHASE_ONE_ENDPOINTS) {
+    const at = text.indexOf(`POST /api/${endpoint}\n`)
+    if (at < 0) {
+      problems.push(`${endpoint}: 契约里没有 \`POST /api/${endpoint}\` 这一段`)
+      continue
+    }
+    if (argsKey === '') continue
+    // 段落 = 从这一行到下一个三级标题（`### `）或文件末尾。
+    const next = text.indexOf('\n### ', at)
+    const section = text.slice(at, next < 0 ? undefined : next)
+    if (!section.includes(`"${argsKey}"`)) {
+      problems.push(`${endpoint}: 段落里没写 args 键 "${argsKey}" —— 读者照它拼不出请求`)
+    }
+  }
+  assert.deepEqual(problems, [], `契约与端点面对不上：\n${problems.join('\n')}`)
+})
+
+test('判据 13 后半：docs/ 里出现的每个 POST /api/<名> 都是代码里真有的端点', () => {
+  const docsDir = join(ROOT, 'docs')
+  if (!existsSync(docsDir)) {
+    console.warn('⚠️ docs/ 不在工作区（干净 clone），跳过文档端点名的检查')
+    return
+  }
+  const files = collectFiles(docsDir, '.md')
+  assert.ok(files.length > 5, `docs/ 里只扫到 ${files.length} 份文档 —— 路径推算错了？`)
+  // 占位写法（`POST /api/<命名空间>/<方法>`）不算名字：尖括号开头的不匹配。
+  const pattern = /POST \/api\/([a-z$][\w$-]*\/[a-z][\w$-]*)/gu
+  const unknown: string[] = []
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8')
+    for (const match of text.matchAll(pattern)) {
+      const name = match[1]!
+      if (!(UNARY_ENDPOINT_NAMES as readonly string[]).includes(name)) {
+        unknown.push(`${relative(ROOT, file)}: POST /api/${name} —— 代码里没有这个端点`)
+      }
+    }
+  }
+  assert.deepEqual(unknown, [],
+    `文档写了不存在的端点（读文档的人会照着打，然后拿到 404）：\n${unknown.join('\n')}`)
 })

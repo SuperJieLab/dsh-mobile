@@ -19,7 +19,7 @@ import { connect as netConnect } from 'node:net'
 import { apply, inject } from '../src/index.ts'
 import { CredentialVault } from '../src/remote/credentials.ts'
 import { setLogSink } from '../src/log.ts'
-import { call, type UnaryAnswer } from './helpers/http.ts'
+import { call, callRaw, type UnaryAnswer } from './helpers/http.ts'
 
 /** Random high port: two tests must not race each other or anything real. */
 function freshPort(base: number): number {
@@ -205,7 +205,7 @@ async function accessTokenFor(port: number): Promise<string> {
  * 断言，调用点只表达「要一条带票的流」。
  */
 function streamWithToken(port: number, access: string): WebSocket {
-  const url = `ws://127.0.0.1:${port}/rpc/stream`
+  const url = `ws://127.0.0.1:${port}/api/remote.mux`
   return new WebSocket(url, { headers: { authorization: `Bearer ${access}` } } as unknown as string[])
 }
 
@@ -221,7 +221,7 @@ function rawUpgrade(port: number, access: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = netConnect(port, '127.0.0.1', () => {
       socket.write([
-        'GET /rpc/stream HTTP/1.1',
+        'GET /api/remote.mux HTTP/1.1',
         `Host: 127.0.0.1:${port}`,
         'Upgrade: websocket',
         'Connection: Upgrade',
@@ -359,7 +359,7 @@ test('a protocol message is answered with an envelope even when nothing is behin
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const body = await call(port, 'mobile/listSessions', {}, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'session/list', { _request: {} }, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
     assert.equal(body.status, 200)
     // The fake context has no services, so the read fails — and must fail as a
     // readable refusal, never as a dead connection.
@@ -424,8 +424,13 @@ test('model-catalog is answered with the host catalog over real HTTP when the co
     assert.deepEqual(body.default, { provider: 'deepseek', model: 'v3.2' })
     assert.equal(body.groups?.length, 1)
     assert.equal(body.failures?.length, 1)
-    // The host-only field must not leak to the phone (决定 7).
-    assert.equal('routableProviders' in body, false)
+    // 目录是转发的：上游的 `routableProviders` 也在线上形状里（F3 起不再裁）。
+    assert.deepEqual(body.routableProviders, ['deepseek'])
+    assert.deepEqual(
+      Object.keys(body).filter(key => key !== 'status' && key !== 'ok').sort(),
+      ['default', 'failures', 'groups', 'routableProviders'],
+      '键集合等于上游 `ModelCatalog` —— 少一个就是被裁过',
+    )
   } finally {
     teardown()
   }
@@ -443,7 +448,7 @@ test('model-select reaches the controller and answers the normalized selection',
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const body = await call(port, 'session/selectModel', { sessionId: 's1', provider: 'deepseek', model: 'v3.2' }, access) as UnaryAnswer & { ok: boolean; selected?: unknown }
+    const body = await call(port, 'session/selectModel', { request: { sessionId: 's1', provider: 'deepseek', model: 'v3.2' } }, access) as UnaryAnswer & { ok: boolean; selected?: unknown }
     assert.equal(body.status, 200)
     assert.equal(body.ok, true)
     // Upstream's answer is the normalized pair — relayed, not re-derived (决定 3).
@@ -515,11 +520,13 @@ test('the command channel picks up a service it never injected, and reaches it o
       return answer
     }
 
-    const catalog = await send('commands/list', { sessionId: 's1' })
+    const catalog = await callRaw(port, 'commands/list', { agentId: 's1' }, access)
     assert.equal(catalog.ok, true, `the lazy resolve must reach the host service: ${JSON.stringify(catalog.error)}`)
-    assert.deepEqual((catalog.commands as { name: string }[]).map(row => row.name), ['compact', 'permission'])
+    // 裸数组：上游这条回的就是一串描述符。
+    assert.deepEqual((catalog.value as { name: string }[]).map(row => row.name), ['compact', 'permission'])
 
-    const executed = await send('commands/execute', { sessionId: 's1', line: '/permission read-only' })
+    const executed = await send('commands/execute',
+      { agentId: 's1', line: '/permission read-only', submittedAttachments: [] })
     assert.equal(executed.ok, true)
     assert.deepEqual(commands.executed, ['/permission read-only'], '整行原样交给宿主，网关不拆参数')
   } finally {
@@ -536,7 +543,7 @@ test('command ops are refused as an envelope when the command service is absent'
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
     const access = await accessTokenFor(port)
 
-    const body = await call(port, 'commands/list', { sessionId: 's1' }, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'commands/list', { agentId: 's1' }, access) as UnaryAnswer & { ok: boolean; error?: { code: string } }
     assert.equal(body.status, 200)
     // 缺席发生在调用时，兑现成同一枚拒绝码 —— 手机不能把「本应拒答」看成死连接。
     assert.equal(body.ok, false)
@@ -582,7 +589,7 @@ test('a business request without credentials is refused as 401 unauthenticated',
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
 
-    const body = await call(port, 'mobile/listSessions', {}) as UnaryAnswer & { ok: boolean; error?: { code: string } }
+    const body = await call(port, 'session/list', { _request: {} }) as UnaryAnswer & { ok: boolean; error?: { code: string } }
     assert.equal(body.status, 401)
     assert.equal(body.ok, false)
     assert.equal(body.error?.code, 'unauthenticated')
@@ -599,7 +606,7 @@ test('a bad access token is refused exactly like a missing one', async () => {
   try {
     await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
 
-    const body = await call(port, 'mobile/listSessions', {}, 'not-a-token-we-issued') as UnaryAnswer & { error?: { code: string } }
+    const body = await call(port, 'session/list', { _request: {} }, 'not-a-token-we-issued') as UnaryAnswer & { error?: { code: string } }
     assert.equal(body.status, 401)
     assert.equal(body.error?.code, 'unauthenticated')
   } finally {
@@ -680,7 +687,7 @@ test('an upgrade without an access token is refused before the handshake', { tim
     // the connection never becomes a WebSocket at all.
     await assert.rejects(
       new Promise<void>((resolve, reject) => {
-        const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc/stream`)
+        const socket = new WebSocket(`ws://127.0.0.1:${port}/api/remote.mux`)
         socket.addEventListener('open', () => { resolve() }, { once: true })
         socket.addEventListener('error', () => { reject(new Error('upgrade refused')) }, { once: true })
         setTimeout(() => { reject(new Error('upgrade unexpectedly neither opened nor failed')) }, 5_000)
@@ -1109,132 +1116,6 @@ test('U6: without projections the baseline is absent and no frame is ever pushed
 
     socket.close()
     await new Promise(resolve => setTimeout(resolve, 30))
-  } finally {
-    teardown()
-  }
-})
-
-// MARK: - the list path against the runtime's projection faces (实施期修正 16)
-
-/**
- * The runtime's cache face as 0.1.7-alpha.2 spells it: `cachedSnapshot(meta, keys)`
- * (dsh-session-projection-cache/lib/index.js:193).
- *
- * The baseline's leading `inheritedEventCount` made a positional `0` mean "no inherited
- * prefix"; the runtime dropped it, so the same `0` now lands in `keys` and upstream's
- * iteration over it throws `number 0 is not iterable` — exactly what killed the real list.
- * This fixture keeps the runtime shape *including the iteration*, because a fixture that
- * ignores its arguments cannot catch that drift.
- */
-function fakeProjectionCache(
-  valuesFor: (id: string) => Record<string, unknown> | undefined,
-): {
-  cachedSnapshot: (meta: { id: string }, keys?: readonly string[]) => unknown
-  cachedPredecessorTitle: (meta: { id: string }) => unknown
-} {
-  return {
-    cachedSnapshot(meta: { id: string }, keys?: readonly string[]) {
-      // The iteration is the drift detector, not decoration.
-      for (const key of keys ?? []) void key
-      const values = valuesFor(meta.id)
-      return values === undefined ? undefined : { asOfSeq: 4, values }
-    },
-    cachedPredecessorTitle(meta: { id: string }) {
-      void meta
-      return undefined
-    },
-  }
-}
-
-/** A session row as the corpus yields it: a header plus its liveness. */
-function listRecord(id: string, createdAt: number, live: boolean): unknown {
-  return { header: { id, createdAt, cwd: '/tmp/project' }, live }
-}
-
-test('the list works against the runtime cache face that dropped inheritedEventCount', { timeout: 10_000 }, async () => {
-  const port = freshPort(47_000)
-  const credentialsPath = tempCredentialsPath()
-  const { teardown } = install('127.0.0.1', port, credentialsPath, {
-    sessionQuery: {
-      listSessions: async () => [
-        listRecord('cold-1', 1_700_000_000_000, false),
-        listRecord('live-1', 1_700_000_200_000, true),
-      ],
-    },
-    sessions: { get: (id: string) => (id === 'live-1' ? { id } : undefined) },
-    sessionProjections: {
-      cachedSnapshot: () => ({
-        asOfSeq: 9,
-        values: { title: '在跑的会话', sessionListMetadata: { lastPromptAt: null, blank: false } },
-      }),
-      snapshot: () => undefined,
-    },
-    sessionProjectionCache: fakeProjectionCache(id => ({
-      title: `冷却的 ${id}`,
-      sessionListMetadata: { lastPromptAt: 1_700_000_100_000, blank: false },
-    })),
-    agents: { get: (id: string) => (id === 'live-1' ? { status: 'running' } : undefined) },
-  })
-
-  try {
-    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
-    const access = await accessTokenFor(port)
-    const body = await call(port, 'mobile/listSessions', {}, access) as UnaryAnswer & {
-      ok: boolean
-      error?: { code: string; message: string }
-      sessions?: { id: string; title?: string; updatedAt: number; running: boolean }[]
-    }
-    assert.equal(body.status, 200)
-    assert.equal(body.ok, true, `the list must not fail on the cache face: ${JSON.stringify(body.error)}`)
-    // Newest first: the live session's `lastPromptAt` is absent, so it falls
-    // back to its (later) creation time.
-    assert.deepEqual(body.sessions?.map(row => [row.id, row.title, row.running]), [
-      ['live-1', '在跑的会话', true],
-      ['cold-1', '冷却的 cold-1', false],
-    ])
-    assert.equal(body.sessions?.[1].updatedAt, 1_700_000_100_000)
-  } finally {
-    teardown()
-  }
-})
-
-test('one row whose projection read throws still lists — without its cells', { timeout: 10_000 }, async () => {
-  const port = freshPort(48_600)
-  const credentialsPath = tempCredentialsPath()
-  const { teardown } = install('127.0.0.1', port, credentialsPath, {
-    sessionQuery: {
-      listSessions: async () => [
-        listRecord('fine-1', 1_700_000_300_000, false),
-        listRecord('broken-1', 1_700_000_400_000, false),
-      ],
-    },
-    sessions: { get: () => undefined },
-    sessionProjections: { cachedSnapshot: () => undefined, snapshot: () => undefined },
-    // Mirrors upstream's own `projectionsFor` guard (session-controller/src/list.ts:272–293):
-    // a projection is a hint, so one row's failure costs that row its cells, never the list.
-    sessionProjectionCache: fakeProjectionCache(id => {
-      if (id === 'broken-1') throw new Error('projection column for broken-1 failed')
-      return { title: '好的会话', sessionListMetadata: { lastPromptAt: null, blank: false } }
-    }),
-    agents: { get: () => undefined },
-  })
-
-  try {
-    await untilUp(port, () => fetch(`http://127.0.0.1:${port}/`))
-    const access = await accessTokenFor(port)
-    const body = await call(port, 'mobile/listSessions', {}, access) as UnaryAnswer & {
-      ok: boolean
-      error?: { code: string }
-      sessions?: { id: string; title?: string; updatedAt: number }[]
-    }
-    assert.equal(body.status, 200)
-    assert.equal(body.ok, true, `a hint must not fail the list: ${JSON.stringify(body.error)}`)
-    assert.deepEqual(body.sessions?.map(row => [row.id, row.title]), [
-      ['broken-1', undefined],
-      ['fine-1', '好的会话'],
-    ])
-    // The degraded row keeps its header facts: only the cells are missing.
-    assert.equal(body.sessions?.[0].updatedAt, 1_700_000_400_000)
   } finally {
     teardown()
   }

@@ -7,21 +7,23 @@
  * 不再多断。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { isNotFound, isRemoteError } from '../ports/errors.ts'
 import type { WritePort } from '../ports/write.ts'
 import type { ModelPort } from '../ports/model.ts'
 import type { CommandPort } from '../ports/command.ts'
-import type { ModelSelection } from '../wire/model.ts'
+import type { SessionPort } from '../ports/session.ts'
+import type { ModelCatalog, ModelSelection } from '../wire/model.ts'
 
-import { nextOf, type HeaderLike, type ListSource, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
-import { workspaceSnapshotOf, createWorkspaceIn, deleteWorkspaceIn, type RegistryLike, type WorkspaceCreateFace, type WorkspaceDeleteFace } from './workspace.ts'
+import { nextOf, type ModelSelectionSource, type HostModelSelectionView } from './sessions.ts'
+import { createWorkspaceIn, deleteWorkspaceIn, type WorkspaceCreateFace, type WorkspaceDeleteFace } from './workspace.ts'
 import { makeWorkspaceDirectory } from './workspace-root.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
+import type { WorkspaceFollowFrame } from '../wire/workspace-stream.ts'
 import type { FollowSource } from '../ports/follow.ts'
-import { modelPortOver, type ModelControllerLike } from './model.ts'
 import { commandPortOver, type CommandsLike, type LiveAgentsLike } from './command.ts'
-import { permissionPortOver, type PermissionSources } from './permission.ts'
+import { permissionPortOver } from './permission.ts'
 import type { PermissionPort } from '../ports/permission.ts'
-import type { PermissionOption } from '../wire/permission.ts'
+import type { PermissionCatalog } from '../wire/permission.ts'
 import { callThrough, openStreamThrough, parameterNamesOf, signatureNoteOf, type PeerScopeLike } from './call-through.ts'
 import { ApprovalRelay, pumpPrompt, type PromptControllerLike, type RemoteEventAnswerLike } from './write.ts'
 import type { RemoteEventStreamLike } from './remote-events.ts'
@@ -45,59 +47,37 @@ const log = createLogger(LogModule.faces)
 export type HostContext = Context & Record<string, unknown>
 
 /**
- * 列表路径的来源，由宿主服务组装 —— 每一项都对应参照列表做的一件事
- * （M1 §2.2）：记录来自语料库（头部 +
- * 存活性），值在运行会话取存活投影、冷会话取存储 checkpoint，存活性来自
- * agent 注册表。
+ * 列表路径：**转发宿主的 `session/list`**，不自己拼行。
  *
- * 这里没有任何日志读取。
+ * 这一层只做一件事 —— 把宿主的方法递给端口。排序、可见性、访问过滤、投影块都在
+ * 宿主那一侧（`SessionController.list` 已经做过），我们再算一遍就是第二份形状：
+ * 上游每加一格字段，那一份就漏一格，而漏掉不会编译失败。
  */
-export function listSourceOver(ctx: HostContext): ListSource {
-  return {
-    async records() {
-      const records = await (ctx.sessionQuery as unknown as CorpusLike).listSessions()
-      return records.map(record => ({ header: record.header, live: record.live }))
-    },
-
-    liveValues(sessionId) {
-      const session = (ctx.sessions as unknown as SessionsLike).get(sessionId)
-      if (session === undefined) return undefined
-      return (ctx.sessionProjections as unknown as ProjectionsLike).cachedSnapshot(session)?.values
-    },
-
-    storedValues(header) {
-      const cache = ctx.sessionProjectionCache as unknown as ProjectionCacheLike
-      const snapshot = cache.cachedSnapshot(header) ?? cache.cachedPredecessorTitle(header)
-      return snapshot?.values
-    },
-
-    isRunning(sessionId) {
-      return (ctx.agents as unknown as AgentsLike).get(sessionId)?.status === 'running'
-    },
-
-    // 没有投影的行仍是正确的行，但*静默*降级曾让缓存参数漂移一直不可见，
-    // 直到手机端显示空白屏幕，所以计数要进日志。
-    onProjectionFailure: (failures, first) => {
-      log.warn(
-        `${failures} session row(s) served without projections — first failure: ${String(first)}`,
-      )
-    },
+export function sessionListFace(ctx: HostContext): SessionPort['list'] {
+  return async (request, signal) => {
+    const controller = ctx.sessionController as unknown as Partial<SessionListControllerLike>
+    if (typeof controller.list !== 'function') {
+      throw new Error('sessionController has no list face — session/list cannot be served')
+    }
+    return await controller.list(request, signal)
   }
 }
 
+/** 本模块用到的 `ctx.sessionController.list` 部分。 */
+interface SessionListControllerLike {
+  list(request: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<unknown>
+}
+
 /**
- * 工作空间端口：组清单与归属表都取自注册表。
+ * 工作空间端口：组流 + 两条写面。
  *
- * 注册表是宿主的核心服务，网关能起来就意味着它在 —— `sessionController` 自己也
- * 注入它，而本插件注入 `sessionController`。所以这里没有「服务缺席」这一支：
- * 缺了就不是少一个格子，而是整个网关不该起来。
- *
- * 每次 `snapshot()` 现读服务而不是在装配时捕获：与 `listSourceOver` 同一写法，
- * 服务在热重载里被换掉时不会留下旧引用。
+ * 组清单与归属只有一处来源 —— `workspace/follow` 的 `items[].sessionIds`。网关不再
+ * 自己按目录比一遍（那份判据宿主已经做过），也不在 HTTP 上另开一条读。
  */
 export function workspacePortOver(ctx: HostContext): WorkspacePort {
+  const follow = workspaceFollowFace(ctx)
   return {
-    snapshot: () => workspaceSnapshotOf(ctx.workspaceRegistry as unknown as RegistryLike),
+    ...follow === undefined ? {} : { follow },
     // 只有「建目录」是我们的：「在指定父目录下建一个子目录」这件事宿主没有可用入口
     // （目录选择器的建目录能力挂在 browse 后端上，而 macOS 绑回环时挂的是 native 后端）。
     // 注册这一步走宿主的控制器 —— 它回答 created，也自带串行化。
@@ -111,6 +91,35 @@ export function workspacePortOver(ctx: HostContext): WorkspacePort {
       await deleteWorkspaceIn(ctx.workspaceController as unknown as WorkspaceDeleteFace, workspaceId)
     },
   }
+}
+
+/**
+ * 组流的来源：**直呼宿主的 `workspaceController.follow(signal)`**，不加工。
+ *
+ * 七个帧形状就是线上形状（见 `wire/workspace-stream.ts`）—— 网关只做鉴权、帧化与
+ * 取消。可见性过滤（`remoteAccess`）在宿主那一侧，所以这里不必也不该再筛一遍：
+ * 筛两遍的后果是两份规则分叉，而分叉时手机与 Web UI 的组不一样。
+ *
+ * 宿主没有这个切面时返回 `undefined`：泵据此回一条 `internal-error`，而不是一条
+ * 永远等不到基线的流（那会让整条连接在 45 秒后一起被判死）。
+ */
+export function workspaceFollowFace(
+  ctx: HostContext,
+): ((signal: AbortSignal) => AsyncIterable<WorkspaceFollowFrame>) | undefined {
+  const controller = ctx.workspaceController as unknown as Partial<WorkspaceFollowControllerLike> | undefined
+  if (typeof controller?.follow !== 'function') {
+    log.warn('workspaceController has no follow face — workspace/follow will refuse as internal-error')
+    return undefined
+  }
+  const readable = controller as WorkspaceFollowControllerLike
+  const note = signatureNoteOf(readable, 'follow', ['signal'])
+  if (note !== undefined) log.warn('workspace follow: calling positionally', { note })
+  return (signal) => readable.follow(signal)
+}
+
+/** 本模块用到的 `ctx.workspaceController.follow` 部分 —— 签名与运行时逐字一致。 */
+interface WorkspaceFollowControllerLike {
+  follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame>
 }
 
 /**
@@ -141,11 +150,6 @@ export function streamSourceOver(ctx: HostContext): FollowSource {
   }
 }
 
-/** 本模块用到的 `ctx.sessionQuery` 部分。 */
-interface CorpusLike {
-  listSessions(): Promise<readonly { header: never; live: boolean }[]>
-}
-
 /** 本模块用到的 `ctx.sessions` 部分。 */
 interface SessionsLike {
   get(id: string): unknown
@@ -168,25 +172,6 @@ interface ProjectionsLike {
 interface ProjectionSnapshotLike {
   asOfSeq: number
   values: Readonly<Record<string, unknown>>
-}
-
-/**
- * 本模块用到的 `ctx.sessionProjectionCache` 部分。⚠️ **位置漂移风险**：本构建
- * 依赖的运行时（0.1.7-alpha.2）中，切面是 `cachedSnapshot(meta, keys?)` /
- * `cachedPredecessorTitle(meta)`
- * （dsh-session-projection-cache/lib/index.js:193,214）—— 头部单独承载生命周期
- * 身份，且是此处给出的唯一实参，与运行时自己的列表调用一致
- * （dsh-api-session-controller/lib/index.js:1917）。更早的签名带一个
- * `inheritedEventCount` 前缀实参；对漂移后的切面按位置传参，实参会落进 `keys`。
- */
-interface ProjectionCacheLike {
-  cachedSnapshot(header: HeaderLike): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
-  cachedPredecessorTitle(header: HeaderLike): { asOfSeq: number; values: Readonly<Record<string, unknown>> } | undefined
-}
-
-/** 本模块用到的 `ctx.agents` 部分。 */
-interface AgentsLike {
-  get(id: string): { status?: string } | undefined
 }
 
 /**
@@ -250,9 +235,15 @@ interface SessionCreateControllerLike {
 }
 
 /**
- * 协议层眼中的模型通道，建立在中继与泵共用的同一 controller 上。
+ * 协议层眼中的模型通道，建立在会话控制器上。
  * 缺席是组装层事实，因此在组装时宣布，之后这些操作
  * 以 `internal-error` 信封应答 —— 手机绝不能把「本应拒答」看成死连接。
+ *
+ * **目录是转发**：`modelCatalog()` 交出的就是线上形状（四个键，含 `routableProviders`），
+ * 这里不重建它 —— 重建一次就会漏一格，而漏掉不会编译失败。
+ *
+ * **选择要翻码**：上游的 not-found 是 `unknown-session`，`session/model-unavailable`
+ * 原码透传（「换一个模型或修凭证」与「载荷畸形」是两种补救）。
  */
 export function modelChannelOver(ctx: HostContext): ModelPort | undefined {
   const controller = ctx.sessionController as unknown as Partial<ModelControllerLike> | undefined
@@ -264,7 +255,45 @@ export function modelChannelOver(ctx: HostContext): ModelPort | undefined {
     log.warn('sessionController has no model face — model-catalog/model-select will refuse as internal-error')
     return undefined
   }
-  return modelPortOver(controller as ModelControllerLike)
+  const readable = controller as ModelControllerLike
+  // 组装期签名检查：两个成员都按位置调用，形参表变了要在启动时出声，
+  // 而不是第一次点模型时（G2 的同族防线）。
+  for (const [member, expected] of [
+    ['selectModel', ['request']],
+    ['modelCatalog', []],
+  ] as const) {
+    const note = signatureNoteOf(readable, member, expected)
+    if (note !== undefined) log.warn('model channel: calling positionally', { note })
+  }
+
+  return {
+    catalog: () => readable.modelCatalog(),
+    async select(request) {
+      try {
+        const answer = await readable.selectModel({ ...request })
+        return { ok: true, selected: { ...answer.selected } }
+      } catch (error) {
+        if (isNotFound(error)) {
+          return { ok: false, code: 'unknown-session', message: String((error as { message?: unknown }).message ?? error) }
+        }
+        if (isRemoteError(error)) {
+          return { ok: false, code: error.code as 'session/model-unavailable', message: String((error as { message?: unknown }).message ?? error) }
+        }
+        throw error
+      }
+    },
+  }
+}
+
+/** 本模块用到的 `ctx.sessionController` 模型两面 —— 签名与运行时逐字一致。 */
+interface ModelControllerLike {
+  selectModel(request: {
+    sessionId: string
+    provider: string
+    model: string
+    reasoningEffort?: string
+  }): Promise<{ selected: ModelSelection }>
+  modelCatalog(): Promise<ModelCatalog>
 }
 
 /**
@@ -309,20 +338,18 @@ export function commandChannelOver(ctx: HostContext): CommandPort {
 }
 
 /**
- * 协议层眼中的权限通道。
+ * 协议层眼中的权限通道 —— **只剩目录的读**。
  *
- * 与命令通道同形：`permissionPresets` 与 `commands` 都不在 `inject` 里（它们是扩展，
- * 缺席不该让整个网关 pending），所以经 `ctx.reflect.get` 取、调用时解析并缓存 ——
- * 插件晚于网关就绪时，下一次调用自己接上。
+ * `permissionPresets` 不在 `inject` 里（它是扩展，缺席不该让整个网关 pending），所以经
+ * `ctx.reflect.get` 取、调用时解析并缓存 —— 插件晚于网关就绪时，下一次调用自己接上。
  *
- * **能力缺席不是错误**：预设服务不在时这个端口照常应答，只是 `options` 缺席 ——
- * 手机据此不画那一格。写 op 没得谈，抛出去由协议层折成 `internal-error`。
+ * **能力缺席不是错误**：预设服务不在时端口照常应答，只是三键一起缺席 —— 手机据此不画
+ * 那一格。切档不在这条通道上（走命令域），当前值也不在（走 `permissions` 投影）。
  */
 export function permissionChannelOver(ctx: HostContext): PermissionPort {
   let resolved: PermissionPort | undefined
   return {
-    catalog: sessionId => port().catalog(sessionId),
-    select: (sessionId, preset) => port().select(sessionId, preset),
+    catalog: () => port().catalog(),
   }
 
   function port(): PermissionPort {
@@ -333,81 +360,28 @@ export function permissionChannelOver(ctx: HostContext): PermissionPort {
       resolved = ABSENT_PERMISSION
       return resolved
     }
-    const commands = ctx.reflect.get('commands') as Partial<CommandsLike> | undefined
-    const agents = ctx.agents as Partial<LiveAgentsLike> | undefined
-    const sessions = ctx.sessions as Partial<SessionsLike> | undefined
-    const projections = ctx.sessionProjections as Partial<ProjectionsLike> | undefined
-    if (
-      typeof commands?.execute !== 'function' ||
-      typeof agents?.get !== 'function' ||
-      typeof sessions?.get !== 'function' ||
-      typeof projections?.snapshot !== 'function'
-    ) {
-      throw new Error('permission channel: the host is missing a face it needs — permission ops cannot be served')
-    }
-
     const readable = presets as PermissionPresetsLike
-    const exec = commands as CommandsLike
-    const live = agents as LiveAgentsLike
-    const stored = sessions as SessionsLike
-    const read = projections as ProjectionsLike
+    // 组装期签名检查：目录走的是预设服务的 `catalog()`，形参表变了要在启动时出声，
+    // 而不是第一次点格子时。
+    const note = signatureNoteOf(readable, 'catalog', [])
+    if (note !== undefined) log.warn('permission adapter: calling positionally', { note })
 
-    // 组装期签名检查：切换走的是命令门，目录走的是预设服务 —— 两处形参表变了都要在
-    // 启动时出声，而不是第一次点格子时。
-    for (const [target, member, expected] of [
-      [readable, 'catalog', []],
-      [exec, 'execute', ['agent', 'line', 'submittedAttachments', 'signal']],
-    ] as const) {
-      const note = signatureNoteOf(target, member, expected)
-      if (note !== undefined) log.warn('permission adapter: calling positionally', { note })
-    }
-
-    const sources: PermissionSources = {
-      options: () => readable.catalog().options,
-      currentOf: sessionId => {
-        const session = stored.get(sessionId)
-        if (session === undefined) return undefined
-        const view = read.snapshot(session, PERMISSION_KEYS)?.values.permissions
-        if (typeof view !== 'object' || view === null) return undefined
-        const value = (view as { currentValue?: unknown }).currentValue
-        return typeof value === 'string' && value !== '' ? value : undefined
-      },
-      execute: async (sessionId, line) => {
-        // 会话与 agent 可能在这两次读之间被回收：那不是一个可归因的「名字不对」，
-        // 所以取不到就如实回报，而不是把它混进 `unparsable`。
-        const agent = live.get(sessionId)
-        if (agent === undefined) return { kind: 'no-agent' }
-        const acceptance = await exec.execute(agent, line, [], AbortSignal.timeout(SELECT_TIMEOUT_MS))
-        return acceptance === undefined
-          ? { kind: 'unparsable' }
-          : { kind: 'accepted', commandId: acceptance.commandId }
-      },
-    }
-    resolved = permissionPortOver(sources)
+    resolved = permissionPortOver({ catalog: () => readable.catalog() })
     log.info('permission channel wired')
     return resolved
   }
 }
 
-/** 预设服务缺席时的端口：读回一个「什么都不知道」的面，写直接抛。 */
+/** 预设服务缺席时的端口：目录答「三键缺席」，客户端据此不画那一格。 */
 const ABSENT_PERMISSION: PermissionPort = {
   async catalog() {
-    return {}
-  },
-  async select() {
-    throw new Error('permission-presets service is not composed — permission-select cannot be served')
+    return undefined
   },
 }
 
-/** 读当前值所基于的投影键 —— 具名常量使读取不会物化无人消费的视图。 */
-const PERMISSION_KEYS = ['permissions'] as const
-
-/** 切换一档的受理超时 —— 与命令通道同款：受理很快，排上队之后回合自己继续。 */
-const SELECT_TIMEOUT_MS = 30_000
-
-/** 本模块用到的 `ctx.permissionPresets` 部分。 */
+/** 本模块用到的 `ctx.permissionPresets` 部分 —— 目录原样。 */
 interface PermissionPresetsLike {
-  catalog(): { options: readonly PermissionOption[] }
+  catalog(): PermissionCatalog
 }
 
 /**

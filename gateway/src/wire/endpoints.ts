@@ -14,12 +14,13 @@
  */
 
 import { isPositiveInteger, nonEmptyString } from './fields.ts'
+import { parseWorkspaceArgs } from './workspace-stream.ts'
 
 
 /** 解析结果：认下来了（带泵种类与请求），或两种拒绝之一。 */
 export type EndpointResolution =
   | { readonly ok: true; readonly kind: 'follow'; readonly request: FollowRequest }
-  | { readonly ok: true; readonly kind: 'events' | 'control'; readonly request: undefined }
+  | { readonly ok: true; readonly kind: 'events' | 'control' | 'workspace'; readonly request: undefined }
   | { readonly ok: false; readonly code: 'unknown-endpoint' | 'invalid-args' }
 
 /**
@@ -33,11 +34,17 @@ export interface FollowRequest {
   maxMessages?: number
 }
 
-/** 三个端点名，按上游的写法原样 —— 这里是它们的**唯一定义处**。 */
+/**
+ * 四个端点名，按上游的写法原样 —— 这里是它们的**唯一定义处**。
+ *
+ * 三条无参（`session/control`、`$events`、`workspace/follow`），一条按会话
+ * （`session/follow`）。前三条的入参校验是同一件事：空对象，多一个键都算说错了。
+ */
 export const ENDPOINTS = {
   follow: 'session/follow',
   control: 'session/control',
   events: '$events',
+  workspace: 'workspace/follow',
 } as const
 
 /**
@@ -50,6 +57,11 @@ export function resolveEndpoint(endpoint: unknown, args: unknown): EndpointResol
   if (endpoint === ENDPOINTS.follow) {
     const request = followArgsOf(args)
     return request === undefined ? { ok: false, code: 'invalid-args' } : { ok: true, kind: 'follow', request }
+  }
+  if (endpoint === ENDPOINTS.workspace) {
+    return isEmptyArgs(args)
+      ? { ok: true, kind: 'workspace', request: undefined }
+      : { ok: false, code: 'invalid-args' }
   }
   if (endpoint === ENDPOINTS.control || endpoint === ENDPOINTS.events) {
     if (!isEmptyArgs(args)) return { ok: false, code: 'invalid-args' }
@@ -67,9 +79,14 @@ function followArgsOf(args: unknown): FollowRequest | undefined {
   return isPositiveInteger(args.maxMessages) ? { sessionId, maxMessages: args.maxMessages } : undefined
 }
 
-/** 无入参的流：`args` 必须是空对象，多一个键都算说错了。 */
+/**
+ * 无入参的流：`args` 必须是空对象，多一个键都算说错了。
+ *
+ * 委托给 `workspace-stream.ts` 的 `parseWorkspaceArgs` —— 三条无参流共用一次判定。
+ * 两份 `Object.keys` 检查迟早各漂一次，而漂了不会有编译错误。
+ */
 function isEmptyArgs(args: unknown): boolean {
-  return isPlainObject(args) && Object.keys(args).length === 0
+  return parseWorkspaceArgs(args) !== undefined
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

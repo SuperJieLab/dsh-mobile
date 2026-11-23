@@ -62,12 +62,12 @@ test('each write op maps to its own target field', () => {
   const cases: [string, Record<string, unknown>, string][] = [
     ['session-prompt', { sessionId: 's-1' }, 's-1'],
     ['approval-answer', { eventId: 'e-1' }, 'e-1'],
-    ['command-execute', { sessionId: 's-2' }, 's-2'],
-    ['permission-select', { sessionId: 's-3' }, 's-3'],
-    ['model-select', { sessionId: 's-4' }, 's-4'],
+    ['command-execute', { agentId: 's-2' }, 's-2'],
+    // 三条跟着宿主的 `request` 容器走：线上多一层，目标在那层里面。
+    ['model-select', { request: { sessionId: 's-4' } }, 's-4'],
     ['workspace-create', { name: 'proj' }, 'proj'],
-    ['workspace-delete', { workspaceId: 'w-1' }, 'w-1'],
-    ['session-create', { workspaceId: 'w-2' }, 'w-2'],
+    ['workspace-delete', { request: { workspaceId: 'w-1' } }, 'w-1'],
+    ['session-create', { request: { workspaceId: 'w-2' } }, 'w-2'],
   ]
   for (const [op, message, expected] of cases) {
     assert.equal(auditEntryOf(op, message, { ok: true, value: {} }).target, expected, `${op} 的目标取错了`)
@@ -79,7 +79,7 @@ test('each write op maps to its own target field', () => {
 test('an entry round-trips through format and parse', () => {
   const entry = {
     at: '2026-11-04T10:00:00.000+08:00',
-    op: 'permission-select',
+    op: 'command-execute',
     target: 's-1',
     result: 'ok' as const,
     request: 'req-abc123',
@@ -193,7 +193,6 @@ test('a real request through the listener leaves a record', { timeout: 10_000 },
     modelPort: undefined,
     commandPort: undefined,
     workspacePort: {
-      snapshot: () => ({ workspaces: [] }) as never,
       create: unused,
       delete: async () => {},
     },
@@ -205,7 +204,7 @@ test('a real request through the listener leaves a record', { timeout: 10_000 },
   try {
     await once(server, 'listening')
     const address = server.address() as AddressInfo
-    const answer = await call(address.port, 'workspace/delete', { workspaceId: 'w-1' }, 'test-token')
+    const answer = await call(address.port, 'workspace/delete', { request: { workspaceId: 'w-1' } }, 'test-token')
     assert.equal(answer.status, 200)
 
     const entries = audit.recent(5)

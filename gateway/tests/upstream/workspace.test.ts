@@ -8,37 +8,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { createWorkspaceIn, deleteWorkspaceIn, workspaceSnapshotOf } from '../../src/upstream/workspace.ts'
-
-/**
- * 一个工作空间在注册表里的样子。`path` 是**多余的**：实现要是改成按目录路径
- * 与会话的 cwd 比对，这里一个 cwd 也没有，归属表会空 —— 下面那条断言就是它的守护。
- */
-function workspace(id: string, title: string, sessionIds: readonly string[]) {
-  return { id, title, sessionIds, path: `/w/${id}` }
-}
-
-test('snapshot keeps the registry order and maps every member to its workspace', () => {
-  const snapshot = workspaceSnapshotOf({
-    list: () => [workspace('w-b', 'B 项目', ['s2']), workspace('w-a', 'A 项目', ['s1', 's3'])],
-  })
-
-  assert.deepEqual(snapshot.rows, [
-    { id: 'w-b', title: 'B 项目' },
-    { id: 'w-a', title: 'A 项目' },
-  ], '组清单必须原样保留注册表的顺序 —— 按标题或按 id 重排都会在这里红')
-  assert.equal(snapshot.owners.get('s1'), 'w-a')
-  assert.equal(snapshot.owners.get('s3'), 'w-a')
-  assert.equal(snapshot.owners.get('s2'), 'w-b')
-  assert.equal(snapshot.owners.get('s9'), undefined, '不在任何成员表里的会话没有归属')
-})
-
-test('an empty registry yields an empty snapshot rather than throwing', () => {
-  const snapshot = workspaceSnapshotOf({ list: () => [] })
-
-  assert.deepEqual(snapshot.rows, [])
-  assert.equal(snapshot.owners.size, 0)
-})
+import { createWorkspaceIn, deleteWorkspaceIn } from '../../src/upstream/workspace.ts'
 
 // -- 注册（幂等） -------------------------------------------------------------
 
@@ -77,15 +47,6 @@ test('registering the same path twice reports created once', async () => {
 test('a brand-new path reports the title the host derived', async () => {
   const made = await createWorkspaceIn(fakeController(), '/根/记账 App')
   assert.equal(made.title, '记账 App', '标题由宿主从目录名派生，网关不改写')
-})
-
-test('a session listed by two workspaces belongs to the first in registry order', () => {
-  const snapshot = workspaceSnapshotOf({
-    list: () => [workspace('w-a', 'A 项目', ['s-shared']), workspace('w-b', 'B 项目', ['s-shared'])],
-  })
-
-  assert.equal(snapshot.owners.get('s-shared'), 'w-a',
-    '参照界面找的是清单里第一个成员表含它的工作空间；取后者会让同一批会话在手机与 Web UI 上分到不同的组')
 })
 
 // -- 删除（幂等） -------------------------------------------------------------

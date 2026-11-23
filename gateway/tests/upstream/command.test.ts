@@ -60,12 +60,12 @@ async function captureWarn(body: () => Promise<void>): Promise<string[]> {
 
 // -- list --------------------------------------------------------------------
 
-test('list forwards every descriptor, mapping input.hint onto inputHint', async () => {
+test('list forwards every descriptor as-is, input object included', async () => {
   const port = commandPortOver(fakeCommands(), fakeAgents())
   assert.deepEqual(await port.list('s'), [
     { name: 'compact', description: 'Compact the conversation' },
-    { name: 'permission', description: 'Switch the permission preset', inputHint: '<preset>' },
-  ])
+    { name: 'permission', description: 'Switch the permission preset', input: { hint: '<preset>' } },
+  ], '裁字段就是第二份形状：宿主的描述符原样过去，`input` 不拆成 `inputHint`')
 })
 
 test('list answers undefined — not an empty list — when the session has no live agent', async () => {

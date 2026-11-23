@@ -8,15 +8,23 @@
  * 手机端不知道这些接口存在：它们是网关内部两层的约定，不是线上形状。
  */
 
-import type { SessionRow, SessionSlice, WireEvent } from '../wire/rpc.ts'
+import type { SessionSlice, WireEvent } from '../wire/rpc.ts'
 
 /**
  * 协议层所依赖的数据源 —— 契约的唯一依赖；用 fake 让测试摆脱运行时、
  * 文件系统与网络。
  */
 export interface SessionPort {
-  /** 本进程可见的所有会话。顺序无意义。 */
-  list(): Promise<readonly SessionRow[]>
+  /**
+   * 宿主的 `session/list`：**原样转发**，网关不排序、不裁剪、不改名。
+   *
+   * 返回类型是 `unknown` 而不是一份我们自己声明的行类型 —— 那是这条判据的要点：
+   * 形状由宿主决定，网关一旦声明它，就会在宿主加字段时静默地变成两份。
+   *
+   * @param request - `_request` 的内层；`{cursor?}`。
+   * @param signal - 取消。HTTP 断开目前不接到这里（见方案「明确不做」）。
+   */
+  list(request: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<unknown>
   /**
    * 至多 `limit` 条 `seq >= since` 的事件；会话不存在时返回 `undefined`。
    * 切片自报是否还有剩余。

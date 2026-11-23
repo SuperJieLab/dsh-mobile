@@ -20,10 +20,9 @@ import type { CommandPort } from '../ports/command.ts'
 import type { PermissionPort } from '../ports/permission.ts'
 import type { WorkspacePort } from '../ports/workspace.ts'
 import type { RemoteResult } from '../wire/unary.ts'
-import type { WireEvent, SessionRow } from '../wire/rpc.ts'
+import type { WireEvent } from '../wire/rpc.ts'
 import { modelSelectRequestOf } from '../wire/model.ts'
 import { commandExecuteRequestOf } from '../wire/command.ts'
-import { permissionSelectRequestOf } from '../wire/permission.ts'
 import { approvalAnswerOf, questionAnswerOf, sessionPromptOf, type QuestionAnswerMessage } from '../wire/write.ts'
 import { workspaceIdOf, workspaceNameOf } from '../wire/workspace.ts'
 import { isPositiveInteger } from '../wire/fields.ts'
@@ -339,29 +338,25 @@ export async function modelSelectOf(
   return { ok: true, value: { selected: { ...outcome.selected } } }
 }
 
-/** 模型目录路径：宿主目录原样，去掉客户端用不上的字段。 */
 /**
- * 模型目录的业务字段。端口缺席是装配层宣布过的事实（`faces.ts` 在宿主没有模型切面时
+ * 模型目录。端口缺席是装配层宣布过的事实（`faces.ts` 在宿主没有模型切面时
  * 返回 `undefined` 并留痕），所以这一支在生产也可达 —— 拒答而不是崩。
+ *
+ * 值不重建：宿主的目录就是线上形状（四个键，含 `routableProviders`）。逐字段抄一遍
+ * （`{default, groups, failures}`）正是上一版剥掉 `routableProviders` 的原因 ——
+ * 抄的人只会抄他记得的那几格。
  */
 export async function modelCatalogOf(model: ModelPort | undefined): Promise<RemoteResult> {
   if (model === undefined) return refused('internal-error', 'model channel not wired for "model-catalog"')
   const catalog = await model.catalog()
-  return {
-    ok: true,
-    value: {
-      ...catalog.default === undefined ? {} : { default: catalog.default },
-      groups: [...catalog.groups],
-      failures: [...catalog.failures],
-    },
-  }
+  return { ok: true, value: catalog }
 }
 
 /**
- * 命令列表：该会话此刻能用的命令，名字与说明原样。
+ * 命令列表：该 agent 此刻能用的命令，**描述符原样**（裸数组，不套 `{commands}`）。
  *
- * 会话不在 → `unknown-session`（不是空列表）：没有 agent 就没有 per-agent 的命令集，
- * 空列表会让客户端把「这个会话没了」误读成「这个会话没有命令」。
+ * agent 不在 → `unknown-session`（不是空数组）：没有 agent 就没有 per-agent 的命令集，
+ * 空数组会让客户端把「这个会话没了」误读成「这个会话没有命令」。
  */
 export async function commandCatalogOf(
   args: Record<string, unknown>,
@@ -370,13 +365,13 @@ export async function commandCatalogOf(
   // 仅只读测试装配会缺这个端口：生产装配的命令端口总在，服务缺席由那次调用抛出
   // （折成 `internal-error`），不在这里判。
   if (command === undefined) return refused('internal-error', 'command channel not wired for "command-catalog"')
-  const sessionId = args.sessionId
-  if (typeof sessionId !== 'string' || sessionId === '') {
-    return refused('unknown-session', 'sessionId must be a non-empty string')
+  const agentId = args.agentId
+  if (typeof agentId !== 'string' || agentId === '') {
+    return refused('unknown-session', 'agentId must be a non-empty string')
   }
-  const commands = await command.list(sessionId)
-  if (commands === undefined) return refused('unknown-session', `no live session "${sessionId}"`)
-  return { ok: true, value: { commands: [...commands] } }
+  const commands = await command.list(agentId)
+  if (commands === undefined) return refused('unknown-session', `no live session "${agentId}"`)
+  return { ok: true, value: [...commands] }
 }
 
 /**
@@ -393,117 +388,30 @@ export async function commandExecuteOf(
   if (command === undefined) return refused('internal-error', 'command channel not wired for "command-execute"')
   const request = commandExecuteRequestOf(args)
   if (request === undefined) {
-    return refused('invalid-request', 'command-execute needs sessionId and a line starting with "/"')
+    return refused('invalid-request',
+      'command-execute needs agentId, a line starting with "/", and empty submittedAttachments')
   }
-  const outcome = await command.execute(request.sessionId, request.line)
+  const outcome = await command.execute(request.agentId, request.line)
   if (!outcome.ok) return refused(outcome.code, outcome.message)
   return { ok: true, value: { commandId: outcome.commandId } }
 }
 
 /**
- * 权限预设：该会话此刻能选什么、现在是什么。
+ * 权限目录：此刻能选什么、装配的默认档是什么。
  *
- * 两格都可以缺席，含义不同（见 `wire/permission.ts`）—— `options` 缺席 = 这个装配没有
- * 权限服务，客户端据此不画那一格；`current` 缺席 = 宿主不知道，客户端显示 `--`。
- * 两者都不补默认值：补出来的档位会与 Web UI 显示的那个不一致。
+ * **一条只读、无参的端点**：目录是进程级的；「这个会话现在是哪一档」在 `permissions`
+ * 投影里（`session/control`），不在这条应答里。合成一处会让「目录新、当前值旧」无从分辨。
+ *
+ * 服务缺席时**三键一起缺席**（`{}`）：客户端据此不画那一格。空数组是另一件事 ——
+ * 服务在、一项都没配，界面照画（点开是空的）。
  */
 export async function permissionCatalogOf(
-  args: Record<string, unknown>,
+  _args: Record<string, unknown>,
   permission: PermissionPort | undefined,
 ): Promise<RemoteResult> {
-  // 端口缺席只发生在只读测试装配里；生产装配的端口总在，而「权限服务没装」这件事
-  // 由端口自己用「options 缺席」表达，不在这里判。
   if (permission === undefined) return refused('internal-error', 'permission channel not wired for "permission-catalog"')
-  const sessionId = args.sessionId
-  if (typeof sessionId !== 'string' || sessionId === '') {
-    return refused('unknown-session', 'sessionId must be a non-empty string')
-  }
-  const view = await permission.catalog(sessionId)
-  return {
-    ok: true,
-    value: {
-      ...view.current === undefined ? {} : { current: view.current },
-      ...view.options === undefined ? {} : { options: [...view.options] },
-    },
-  }
-}
-
-/**
- * 切到一档。`ok` 意为*宿主已受理* —— 落地证据是流里的 `permission/preset` 与随之的两个
- * knob 事件；回包里的 `current` 是受理后重读投影拿到的值。
- *
- * 两类拒绝保留自己的码：`unknown-preset` 说这个名字不在宿主目录里（客户端重拉目录再选），
- * `unknown-session` 说会话没有活着的 agent（切不了）。
- */
-export async function permissionSelectOf(
-  args: Record<string, unknown>,
-  permission: PermissionPort | undefined,
-): Promise<RemoteResult> {
-  if (permission === undefined) return refused('internal-error', 'permission channel not wired for "permission-select"')
-  const request = permissionSelectRequestOf(args)
-  if (request === undefined) {
-    return refused('invalid-request', 'permission-select needs sessionId and a non-empty preset')
-  }
-  const outcome = await permission.select(request.sessionId, request.preset)
-  if (!outcome.ok) return refused(outcome.code, outcome.message)
-  return {
-    ok: true,
-    value: {
-      ...outcome.current === undefined ? {} : { current: outcome.current },
-    },
-  }
-}
-
-/**
- * 列表应答：会话行 + 工作空间清单。
- *
- * 两样出自**同一次**读取（`snapshot()` 一次），所以不存在「清单里没有、归属里
- * 却有」这种半新半旧的应答。端口缺席时清单这一格整个不发 —— 那是「这个装配没有
- * 分组能力」，与「宿主里没有工作空间」（空数组）是两件事，客户端两种都按
- * 「没有组」处理，但线上不能混成一种。
- */
-/**
- * 列表应答的**业务字段**（不含信封）。
- *
- * 单独一个函数是为了两条通道共用同一份装配：旧的一元路径包 `{v, ok}`，新的端点路径
- * 包 `{type, rpcId, result}`。把装配抄第二遍，两条路径迟早会在某个字段上分叉，
- * 而分叉的症状是「同一个列表在两个入口长得不一样」。
- */
-export async function listSessionsOf(
-  port: SessionPort,
-  workspace: WorkspacePort | undefined,
-  now: () => number,
-): Promise<Record<string, unknown>> {
-  const summaries = [...await port.list()]
-  // 在此排序而非在客户端排，让所有客户端的顺序一致。
-  summaries.sort((left, right) => right.updatedAt - left.updatedAt)
-  const groups = workspace?.snapshot()
-  return {
-    serverTime: now(),
-    ...groups === undefined ? {} : { workspaces: groups.rows },
-    sessions: summaries.map(row => toWireSummary(row, groups?.owners.get(row.id))),
-  }
-}
-
-/**
- * 一行的线上形状，省略 `title` 而非发送 null。`eventCount` 刻意缺席：
- * 日志推导的事实会把日志拖回列表路径。
- *
- * `workspaceId` 由**这一层**补上而不是由数据源给：归属不是会话的事实，而是
- * 「会话与工作空间的关系」，它的唯一来源是工作空间注册表。让适配器去填这一格，
- * 等于让会话存储认识工作空间。
- */
-function toWireSummary(row: SessionRow, workspaceId: string | undefined): Record<string, unknown> {
-  return {
-    id: row.id,
-    ...row.title === undefined ? {} : { title: row.title },
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    running: row.running,
-    blank: row.blank,
-    ...row.origin === undefined ? {} : { origin: row.origin },
-    ...workspaceId === undefined ? {} : { workspaceId },
-  }
+  const catalog = await permission.catalog()
+  return { ok: true, value: catalog === undefined ? {} : catalog }
 }
 
 /** 读路径：一个会话自客户端水位之后的事件。 */

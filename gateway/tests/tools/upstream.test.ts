@@ -30,9 +30,9 @@ test('H2: 缺一个面时点名那一个面', () => {
 
 test('H2: 缺多个面时全部点名', () => {
   const faces = defaultBenchFaces()
-  delete (faces as Record<string, unknown>).sessionQuery
+  delete (faces as Record<string, unknown>).workspaceController
   delete (faces as Record<string, unknown>).typertGateway
-  assert.deepEqual(missingFaces(faces).sort(), ['sessionQuery', 'typertGateway'])
+  assert.deepEqual(missingFaces(faces).sort(), ['typertGateway', 'workspaceController'])
 })
 
 test('H2: installBench 缺面时抛错且错误信息点名缺的那一面', async () => {

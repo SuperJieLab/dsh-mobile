@@ -14,7 +14,7 @@
 
 import assert from 'node:assert/strict'
 import { mock, test } from 'node:test'
-import { gatewayOver, peerShapeProblem, workspacePortOver } from '../../src/upstream/faces.ts'
+import { gatewayOver, modelChannelOver, peerShapeProblem, workspacePortOver } from '../../src/upstream/faces.ts'
 import type { PeerScopeLike } from '../../src/upstream/call-through.ts'
 
 /** A Peer as the runtime's `connection.createPeer` returns one. */
@@ -252,4 +252,80 @@ test('workspacePortOver: the id the caller gives is the one the host receives', 
   await port.delete('w-a')
 
   assert.deepEqual(seen, ['w-a'], '参数名与位置都要对 —— 装配层最容易错的就是这一格')
+})
+
+// -- 模型通道的装配 -----------------------------------------------------------
+
+/**
+ * 一个只带会话控制器（模型两面）的假宿主。
+ *
+ * 这些判据守的是**装配那一行**：宿主的方法直接接上去、目录不重建、选择照旧翻码。
+ * 从前这些住在 `upstream/model.ts` 的端口工厂里；目录改成转发之后工厂没有存在理由了
+ * （它唯一的工作是裁字段），但这几条承诺仍然要有人守。
+ */
+function hostWithModelController(controller: Record<string, unknown>) {
+  return { sessionController: controller } as never
+}
+
+const HOST_CATALOG = {
+  default: { provider: 'deepseek', model: 'deepseek-chat' },
+  routableProviders: ['deepseek'],
+  groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }] }],
+  failures: [],
+}
+
+test('modelChannelOver: the catalog goes out as the host gave it — routableProviders included', async () => {
+  const port = modelChannelOver(hostWithModelController({
+    async modelCatalog() { return HOST_CATALOG },
+    async selectModel() { return { selected: HOST_CATALOG.default } },
+  }))
+
+  assert.notEqual(port, undefined, '两面都在时必须接上')
+  assert.deepEqual(await port!.catalog(), HOST_CATALOG,
+    '逐字转发：重建一次形状就会漏一格，而漏掉不会编译失败')
+})
+
+test('modelChannelOver: select maps the not-found family onto unknown-session', async () => {
+  const port = modelChannelOver(hostWithModelController({
+    async modelCatalog() { return HOST_CATALOG },
+    async selectModel() {
+      throw Object.assign(new Error('no session "s"'), { isDSHRemoteError: true, code: 'session/not-found' })
+    },
+  }))
+
+  assert.deepEqual(await port!.select({ sessionId: 's', provider: 'deepseek', model: 'deepseek-chat' }),
+    { ok: false, code: 'unknown-session', message: 'no session "s"' })
+})
+
+test('modelChannelOver: select keeps the upstream model-unavailable code', async () => {
+  const port = modelChannelOver(hostWithModelController({
+    async modelCatalog() { return HOST_CATALOG },
+    async selectModel() {
+      throw Object.assign(new Error('no adapter serves provider "x"'),
+        { isDSHRemoteError: true, code: 'session/model-unavailable' })
+    },
+  }))
+
+  assert.deepEqual(await port!.select({ sessionId: 's', provider: 'x', model: 'm' }),
+    { ok: false, code: 'session/model-unavailable', message: 'no adapter serves provider "x"' })
+})
+
+test('modelChannelOver: a drifted parameter list warns at assembly instead of feeding garbage', async () => {
+  // 上游把 `request` 改名或加了一个形参。适配仍要建起来 —— 那条 warn 才是机制。
+  const drifted = {
+    async modelCatalog() { return HOST_CATALOG },
+    async selectModel(_session: unknown, _request: unknown) { return { selected: HOST_CATALOG.default } },
+  }
+
+  const captured = await captureRefusals(async () => {
+    await modelChannelOver(hostWithModelController(drifted))!
+      .select({ sessionId: 's', provider: 'deepseek', model: 'deepseek-chat' })
+  })
+
+  assert.equal(captured.length, 1, captured.join('\n'))
+  assert.match(captured[0]!, /selectModel/)
+})
+
+test('modelChannelOver: no model face means no port — callers refuse instead of crashing', () => {
+  assert.equal(modelChannelOver(hostWithModelController({})), undefined)
 })

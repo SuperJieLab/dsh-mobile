@@ -216,13 +216,15 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
  * 认不出的端点因此不是畸形帧 —— 它归得上一条流，只是那条流开不起来（一条带编号的
  * `error` 帧，连接与别的流不动）。
  *
- * **三种流三个取值**：`events` 是上游的 `$events`，一条流承载四种货物（`ready` /
+ * **四种流四个取值**：`events` 是上游的 `$events`，一条流承载四种货物（`ready` /
  * `emit` / `waterfall` / `cancel`）—— 原来按恢复语义拆出的三条流并回这里。
+ * `workspace` 是组清单流，没有入参（组是进程级的，不分会话）。
  */
 export type OpenRequest =
   | ({ kind: 'follow' } & FollowRequest)
   | { kind: 'events' }
   | { kind: 'control' }
+  | { kind: 'workspace' }
 
 /** 端点表给出的两种拒绝 —— 调用方据此回一条带编号的 `error`，**不关连接**。 */
 export type OpenRequestRefusal = { readonly error: 'unknown-endpoint' | 'invalid-args' }

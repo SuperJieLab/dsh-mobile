@@ -100,7 +100,7 @@ export class BenchClient {
   /** 连接 + 打开 follow 流。`gen` 随连接递增；一轮内它必须恒定。 */
   async start(): Promise<void> {
     const access = await benchAccessToken(this.options.port, this.options.deviceToken, this.options.host)
-    const url = `ws://${this.options.host}:${this.options.port}/rpc/stream`
+    const url = `ws://${this.options.host}:${this.options.port}/api/remote.mux`
     // 第二参在运行时是 undici 的 init：`headers` 进握手请求（实测 `req.headers.authorization`
     // 拿得到它的值，Node 22.22），而 `@types/node` 只声明协议名 `string | string[]`。
     // 类型落后于运行时，故在此断言一次 —— 网关的 WS 闸门就要这一个头。

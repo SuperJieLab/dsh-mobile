@@ -11,7 +11,7 @@
  * 字面量对齐，改这里必须同步改 `WorkspaceName.swift`。
  */
 
-import { nonEmptyString } from './fields.ts'
+import { nonEmptyString, requestContainerOf } from './fields.ts'
 
 /** 名字里不许出现的两个路径分隔符。 */
 const SEPARATORS = ['/', '\\']
@@ -57,6 +57,9 @@ export function workspaceNameOf(payload: unknown): string | undefined {
 /**
  * 请求 → 要删的工作空间 id；形状不对、空串或纯空白时返回 `undefined`。
  *
+ * 读的是宿主的 `request` 容器（`args.request.workspaceId`）—— 它的 `delete(request)`
+ * 收一个对象，线上照抄这一层。少一层容器是旧客户端，按畸形拒。
+ *
  * 这里比 `nonEmptyString` 严一格（纯空白也拒）：工作空间 id 是宿主给的标识符，
  * 一个全是空白的 id 不可能指到任何东西。而拒绝的代价是零 —— 允许它的话，那次请求会
  * 一路走到宿主、得到 not-found、被适配层当成功吞掉，于是「载荷畸形」与「它本来就不在」
@@ -67,8 +70,9 @@ export function workspaceNameOf(payload: unknown): string | undefined {
  *
  * @param payload - 解析后的请求体，构造上形状未知。
  */
-export function workspaceIdOf(payload: unknown): string | undefined {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
-  const workspaceId = nonEmptyString((payload as Record<string, unknown>).workspaceId)
+export function workspaceIdOf(args: Record<string, unknown>): string | undefined {
+  const request = requestContainerOf(args)
+  if (request === undefined) return undefined
+  const workspaceId = nonEmptyString(request.workspaceId)
   return workspaceId === undefined || workspaceId.trim() === '' ? undefined : workspaceId
 }

@@ -39,6 +39,15 @@
 组网;订阅组网;订阅流;期1 误伤：「跟随承载下」被两条规则先后替换
 未定稿;未定稿未定稿;未定稿内容;同族自撞
 
+# ── 端点与路径的退场名（F3 第 1 期：端点面对齐上游）─────────────────────
+# 这四个是「名字本身」而不是「词 + 搭配」—— 端点名没有歧义搭配可写，而留着一个旧名
+# 就等于留了一条别名期：客户端打旧名还能通，谁也发现不了它没改。
+# 断言「这两个名字已经 404」的那一行要写名字，用 `terms-ok: 理由` 豁免。
+mobile/listSessions;mobile/listSessions;session/list;端点改名，照上游（F3 第 1 期）
+mobile/permissionCatalog;mobile/permissionCatalog;permissionPresets/catalog;目录改成无参、进程级（F3 第 1 期）
+mobile/permissionSelect;mobile/permissionSelect;commands/execute 的 /permission;切档走命令域，与 Web UI 同一条路（F3 第 1 期）
+rpc/stream;/rpc/stream;WS /api/remote.mux;传输路径照上游（F3 第 1 期）
+
 # ── 自查样本：规则被改坏时这里先红，不必等仓库真的回潮 ──────────────────
 expect-hit;正在生成的打字机内容
 expect-hit;瞬态帧不进水位
@@ -48,6 +57,13 @@ expect-hit;流按恢复语义分类，恢复方式只有两种
 expect-hit;组网激活后的组网
 expect-hit;M8 组网换成组网后改稳定域名
 expect-hit;订阅组网下的镜像重放
+expect-hit;POST /api/mobile/listSessions
+expect-hit;mobile/permissionCatalog 收 sessionId
+expect-hit;切档还在打 mobile/permissionSelect
+expect-hit;长连接挂在 /rpc/stream 上
+expect-pass;POST /api/session/list
+expect-pass;permissionPresets/catalog 无参
+expect-pass;WS /api/remote.mux
 expect-hit;承载切换是分界点
 expect-hit;兜底承载代码已删除
 expect-hit;换承载时消息一字不改

@@ -29,7 +29,7 @@ import { IdentityRegistry } from './remote/identity-registry.ts'
 import { AuditLog, defaultAuditDirectory } from './audit.ts'
 import { Metrics } from './metrics.ts'
 import { checkHostVersion, hostVersionOf } from './host-version.ts'
-import { commandChannelOver, gatewayOver, listSourceOver, modelChannelOver, modelSelectionSourceOver, permissionChannelOver, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
+import { commandChannelOver, gatewayOver, modelChannelOver, modelSelectionSourceOver, permissionChannelOver, sessionListFace, streamSourceOver, workspacePortOver, writePortOver, type HostContext } from './upstream/faces.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
@@ -45,18 +45,15 @@ export const name = 'dsh-mobile-gateway'
 export const inject = [
   // 读路径（snapshot / page）直取已存储的日志。
   'sessionPersistence',
-  // 列表路径：记录（头 + 存活）、投影，以及在运行的东西。
-  'sessionQuery',
+  // 会话投影与存活会话表：control 流的基线与模型基线取自它们。
+  // 列表**不**在这里 —— 它转发宿主的 `session/list`（`sessionListFace`），
+  // 连 `sessionQuery` 都不必注入：转发之后网关不再自己拼行。
   'sessionProjections',
   'sessionProjectionCache',
   'sessions',
   'agents',
-  // 工作空间注册表：列表分组的组清单与每行归属都取自它。它也是
-  // sessionController 的依赖之一，所以这一条不新增失败面 —— 只是把
-  // 「网关依赖它」这件事显式写出来。
-  'workspaceRegistry',
-  // 工作空间的写面（建目录之后注册那一步）。与注册表同源、同一个 bundle 装载；
-  // 「这一次是不是新建的」只有它回答，注册表那两个方法都不带这一格。
+  // 工作空间的写面（建目录之后注册那一步）。「这一次是不是新建的」只有它回答。
+  // 读面（组清单与归属）随 `workspace/follow` 流来，所以注册表本身不再需要注入。
   'workspaceController',
   // follow 流：把控制器的 follow 泵到 WS 通道。
   // 仅 web-app bundle 提供。
@@ -120,11 +117,15 @@ export function apply(ctx: HostContext, config: Config = {}): void {
 
   const host = config.host ?? DEFAULT_HOST
   const port = config.port ?? DEFAULT_PORT
-  const sessionPort: SessionPort = createSessionPort(
-    ctx.sessionPersistence as unknown as PersistenceLike,
-    listSourceOver(ctx),
-    modelSelectionSourceOver(ctx),
-  )
+  // 读路径（snapshot / page）自持久化取；列表是**转发**宿主的 `session/list`，
+  // 所以它不在这里造，而是在端口上直接接一条转发函数。
+  const sessionPort: SessionPort = {
+    list: sessionListFace(ctx),
+    ...createSessionPort(
+      ctx.sessionPersistence as unknown as PersistenceLike,
+      modelSelectionSourceOver(ctx),
+    ),
+  }
   // 上限是配置而非常量：它们存在的意义就是被调低直到分块读（以及收窄）
   // 可观测，这正是它们的验证方式。
   const limits = resolveLimits(config)
@@ -174,7 +175,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     const registry = new IdentityRegistry()
     const server = createRpcListener({ sessionPort, limits, vault, registry, writePort, modelPort, commandPort, workspacePort, permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
 
-    // 流通道与监听器共享：同端口，`POST /api/<命名空间>/<方法>` 走一元调用，`/rpc/stream`
+    // 流通道与监听器共享：同端口，`POST /api/<命名空间>/<方法>` 走一元调用，`/api/remote.mux`
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
     const streamHandler = attachStreamHandler(server, streamSourceOver(ctx), vault, {
       registry,
@@ -183,8 +184,9 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       openingCapBytes: limits.maxOpeningBytes,
       // `session-list` 与 `host-events` 两条流订阅这份源：身份是网关进程的，流是这条连接的。
       events: forwardedEvents,
-      // 列表增量行的归属来源。与一元的列表路径同一份端口 —— 两处的归属必须同一判据，
-      // 否则同一条会话会在列表里和增量里落在两个组。
+      // 组清单与归属的来源（`workspace/follow` 流）。与一元的建/删共用同一份端口 ——
+      // 组流里出现的新组、删掉的组，都是宿主那一侧的事实，网关不另存一份。
+      workspace: workspacePort,
       // 待答项随这条流走：开流时重放当前集合、之后随变化增量。它是审批唯一的
       // 投递通道 —— 连接建立时不再预先推一遍（那时还没有流编号可用）。
       approvals: relay,

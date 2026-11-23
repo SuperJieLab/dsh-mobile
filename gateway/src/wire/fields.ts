@@ -26,6 +26,21 @@ export function nonEmptyString(value: unknown): string | undefined {
 }
 
 /**
+ * 宿主的 `request` 容器：`args.request` 必须是普通对象。
+ *
+ * 三条写 op（`session/create`、`session/selectModel`、`workspace/delete`）的宿主方法
+ * 签名都是 `(request)` —— 一个对象。线上因此照抄这一层容器，键名就是宿主的形参名。
+ *
+ * **缺席不是「空请求」**：少一层容器的客户端是旧客户端，静默当空对象收下会让它看起来
+ * 能用（而它发的字段一个都没生效）。两者补救不同，所以在这里就分开。
+ */
+export function requestContainerOf(args: Record<string, unknown>): Record<string, unknown> | undefined {
+  const request = args.request
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) return undefined
+  return request as Record<string, unknown>
+}
+
+/**
  * 正整数，否则无。
  *
  * 「安全整数」那一步写在这条里，不再单独导出：它唯一的消费者就是这里 ——

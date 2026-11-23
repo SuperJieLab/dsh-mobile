@@ -95,7 +95,6 @@ async function withListener(
     modelPort: undefined,
     commandPort: undefined,
     workspacePort: {
-      snapshot: () => ({ workspaces: [] }) as never,
       create: unused,
       delete: async () => {},
     },
@@ -131,8 +130,8 @@ test('GET /metrics answers with the Prometheus content type', async () => {
 test('a request increments the counter', async () => {
   // **这条才是接线判据**：上面那些只证明 `Metrics` 自己会渲染。
   await withListener(async (base, metrics) => {
-    await post(base, 'mobile/listSessions')
-    await post(base, 'mobile/listSessions')
+    await post(base, 'session/list', { _request: {} })
+    await post(base, 'session/list', { _request: {} })
 
     const rows = metrics.render().split('\n')
       .filter((line) => line.startsWith('dsh_rpc_requests_total'))
@@ -143,7 +142,7 @@ test('a request increments the counter', async () => {
 test('a refused request is counted as refused', async () => {
   // 失败率是这三个指标里最有用的一个 —— 它得真的分开记。
   await withListener(async (base, metrics) => {
-    await post(base, 'workspace/delete', { workspaceId: '' })
+    await post(base, 'workspace/delete', { request: { workspaceId: '' } })
 
     const text = metrics.render()
     assert.match(text, /dsh_rpc_requests_total\{op="workspace-delete",result="refused"\} 1/)
@@ -153,7 +152,7 @@ test('a refused request is counted as refused', async () => {
 test('the metrics page never carries a credential', async () => {
   // 匿名可读的页面：只要有一个字段把请求头带进来，凭据就漏了。
   await withListener(async (base) => {
-    await post(base, 'mobile/listSessions')
+    await post(base, 'session/list', { _request: {} })
     const body = await (await fetch(`${base}/metrics`)).text()
 
     assert.equal(body.includes('secret-token'), false, '指标页里出现了凭据')

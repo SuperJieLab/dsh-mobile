@@ -24,7 +24,6 @@ function workspacePort(
     asked,
     port: {
       // 这组用例不读列表；分组链路的判据在 `list-workspaces.test.ts`。
-      snapshot: () => ({ rows: [], owners: new Map() }),
       // 删除在本文件里用不到，走到就是编错了。
       delete: async () => { throw new Error('workspace-create must not delete anything') },
       create: async (name) => {
