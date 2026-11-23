@@ -80,6 +80,33 @@ struct SessionEvent: Decodable, Equatable {
 }
 
 
+/// 会话地址 —— 带 `kind` 判别字段的联合（上游 `SessionAddress`）。
+///
+/// 不是裸 `sessionId`：将来加一种地址（`subagent`）时，改的是这一处判别，
+/// 而不是每个调用点的字段名。本期只发 `kind: "session"`。
+struct SessionAddress: Encodable, Equatable {
+    let kind = "session"
+    let sessionId: String
+}
+
+/// 一屏历史的大小 —— 打开与翻页用**同一组数**。
+///
+/// 上游的 `HISTORY_PAGE_OPTIONS`：`maxMessages: 500`、
+/// `turnWindow{minMessages: 50, minTurns: 2}`。只在这里写一次：两处各写一份，
+/// 改一处另一处不会红，症状是「打开的一屏与翻回来的那一页长短不同」。
+struct HistoryWindow: Encodable, Equatable {
+    struct TurnWindow: Encodable, Equatable {
+        let minMessages: Int
+        let minTurns: Int
+    }
+    let maxMessages: Int
+    let turnWindow: TurnWindow
+    static let standard = HistoryWindow(
+        maxMessages: 500,
+        turnWindow: TurnWindow(minMessages: 50, minTurns: 2)
+    )
+}
+
 /// 一屏历史里的一条记录：事件外面包一层判别字段（`{type:"event", event}`）。
 ///
 /// 打开帧的 `records` 与分页应答的 `records` 是**同一个类型** —— 客户端用同一套合并逻辑
@@ -107,23 +134,10 @@ struct SessionWireHeader: Decodable, Equatable {
     let agentPreset: String?
 }
 
-/// 一次快照的结果。`Equatable` 是状态机的需要：`Outcome` 要能比较，
-/// 而它装着这个类型。
-struct SessionSnapshot: Equatable {
-    /// 本次覆盖到的位置（不含）—— 回传它就能拿到「空增量」，是水位不变式的用法。
-    let asOfSeq: Int
-    /// 服务端是否还有没给完的事件。为真就接着要 —— 单次响应有上限。
-    let hasMore: Bool
-    let events: [SessionEvent]
-    /// 会话的模型基线：**下一轮**将使用的模型。缺省 = 服务端不知道，
-    /// 客户端退到目录默认；进会话后的增量走订阅流。
-    var model: ModelSelection? = nil
-}
-
 /// 一屏历史 —— 打开帧与分页应答**共用同一个类型**。
 ///
 /// 三个字段各有分工：`records` 是这一屏；`cursor` 是**含端**的切点（宿主覆盖到哪）；
-/// `hasMore` 说更早还有没有。**没有 `pageStart`**：窗口起点由首条记录的 `seq` 给出 ——
+/// `hasMore` 说更早还有没有。**没有「窗口起点」那一格**：起点由首条记录的 `seq` 给出 ——
 /// 服务端不再替我们算一个，两份「这一屏从哪开始」迟早分叉。
 struct SessionWindow: Equatable {
     let records: [SessionRecord]

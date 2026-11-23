@@ -156,18 +156,32 @@ struct RefreshRequest: GatewayRequest {
     let deviceToken: String
 }
 
-struct SnapshotRequest: GatewayRequest {
-    static let endpoint = "mobile/snapshot"
-    let sessionId: String
-    let since: Int
-}
-
-/// 可选字段为 `nil` 时不会出现在 JSON 里（合成实现用的是 `encodeIfPresent`），
-/// 这正是协议要的形状：不传 `beforeSeq` 的意思是「从最新往回」，而不是「空值」。
+/// `session/page` 请求：参数在 `request` 这一层容器里（宿主的形参名就是它）。
+///
+/// `throughSeq` 与 `beforeSeq` 各管一件事：前者钉「日志长到哪为止」—— 打开那一刻的
+/// `cursor`，翻页时**原样带回**；后者钉「这一页往前到哪」—— 本地窗口起点，每次递减。
+/// 两个都发，不矛盾。
 struct PageRequest: GatewayRequest {
-    static let endpoint = "mobile/page"
+    static let endpoint = "session/page"
+
     let sessionId: String
-    let beforeSeq: Int?
+    let throughSeq: Int
+    let beforeSeq: Int
+
+    private enum CodingKeys: String, CodingKey { case request }
+    private enum RequestKeys: String, CodingKey {
+        case address, throughSeq, beforeSeq, maxMessages, turnWindow
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        var request = container.nestedContainer(keyedBy: RequestKeys.self, forKey: .request)
+        try request.encode(SessionAddress(sessionId: sessionId), forKey: .address)
+        try request.encode(throughSeq, forKey: .throughSeq)
+        try request.encode(beforeSeq, forKey: .beforeSeq)
+        try request.encode(HistoryWindow.standard.maxMessages, forKey: .maxMessages)
+        try request.encode(HistoryWindow.standard.turnWindow, forKey: .turnWindow)
+    }
 }
 
 /// 审批应答：应答词汇表只有两键，映射在服务端完成 ——
@@ -265,21 +279,14 @@ struct RefreshResponse: GatewayResponse {
     let deviceToken: String?
 }
 
-/// 快照回包：opening 的 `model` 字段是协议面，解码行为要能被
-/// `tests/ModelProtocolTests.swift` 直接断言 —— `@testable import` 下 internal 即可测。
-struct SnapshotResponse: GatewayResponse {
-    let asOfSeq: Int?
-    let hasMore: Bool?
-    let events: [SessionEvent]?
-    /// 下一轮将使用的模型；整个缺省 = 服务端不知道。
-    var model: ModelSelection? = nil
-}
-
+/// `session/page` 回包 —— 与打开帧的 `records` 同型（`{type:"event", event}`）。
+///
+/// 三个键缺一即为畸形应答（调用方抛 `malformedResponse`，不补默认值）：
+/// `cursor` 是**含端**切点（不是这一页的起点），`hasMore` 说更早还有没有。
 struct PageResponse: GatewayResponse {
-    let pageStart: Int?
-    let asOfSeq: Int?
-    let hasOlder: Bool?
-    let events: [SessionEvent]?
+    let records: [FailableDecodable<SessionRecord>]?
+    let cursor: Int?
+    let hasMore: Bool?
 }
 
 /// 审批应答回包：成功不带业务字段。

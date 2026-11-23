@@ -11,28 +11,12 @@
  * 而两者都不报错。
  */
 
-/// 一次被拒绝的响应。
-struct Refusal: Equatable {
-  let code: String
-  let message: String
-}
-
-/// 一次请求的结局。用枚举而非可选值：「没有响应」与「被拒绝」对视图的影响不同。
-enum Outcome: Equatable {
-  case received(SessionSnapshot)
-  case refused(Refusal)
-  /// 传输层失败：连接断了、超时、进程被杀 —— 没有任何服务端结论。
-  case transportFailed
-}
-
 /// 需要重置的理由 —— 动作同一个（丢弃位置重取窗口），保留区分是为了界面能如实说明。
 enum ResetReason: Equatable {
   /// 事件的 `seq` 跳过了已有内容 —— 中间有事件没拿到。
   case gap
   /// 服务端给的位置比本地还靠前 —— 本地视图不可信。
   case waterMarkWentBack
-  /// 服务端明确拒绝了这个位置（`resync-required`）。
-  case cursorVoid
 
     /// 这一因是否**否定了本地位置本身** —— 决定「对不上」时保住本地还是清空重来。
     /// 有洞（`.gap`）时本地那段仍然是真的、只是旧：保住它并如实说「更新没接上」。
@@ -40,7 +24,7 @@ enum ResetReason: Equatable {
   var invalidatesLocalContent: Bool {
     switch self {
     case .gap: return false
-    case .waterMarkWentBack, .cursorVoid: return true
+    case .waterMarkWentBack: return true
     }
   }
 }
@@ -97,7 +81,7 @@ struct SessionMirror {
 
   /// 窗口自己的内容要成形 —— 同一条校验，`open` 与 `realign` 都过。
   ///
-  /// 从前这条比的是「首条 `seq` == 服务端给的 `pageStart`」；起点现在由首条记录自己给出，
+  /// 从前这条比的是「首条 `seq` == 服务端给的窗口起点」；起点现在由首条记录自己给出，
   /// 那条比较成了恒真。留下的是能真出错的那一面：**记录必须按 `seq` 逐条相接**。乱序或
   /// 中间缺一条的一段拼进视图，按 `seq` 渲染会静默错位 —— 错了没人报，肉眼才看得出。
   private static func isSelfConsistent(_ window: SessionWindow) -> Bool {
@@ -178,25 +162,20 @@ struct SessionMirror {
     return .merged(added: window.records.count)
   }
 
-    /// 合并一次 `snapshot`：往后追新增。失败一律不改视图与位置。
-    /// - Returns: 本次的判定。
-  mutating func apply(_ outcome: Outcome) -> Verdict {
-    inFlight = false
-
-    switch outcome {
-    case .transportFailed:
-      return .failed
-
-    case .refused(let refusal):
-      // 只有「位置不可用」需要重置；其它拒绝（会话不存在、读不出来）照实显示即可。
-      return refusal.code == GatewayErrorCode.resyncRequired.rawValue
-        ? .resetRequired(.cursorVoid)
-        : .refused(code: refusal.code)
-
-    case .received(let snapshot):
-      return merge(snapshot)
+    /// 并进一条**实时事件**。
+    ///
+    /// 顺序是**幂等 → 缺口**：重复（`seq < frontier`）说明它已经在视图里，丢掉；跳号
+    /// （`seq > frontier`）说明中间缺了事件，判缺口让上层去重开这条流 —— 两种都「看起来
+    /// 只是少一条」，而视图按 `seq` 渲染，静默放过去就是一处不会报错的错位。
+    ///
+    /// **不碰 `inFlight`**：事件不是对某次请求的回应，翻页在途时它照常到达。
+    mutating func append(_ event: SessionEvent) -> Verdict {
+        if event.seq < frontier { return .caughtUp }
+        if event.seq > frontier { return .resetRequired(.gap) }
+        events.append(event)
+        frontier = event.seq + 1
+        return .merged(added: 1)
     }
-  }
 
     /// 丢弃位置与视图。由调用方在收到 `resetRequired` 后调用 —— 重置是用户看得见的事件。
   mutating func reset() {
@@ -206,29 +185,5 @@ struct SessionMirror {
     throughSeq = -1
     events = []
     inFlight = false
-  }
-
-    /// 把一次成功响应并进视图。顺序是**幂等 → 水位单调 → 缺口**，不能换：重复投递时首批事件
-    /// 的 `seq` 同样小于游标，先判缺口就会把正常重发误判成重置。
-  private mutating func merge(_ snapshot: SessionSnapshot) -> Verdict {
-    if snapshot.asOfSeq < frontier {
-      return .resetRequired(.waterMarkWentBack)
-    }
-
-    // 幂等：丢掉已经在视图里的事件。重复投递与部分重叠都由这一步吸收。
-    let fresh = snapshot.events.filter { $0.seq >= frontier }
-
-    guard let first = fresh.first else {
-      // 一条新的也没有，而服务端声称覆盖到更远的位置 ⇒ 视图缺了这一段，重置比将就安全。
-      return snapshot.asOfSeq > frontier ? .resetRequired(.gap) : .caughtUp
-    }
-
-    if first.seq > frontier {
-      return .resetRequired(.gap)
-    }
-
-    events.append(contentsOf: fresh)
-    frontier = snapshot.asOfSeq
-    return .merged(added: fresh.count)
   }
 }

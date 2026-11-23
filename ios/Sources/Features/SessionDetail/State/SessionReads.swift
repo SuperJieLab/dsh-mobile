@@ -1,62 +1,35 @@
 /**
- * 会话内容的两次读取：打开窗口（快照）与往回翻（分页）。
+ * 往回翻一页。
  *
  * 住这一层是因为只有会话详情需要窗口；协议形状仍在 `Core/Gateway/Wire`，这里只决定这一次
- * 问什么。两条都**不吞错**：`refused` 与传输失败由调用方分成两种说法。
+ * 问什么。**不吞错**：`refused` 与传输失败由调用方分成两种说法。
+ *
+ * 打开那一屏不在这里 —— 它由订阅流的打开帧送来。从前这条路上还有一次 HTTP 快照，
+ * 那条路随 HTTP 快照端点一起退场了：两个来源（流与 HTTP）各算一份水位，
+ * 迟早有一个说「我读到 12」而另一个说「我读到 13」。
  */
 import Foundation
 
-/// 拉某会话的快照。
-/// - Parameter since: 客户端**下一个期望的 seq** —— 由本地镜像记着，不是每次传 0。
-@MainActor
-func readSnapshot(
-    _ client: RpcClient,
-    sessionId: String,
-    since: Int
-) async throws -> SessionSnapshot {
-    let response: SnapshotResponse = try await client.perform(
-        SnapshotRequest(sessionId: sessionId, since: since)
-    )
-    // 缺载荷抛错，不填默认值；报的是缺了哪个字段（句子归 `FailureText`）。
-    guard let asOfSeq = response.asOfSeq, let events = response.events else {
-        throw RpcClientError.malformedResponse(detail: "asOfSeq / events")
-    }
-    return SessionSnapshot(
-        asOfSeq: asOfSeq,
-        // 缺省 `false`：不带这个字段的是旧服务端，它只会一次给完。
-        hasMore: response.hasMore ?? false,
-        events: events,
-        // 基线：服务端「不知道」时整个缺省 —— 客户端退到目录默认，不猜。
-        model: response.model
-    )
-}
-
-/// 拉一段回溯窗口 —— 打开会话与往回翻都用它。
+/// 拉一段回溯窗口。
+///
 /// - Parameters:
-/// - beforeSeq: 窗口上界（不含）。不传表示「从最新往回」（打开会话）；
-///   往回翻时传上一次的 `pageStart`。
-
+///   - throughSeq: 日志切点（**含端**）。打开那一刻的 `cursor`，翻页期间原样带回 ——
+///     它钉住「日志长到哪为止」，于是翻页途中新来的事件不会把这一页挤走。
+///   - beforeSeq: 这一页往前到哪（**排他**）。每次取本地窗口起点递减。
 @MainActor
 func readPage(
     _ client: RpcClient,
     sessionId: String,
-    beforeSeq: Int? = nil,
+    throughSeq: Int,
+    beforeSeq: Int
 ) async throws -> SessionWindow {
     let response: PageResponse = try await client.perform(
-        PageRequest(sessionId: sessionId, beforeSeq: beforeSeq)
+        PageRequest(sessionId: sessionId, throughSeq: throughSeq, beforeSeq: beforeSeq)
     )
-    // 同上：缺载荷抛错。
-    guard let asOfSeq = response.asOfSeq,
-          let hasOlder = response.hasOlder,
-          let events = response.events else {
-        throw RpcClientError.malformedResponse(detail: "asOfSeq / hasOlder / events")
+    // 缺载荷抛错，不填默认值；报的是缺了哪个字段（句子归 `FailureText`）。
+    guard let records = response.records, let cursor = response.cursor, let hasMore = response.hasMore else {
+        throw RpcClientError.malformedResponse(detail: "records / cursor / hasMore")
     }
-    // 这条 HTTP 读法正在退场（流通道的打开帧 + `session/page` 已取代它）：
-    // 它的水位是**排他**的 `asOfSeq`，而 `SessionWindow` 用**含端**的 `cursor` ——
-    // 换算只在这一处，删它的时候一起消失。
-    return SessionWindow(
-        records: events.map { SessionRecord(type: "event", event: $0) },
-        cursor: asOfSeq - 1,
-        hasMore: hasOlder
-    )
+    // 坏记录单条跳过 —— 与打开帧同一条规则（那一格解不出的是一条事件，不是整页）。
+    return SessionWindow(records: records.compactMap(\.value), cursor: cursor, hasMore: hasMore)
 }

@@ -1,5 +1,5 @@
 /**
- * SessionMirror 的契约测试（SM1–SM19）与「对不上」告知状态机的测试（SM20–SM22）：
+ * SessionMirror 的契约测试（SM1–SM19）与「对不上」告知状态机的测试（SM20–SM21）：
  * 状态机不碰网络 / UI / 持久化，每条断言由状态机自决。
  */
 import Foundation
@@ -35,11 +35,6 @@ final class SessionMirrorTests: XCTestCase {
     )
   }
 
-  private func snapshot(_ asOfSeq: Int, _ events: [SessionEvent],
-                        hasMore: Bool = false) -> Outcome {
-    .received(SessionSnapshot(asOfSeq: asOfSeq, hasMore: hasMore, events: events))
-  }
-
   /// 请求失败必须放掉在途标记 —— 否则这个镜像之后再也发不出请求。
   ///
   /// 守的是「失败路径也要还发起权」：`beginRequest` 拿到的权只由三条落地路径
@@ -54,103 +49,38 @@ final class SessionMirrorTests: XCTestCase {
   }
 
   func testContract() {
-    // MARK: SM1 首次合并
+    // MARK: SM1 实时事件按序并进
 
-    // 分两批拉，覆盖「分块推进」：第一批 hasMore 为真。
+    // 打开一屏，然后事件一条条到 —— 序号相接就接上，探测的是「视图与 `frontier` 同步推进」。
     var mirror = SessionMirror()
-    XCTAssertTrue(mirror.beginRequest(), "SM1 首次请求可以发起")
-    let firstBatch = mirror.apply(snapshot(2, [event(0), event(1)], hasMore: true))
-    XCTAssertTrue(firstBatch == .merged(added: 2), "SM1 第一批记为 2 条新增")
-    XCTAssertTrue(mirror.frontier == 2, "SM1 游标落在本批末尾（不是整个日志的末尾）")
+    _ = mirror.open(with: window(0, 2, [event(0), event(1)]))
+    XCTAssertTrue(mirror.append(event(3)) == .merged(added: 1), "接得上的一条记为 1 条新增")
+    XCTAssertTrue(mirror.frontier == 4, "位置跟着事件前进")
+    XCTAssertTrue(mirror.events.map(\.seq) == [0, 1, 3], "视图按 seq 连续")
 
-    XCTAssertTrue(mirror.beginRequest(), "SM1 第二批可以接着发起")
-    let secondBatch = mirror.apply(snapshot(3, [event(2)]))
-    XCTAssertTrue(secondBatch == .merged(added: 1), "SM1 第二批记为 1 条新增")
-    XCTAssertTrue(mirror.events.count == 3, "SM1 两批合起来事件全收")
-    XCTAssertTrue(mirror.frontier == 3, "SM1 游标等于服务端给的 asOfSeq")
+    // MARK: SM2 重复的事件丢掉
 
-    // MARK: SM2 空增量
+    // 重连之后上游重发一条已在视图里的事件：丢弃，不写第二遍，也不判缺口。
+    let beforeRepeat = mirror.events
+    XCTAssertTrue(mirror.append(event(1)) == .caughtUp, "重复的 seq 不是新增")
+    XCTAssertTrue(mirror.events == beforeRepeat, "视图逐字节不变")
 
-    let viewBefore = mirror.events
-    XCTAssertTrue(mirror.beginRequest(), "SM2 可以发起")
-    let verdictCaughtUp = mirror.apply(snapshot(3, []))
-    XCTAssertTrue(verdictCaughtUp == .caughtUp, "SM2 判定为已追平")
-    XCTAssertTrue(mirror.events == viewBefore, "SM2 视图逐字节不变")
-    XCTAssertTrue(mirror.frontier == 3, "SM2 游标不变")
+    // MARK: SM3 跳号判缺口，且不动视图
 
-    // MARK: SM3 缺口
+    let beforeGap = mirror.events
+    XCTAssertTrue(mirror.append(event(9)) == .resetRequired(.gap), "跳过的 seq ⇒ 中间有洞")
+    XCTAssertTrue(mirror.events == beforeGap, "判定不等于自动改视图：调用方重置前一律不动")
+    XCTAssertTrue(mirror.frontier == 4, "判定本身也不动位置")
 
-    XCTAssertTrue(mirror.beginRequest(), "SM3 可以发起")
-    let verdictGap = mirror.apply(snapshot(5, [event(4)]))
-    XCTAssertTrue(verdictGap == .resetRequired(.gap), "SM3 首批 seq 跳过了游标 ⇒ 判定存在缺口")
-    XCTAssertTrue(mirror.frontier == 3, "SM3 判定不等于自动重置：游标在调用方重置前不动")
+    // MARK: SM4 翻页在途时事件照常进
 
-    // MARK: SM4 幂等
-
-    // 整批重复投递：首批的 seq 小于游标。这里不能判成缺口 —— 它已经在视图里了。
-    var idempotent = SessionMirror()
-    _ = idempotent.beginRequest()
-    _ = idempotent.apply(snapshot(3, [event(0), event(1), event(2)]))
-    let beforeRepeat = idempotent.events
-
-    _ = idempotent.beginRequest()
-    let repeated = idempotent.apply(snapshot(3, [event(0), event(1), event(2)]))
-    XCTAssertTrue(repeated == .caughtUp, "SM4 整批重复投递不产生新增")
-    XCTAssertTrue(idempotent.events == beforeRepeat, "SM4 事件不重复")
-    XCTAssertTrue(idempotent.events.count == 3, "SM4 视图仍是 3 条")
-
-    // 部分重叠：前半重复、后半是新的 —— 重复的丢掉，新的照收。
-    _ = idempotent.beginRequest()
-    let overlap = idempotent.apply(snapshot(5, [event(2), event(3), event(4)]))
-    XCTAssertTrue(overlap == .merged(added: 2), "SM4 部分重叠时只算新增的两条")
-    XCTAssertTrue(idempotent.events.count == 5, "SM4 重叠部分没有被写第二遍")
-    XCTAssertTrue(idempotent.events.map(\.seq) == [0, 1, 2, 3, 4], "SM4 视图按 seq 连续")
-
-    // MARK: SM5 水位倒退
-
-    let cursorBefore = idempotent.frontier
-    _ = idempotent.beginRequest()
-    let wentBack = idempotent.apply(snapshot(cursorBefore - 1, []))
-    XCTAssertTrue(wentBack == .resetRequired(.waterMarkWentBack), "SM5 asOfSeq 小于游标 ⇒ 判定水位倒退")
-    XCTAssertTrue(idempotent.frontier == cursorBefore, "SM5 判定本身不动游标")
-
-    // MARK: SM6 游标作废
-
-    _ = idempotent.beginRequest()
-    let voided = idempotent.apply(.refused(Refusal(code: "resync-required", message: "since cannot exist")))
-    XCTAssertTrue(voided == .resetRequired(.cursorVoid), "SM6 resync-required ⇒ 判定游标作废")
-    idempotent.reset()
-    XCTAssertTrue(idempotent.frontier == 0 && idempotent.events.isEmpty, "SM6 重置后丢弃游标与视图，以 0 重来")
-
-    // 其它错误码只是拒绝，不要求重置。
-    _ = idempotent.beginRequest()
-    let other = idempotent.apply(.refused(Refusal(code: "unknown-session", message: "no such session")))
-    XCTAssertTrue(other == .refused(code: "unknown-session"), "SM6 其它错误码只作拒绝")
-
-    // MARK: SM7 投递失败
-
-    var fragile = SessionMirror()
-    _ = fragile.beginRequest()
-    _ = fragile.apply(snapshot(3, [event(0), event(1), event(2)]))
-    let intactEvents = fragile.events
-    let intactCursor = fragile.frontier
-
-    _ = fragile.beginRequest()
-    let incomplete = fragile.apply(.transportFailed)
-    XCTAssertTrue(incomplete == .failed, "SM7 传输失败判定为失败")
-    XCTAssertTrue(fragile.events == intactEvents, "SM7 视图不含半截数据")
-    XCTAssertTrue(fragile.frontier == intactCursor, "SM7 游标不动")
-
-    // MARK: SM8 单飞
-
-    var single = SessionMirror()
-    XCTAssertTrue(single.beginRequest(), "SM8 第一次发起成功")
-    XCTAssertTrue(!single.beginRequest(), "SM8 在途时第二次发起被拒绝")
-    _ = single.apply(snapshot(1, [event(0)]))
-    XCTAssertTrue(single.beginRequest(), "SM8 响应返回后可以再次发起")
-
-    // 在途时再发起被拒，也不得产生第二次合并 —— 用「被拒的请求没有响应可合并」体现。
-    XCTAssertTrue(single.events.count == 1, "SM8 被拒的那次没有改动视图")
+    // 事件不是对某次请求的回应 —— 翻页在途时它不该被闸门挡住，也不该松开那个闸门。
+    var paging = SessionMirror()
+    _ = paging.open(with: window(0, 2, [event(0), event(1)]))
+    XCTAssertTrue(paging.beginRequest(), "翻页拿到发起权")
+    XCTAssertTrue(paging.append(event(2)) == .merged(added: 1), "在途时事件照常并进")
+    XCTAssertTrue(paging.events.map(\.seq) == [0, 1, 2], "事件进得去")
+    XCTAssertFalse(paging.beginRequest(), "事件不松开翻页的闸门")
 
     // MARK: SM9 打开会话：窗口替换整个视图，之后接着追新增
 
@@ -161,7 +91,7 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertTrue(opened.windowStart == 1 && opened.hasMore, "SM9 窗口起点与「还有更早的」都记下了")
     XCTAssertTrue(opened.frontier == 4, "SM9 位置落在窗口末尾，追新增从这里开始")
     XCTAssertTrue(opened.beginRequest(), "SM9 打开后可以继续发起")
-    XCTAssertTrue(opened.apply(snapshot(5, [event(4)])) == .merged(added: 1), "SM9 追新增只并进新的那部分")
+    XCTAssertTrue(opened.append(event(4)) == .merged(added: 1), "SM9 追新增续在窗口之后")
     XCTAssertTrue(opened.events.map(\.seq) == [1, 2, 3, 4], "SM9 新事件续在窗口之后")
 
     // MARK: SM10 再来一次「打开」是替换，不是叠加
@@ -266,8 +196,6 @@ final class SessionMirrorTests: XCTestCase {
                   "SM19 两段之间有洞 —— 本地那段本身仍是真的，不算否定位置")
     XCTAssertTrue(ResetReason.waterMarkWentBack.invalidatesLocalContent == true,
                   "SM19 服务端给的位置比本地还靠前 ⇒ 本地位置被否定")
-    XCTAssertTrue(ResetReason.cursorVoid.invalidatesLocalContent == true,
-                  "SM19 服务端明确说这个位置不存在 ⇒ 本地位置被否定")
 
     // MARK: SM20 「未接上」的说明不被一次接得上的重连抹掉
 

@@ -74,6 +74,43 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertEqual((args["_request"] as? [String: Any])?.isEmpty, true, "本客户端做全量读，不带 cursor")
     }
 
+    /// 判据 7：分页请求的容器名与水位。
+    ///
+    /// - 容器是 `request`（宿主的形参名），里面四组水位 + 窗口；
+    /// - `throughSeq` 是**含端**的切点，`beforeSeq` 是**排他**的下界 —— 两个都发，各管一件事；
+    /// - 窗口参数与打开会话那一组是同一份（`HistoryWindow.standard`），不是各写一遍。
+    func testThePageRequestPinsTheCutUnderTheHostsContainerName() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/page": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"records":[],"cursor":12,"hasMore":false}}}"#
+            ),
+        ])
+
+        let page = try await readPage(client(), sessionId: "s-1", throughSeq: 12, beforeSeq: 5)
+        XCTAssertEqual(page.cursor, 12, "含端切点原样回来")
+        XCTAssertFalse(page.hasMore)
+        XCTAssertTrue(page.records.isEmpty)
+
+        let sent = try XCTUnwrap(ScriptedURLProtocol.bodies["session/page"], "这一发没到达 session/page")
+        let body = try XCTUnwrap(sent.first, "没有收到请求体")
+        XCTAssertEqual(body["method"] as? String, "session/page")
+        let payload = try XCTUnwrap(body["payload"] as? [String: Any])
+        let args = try XCTUnwrap(payload["args"] as? [String: Any])
+        XCTAssertEqual(Set(args.keys), ["request"], "参数在 `request` 里 —— 少一层就是 invalid-request")
+
+        let request = try XCTUnwrap(args["request"] as? [String: Any])
+        XCTAssertEqual(Set(request.keys), ["address", "throughSeq", "beforeSeq", "maxMessages", "turnWindow"],
+                       "水位与窗口五键，一个不多一个不少")
+        XCTAssertEqual(request["throughSeq"] as? Int, 12, "切点原样带回（含端）")
+        XCTAssertEqual(request["beforeSeq"] as? Int, 5, "下界是本地窗口起点（排他）")
+        XCTAssertEqual(request["maxMessages"] as? Int, HistoryWindow.standard.maxMessages,
+                       "窗口与打开会话同一份 —— 两处各写一遍就会长短不同")
+        let address = try XCTUnwrap(request["address"] as? [String: Any])
+        XCTAssertEqual(address["kind"] as? String, "session")
+        XCTAssertEqual(address["sessionId"] as? String, "s-1")
+    }
+
     /// 判据 7 的前半：`details` 要原样解出来。
     func testRefusalCarriesDetails() async throws {
         ScriptedURLProtocol.reset(replies: [

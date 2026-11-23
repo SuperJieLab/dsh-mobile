@@ -23,36 +23,23 @@ typealias StreamId = String
 /// 谁也不会红。这里的四个数就是上游浏览器客户端用的那一组。
 struct FollowRequest: Encodable {
 
-    /// 会话地址 —— 带 `kind` 判别字段的联合，不是裸 `sessionId`：将来加一种地址
-    /// （`subagent`）时，改的是这一处判别，而不是每个调用点的字段名。
-    struct Address: Encodable {
-        let kind = "session"
-        let sessionId: String
-    }
-
-    /// 「走到后可停的下限」与「必须停的轮数」—— 与上游同一组数。
-    struct TurnWindow: Encodable {
-        let minMessages: Int
-        let minTurns: Int
-    }
-
-    let address: Address
+    let address: SessionAddress
     /// 打开即激活这个会话（宿主的 `promote`）。**不是可选项**：不带它，会话只被被动观察 ——
     /// 手机上看着一切正常，一发消息就是「会话不在」。
     let activate: Bool
     /// 要进程内的未定稿帧（进行中的 assistant 输出）。
     let assistantStream: Bool
     let maxMessages: Int
-    let turnWindow: TurnWindow
+    let turnWindow: HistoryWindow.TurnWindow
 
-    /// 上游浏览器客户端打开会话时用的那一组（`HISTORY_PAGE_OPTIONS`）。
+    /// 打开会话用的那一组窗口参数 —— 与翻页**同一份**（`HistoryWindow.standard`）。
     static func opening(sessionId: String) -> FollowRequest {
         FollowRequest(
-            address: Address(sessionId: sessionId),
+            address: SessionAddress(sessionId: sessionId),
             activate: true,
             assistantStream: true,
-            maxMessages: 500,
-            turnWindow: TurnWindow(minMessages: 50, minTurns: 2)
+            maxMessages: HistoryWindow.standard.maxMessages,
+            turnWindow: HistoryWindow.standard.turnWindow
         )
     }
 }

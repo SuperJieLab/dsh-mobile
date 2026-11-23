@@ -27,6 +27,34 @@ final class SourceLevelTests: XCTestCase {
         try String(contentsOf: url, encoding: .utf8)
     }
 
+    // MARK: - 打开一屏只有一个来源
+
+    /// `SessionFollowing` 里没有「等了几秒就改走 HTTP」的兜底。
+    ///
+    /// 从前这里有一个 2.5 秒的定时器：WS 迟迟不给窗口就调一次 `sync()`，把那一次 HTTP
+    /// 读到的窗口并进同一个镜像。两条来源各自算一份水位，于是「我读到 12」与「我读到 13」
+    /// 迟早同时存在，而两者都不报错。第 2 期起打开帧是唯一来源，兜底连同 `readSnapshot`
+    /// 一起删了 —— 这条判据守的是它别以别的名字长回来。
+    ///
+    /// **判据是「没有第二条取数路」这件事本身**，所以扫的是「取数」的标记：定时器
+    /// （`Task.sleep` / `Timer`）、HTTP 客户端（`RpcClient` / `readSnapshot` / `readPage`）、
+    /// 以及那个闭包（`syncNow`）。`start()` 必须在（正控：切块没切错）。
+    func testTheSecondScreenNeverComesOverHTTP() throws {
+        let text = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionFollowing.swift"))
+        XCTAssertTrue(text.contains("func start()"), "读到的不是流开关 —— 先怀疑路径推算")
+
+        var hits: [String] = []
+        for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            let code = String(line)
+            for banned in ["Task.sleep", "Timer", "RpcClient", "readSnapshot", "readPage", "syncNow"] {
+                if code.contains(banned) { hits.append(":\(number + 1) \(banned)") }
+            }
+        }
+        XCTAssertEqual(hits, [],
+                       "流开关里又出现了第二条取数路 —— 一屏只有一个来源（判据 12）")
+    }
+
     // MARK: - 收帧链路只解一次
 
     /// 收帧链路上 `JSONDecoder(` 只出现在形状层，且只有一处。

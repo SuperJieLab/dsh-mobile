@@ -66,9 +66,7 @@ final class SessionSync {
     private lazy var followingStorage = SessionFollowing(
         makeStream: { [unowned self] in
             self.factory.makeStream(SessionBehavior(owner: self))
-        },
-        isTranscriptEmpty: { [unowned self] in self.mirror.isEmpty },
-        syncNow: { [unowned self] in await self.sync() }
+        }
     )
     var following: SessionFollowing { followingStorage }
 
@@ -93,6 +91,8 @@ final class SessionSync {
     private var controlSubscription: (() -> Void)?
     /// 内存里的镜像；视图重建即重取窗口。
     private var mirror = SessionMirror()
+    /// 同一时刻只允许一次读请求（翻页）。从前还要挡住「同步 + 翻页」并发 ——
+    /// 同步那条路随 HTTP 兜底一起退场了。
     private var syncInFlight = false
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
@@ -197,90 +197,6 @@ final class SessionSync {
 
     // MARK: - 读侧编排
 
-    /// 同步一次：空则先取窗口，然后从末尾追到最新。幂等。
-    func sync() async {
-        guard !syncInFlight else { return }
-        syncInFlight = true
-        defer { syncInFlight = false }
-        // 与 `loadOlder` 对照用：debug 级，`DSH_LOG_DEBUG=1` 才出来（这条可能一秒一次）。
-        Log.debug(Log.Module.session, "sync start",
-                  ["events": String(mirror.events.count), "empty": String(mirror.isEmpty)])
-        statusBox.set(.syncing)
-
-        var added = 0
-        var recovered = false
-
-        // 打开会话：手里什么都没有时，先向服务端要一个最新的窗口。
-        if mirror.isEmpty {
-            switch await openLatest() {
-            case .merged(let count):
-                added += count
-            case .caughtUp:
-                break
-            case .resetRequired:
-                // 窗口本身对不上，没有比它更早的状态可退。
-                resetMirror()
-                recovered = true
-            case .refused(let code):
-                statusBox.set(.failed(step: .opening, cause: .refusal(code: code)))
-                refreshView()
-                return
-            case .failed:
-                statusBox.set(.failed(step: .opening, cause: .transport))
-                refreshView()
-                return
-            }
-        }
-
-        // 追新增：从镜像的末尾一直拉到服务端没有更多。
-        while true {
-            guard mirror.beginRequest() else { break }
-            let outcome = await fetchSnapshot()
-            let more = hasMore(in: outcome)
-
-            switch mirror.apply(outcome) {
-            case .merged(let count):
-                added += count
-
-            case .caughtUp:
-                break
-
-            case .resetRequired(let reason):
-                // 重置只做一次：再要求重置说明不会收敛。
-                guard !recovered else {
-                    statusBox.set(.failed(step: .syncing, cause: .resetLoop(reason)))
-                    refreshView()
-                    return
-                }
-                recovered = true
-                resetMirror()
-                // 编排自己执行的重置：保留无法收敛，一律重置并如实记「已重置」。
-                noteReset(reason)
-                statusBox.set(.done(added: added, recovered: true))
-                refreshView()
-                return
-
-            case .refused(let code):
-                statusBox.set(.failed(step: .syncing, cause: .refusal(code: code)))
-                refreshView()
-                return
-
-            case .failed:
-                // 传输失败：视图保持原样，只把状态说清楚。
-                statusBox.set(.failed(step: .syncing, cause: .transport))
-                refreshView()
-                return
-            }
-
-            if !more { break }
-        }
-
-        // 干净走完 = 已对齐，「未接上」到此为止。
-        clearNotice()
-        statusBox.set(.done(added: added, recovered: recovered))
-        refreshView()
-    }
-
     /// 往回翻一段更早的历史；一页没有可显示的内容时接着往前（上限 3 页）。
     func loadOlder() async {
         guard !syncInFlight, mirror.hasMore else { return }
@@ -332,7 +248,9 @@ final class SessionSync {
     private func fetchOlderPage() async -> Verdict? {
         guard mirror.beginRequest() else { return nil }
         do {
-            let page = try await readPage(client, sessionId: sessionId, beforeSeq: mirror.windowStart)
+            let page = try await readPage(client, sessionId: sessionId,
+                                          throughSeq: mirror.throughSeq,
+                                          beforeSeq: mirror.windowStart)
             return mirror.prepend(page)
         } catch let error as RpcClientError {
             mirror.abandonRequest()
@@ -390,9 +308,7 @@ final class SessionSync {
 
     private func applyOpening(_ opening: SnapshotFrame) {
         lastFrameAt = Date()
-        // WS 自己把窗口送到了，HTTP 兜底取消，免得两秒后又拉一次。
-        following.cancelFirstScreenFallback()
-        // 手空着时等价于「打开」，重连时走「重对齐」：保留本地更早的部分。
+        // 手空着时等价于「打开」，重连时走「重对齐」：保留更早的部分。
         let wasEmpty = mirror.isEmpty
         let verdict = mirror.realign(with: SessionWindow(opening: opening))
 
@@ -432,8 +348,7 @@ final class SessionSync {
                 resetMirror()
                 // 清空之后必须刷一次：否则屏幕留着上一段窗口的内容，而引擎已经没有它了。
                 refreshView()
-                // 镜像与引擎都空了，而这条流不会再送旧窗口。重开流，让服务端送一份新 opening ——
-                // 不走 `sync()`：它在 `loadOlder` 在途时会被单飞闸直接挡回，屏幕就停在空态。
+                // 镜像与引擎都空了，而这条流不会再送旧窗口。重开流，让服务端送一份新 opening。
                 //
                 // 必须留到帧处理返回之后再做：在 `applyOpening` 里同步重开，外层随后仍拿**旧帧**的
                 // `establishes` 去结算新代次，会把新开流的超时守卫当场关掉。
@@ -456,24 +371,10 @@ final class SessionSync {
         notice = noticeState.notice
     }
 
-    /// 编排自己重置过之后改记「已重置」（`sync()` 的收场，见 `ResyncNoticeState.didReset`）。
-    private func noteReset(_ reason: ResetReason) {
-        noticeState.didReset(reason)
-        notice = noticeState.notice
-    }
-
-    /// 重新建立 —— 告知唯一的清除点（一次成功的重新同步、或离开再进入会话）。
-    private func clearNotice() {
-        noticeState.clear()
-        notice = noticeState.notice
-    }
-
     private func applyLiveEvent(_ event: SessionEvent) {
         lastFrameAt = Date()
-        // 一条事件 = 一次覆盖到 seq+1 的快照；上游 gap-free 是契约，幂等照旧生效。
-        let verdict = mirror.apply(.received(
-            SessionSnapshot(asOfSeq: event.seq + 1, hasMore: false, events: [event])
-        ))
+        // 上游 gap-free 是契约，重复与跳号各有一种处置（见 `SessionMirror.append`）。
+        let verdict = mirror.append(event)
         // 「未接上」之后事件进不来；告知要跟上现状，否则界面静止却看起来正常。
         if case .resetRequired = verdict { observeNotice(verdict) }
         // 模型选择的两类事件照同一条流进来 —— 状态机自己判水位与顺序。
@@ -614,45 +515,6 @@ final class SessionSync {
     }
 
     // MARK: - 一次请求
-
-    /// 取最新的一个窗口（打开会话）。
-    private func openLatest() async -> Verdict {
-        guard mirror.beginRequest() else { return .caughtUp }
-        do {
-            let page = try await readPage(client, sessionId: sessionId)
-            return mirror.open(with: page)
-        } catch let error as RpcClientError {
-            mirror.abandonRequest()
-            if case .refused(let failure) = error { return .refused(code: failure.code) }
-            return .failed
-        } catch {
-            mirror.abandonRequest()
-            return .failed
-        }
-    }
-
-    /// 从镜像的末尾往前拉一块。
-    private func fetchSnapshot() async -> Outcome {
-        do {
-            let snapshot = try await readSnapshot(client, sessionId: sessionId, since: mirror.frontier)
-            // 协议回应就是状态机的输入形状 —— 同形的东西只有一份，不在此逐字段搬。
-            return .received(snapshot)
-        } catch let error as RpcClientError {
-            mirror.abandonRequest()
-            if case .refused(let failure) = error {
-                return .refused(Refusal(code: failure.code, message: failure.message))
-            }
-            return .transportFailed
-        } catch {
-            mirror.abandonRequest()
-            return .transportFailed
-        }
-    }
-
-    private func hasMore(in outcome: Outcome) -> Bool {
-        if case .received(let snapshot) = outcome { return snapshot.hasMore }
-        return false
-    }
 
     private func refreshView() {
         feedEngine()

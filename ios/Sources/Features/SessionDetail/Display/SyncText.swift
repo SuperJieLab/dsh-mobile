@@ -89,7 +89,6 @@ extension ResetReason {
         switch self {
         case .gap: return "中间有事件没拿到"
         case .waterMarkWentBack: return "服务端给的位置比本地还靠前"
-        case .cursorVoid: return "本地记的位置在 Mac 上不存在了"
         }
     }
 }
