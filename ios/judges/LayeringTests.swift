@@ -734,7 +734,7 @@ final class LayeringTests: XCTestCase {
     /// （漏报方向，靠评审）。
     func testWireShapesAreDeclaredOnce() throws {
         let shapes = ["InboundFrame", "MuxOpenFrame", "MuxCancelFrame", "FollowRequest",
-                      "OpeningFrame", "FailurePayload"]
+                      "SnapshotFrame", "FailurePayload", "SessionWindow", "SessionRecord"]
         var homes: [String: [String]] = [:]
 
         for file in swiftFiles(under: sourcesRoot) {
@@ -1714,31 +1714,31 @@ final class LayeringTests: XCTestCase {
         XCTAssertEqual(hits, [], "判读器引用了连接层或网络类型：\(hits)")
     }
 
-    /// `OpeningFrame` 的类型体不认识 `SessionPage` —— 线上形状不认识状态机的输入。
+    /// `SnapshotFrame` 的类型体不认识 `SessionWindow` —— 线上形状不认识状态机的输入。
     ///
-    /// 认的是**类型体**（`struct OpeningFrame {` 到它的右花括号），不是整个文件：同一个文件里
+    /// 认的是**类型体**（`struct SnapshotFrame {` 到它的右花括号），不是整个文件：同一个文件里
     /// `MuxOpenFrame` 的注释可以提到窗口。判据带正控：取到的类型体里必须有 `cursor`，
-    /// 否则说明切块切错了位置，此时「零处 SessionPage」是假绿。
+    /// 否则说明切块切错了位置，此时「零处 SessionWindow」是假绿。
     ///
     /// 盲区：类型体里若声明同名嵌套结构，切块会提前结束（漏报方向）；这一条靠评审看。
-    func testOpeningFrameDoesNotKnowSessionPage() throws {
+    func testSnapshotFrameDoesNotKnowSessionWindow() throws {
         let text = try String(contentsOf: sourcesRoot.appendingPathComponent(
             "Core/Gateway/LongConnection/Wire/MuxFrames.swift"), encoding: .utf8)
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard let start = lines.firstIndex(where: { $0 == "struct OpeningFrame {" }) else {
-            return XCTFail("没找到顶格的 `struct OpeningFrame {` —— 先怀疑名字或路径")
+        guard let start = lines.firstIndex(where: { $0 == "struct SnapshotFrame {" }) else {
+            return XCTFail("没找到顶格的 `struct SnapshotFrame {` —— 先怀疑名字或路径")
         }
         // 结束行取**顶格**的 `}`：嵌套类型与函数的右花括号都有缩进，按行首判才切得准。
         guard let end = lines[start...].firstIndex(where: { $0 == "}" }) else {
-            return XCTFail("`struct OpeningFrame` 的类型体没有结束行 —— 先怀疑切块")
+            return XCTFail("`struct SnapshotFrame` 的类型体没有结束行 —— 先怀疑切块")
         }
         let body = lines[start...end]
 
         XCTAssertTrue(body.contains { $0.contains("let cursor: Int") },
                       "切出来的类型体里没有 `let cursor: Int` —— 切块位置错了，下面的零命中不算证据")
-        for (offset, line) in body.enumerated() where contains("SessionPage", in: line) {
-            XCTFail("Mux.swift:\(start + offset + 1) 的 OpeningFrame 类型体里出现 SessionPage"
-                    + " —— 投影归 SessionPage 自己（init(opening:)），形状只交字段")
+        for (offset, line) in body.enumerated() where contains("SessionWindow", in: line) {
+            XCTFail("Mux.swift:\(start + offset + 1) 的 SnapshotFrame 类型体里出现 SessionWindow"
+                    + " —— 窗口归 `SessionWindow` 自己（`init(opening:)`），形状只交字段")
         }
     }
 
@@ -2067,10 +2067,10 @@ final class LayeringTests: XCTestCase {
         return false
     }
 
-    /// 状态机不另声明窗口 / 快照的形状 —— 它引用协议里的 `SessionPage` / `SessionSnapshot`。
+    /// 状态机不另声明窗口 / 快照的形状 —— 它引用协议里的 `SessionWindow` / `SessionSnapshot`。
     ///
     /// **只查「不许声明」，不查「有没有用上」。** 后者看着更严，实际是弱检查：入口签名里
-    /// 写着 `SessionPage` 就够让「出现过」为真，而被替换成本地同形类型时（真正的失败模式）
+    /// 写着 `SessionWindow` 就够让「出现过」为真，而被替换成本地同形类型时（真正的失败模式）
     /// 那三个签名往往还在 —— 于是它既抓不到失败模式，又会把注释里的名字算成证据。
     /// 曾写过一个用 `text.contains` 的版本，被文件头注释满足 —— 同一个洞复发过两次；
     /// 改成逐代码行后读数会真，但结论仍是「注定为真」—— 所以整段删掉。
@@ -3213,7 +3213,7 @@ final class LayeringTests: XCTestCase {
     /// 外层名字本身就在集合里 —— 所以只取顶层不会漏。
     /// 收集实现层声明的类型名。
     ///
-    /// 跳过各层下的 `Wire/`：那里面是两端契约形状（`OpeningFrame` 等），不是实现 ——
+    /// 跳过各层下的 `Wire/`：那里面是两端契约形状（`SnapshotFrame` 等），不是实现 ——
     /// 契约之间互相引用是允许的，把它们算进来会让根 `Wire/` 的合法引用变成违规。
     private func declaredTypes(under directories: [URL], topLevelOnly: Bool = false) throws -> [String] {
         var names: [String] = []

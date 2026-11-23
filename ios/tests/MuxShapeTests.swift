@@ -207,11 +207,11 @@ final class MuxShapeTests: XCTestCase {
 
     // MARK: - O2：窗口投影不是逐字段复制
 
-    /// `cursor` 是**含端**上界：`asOfSeq` 必须等于 `cursor + 1`（「下一个期望的 seq」）。
+    /// 打开帧就是第一屏：三个字段一一对应，窗口起点由首条记录**算出来**而不是由服务端给。
     ///
-    /// 同时钉住窗口起点：它取首条记录的 `seq`（网关不再自己算 `pageStart`），
-    /// 与 `cursor` 取不同的值 —— 两者相等时写错也看不出来。
-    func testPageProjectsTheOpeningCursorPlusOneOntoAsOfSeq() throws {
+    /// 样本里 `cursor`（9）与首条记录的 `seq`（7）取不同的值 —— 两者相等时，
+    /// 「起点取错了字段」这条写错也看不出来。
+    func testTheOpeningBecomesTheFirstWindow() throws {
         let data = frame("""
         {"header":{"version":1,"id":"s-1","createdAt":1700000000000,"isSeeded":false},
          "cursor":9,"hasMore":true,
@@ -220,11 +220,11 @@ final class MuxShapeTests: XCTestCase {
         """)
         let opening = try XCTUnwrap(decodeOpening(data))
 
-        let page = SessionPage(opening: opening)
+        let window = SessionWindow(opening: opening)
 
-        XCTAssertEqual(page.asOfSeq, 10, "含端的 cursor 换成排他的 asOfSeq：+1，只在这一处换算")
-        XCTAssertEqual(page.pageStart, 7, "窗口起点是首条记录的 seq")
-        XCTAssertTrue(page.hasOlder, "hasMore 直传")
-        XCTAssertEqual(page.events.map(\.seq), [7], "records 剥层成事件")
+        XCTAssertEqual(window.cursor, 9, "含端切点原样——换算成「下一个期望」是镜像入口的事")
+        XCTAssertEqual(window.start, 7, "窗口起点是首条记录的 seq")
+        XCTAssertTrue(window.hasMore, "hasMore 直传")
+        XCTAssertEqual(window.events.map(\.seq), [7], "records 剥层成事件")
     }
 }

@@ -120,31 +120,28 @@ struct SessionSnapshot: Equatable {
     var model: ModelSelection? = nil
 }
 
-/// 一段往回读的窗口。与 `SessionSnapshot` 是两个方向：快照从 `since` 往后走，窗口
-/// 从某个位置往回走。打开会话用后者取最近一段，之后用前者追新增 —— 客户端**不需要跨会话记住
-/// 任何位置**，冷启动永远从「现在的最新一段」开始。
-struct SessionPage: Equatable {
-    /// 窗口首个事件的 `seq` —— 即下一次往回翻时的 `beforeSeq`。
-    let pageStart: Int
-    /// 窗口末尾（不含）。与 `SessionSnapshot.asOfSeq` 同义。
-    let asOfSeq: Int
-    /// 窗口之前还有事件吗。`false` 表示已经到日志开头。
-    let hasOlder: Bool
-    let events: [SessionEvent]
+/// 一屏历史 —— 打开帧与分页应答**共用同一个类型**。
+///
+/// 三个字段各有分工：`records` 是这一屏；`cursor` 是**含端**的切点（宿主覆盖到哪）；
+/// `hasMore` 说更早还有没有。**没有 `pageStart`**：窗口起点由首条记录的 `seq` 给出 ——
+/// 服务端不再替我们算一个，两份「这一屏从哪开始」迟早分叉。
+struct SessionWindow: Equatable {
+    let records: [SessionRecord]
+    let cursor: Int
+    let hasMore: Bool
+
+    /// 窗口内的事件（剥掉记录外面那层判别字段）。视图只认事件 —— 「这一条是不是事件」
+    /// 在解码层已经判过了。
+    var events: [SessionEvent] { records.map(\.event) }
+
+    /// 窗口起点：首条记录的 `seq`。空窗口取 `cursor + 1` —— 与「下一个期望的 seq」相等，
+    /// 于是「往前翻」没有下界可传，也不该发起。
+    var start: Int { records.first?.event.seq ?? cursor + 1 }
 }
-extension SessionPage {
-    /// 由 opening 帧的字段拼出窗口 —— 这条流的打开就是一次「最近一段」的窗口。
-    /// `cursor`（订阅流的说法：已读到的位置）与 `asOfSeq`（窗口末尾，不含）是同一个量，
-    /// 改名只在这里发生一次。归这里是因为 `asOfSeq` 属于 `SessionPage`：谁持有目标名字，
-    /// 谁负责翻译。
+
+extension SessionWindow {
+    /// 打开帧就是第一屏：三个字段一一对应（`records` 已经是剥层前的形状）。
     init(opening: SnapshotFrame) {
-        // 三个换算都只在这里发生一次（第 2 期起打开帧是上游形状）：
-        // 窗口起点是首条记录的 seq（网关不再自己算 `pageStart`）、末尾是 `cursor + 1`
-        // （上游 `cursor` 含端）、`hasMore` 就是「上面还有」。
-        let events = opening.records.map(\.event)
-        self.init(pageStart: events.first?.seq ?? opening.cursor + 1,
-                  asOfSeq: opening.cursor + 1,
-                  hasOlder: opening.hasMore,
-                  events: events)
+        self.init(records: opening.records, cursor: opening.cursor, hasMore: opening.hasMore)
     }
 }

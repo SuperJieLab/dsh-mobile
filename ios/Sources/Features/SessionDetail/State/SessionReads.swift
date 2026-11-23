@@ -41,23 +41,22 @@ func readPage(
     _ client: RpcClient,
     sessionId: String,
     beforeSeq: Int? = nil,
-) async throws -> SessionPage {
+) async throws -> SessionWindow {
     let response: PageResponse = try await client.perform(
         PageRequest(sessionId: sessionId, beforeSeq: beforeSeq)
     )
     // 同上：缺载荷抛错。
-    guard let pageStart = response.pageStart,
-          let asOfSeq = response.asOfSeq,
+    guard let asOfSeq = response.asOfSeq,
           let hasOlder = response.hasOlder,
           let events = response.events else {
-        throw RpcClientError.malformedResponse(
-            detail: "pageStart / asOfSeq / hasOlder / events"
-        )
+        throw RpcClientError.malformedResponse(detail: "asOfSeq / hasOlder / events")
     }
-    return SessionPage(
-        pageStart: pageStart,
-        asOfSeq: asOfSeq,
-        hasOlder: hasOlder,
-        events: events
+    // 这条 HTTP 读法正在退场（流通道的打开帧 + `session/page` 已取代它）：
+    // 它的水位是**排他**的 `asOfSeq`，而 `SessionWindow` 用**含端**的 `cursor` ——
+    // 换算只在这一处，删它的时候一起消失。
+    return SessionWindow(
+        records: events.map { SessionRecord(type: "event", event: $0) },
+        cursor: asOfSeq - 1,
+        hasMore: hasOlder
     )
 }

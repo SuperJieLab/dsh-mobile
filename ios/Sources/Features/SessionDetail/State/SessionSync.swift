@@ -33,7 +33,7 @@ final class SessionSync {
     /// 视图里的事件条数（消息只是其中一部分）。
     private(set) var eventCount = 0
     /// 还能往回翻吗。为真时界面给出入口。
-    private(set) var hasOlder = false
+    private(set) var hasMore = false
     /// 「对不上」的告知 —— 底部固定面的数据源；判定在 `ResyncNoticeState`。
     private(set) var notice: ResyncNotice?
     /// 正在往回翻页 —— 与状态行分开：界面要的是「顶部在等」。
@@ -280,10 +280,10 @@ final class SessionSync {
 
     /// 往回翻一段更早的历史；一页没有可显示的内容时接着往前（上限 3 页）。
     func loadOlder() async {
-        guard !syncInFlight, mirror.hasOlder else { return }
+        guard !syncInFlight, mirror.hasMore else { return }
         // 翻页低频，打 info：真机上要能对照「我没点它却加载了」。
         Log.info(Log.Module.session, "loadOlder",
-                 ["seq": String(mirror.pageStart), "count": String(mirror.events.count)])
+                 ["seq": String(mirror.windowStart), "count": String(mirror.events.count)])
         syncInFlight = true
         isPagingOlder = true
         defer {
@@ -321,7 +321,7 @@ final class SessionSync {
 
             refreshView()
             // 这一页真的多了可显示的东西，或者已经到日志开头 —— 收工。
-            if nodes.count > nodesBefore || !mirror.hasOlder { return }
+            if nodes.count > nodesBefore || !mirror.hasMore { return }
         }
     }
 
@@ -329,7 +329,7 @@ final class SessionSync {
     private func fetchOlderPage() async -> Verdict? {
         guard mirror.beginRequest() else { return nil }
         do {
-            let page = try await readPage(client, sessionId: sessionId, beforeSeq: mirror.pageStart)
+            let page = try await readPage(client, sessionId: sessionId, beforeSeq: mirror.windowStart)
             return mirror.prepend(page)
         } catch let error as RpcClientError {
             mirror.abandonRequest()
@@ -391,7 +391,7 @@ final class SessionSync {
         following.cancelFirstScreenFallback()
         // 手空着时等价于「打开」，重连时走「重对齐」：保留本地更早的部分。
         let wasEmpty = mirror.isEmpty
-        let verdict = mirror.realign(with: SessionPage(opening: opening))
+        let verdict = mirror.realign(with: SessionWindow(opening: opening))
 
         // 一条新流开始：上一代扣着没点名的定稿一律作废 —— 它们要么会作为普通持久事件重来，
         // 要么属于已经结束的那一轮。留着只会让 feedEngine 永久跳过它们（静默少一行）。
@@ -412,7 +412,7 @@ final class SessionSync {
         // 未定稿基线：opening 带进行中的 attempt 就恢复草稿槽位（基线内容变成事件交给引擎），
         // 没有就清场。基线是服务端此刻的权威，本地那份一律丢掉。
         if let baseline = opening.assistantStream {
-            for event in transient.apply(baseline: baseline, cursor: max(0, mirror.cursor - 1)) {
+            for event in transient.apply(baseline: baseline, cursor: max(0, mirror.frontier - 1)) {
                 conversation.append(event)
             }
             refreshSnapshot()
@@ -503,7 +503,7 @@ final class SessionSync {
         lastFrameAt = Date()
         let before = transient
         // 小数序号要落在「最后一条持久事件之后」，所以把当前游标交给通道。
-        switch transient.apply(frame: frame, cursor: max(0, mirror.cursor - 1)) {
+        switch transient.apply(frame: frame, cursor: max(0, mirror.frontier - 1)) {
         case .broken:
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
             Log.warn(Log.Module.session, "TransientChannel broken", [
@@ -631,7 +631,7 @@ final class SessionSync {
     /// 从镜像的末尾往前拉一块。
     private func fetchSnapshot() async -> Outcome {
         do {
-            let snapshot = try await readSnapshot(client, sessionId: sessionId, since: mirror.cursor)
+            let snapshot = try await readSnapshot(client, sessionId: sessionId, since: mirror.frontier)
             // snapshot 回应带着「下一轮用什么」，只有这一路能补上。
             models.absorb(baseline: snapshot.model)
             // 协议回应就是状态机的输入形状 —— 同形的东西只有一份，不在此逐字段搬。
@@ -657,7 +657,7 @@ final class SessionSync {
         feedEngine()
         refreshSnapshot()
         eventCount = mirror.events.count
-        hasOlder = mirror.hasOlder
+        hasMore = mirror.hasMore
     }
 
     /// 镜像清空时引擎必须跟着清 —— 否则它保留的是上一段窗口的身份，
@@ -665,7 +665,7 @@ final class SessionSync {
     private func resetMirror() {
         // 屏幕会「整列重挂」的那个入口。记一条，否则现象只有用户看得见。
         Log.info(Log.Module.session, "镜像重置：引擎随之清空",
-                 ["events": String(mirror.events.count), "hasOlder": String(mirror.hasOlder)])
+                 ["events": String(mirror.events.count), "hasMore": String(mirror.hasMore)])
         mirror.reset()
         conversation = SessionSync.makeAssembler()
         builder = ChatSnapshotBuilder()

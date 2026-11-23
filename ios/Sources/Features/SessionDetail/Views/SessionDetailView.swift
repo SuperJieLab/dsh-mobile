@@ -87,7 +87,7 @@ struct SessionDetailView: View {
             List {
                 // 翻页是自动的，这里只画「正在拉」的占位。给三行骨架而不是转圈：
                 // 一片空白加个小转圈会让人以为到头了。
-                if detail.sync.hasOlder && detail.sync.isPagingOlder {
+                if detail.sync.hasMore && detail.sync.isPagingOlder {
                     ForEach(0..<3, id: \.self) { _ in
                         RoundedRectangle(cornerRadius: 14)
                             .fill(Color(uiColor: .secondarySystemBackground))
@@ -149,7 +149,7 @@ struct SessionDetailView: View {
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.contentInsets.top <= Self.topTriggerDistance
             } action: { wasNear, isNear in
-                guard isNear, !wasNear, detail.sync.hasOlder, !detail.sync.isPagingOlder else { return }
+                guard isNear, !wasNear, detail.sync.hasMore, !detail.sync.isPagingOlder else { return }
                 Task { await detail.sync.loadOlder() }
             }
             // 跟随底部之一：谁在带着列表走。程序性滚动（我们自己的 scrollTo）不算。
