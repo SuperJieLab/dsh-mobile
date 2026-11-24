@@ -148,15 +148,29 @@ final class SourceLevelTests: XCTestCase {
     /// 快照的可见节点与消息条数必须是存储值。
     ///
     /// 做成计算属性就是每读一次全量过滤一遍，而视图 body 每帧读三次 —— 代价看不见，
-    /// 只有长会话里叠出来。这条判据认形态：`ChatSnapshot` 里不许有计算型的可见集。
+    /// 只有长会话里叠出来。这条判据认**名字与形态**：两个读口都得是那两行 `let`。
+    ///
+    /// 只写「不许出现 `var visible: [ChatNode] {`」是抓不住它的 —— 那是已经删掉的旧名字，
+    /// 把 `visibleNodes` 改回计算属性时一个字都不命中。所以正面要求 `let` 在场，
+    /// 反面按现在的名字禁 `var`。
     func testSnapshotKeepsItsVisibleHalfStored() throws {
         let file = iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/Conversation/ChatNode.swift")
         let code = try read(file)
         XCTAssertTrue(code.contains("struct ChatSnapshot"), "判据的落点没找对：\(file.path)")
+
+        let stored = ["let visibleNodes: [ChatNode]", "let messageCount: Int"]
+        for needle in stored {
+            XCTAssertTrue(code.contains(needle),
+                          "\(file.lastPathComponent) 少了存储读口「\(needle)」—— 它必须是存储值")
+        }
+
+        let forbidden = ["var visibleNodes", "var messageCount"]
         for (line, text) in Self.codeLines(in: code) {
-            XCTAssertFalse(text.contains("var visible: [ChatNode] {"),
-                           "\(file.lastPathComponent):\(line) 可见节点又变成计算属性了 —— 每帧全量过滤")
+            for computed in forbidden {
+                XCTAssertFalse(text.contains(computed),
+                               "\(file.lastPathComponent):\(line) \(computed) 又把读口变回计算属性了 —— 每帧全量过滤 / 遍历")
+            }
         }
     }
 
