@@ -660,6 +660,10 @@ final class SessionSync {
         pendingChange.absorb(change)
     }
 
+    /// 重导次数 —— **为判据而留的读数**，与引擎那一个计同源。
+    /// 它量的不是耗时，是「这次刷新碰了几格」：全量就是历史长度，增量就是变化量。
+    var buildViewNodeCount: Int { conversation.buildViewNodeCount }
+
     private func refreshSnapshot() {
         // 上一次刷新到这一次之间攒下的变化。**先取再清**：`nodes(forKeys:)` 期间不会再写引擎，
         // 但万一将来有，清空放在取值之后才安全。
