@@ -497,4 +497,58 @@ final class ConversationAssemblerTests: XCTestCase {
         events.append(event(21, "step/start", #"{"turn":3,"step":1}"#))
         return events
     }
+
+    // MARK: - 每次写入报出「变了哪些槽位」
+
+    func testAppendingAUserMessageTouchesExactlyOneSlot() {
+        var engine = assembler()
+        engine.rebuild([event(1, "turn/start", #"{"turn":1}"#)])
+
+        let change = engine.append(
+            event(2, "user/message", #"{"id":"u1","source":{"kind":"user"},"content":[{"type":"text","text":"开"}]}"#)
+        )
+
+        XCTAssertFalse(change.rebuilt, "一条非边界事件说得清自己变了哪些槽位")
+        XCTAssertEqual(change.touched.count, 1, "只有这条消息自己的格子")
+    }
+
+    func testAppendingAnAssistantMessageTouchesTheStepAndTheTurnProcess() {
+        var engine = assembler()
+        engine.rebuild([
+            event(1, "turn/start", #"{"turn":1}"#),
+            event(3, "step/start", #"{"turn":1,"step":1}"#),
+        ])
+
+        let change = engine.append(event(6, "assistant/message",
+                                         #"{"turn":1,"step":1,"message":{"id":"m1","content":[{"type":"text","text":"说明"}]}}"#))
+
+        XCTAssertFalse(change.rebuilt)
+        XCTAssertEqual(change.touched.count, 2,
+                       "一条助手消息同时属于这一轮的过程行与这一格的步骤行")
+    }
+
+    func testAppendingABoundaryEventSaysItCannotNameTheChangeSet() {
+        var engine = assembler()
+        engine.rebuild([
+            event(1, "turn/start", #"{"turn":1}"#),
+            event(3, "step/start", #"{"turn":1,"step":1}"#),
+        ])
+
+        let change = engine.append(event(7, "step/end", #"{"turn":1,"step":1}"#))
+
+        XCTAssertTrue(change.rebuilt,
+                      "边界事件会重建位置索引，改到的是任意槽位 —— 变化集说不清")
+    }
+
+    func testPrependingSaysItCannotNameTheChangeSet() {
+        var engine = assembler()
+        engine.rebuild([event(9, "turn/start", #"{"turn":1}"#)])
+
+        let change = engine.prepend([
+            event(1, "turn/start", #"{"turn":1}"#),
+            event(2, "user/message", #"{"id":"u0","source":{"kind":"user"},"content":[{"type":"text","text":"早"}]}"#),
+        ])
+
+        XCTAssertTrue(change.rebuilt, "前插会重建位置索引")
+    }
 }

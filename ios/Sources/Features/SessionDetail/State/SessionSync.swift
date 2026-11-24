@@ -516,11 +516,11 @@ final class SessionSync {
         case .consumed(let events):
             // 每条 draft 的更新都物化一次会把「每帧 O(n)」放大成「每个 chunk O(n)」。
             // 节奏由定义给：`animationFrame` 合到一帧，其余立刻。
-            var publication = Publication.none
+            var change = Change.none
             for event in events {
-                publication = Publication.maximum(publication, conversation.append(event))
+                change.absorb(conversation.append(event))
             }
-            switch publication {
+            switch change.publication {
             case .none: break
             case .animationFrame: scheduleSnapshot()
             case .immediate: refreshSnapshot()

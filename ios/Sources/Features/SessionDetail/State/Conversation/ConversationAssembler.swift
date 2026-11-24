@@ -53,30 +53,39 @@ struct ConversationAssembler {
     // MARK: - 三条路径
 
     /// 重建整段窗口。打开、重连、缺口修复走这条 —— 身份全部重来，这是「重置」的语义。
-    mutating func rebuild(_ events: [AssemblyEvent]) {
+    @discardableResult
+    mutating func rebuild(_ events: [AssemblyEvent]) -> Change {
         contexts.removeAll()
         inputs.removeAll()
         let sorted = events.sorted { $0.order < $1.order }
         for event in sorted { inputs[event.order] = event }
         locationIndex.rebuild(sorted)
         for event in sorted { dispatch(event) }
+        return .full(.immediate)
     }
 
     /// 追加一条实时事件。不扫描既有格子。
-    mutating func append(_ event: AssemblyEvent) -> Publication {
+    ///
+    /// 非边界事件说得清自己变了哪些槽位（命中的 key 就是全部变化）；边界事件会推动整条
+    /// 时间线，`rebuildLocations()` 改到的是任意槽位，所以只能报「说不清」。
+    @discardableResult
+    mutating func append(_ event: AssemblyEvent) -> Change {
         guard inputs[event.order] == nil else { return .none }
         inputs[event.order] = event
-        var publication = Publication.none
-        if Self.isLocationBoundary(event.type) {
-            rebuildLocations()
-            publication = .immediate
-        }
-        publication = Publication.maximum(publication, dispatch(event))
-        return publication
+        let boundary = Self.isLocationBoundary(event.type)
+        if boundary { rebuildLocations() }
+        let change = dispatch(event)
+        guard !boundary else { return .full(Publication.maximum(change.publication, .immediate)) }
+        return change
     }
 
     /// 往回翻一页。既有格子的 key 与 state 逐条保留，只有受影响的格子重算。
-    mutating func prepend(_ events: [AssemblyEvent]) -> Publication {
+    ///
+    /// **报「说不清」**：`rebuildLocations()` 会改写**所有**槽位的匹配位置，不只是新事件
+    /// 命中的那几个；位置又是匹配的一部分（过程行按位置滤条目、`isLastStep` 读起点位置），
+    /// 所以「命中集」不等于「变化集」。要把它变成增量，得先做位置索引的增量。
+    @discardableResult
+    mutating func prepend(_ events: [AssemblyEvent]) -> Change {
         let fresh = events
             .filter { inputs[$0.order] == nil }
             .sorted { $0.order < $1.order }
@@ -93,13 +102,16 @@ struct ConversationAssembler {
             }
         }
         for (key, hits) in pending { merge(hits, into: key) }
-        return Publication.maximum(publication, .immediate)
+        return .full(Publication.maximum(publication, .immediate))
     }
 
     /// 一次未定稿输出收笔：撤掉这个 attempt 的未定稿命中，可选地接下持久定稿事件。
     ///
     /// 撤掉之后留下的空格子**不删** —— 它继续占着身份，定义自己决定转不转 `hidden`。
-    mutating func settleAssistant(attemptId: String, settlement: AssemblyEvent? = nil) -> Publication {
+    ///
+    /// 带定稿时走 `rebuildLocations()`，所以报「说不清」；只撤草稿时变化集就是被波及的槽位。
+    @discardableResult
+    mutating func settleAssistant(attemptId: String, settlement: AssemblyEvent? = nil) -> Change {
         var affected: Set<String> = []
         var retiredOrders: Set<EventOrder> = []
         let retired = inputs.filter { Self.attemptId(of: $0.value) == attemptId }.map(\.key)
@@ -114,13 +126,17 @@ struct ConversationAssembler {
             affected.insert(key)
         }
         var publication: Publication = retiredOrders.isEmpty ? .none : .immediate
+        var rebuilt = false
         if let settlement, inputs[settlement.order] == nil {
             inputs[settlement.order] = settlement
             rebuildLocations()
-            publication = Publication.maximum(publication, dispatch(settlement))
+            publication = Publication.maximum(publication, dispatch(settlement).publication)
+            rebuilt = true
         }
         for key in affected { replay(key) }
-        return publication
+        return rebuilt
+            ? .full(publication)
+            : Change(publication: publication, touched: affected, rebuilt: false)
     }
 
     // MARK: - 物化
@@ -189,12 +205,14 @@ struct ConversationAssembler {
         }
     }
 
-    private mutating func dispatch(_ event: AssemblyEvent) -> Publication {
-        var publication = Publication.none
+    @discardableResult
+    private mutating func dispatch(_ event: AssemblyEvent) -> Change {
+        var change = Change.none
         for hit in hits(of: event) {
-            publication = Publication.maximum(publication, accept(hit))
+            change.touched.insert(hit.key)
+            change.publication = Publication.maximum(change.publication, accept(hit))
         }
-        return publication
+        return change
     }
 
     private mutating func accept(_ hit: Hit?) -> Publication {
