@@ -38,6 +38,10 @@ struct ConversationAssembler {
     private let onAnomaly: ((String, [String: String]) -> Void)?
     private var contexts: [String: Context] = [:]
     private var inputs: [EventOrder: AssemblyEvent] = [:]
+    /// `inputs` 的同一集合，按 `order` 升序。位置扫描要求升序输入，而字典没有顺序 ——
+    /// 每次从字典排一遍就是 O(N log N)，前插的代价会随历史长度长。
+    /// **五处改动 `inputs` 的地方必须同时改它**，漏一处就是「字典里有、数组里没有」。
+    private var orderedInputs: [AssemblyEvent] = []
     private var locationIndex = LocationIndex()
     private let buildCounter = ViewNodeBuildCounter()
 
@@ -51,6 +55,18 @@ struct ConversationAssembler {
         type == "turn/start" || type == "turn/end" || type == "step/start" || type == "step/end"
     }
 
+    /// 按 `order` 升序插入。调用方都已 guard 过「这个 order 不在 `inputs` 里」，
+    /// 所以这里不必处理等值覆盖。
+    private mutating func insertOrdered(_ event: AssemblyEvent) {
+        var low = 0
+        var high = orderedInputs.count
+        while low < high {
+            let mid = (low + high) / 2
+            if orderedInputs[mid].order < event.order { low = mid + 1 } else { high = mid }
+        }
+        orderedInputs.insert(event, at: low)
+    }
+
     // MARK: - 三条路径
 
     /// 重建整段窗口。打开、重连、缺口修复走这条 —— 身份全部重来，这是「重置」的语义。
@@ -60,6 +76,7 @@ struct ConversationAssembler {
         inputs.removeAll()
         let sorted = events.sorted { $0.order < $1.order }
         for event in sorted { inputs[event.order] = event }
+        orderedInputs = sorted
         locationIndex.rebuild(sorted)
         for event in sorted { dispatch(event) }
         return .full(.immediate)
@@ -73,6 +90,7 @@ struct ConversationAssembler {
     mutating func append(_ event: AssemblyEvent) -> AssemblyChange {
         guard inputs[event.order] == nil else { return .none }
         inputs[event.order] = event
+        insertOrdered(event)
         let boundary = Self.isLocationBoundary(event.type)
         if boundary { rebuildLocations() }
         let change = dispatch(event)
@@ -91,7 +109,10 @@ struct ConversationAssembler {
             .filter { inputs[$0.order] == nil }
             .sorted { $0.order < $1.order }
         guard !fresh.isEmpty else { return .none }
-        for event in fresh { inputs[event.order] = event }
+        for event in fresh {
+            inputs[event.order] = event
+            insertOrdered(event)
+        }
         rebuildLocations()
 
         var pending: [String: [PendingHit]] = [:]
@@ -120,6 +141,9 @@ struct ConversationAssembler {
             retiredOrders.insert(order)
             inputs.removeValue(forKey: order)
         }
+        if !retiredOrders.isEmpty {
+            orderedInputs.removeAll { retiredOrders.contains($0.order) }
+        }
         for (key, context) in contexts {
             let remaining = context.matches.filter { !retiredOrders.contains($0.event.order) }
             guard remaining.count != context.matches.count else { continue }
@@ -130,6 +154,7 @@ struct ConversationAssembler {
         var rebuilt = false
         if let settlement, inputs[settlement.order] == nil {
             inputs[settlement.order] = settlement
+            insertOrdered(settlement)
             rebuildLocations()
             publication = Publication.maximum(publication, dispatch(settlement).publication)
             rebuilt = true
@@ -145,6 +170,10 @@ struct ConversationAssembler {
     /// 重导次数。**为判据而留的可观测点**：一次全量重导就是「每个槽位都算了一遍」，
     /// 一次增量只该是「命中的那几个」。生产上它只多一次自增。
     var buildViewNodeCount: Int { buildCounter.count }
+
+    /// 事件序（升序）。**为判据而留的读数**：它必须与 `inputs` 是同一集合 ——
+    /// 漏维护一处，这条序列就与字典对不上，而生产上的症状只是「位置少算一条」。
+    var inputOrders: [EventOrder] { orderedInputs.map(\.order) }
 
     /// 当前的节点集合（含 hidden），顺序由排序层给。
     func nodes() -> [ChatNode] {
@@ -336,8 +365,7 @@ struct ConversationAssembler {
     }
 
     private mutating func rebuildLocations() {
-        let sorted = inputs.values.sorted { $0.order < $1.order }
-        locationIndex.rebuild(sorted)
+        locationIndex.rebuild(orderedInputs)
         // 位置是匹配的一部分：边界事件后到（例如 `turn/end` 补上）要回填到既有命中上。
         for (key, context) in contexts {
             let refreshed = context.matches.map { match in

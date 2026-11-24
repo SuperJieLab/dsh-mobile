@@ -568,4 +568,29 @@ final class ConversationAssemblerTests: XCTestCase {
 
         XCTAssertTrue(change.rebuilt, "前插会重建位置索引")
     }
+
+    /// `orderedInputs` 与 `inputs` 是同一集合的两种视图，五处变动都要跟着改它。
+    ///
+    /// 漏一处的症状是「位置少算一条」—— 字典里有、数组里没有，没有任何报错。
+    func testEveryWriteKeepsTheOrderedInputsInStep() {
+        var engine = assembler()
+        engine.rebuild([event(60, "turn/start", #"{"turn":2}"#),
+                        event(70, "turn/end", #"{"turn":2}"#)])      // 整段重建：清空 + 填充
+        engine.append(event(80, "turn/start", #"{"turn":3}"#))        // 追加
+        engine.prepend([event(10, "turn/start", #"{"turn":1}"#),
+                        event(20, "turn/end", #"{"turn":1}"#)])       // 前插
+        engine.append(event(85, "step/start", #"{"turn":3,"step":1}"#))
+        engine.append(chunk(85.5, turn: 3, step: 1, index: 0, text: "半"))   // 草稿
+        engine.settleAssistant(                                          // 撤草稿 + 接定稿
+            attemptId: "a1",
+            settlement: event(90, "assistant/message",
+                              #"{"turn":3,"step":1,"message":{"id":"m1","content":[{"type":"text","text":"答"}]}}"#)
+        )
+
+        let orders = engine.inputOrders
+        XCTAssertEqual(orders.count, 7,
+                       "五处变动之后条数对不上：撤草稿那一处漏了就会多一条")
+        XCTAssertEqual(orders, orders.sorted(),
+                       "事件序没有维护成升序 —— 未来位置扫描会从错的地方开始")
+    }
 }

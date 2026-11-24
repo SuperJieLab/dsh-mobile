@@ -174,6 +174,28 @@ final class SourceLevelTests: XCTestCase {
         }
     }
 
+    /// 位置回填时的事件序不能每次从字典排一遍。
+    ///
+    /// 排序器与 `inputs` 是同一集合的两种视图，前插走的是「有序合并」而不是「排一次字典」。
+    /// 判据只守这一个函数体：`rebuild` 自己的 `events.sorted` 是整段重建时跑一次的，不在守备面内。
+    func testLocationRefreshDoesNotSortTheDictionary() throws {
+        let file = iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/Conversation/ConversationAssembler.swift")
+        let code = try read(file)
+        guard let start = code.range(of: "private mutating func rebuildLocations()") else {
+            return XCTFail("判据的落点没找对：`rebuildLocations` 不见了 —— \(file.lastPathComponent)")
+        }
+        let rest = code[start.upperBound...]
+        let end = rest.range(of: "\n    }")?.lowerBound ?? rest.endIndex
+        let body = String(rest[..<end])
+        XCTAssertGreaterThan(body.count, 100, "函数体取空了 —— 先怀疑落点")
+
+        for (offset, line) in body.components(separatedBy: "\n").enumerated() {
+            XCTAssertFalse(line.contains("values.sorted"),
+                           "\(file.lastPathComponent) 的 rebuildLocations 第 \(offset + 1) 行又排了一次字典 —— 前插的代价会随 N log N 长")
+        }
+    }
+
     func testMenuSourcesBakeInNoLevelNames() throws {
         let files = Self.swiftFiles(under: sessionDetailRoot)
         XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
