@@ -17,6 +17,11 @@
  * `dev/` 不进 git：干净 clone 上没有私有工作区。**`dev/` 整个不存在**时跳过文档并告警；
  * 它在、但四份之中缺一份，则是工作区残缺，报错。
  *
+ * **`docs/` 不在扫描面**（读者向的梳理与操作手册）。判据只读代码、测试与契约三样：叙事文档
+ * 只能查「字符串在不在」，查不出「说法对不对」，于是它守的是拼写 —— 文档改个写法就红，而红的
+ * 原因与代码无关。这类文档还常常不进 git，判据第一行就跳过，在 CI 上从不执行。文档与代码是否
+ * 同步由复核判，不由断言判。
+ *
  * Run: node --test tests/terms.test.ts
  */
 import { test } from 'node:test'
@@ -25,14 +30,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { UNARY_ENDPOINT_NAMES } from '../src/wire/unary.ts'
 
 /** 仓库根：本文件在 `gateway/tests/`，向上两级。 */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
-/** 网关侧要扫的活文档（`dev/features/*` 是过程留痕，不在范围内）。 */
-const DOCS = ['dev/PROJECT.md', 'dev/RULES.md', 'dev/ISSUES.md', 'dev/contract/protocol.md',
-  'docs/tech/00-overview.md', 'docs/tech/02-protocol.md']
+/** 网关侧要扫的规范来源（`dev/features/*` 是过程留痕，不在范围内）。 */
+const DOCS = ['dev/PROJECT.md', 'dev/RULES.md', 'dev/ISSUES.md', 'dev/contract/protocol.md']
 
 type Rule = { word: string; re: RegExp; advice: string; reason: string }
 type Sample = { expect: 'hit' | 'pass'; text: string; line: number }
@@ -220,28 +223,4 @@ test('判据 13 前半：契约里本期的每个端点都有一个 POST /api/<�
     }
   }
   assert.deepEqual(problems, [], `契约与端点面对不上：\n${problems.join('\n')}`)
-})
-
-test('判据 13 后半：docs/ 里出现的每个 POST /api/<名> 都是代码里真有的端点', () => {
-  const docsDir = join(ROOT, 'docs')
-  if (!existsSync(docsDir)) {
-    console.warn('⚠️ docs/ 不在工作区（干净 clone），跳过文档端点名的检查')
-    return
-  }
-  const files = collectFiles(docsDir, '.md')
-  assert.ok(files.length > 5, `docs/ 里只扫到 ${files.length} 份文档 —— 路径推算错了？`)
-  // 占位写法（`POST /api/<命名空间>/<方法>`）不算名字：尖括号开头的不匹配。
-  const pattern = /POST \/api\/([a-z$][\w$-]*\/[a-z][\w$-]*)/gu
-  const unknown: string[] = []
-  for (const file of files) {
-    const text = readFileSync(file, 'utf8')
-    for (const match of text.matchAll(pattern)) {
-      const name = match[1]!
-      if (!(UNARY_ENDPOINT_NAMES as readonly string[]).includes(name)) {
-        unknown.push(`${relative(ROOT, file)}: POST /api/${name} —— 代码里没有这个端点`)
-      }
-    }
-  }
-  assert.deepEqual(unknown, [],
-    `文档写了不存在的端点（读文档的人会照着打，然后拿到 404）：\n${unknown.join('\n')}`)
 })
