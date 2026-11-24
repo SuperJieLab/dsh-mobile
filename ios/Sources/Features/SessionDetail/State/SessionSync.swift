@@ -23,8 +23,8 @@ final class SessionSync {
     /// **排序按锚点**，不是「持久的一律在前」：乐观行落在发送那一刻的末尾，
     /// 之后到的持久事件与未定稿帧都排在它后面（它们的锚点更大）。
     var nodes: [ChatNode] {
-        guard !pendingPrompts.isEmpty else { return snapshot.visible }
-        return (snapshot.visible + pendingPrompts.map(\.node)).sorted { $0.anchorSeq < $1.anchorSeq }
+        guard !pendingPrompts.isEmpty else { return snapshot.visibleNodes }
+        return (snapshot.visibleNodes + pendingPrompts.map(\.node)).sorted { $0.anchorSeq < $1.anchorSeq }
     }
 
     /// 已经发出去、还没被持久事件认领的用户消息。
@@ -61,14 +61,16 @@ final class SessionSync {
     /// 乐观行锚点的序号（只增不减）。用 `count` 会让「先发的那条退休后再发一条」撞回同一个锚点。
     private var pendingOrdinal = 0
 
-    /// 消息条数 —— 从已组装的节点数，不另存一份（两个出处必然不同步）。
+    /// 上一次刷新之后攒下的变化。写入路径都往这里并，`refreshSnapshot` 取走。
+    /// 放在视图状态而不是引擎里：引擎不知道「什么时候该上屏」，那是调度的事。
+    private var pendingChange = Change.none
+
+    /// 消息条数 —— 持久的那一半由快照算好存着，乐观行按条数加上。
+    ///
+    /// 不把乐观行也塞进快照的计数：它的增删有两条路径（发出、被认领），让计数跟着它们
+    /// 手工加减就是第二个真源。乐观行永远是一条消息，加一个数就够了。
     var messageCount: Int {
-        nodes.reduce(0) { count, node in
-            switch node.data {
-            case .message, .assistant: return count + 1
-            case .process, .command: return count
-            }
-        }
+        snapshot.messageCount + pendingPrompts.count
     }
     /// 视图里的事件条数（消息只是其中一部分）。
     private(set) var eventCount = 0
@@ -409,7 +411,7 @@ final class SessionSync {
         }
         // 旧草稿先退役：它的 attempt 已经结束或换了人，留着会与新基线拼成两段重复文本。
         if let previous = transient.liveAttemptId {
-            conversation.settleAssistant(attemptId: previous, settlement: nil)
+            record(conversation.settleAssistant(attemptId: previous, settlement: nil))
         }
 
         // 先把持久窗口喂给引擎，再放基线事件 —— 顺序不能反：
@@ -420,7 +422,7 @@ final class SessionSync {
         // 没有就清场。基线是服务端此刻的权威，本地那份一律丢掉。
         if let baseline = snapshot.assistantStream {
             for event in transient.apply(baseline: baseline, cursor: max(0, mirror.frontier - 1)) {
-                conversation.append(event)
+                record(conversation.append(event))
             }
             refreshSnapshot()
         } else {
@@ -520,6 +522,7 @@ final class SessionSync {
             for event in events {
                 change.absorb(conversation.append(event))
             }
+            pendingChange.absorb(change)
             switch change.publication {
             case .none: break
             case .animationFrame: scheduleSnapshot()
@@ -562,8 +565,8 @@ final class SessionSync {
             Log.info(Log.Module.session, "本轮被放弃：草稿已撤", ["attempt": settlement.attemptId])
         }
 
-        conversation.settleAssistant(attemptId: settlement.attemptId,
-                                     settlement: named.map(AssemblyEvent.init))
+        record(conversation.settleAssistant(attemptId: settlement.attemptId,
+                                            settlement: named.map(AssemblyEvent.init)))
         refreshSnapshot()
     }
 
@@ -636,6 +639,8 @@ final class SessionSync {
         builder = ChatSnapshotBuilder()
         held.removeAll()
         transient = TransientChannel()
+        // 清空变化集：不清的话，重开之后第一条追加会把上一段窗口的键一起并进来。
+        pendingChange = .none
     }
 
     /// 草稿更新的同帧合并：一个渲染帧内多次变化只物化一次。
@@ -650,8 +655,22 @@ final class SessionSync {
         }
     }
 
+    /// 记下一次写入的变化。发布时机由调用方决定 —— 草稿那一路要合并到同一帧。
+    private func record(_ change: Change) {
+        pendingChange.absorb(change)
+    }
+
     private func refreshSnapshot() {
-        builder.replace(conversation.nodes())
+        // 上一次刷新到这一次之间攒下的变化。**先取再清**：`nodes(forKeys:)` 期间不会再写引擎，
+        // 但万一将来有，清空放在取值之后才安全。
+        let change = pendingChange
+        pendingChange = .none
+        if change.rebuilt || change.touched.isEmpty {
+            // 说不清变了哪些 ⇒ 全量。这也是本期之前所有路径的唯一行为。
+            builder.replace(conversation.nodes())
+        } else {
+            builder.apply(conversation.nodes(forKeys: change.touched))
+        }
         snapshot = builder.snapshot
         retireSettledPrompts()
     }
@@ -668,19 +687,19 @@ final class SessionSync {
             // 引擎里只有草稿（冷进入先放了基线、持久事件还没到）：追加进去，不要整段重建 ——
             // 重建会把草稿连同它的格子一起清掉，屏幕上从空重新长。
             guard !conversation.isEmpty else {
-                conversation.rebuild(durable.map(AssemblyEvent.init))
+                record(conversation.rebuild(durable.map(AssemblyEvent.init)))
                 return
             }
-            for event in fresh { conversation.append(AssemblyEvent(event)) }
+            for event in fresh { record(conversation.append(AssemblyEvent(event))) }
             return
         }
         let orders = fresh.map { Double($0.seq) }
         if orders.allSatisfy({ $0 < bounds.min }) {
-            conversation.prepend(fresh.map(AssemblyEvent.init))
+            record(conversation.prepend(fresh.map(AssemblyEvent.init)))
             Log.debug(Log.Module.session, "引擎前插", ["count": String(fresh.count),
                                                     "from": String(orders.min() ?? 0)])
         } else if orders.allSatisfy({ $0 > bounds.max }) {
-            for event in fresh { conversation.append(AssemblyEvent(event)) }
+            for event in fresh { record(conversation.append(AssemblyEvent(event))) }
             Log.debug(Log.Module.session, "引擎追加", ["count": String(fresh.count),
                                                     "from": String(orders.min() ?? 0)])
         } else {
@@ -689,7 +708,7 @@ final class SessionSync {
                      ["fresh": String(fresh.count), "events": String(durable.count),
                       "knownMin": String(bounds.min), "knownMax": String(bounds.max),
                       "freshMin": String(orders.min() ?? 0), "freshMax": String(orders.max() ?? 0)])
-            conversation.rebuild(durable.map(AssemblyEvent.init))
+            record(conversation.rebuild(durable.map(AssemblyEvent.init)))
         }
     }
 }
