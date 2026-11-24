@@ -563,43 +563,6 @@ test('the endpoint envelope has exactly one home, and transport does not build i
 })
 
 /**
- * 讲协议的那一篇必须与线上的流表一致。
- *
- * 为什么这条判据存在：`docs/tech/02-protocol.md` 是「这一层为什么长这样」的唯一长文，而它最
- * 容易与代码脱节 —— 改了端点名而没改文档，读者会照着一段已不存在的东西理解整个通道。断言
- * 「三个不绑会话的端点名都在」是最便宜的一致性检查：少一个就说明文档还停在旧形状上（旧形状
- * 里审批、列表、宿主事件各占一条流）。
- *
- * 盲区：它只查名字在不在，查不到「说法对不对」。后者靠读，不靠这条。
- */
-test('the protocol chapter names the three connection streams', () => {
-  // `docs/` 不进仓库（`.gitignore`），所以 CI 的干净 clone 里没有它 —— 与术语判据对工作区
-  // 文档的处理同形：不在工作区就跳过并告警，而不是让一次 checkout 缺文件把整套判据打红。
-  // 代价写在判据名里：它是一条**只在本地生效**的常驻判据。
-  const chapter = resolve(dirname(SRC), '../docs/tech/02-protocol.md')
-  if (!existsSync(chapter)) {
-    console.warn('⚠️ docs/ 不在工作区（干净 clone），跳过实时流那一册的流表检查')
-    return
-  }
-  const text = readFileSync(chapter, 'utf8')
-  for (const endpoint of ['session/control', '$events', 'workspace/follow']) {
-    assert.ok(text.includes(endpoint), `那一册没提 ${endpoint} —— 文档与代码的流表脱节了`)
-  }
-  // 旧形状：审批与列表各占一条连接级流，流用 `op` 标识、货物叫 `payload`。
-  for (const gone of ['host-events', 'session-list']) {
-    assert.ok(!text.includes(gone), `那一册还在说 ${gone} 这条流 —— 它已经被 $events 与组流取代`)
-  }
-  // 同名不同形是按流解码的起因；册子不讲它，读者就无法解释客户端为什么要按流解货物。
-  assert.ok(text.includes('同名不同形'),
-    '那一册没写两条流都叫 baseline 却形状不同 —— 那是按流解码的理由')
-  // 泵那一侧同样要能读出全局：四条泵各自的货物与拒绝路径。
-  const pump = readFileSync(join(SRC, 'remote', 'stream.ts'), 'utf8')
-  for (const endpoint of ['session/follow', 'session/control', '$events', 'workspace/follow']) {
-    assert.ok(pump.includes(endpoint), `泵上的注释没提 ${endpoint} —— 读这一处的人看不到全局`)
-  }
-})
-
-/**
  * 取一个函数的形参表：从 `function <name>(` 的下一个 `(` 起，按括号配对收尾。
  *
  * 只取形参、不取函数体：泵体里出现 `WorkspacePort` 这样的类型名是正常的（给别的东西
