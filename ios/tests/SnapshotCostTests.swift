@@ -144,6 +144,50 @@ final class SnapshotCostTests: XCTestCase {
                        "全量重导的代价就是「每个槽位都算一遍」—— 这正是本期要绕开的那条路")
     }
 
+    // MARK: - 闸门不因 hidden 关死
+
+    /// hidden 是常态，不是边角：多步回合里每个非末步的助手行永久 hidden，过程行条目被位置
+    /// 滤空后也转 hidden。若增量闸门以「快照里没有 hidden」为条件，一个含工具调用的回合之后
+    /// 每次追加都退全表 —— 而全表 `filter` + `reduce` 正是本期要绕开的那条路。
+    func testApplyWithAHiddenSlotStaysIncremental() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([
+            node("a", message("1", 1), anchor: 1),
+            node("h", assistant("hidden", 2), anchor: 2, visible: false),
+            node("b", message("2", 3), anchor: 3),
+        ])
+        let before = builder.fullRebuildCount
+
+        let snapshot = builder.apply([node("c", message("3", 4), anchor: 4)])
+
+        XCTAssertEqual(builder.fullRebuildCount, before,
+                       "多了一条 hidden 就退全量 —— 真实会话里这个闸门基本关死")
+        XCTAssertEqual(snapshot.nodes.map(\.key), ["a", "h", "b", "c"],
+                       "hidden 的槽位仍留在全量里，它占着身份")
+        XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["a", "b", "c"],
+                       "可见集是 nodes 的子集，不是「等于 nodes 或退全量」")
+        XCTAssertEqual(snapshot.messageCount, 3, "hidden 的助手行不算一条消息")
+    }
+
+    /// 闸门只在「某一格在可见与隐藏之间翻转」时退全量 —— 翻转本身罕见，且那时说不清
+    /// 变了哪些格。这条同时是上一条的活性锚：全量次数确实会变，不是恒零的假观测点。
+    func testApplyRebuildsFullyOnlyWhenAVisibilityFlips() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([
+            node("a", message("1", 1), anchor: 1),
+            node("b", message("2", 2), anchor: 2),
+        ])
+        let before = builder.fullRebuildCount
+
+        let snapshot = builder.apply([node("b", message("", 2), anchor: 2, visible: false)])
+
+        XCTAssertEqual(builder.fullRebuildCount, before + 1,
+                       "可见转隐藏时说不清变了哪些格，应当老老实实退全量")
+        XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["a"])
+        XCTAssertEqual(snapshot.nodes.map(\.key), ["a", "b"], "它没消失，只是不上屏")
+        XCTAssertEqual(snapshot.messageCount, 1)
+    }
+
     func testMergingAFramesWorthOfAppendsMaterializesOnlyOnce() {
         var assembler = engine()
         assembler.rebuild([userMessage(0)])

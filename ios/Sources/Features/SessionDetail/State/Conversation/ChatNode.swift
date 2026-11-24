@@ -52,8 +52,8 @@ struct ChatSnapshot: Equatable {
 
     /// 上屏的那一半。构造时定，读它不分配。
     ///
-    /// 没有 hidden 节点时它与 `nodes` 是同一个数组（浅拷一份引用，不复制元素）——
-    /// 增量合并因此不需要为它做索引，见 `ChatSnapshotBuilder.apply`。
+    /// 它是 `nodes` 的子集，按同一谓词有序。**hidden 的多少不影响增量合并的代价** ——
+    /// 两张表各按 key 二分找位，只碰这一格；见 `ChatSnapshotBuilder.apply`。
     let visibleNodes: [ChatNode]
 
     /// 可见的消息与回复有多少条（命令行与过程行不算）。构造时定，读它不遍历。

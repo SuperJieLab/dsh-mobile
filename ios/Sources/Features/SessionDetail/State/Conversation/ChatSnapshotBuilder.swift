@@ -4,8 +4,8 @@
  * 排序键是 `anchorSeq`（可能是小数），第二键是 `key` —— 有了第二键，同一位置的两个节点
  * 每次重排都落在同一顺序上；没有它，测试与界面的顺序会随字典遍历顺序漂。
  *
- * 只做排序，不做过滤：hidden 节点留在快照里，渲染层自己取 `visible`。
- * 过滤放在这里会让「节点还在吗」变成「排序层说了算」，而那是定义的决定。
+ * 不做过滤：hidden 节点留在快照里，`visibleNodes` 只是它的子集。
+ * 过滤放在定义之外会让「节点还在吗」变成「排序层说了算」，而那是定义的决定。
  */
 import Foundation
 
@@ -13,11 +13,14 @@ struct ChatSnapshotBuilder {
 
     private(set) var snapshot: ChatSnapshot = .empty
 
+    /// 走了几次全量构造。**只有判据读它** —— 「增量」与「全量」的产出完全一样，
+    /// 差别只在代价上，而代价在这里是唯一可观测的。
+    private(set) var fullRebuildCount = 0
+
     @discardableResult
     mutating func replace(_ nodes: [ChatNode]) -> ChatSnapshot {
         let ordered = nodes.sorted(by: Self.precedes)
-        snapshot = ChatSnapshot(nodes: ordered)
-        return snapshot
+        return rebuildAll(ordered)
     }
 
     /// 先按位置、再按身份。第二键不是装饰：同一位置上会有两个节点（过程与答案），
@@ -33,45 +36,100 @@ struct ChatSnapshotBuilder {
     /// 位置索引被整份重建之后（前插、边界事件、带定稿的收笔）必须走 `replace`：
     /// 那时任意槽位的锚点都可能变，按 key 并会把顺序搞错。
     ///
-    /// 代价是 O(改了几格)：常见情形（没有 hidden 节点）下可见集就是 `nodes` 本身，
-    /// 条数按「这一格算不算消息」加减，不回头扫全表。有 hidden 节点时索引不再一一
-    /// 对应，退回一次全量构造 —— 那种情形只在「内容被清空的格子」出现。
+    /// 代价是 O(改了几格)：`nodes` 与 `visibleNodes` 都是有序数组，两张表各按同一谓词
+    /// 二分找位、就地替换，条数按「这一格算不算消息」加减。**hidden 的多少不影响这条路**
+    /// —— 只要这一格没在可见与隐藏之间翻转，其余槽位就不必重算。
+    /// 翻转、以及「同 key 却对不上位置」这类说不清的情形退全量，见 `rebuildRemaining`。
     @discardableResult
     mutating func apply(_ updated: [ChatNode]) -> ChatSnapshot {
         guard !updated.isEmpty else { return snapshot }
-        let allVisible = snapshot.nodes.count == snapshot.visibleNodes.count
-        guard allVisible, updated.allSatisfy({ $0.visibility == .visible }) else {
-            var merged = snapshot.nodes
-            Self.merge(updated, into: &merged)
-            snapshot = ChatSnapshot(nodes: merged)
-            return snapshot
-        }
 
         var nodes = snapshot.nodes
+        var visible = snapshot.visibleNodes
         var count = snapshot.messageCount
-        for node in updated {
-            var at = Self.insertionIndex(for: node, in: nodes)
+
+        for (index, node) in updated.enumerated() {
+            let at = Self.insertionIndex(for: node, in: nodes)
+
+            // 同一格：位置由 `(anchorSeq, key)` 定，位置对上就是它。
             if at < nodes.count, nodes[at].key == node.key {
-                count += Self.delta(from: nodes[at], to: node)
+                let old = nodes[at]
+                guard old.visibility == node.visibility else {
+                    return rebuildRemaining(nodes, remaining: updated[index...])
+                }
+                count += Self.delta(from: old, to: node)
                 nodes[at] = node
+                if node.visibility == .visible {
+                    let visibleAt = Self.insertionIndex(for: node, in: visible)
+                    guard visibleAt < visible.count, visible[visibleAt].key == node.key else {
+                        return rebuildRemaining(nodes, remaining: updated[index...])
+                    }
+                    visible[visibleAt] = node
+                }
                 continue
             }
+
+            // 锚点变了：先摘旧的，再按新位置插。
             if let stale = nodes.firstIndex(where: { $0.key == node.key }) {
-                count += Self.delta(from: nodes[stale], to: node)
+                let old = nodes[stale]
+                guard old.visibility == node.visibility else {
+                    return rebuildRemaining(nodes, remaining: updated[index...])
+                }
+                count += Self.delta(from: old, to: node)
                 nodes.remove(at: stale)
-                at = Self.insertionIndex(for: node, in: nodes)
-            } else if node.isMessage {
-                count += 1
+                if old.visibility == .visible {
+                    let visibleAt = Self.insertionIndex(for: old, in: visible)
+                    guard visibleAt < visible.count, visible[visibleAt].key == old.key else {
+                        return rebuildRemaining(nodes, remaining: updated[index...])
+                    }
+                    visible.remove(at: visibleAt)
+                }
+                nodes.insert(node, at: Self.insertionIndex(for: node, in: nodes))
+                if node.visibility == .visible {
+                    visible.insert(node, at: Self.insertionIndex(for: node, in: visible))
+                }
+                continue
             }
+
+            // 新槽位。
             nodes.insert(node, at: at)
+            if node.visibility == .visible {
+                visible.insert(node, at: Self.insertionIndex(for: node, in: visible))
+                if node.isMessage { count += 1 }
+            }
         }
-        snapshot = ChatSnapshot(nodes: nodes, visibleNodes: nodes, messageCount: count)
+
+        snapshot = ChatSnapshot(nodes: nodes, visibleNodes: visible, messageCount: count)
         return snapshot
     }
 
-    /// 这一格「算不算一条消息」变了多少。
+    /// 这一格「算不算一条消息」变了多少 —— 只算上屏的那一半。
     private static func delta(from old: ChatNode, to new: ChatNode) -> Int {
-        (new.isMessage ? 1 : 0) - (old.isMessage ? 1 : 0)
+        Self.weight(of: new) - Self.weight(of: old)
+    }
+
+    private static func weight(of node: ChatNode) -> Int {
+        node.visibility == .visible && node.isMessage ? 1 : 0
+    }
+
+    /// 说不清的那几支：把这一格连同剩下的改动一并并进去，整份重建。
+    ///
+    /// 「说不清」只有一种成因 —— 这一格在可见与隐藏之间翻转。那时它进出的同时，
+    /// 其余槽位的相对位置并不变，但「变了哪些格」已经不是一句话能说清的了；
+    /// 与其猜，不如退全量。翻转本身罕见（只在内容被清空的格子上发生）。
+    private mutating func rebuildRemaining(
+        _ nodes: [ChatNode],
+        remaining: ArraySlice<ChatNode>
+    ) -> ChatSnapshot {
+        var merged = nodes
+        Self.merge(Array(remaining), into: &merged)
+        return rebuildAll(merged)
+    }
+
+    private mutating func rebuildAll(_ nodes: [ChatNode]) -> ChatSnapshot {
+        fullRebuildCount += 1
+        snapshot = ChatSnapshot(nodes: nodes)
+        return snapshot
     }
 
     /// 全量兜底用的合并：换同 key、按位置插。
