@@ -16,7 +16,8 @@ protocol ApprovalAnswering {
 }
 
 /// 生产实现：走 `$events/result`。
-/// `ok` 只意味着**已交给上游**（结算或幂等 no-op），权威结果以流里的 `approval/decided` 为准。
+/// `ok` 只意味着**已交给上游**（结算或幂等 no-op）。应答者以这一次回包为准：成功即当场撤卡，
+/// 因为上游收口时先摘掉自己的投递、再广播 `cancel`，这一端等不到撤回帧。
 @MainActor
 struct GatewayApprovalAnswerer: ApprovalAnswering {
     let client: RpcClient
