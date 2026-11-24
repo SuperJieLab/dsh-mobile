@@ -563,20 +563,20 @@ test('the endpoint envelope has exactly one home, and transport does not build i
 })
 
 /**
- * 那一册讲实时流的文档必须与线上的流表一致。
+ * 讲协议的那一篇必须与线上的流表一致。
  *
- * 为什么这条判据存在：`docs/system/04-realtime-stream.md` 是「这一层为什么长这样」的唯一
- * 长文，而它最容易与代码脱节 —— 改了端点名而没改文档，读者会照着一段已不存在的东西理解
- * 整个通道。断言「三个不绑会话的端点名都在」是最便宜的一致性检查：少一个就说明文档还停在
- * 旧形状上（旧形状里审批、列表、宿主事件各占一条流）。
+ * 为什么这条判据存在：`docs/tech/02-protocol.md` 是「这一层为什么长这样」的唯一长文，而它最
+ * 容易与代码脱节 —— 改了端点名而没改文档，读者会照着一段已不存在的东西理解整个通道。断言
+ * 「三个不绑会话的端点名都在」是最便宜的一致性检查：少一个就说明文档还停在旧形状上（旧形状
+ * 里审批、列表、宿主事件各占一条流）。
  *
  * 盲区：它只查名字在不在，查不到「说法对不对」。后者靠读，不靠这条。
  */
-test('the realtime-stream chapter names the three connection streams', () => {
-  // 这一册不进仓库（`.gitignore`），所以 CI 的干净 clone 里没有它 —— 与术语判据对工作区
+test('the protocol chapter names the three connection streams', () => {
+  // `docs/` 不进仓库（`.gitignore`），所以 CI 的干净 clone 里没有它 —— 与术语判据对工作区
   // 文档的处理同形：不在工作区就跳过并告警，而不是让一次 checkout 缺文件把整套判据打红。
   // 代价写在判据名里：它是一条**只在本地生效**的常驻判据。
-  const chapter = resolve(dirname(SRC), '../docs/system/04-realtime-stream.md')
+  const chapter = resolve(dirname(SRC), '../docs/tech/02-protocol.md')
   if (!existsSync(chapter)) {
     console.warn('⚠️ docs/ 不在工作区（干净 clone），跳过实时流那一册的流表检查')
     return

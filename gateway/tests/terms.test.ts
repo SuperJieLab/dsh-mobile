@@ -32,7 +32,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 /** 网关侧要扫的活文档（`dev/features/*` 是过程留痕，不在范围内）。 */
 const DOCS = ['dev/PROJECT.md', 'dev/RULES.md', 'dev/ISSUES.md', 'dev/contract/protocol.md',
-  'docs/system/00-overview.md', 'docs/system/04-realtime-stream.md']
+  'docs/tech/00-overview.md', 'docs/tech/02-protocol.md']
 
 type Rule = { word: string; re: RegExp; advice: string; reason: string }
 type Sample = { expect: 'hit' | 'pass'; text: string; line: number }
