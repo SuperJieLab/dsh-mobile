@@ -9,6 +9,12 @@ import Foundation
 
 struct LocationIndex: Equatable {
 
+    /// 只比结果（`turns` / `coordinates`）。`drafts` 是派生它的过程量 ——
+    /// 把它算进值相等会让「同一份位置」因为累积方式不同而不相等。
+    static func == (left: LocationIndex, right: LocationIndex) -> Bool {
+        left.turns == right.turns && left.coordinates == right.coordinates
+    }
+
     struct Coordinates: Equatable {
         var turn: Int?
         var step: Int?
@@ -31,16 +37,49 @@ struct LocationIndex: Equatable {
         var steps: [Int: StepDraft] = [:]
     }
 
+    /// 扫描状态：跨段传递。前插时「插入段的末状态」就是「原窗口那一段」的起点 ——
+    /// 少了它，原来那条「非边界事件继承最近一个边界」的规则就断了。
+    struct ScanState: Equatable {
+        var turn: Int?
+        var step: Int?
+
+        static let initial = ScanState(turn: nil, step: nil)
+    }
+
     private(set) var turns: [Int: TurnLocation] = [:]
     private var coordinates: [EventOrder: Coordinates] = [:]
+    /// 轮次草稿。**由扫描累积、由 `mergeTouched` 落成 `turns`** —— 前者是过程量，后者是结果。
+    private var drafts: [Int: TurnDraft] = [:]
+
+    /// 累计扫过多少条事件。**为判据而留的读数**：它证明前插只碰了「插入段 + 污染区间」。
+    private(set) var scannedCount = 0
+
+    /// 上一次 `advance` 里**值真的变了的**坐标（新写入的不算）。前插用它判断
+    /// 「污染区间是否改写了既有坐标」—— 改了就说明有老槽位要跟着回填。
+    private(set) var changedOrders: Set<EventOrder> = []
 
     /// 重算整段窗口。`events` 必须按 `order` 升序 —— 排序是调用方的责任，
     /// 这里再排一次就等于把「谁负责顺序」写成两处。
     mutating func rebuild(_ events: [AssemblyEvent]) {
-        var drafts: [Int: TurnDraft] = [:]
-        var resolved: [EventOrder: Coordinates] = [:]
-        var currentTurn: Int?
-        var currentStep: Int?
+        coordinates = [:]
+        drafts = [:]
+        _ = advance(events, from: .initial)
+        // 整份重建可能缩窗：不再出现的轮次要清掉（前插只加不减，这条只在重建时起作用）。
+        let live = Set(drafts.keys)
+        turns = turns.filter { live.contains($0.key) }
+    }
+
+    /// 扫一段并给出段末状态。内部把坐标写进表、把草稿并进 `drafts`，
+    /// 再把**这一段碰到的轮次**重新落成 `TurnLocation` —— 没碰到的轮次保持原实例，
+    /// 「前插只增不改」那条判据靠的就是这一点。
+    ///
+    /// 前插调用两次：先扫插入段（`from: .initial`），再以返回值为起点扫污染区间。
+    @discardableResult
+    mutating func advance(_ events: [AssemblyEvent], from state: ScanState) -> ScanState {
+        var currentTurn = state.turn
+        var currentStep = state.step
+        var touched: Set<Int> = []
+        var changed: Set<EventOrder> = []
 
         for event in events {
             let explicit = Self.payloadCoordinates(event)
@@ -68,9 +107,18 @@ struct LocationIndex: Equatable {
                 ? nil
                 : (explicit.step ?? (turn == currentTurn ? currentStep : nil))
 
-            resolved[event.order] = Coordinates(turn: turn, step: step)
-            if let turn { turnDraft(&drafts, turn: turn, order: event.order) }
-            if let turn, let step { stepDraft(&drafts, turn: turn, step: step, order: event.order) }
+            let resolved = Coordinates(turn: turn, step: step)
+            if let previous = coordinates[event.order], previous != resolved {
+                changed.insert(event.order)
+            }
+            coordinates[event.order] = resolved
+            if let turn {
+                turnDraft(&drafts, turn: turn, order: event.order)
+                touched.insert(turn)
+            }
+            if let turn, let step {
+                stepDraft(&drafts, turn: turn, step: step, order: event.order)
+            }
 
             switch event.type {
             case "turn/start":
@@ -94,9 +142,18 @@ struct LocationIndex: Equatable {
             }
         }
 
-        let ordered = drafts.values.sorted { $0.firstOrder < $1.firstOrder }
-        var nextTurns: [Int: TurnLocation] = [:]
-        for draft in ordered {
+        scannedCount += events.count
+        changedOrders = changed
+        mergeTouched(touched)
+        return ScanState(turn: currentTurn, step: currentStep)
+    }
+
+    /// 把这些轮次的草稿落成 `TurnLocation`。同值给**同一个实例** —— 否则「前插只增不改」
+    /// 那条判据会因为引用不同而误报（它比较的就是值相等）。
+    private mutating func mergeTouched(_ numbers: Set<Int>) {
+        var stable = turns
+        for number in numbers {
+            guard let draft = drafts[number] else { continue }
             let steps = draft.steps.values
                 .sorted { $0.firstOrder < $1.firstOrder }
                 .map { step in
@@ -109,7 +166,7 @@ struct LocationIndex: Equatable {
                         endTime: step.endTime
                     )
                 }
-            nextTurns[draft.turn] = TurnLocation(
+            let value = TurnLocation(
                 turn: draft.turn,
                 status: draft.endOrder != nil ? .closed : (draft.startOrder == nil ? .unknown : .open),
                 startOrder: draft.startOrder,
@@ -117,18 +174,9 @@ struct LocationIndex: Equatable {
                 endTime: draft.endTime,
                 steps: steps
             )
+            stable[number] = stable[number] == value ? stable[number]! : value
         }
-
-        // 位置值逐条重算：坐标本身没变时也要给出同一个 `TurnLocation` 实例，
-        // 否则「前插只增不改」那条判据会因为引用不同而误报。
-        let previous = turns
-        var stable: [Int: TurnLocation] = [:]
-        for (number, value) in nextTurns {
-            stable[number] = previous[number] == value ? previous[number]! : value
-        }
-
         turns = stable
-        coordinates = resolved
     }
 
     func locationOf(_ event: AssemblyEvent) -> ConversationLocation {

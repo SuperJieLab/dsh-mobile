@@ -557,40 +557,58 @@ final class ConversationAssemblerTests: XCTestCase {
                       "带定稿的收笔会重建位置索引，改到的是任意槽位 —— 丢了这个标记，行序会静默排错")
     }
 
-    func testPrependingSaysItCannotNameTheChangeSet() {
-        var engine = assembler()
-        engine.rebuild([event(9, "turn/start", #"{"turn":1}"#)])
-
-        let change = engine.prepend([
-            event(1, "turn/start", #"{"turn":1}"#),
-            event(2, "user/message", #"{"id":"u0","source":{"kind":"user"},"content":[{"type":"text","text":"早"}]}"#),
-        ])
-
-        XCTAssertTrue(change.rebuilt, "前插会重建位置索引")
+    /// 一轮 = 5 条事件。order 与 turn 同序。
+    private func turnEvents(_ number: Int, startingAt base: Int? = nil) -> [AssemblyEvent] {
+        let o = base ?? number * 10
+        let message = #"{"id":"u\#(o)","turn":\#(number),"source":{"kind":"user"},"content":[{"type":"text","text":"m"}]}"#
+        return [
+            event(o, "turn/start", #"{"turn":\#(number)}"#),
+            event(o + 1, "step/start", #"{"turn":\#(number),"step":1}"#),
+            event(o + 2, "user/message", message),
+            event(o + 3, "step/end", #"{"turn":\#(number),"step":1}"#),
+            event(o + 4, "turn/end", #"{"turn":\#(number)}"#),
+        ]
     }
 
-    /// `orderedInputs` 与 `inputs` 是同一集合的两种视图，五处变动都要跟着改它。
-    ///
-    /// 漏一处的症状是「位置少算一条」—— 字典里有、数组里没有，没有任何报错。
-    func testEveryWriteKeepsTheOrderedInputsInStep() {
+    /// 区间为空（窗口首条是 `turn/start`）时，前插说得清自己改了哪些槽位。
+    func testPrependingNamesItsChangeSet() {
         var engine = assembler()
-        engine.rebuild([event(60, "turn/start", #"{"turn":2}"#),
-                        event(70, "turn/end", #"{"turn":2}"#)])      // 整段重建：清空 + 填充
-        engine.append(event(80, "turn/start", #"{"turn":3}"#))        // 追加
-        engine.prepend([event(10, "turn/start", #"{"turn":1}"#),
-                        event(20, "turn/end", #"{"turn":1}"#)])       // 前插
-        engine.append(event(85, "step/start", #"{"turn":3,"step":1}"#))
-        engine.append(chunk(85.5, turn: 3, step: 1, index: 0, text: "半"))   // 草稿
-        engine.settleAssistant(                                          // 撤草稿 + 接定稿
-            attemptId: "a1",
-            settlement: event(90, "assistant/message",
-                              #"{"turn":3,"step":1,"message":{"id":"m1","content":[{"type":"text","text":"答"}]}}"#)
-        )
+        engine.rebuild(turnEvents(20))
 
-        let orders = engine.inputOrders
-        XCTAssertEqual(orders.count, 7,
-                       "五处变动之后条数对不上：撤草稿那一处漏了就会多一条")
-        XCTAssertEqual(orders, orders.sorted(),
-                       "事件序没有维护成升序 —— 未来位置扫描会从错的地方开始")
+        let change = engine.prepend(turnEvents(10))
+
+        XCTAssertFalse(change.rebuilt, "区间为空时不该退全量")
+        XCTAssertFalse(change.touched.isEmpty, "命中的槽位要在变化集里")
+    }
+
+    /// 变化集不能「说少了」：前插之后凡内容变了的节点，key 都必须在 `touched` 里。
+    ///
+    /// 期望值不从实现取 —— 它是「前插前后的两份节点按 key 比」的差集，一个独立口径。
+    func testPrependTouchesEveryNodeThatActuallyChanged() {
+        var engine = assembler()
+        engine.rebuild((200...220).flatMap { turnEvents($0) })
+        let before = Dictionary(uniqueKeysWithValues: engine.nodes().map { ($0.key, $0) })
+
+        let change = engine.prepend((100...110).flatMap { turnEvents($0) })
+
+        let changed = Set(engine.nodes().filter { before[$0.key] != $0 }.map(\.key))
+        let missed = changed.subtracting(change.touched)
+        XCTAssertTrue(missed.isEmpty, "这些节点变了却不在 touched 里：\(missed.sorted())")
+    }
+
+    /// 前插的重导次数仍是变化量，与历史长度无关。
+    func testPrependingMaterializesOnlyTheTouchedSlots() {
+        func rebuilds(windowTurns: ClosedRange<Int>) -> Int {
+            var engine = assembler()
+            engine.rebuild(windowTurns.flatMap { turnEvents($0) })
+            let change = engine.prepend((100...110).flatMap { turnEvents($0) })
+            let before = engine.buildViewNodeCount
+            _ = engine.nodes(forKeys: change.touched)
+            return engine.buildViewNodeCount - before
+        }
+
+        let short = rebuilds(windowTurns: 200...220)
+        let long = rebuilds(windowTurns: 2000...2200)
+        XCTAssertEqual(short, long, "前插的重导次数与历史长度无关")
     }
 }

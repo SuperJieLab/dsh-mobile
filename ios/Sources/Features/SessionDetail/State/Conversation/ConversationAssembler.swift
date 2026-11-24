@@ -98,22 +98,35 @@ struct ConversationAssembler {
         return change
     }
 
-    /// 往回翻一页。既有格子的 key 与 state 逐条保留，只有受影响的格子重算。
+    /// 往回翻一页。
     ///
-    /// **报「说不清」**：`rebuildLocations()` 会改写**所有**槽位的匹配位置，不只是新事件
-    /// 命中的那几个；位置又是匹配的一部分（过程行按位置滤条目、`isLastStep` 读起点位置），
-    /// 所以「命中集」不等于「变化集」。要把它变成增量，得先做位置索引的增量。
+    /// **说得清**：位置扫描只碰「插入段 + 污染区间」—— 污染区间是「原窗口里第一个会重置
+    /// 扫描状态的事件」之前的那段，通常为空（窗口按轮边界切，首条就是 `turn/start`）。
+    /// 区间为空时，既有槽位的位置一条都不变，变化集就是这次命中的槽位。
+    /// 区间改写了既有坐标时（`changedOrders` 非空）说不清哪些槽位受影响，退全量回填。
     @discardableResult
     mutating func prepend(_ events: [AssemblyEvent]) -> AssemblyChange {
         let fresh = events
             .filter { inputs[$0.order] == nil }
             .sorted { $0.order < $1.order }
         guard !fresh.isEmpty else { return .none }
+
+        // 区间终点要在写入之前取：写入之后再找「第一个自设状态事件」会撞上新插的边界。
+        let spoiled = spoiledRange()
+
         for event in fresh {
             inputs[event.order] = event
             insertOrdered(event)
         }
-        rebuildLocations()
+
+        let state = locationIndex.advance(fresh, from: .initial)
+        var rebuilt = false
+        if !spoiled.isEmpty {
+            _ = locationIndex.advance(spoiled, from: state)
+            // 区间改写了既有坐标 ⇒ 哪些槽位受影响说不清，整份回填。
+            rebuilt = !locationIndex.changedOrders.isEmpty
+        }
+        if rebuilt { rebuildLocations() }
 
         var pending: [String: [PendingHit]] = [:]
         var publication = Publication.none
@@ -124,7 +137,25 @@ struct ConversationAssembler {
             }
         }
         for (key, hits) in pending { merge(hits, into: key) }
-        return .full(Publication.maximum(publication, .immediate))
+        return AssemblyChange(publication: Publication.maximum(publication, .immediate),
+                              touched: Set(pending.keys), rebuilt: rebuilt)
+    }
+
+    /// 原窗口里「第一个会重置扫描状态的事件」之前的那段。区间为空是常态。
+    ///
+    /// **与 `advance` 里推进状态的三处赋值同规则** —— 那边加一种会重置状态的事件类型时，
+    /// 这里必须同一轮跟着改，否则区间会算短，而症状是「继承坐标算错却没有报错」。
+    private func spoiledRange() -> [AssemblyEvent] {
+        guard let end = orderedInputs.firstIndex(where: Self.setsScanState) else { return [] }
+        return Array(orderedInputs[..<end])
+    }
+
+    /// 与 `advance` 的状态推进同一套规则（见 `spoiledRange` 的注释）。
+    private static func setsScanState(_ event: AssemblyEvent) -> Bool {
+        switch event.type {
+        case "turn/start", "step/start": return true
+        default: return !event.isSessionScoped && event.turn != nil
+        }
     }
 
     /// 一次未定稿输出收笔：撤掉这个 attempt 的未定稿命中，可选地接下持久定稿事件。
