@@ -35,11 +35,33 @@ enum ChatNodeData: Equatable {
 }
 
 /// 一次排序的结果。`nodes` 含 hidden —— 判据要看得到它们，渲染层只看 `visible`。
+///
+/// **可见节点与消息条数在构造时算一次。** 它们是视图每帧都要读的两格，做成计算属性
+/// 就是「每帧全量过滤一遍 + 每帧全量遍历一遍」。算一次的开销与「取全量」同阶，摊在
+/// 刷新里；读的那一侧变成取值。
 struct ChatSnapshot: Equatable {
     let nodes: [ChatNode]
 
+    /// 上屏的那一半。构造时定，读它不分配。
+    let visibleNodes: [ChatNode]
+
+    /// 可见的消息与回复有多少条（命令行与过程行不算）。构造时定，读它不遍历。
+    let messageCount: Int
+
+    init(nodes: [ChatNode]) {
+        self.nodes = nodes
+        let visible = nodes.filter { $0.visibility == .visible }
+        self.visibleNodes = visible
+        self.messageCount = visible.reduce(0) { count, node in
+            switch node.data {
+            case .message, .assistant: return count + 1
+            case .process, .command: return count
+            }
+        }
+    }
+
     var visible: [ChatNode] {
-        nodes.filter { $0.visibility == .visible }
+        visibleNodes
     }
 
     static let empty = ChatSnapshot(nodes: [])
