@@ -25,6 +25,14 @@ struct ChatNode: Identifiable, Equatable {
     let anchorSeq: EventOrder
     let visibility: NodeVisibility
     let data: ChatNodeData
+
+    /// 这一行算不算「一条消息」—— 气泡与回复算，过程行与命令行不算。
+    var isMessage: Bool {
+        switch data {
+        case .message, .assistant: return true
+        case .process, .command: return false
+        }
+    }
 }
 
 enum ChatNodeData: Equatable {
@@ -34,7 +42,7 @@ enum ChatNodeData: Equatable {
     case command(CommandRun)
 }
 
-/// 一次排序的结果。`nodes` 含 hidden —— 判据要看得到它们，渲染层只看 `visible`。
+/// 一次排序的结果。`nodes` 含 hidden —— 判据要看得到它们，渲染层只看 `visibleNodes`。
 ///
 /// **可见节点与消息条数在构造时算一次。** 它们是视图每帧都要读的两格，做成计算属性
 /// 就是「每帧全量过滤一遍 + 每帧全量遍历一遍」。算一次的开销与「取全量」同阶，摊在
@@ -43,21 +51,34 @@ struct ChatSnapshot: Equatable {
     let nodes: [ChatNode]
 
     /// 上屏的那一半。构造时定，读它不分配。
+    ///
+    /// 没有 hidden 节点时它与 `nodes` 是同一个数组（浅拷一份引用，不复制元素）——
+    /// 增量合并因此不需要为它做索引，见 `ChatSnapshotBuilder.apply`。
     let visibleNodes: [ChatNode]
 
     /// 可见的消息与回复有多少条（命令行与过程行不算）。构造时定，读它不遍历。
     let messageCount: Int
 
+    /// 全量路径：一次遍历同时产出可见集与条数。
     init(nodes: [ChatNode]) {
         self.nodes = nodes
-        let visible = nodes.filter { $0.visibility == .visible }
-        self.visibleNodes = visible
-        self.messageCount = visible.reduce(0) { count, node in
-            switch node.data {
-            case .message, .assistant: return count + 1
-            case .process, .command: return count
-            }
+        var visible: [ChatNode] = []
+        visible.reserveCapacity(nodes.count)
+        var count = 0
+        for node in nodes {
+            guard node.visibility == .visible else { continue }
+            visible.append(node)
+            if node.isMessage { count += 1 }
         }
+        self.visibleNodes = visible.count == nodes.count ? nodes : visible
+        self.messageCount = count
+    }
+
+    /// 增量路径：可见集与条数由调用方按「改了几格」算好，不回头扫全表。
+    init(nodes: [ChatNode], visibleNodes: [ChatNode], messageCount: Int) {
+        self.nodes = nodes
+        self.visibleNodes = visibleNodes
+        self.messageCount = messageCount
     }
 
     static let empty = ChatSnapshot(nodes: [])

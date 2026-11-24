@@ -33,26 +33,61 @@ struct ChatSnapshotBuilder {
     /// 位置索引被整份重建之后（前插、边界事件、带定稿的收笔）必须走 `replace`：
     /// 那时任意槽位的锚点都可能变，按 key 并会把顺序搞错。
     ///
-    /// 常见路径是 O(log N) 的：更新已有格子就地替换，新增格子插在末尾。
+    /// 代价是 O(改了几格)：常见情形（没有 hidden 节点）下可见集就是 `nodes` 本身，
+    /// 条数按「这一格算不算消息」加减，不回头扫全表。有 hidden 节点时索引不再一一
+    /// 对应，退回一次全量构造 —— 那种情形只在「内容被清空的格子」出现。
     @discardableResult
     mutating func apply(_ updated: [ChatNode]) -> ChatSnapshot {
         guard !updated.isEmpty else { return snapshot }
+        let allVisible = snapshot.nodes.count == snapshot.visibleNodes.count
+        guard allVisible, updated.allSatisfy({ $0.visibility == .visible }) else {
+            var merged = snapshot.nodes
+            Self.merge(updated, into: &merged)
+            snapshot = ChatSnapshot(nodes: merged)
+            return snapshot
+        }
+
         var nodes = snapshot.nodes
+        var count = snapshot.messageCount
         for node in updated {
             var at = Self.insertionIndex(for: node, in: nodes)
+            if at < nodes.count, nodes[at].key == node.key {
+                count += Self.delta(from: nodes[at], to: node)
+                nodes[at] = node
+                continue
+            }
+            if let stale = nodes.firstIndex(where: { $0.key == node.key }) {
+                count += Self.delta(from: nodes[stale], to: node)
+                nodes.remove(at: stale)
+                at = Self.insertionIndex(for: node, in: nodes)
+            } else if node.isMessage {
+                count += 1
+            }
+            nodes.insert(node, at: at)
+        }
+        snapshot = ChatSnapshot(nodes: nodes, visibleNodes: nodes, messageCount: count)
+        return snapshot
+    }
+
+    /// 这一格「算不算一条消息」变了多少。
+    private static func delta(from old: ChatNode, to new: ChatNode) -> Int {
+        (new.isMessage ? 1 : 0) - (old.isMessage ? 1 : 0)
+    }
+
+    /// 全量兜底用的合并：换同 key、按位置插。
+    private static func merge(_ updated: [ChatNode], into nodes: inout [ChatNode]) {
+        for node in updated {
+            var at = insertionIndex(for: node, in: nodes)
             if at < nodes.count, nodes[at].key == node.key {
                 nodes[at] = node
                 continue
             }
-            // 锚点变了的旧条目会落在别处：先摘掉再按新位置插，否则同一 key 会出现两次。
             if let stale = nodes.firstIndex(where: { $0.key == node.key }) {
                 nodes.remove(at: stale)
-                at = Self.insertionIndex(for: node, in: nodes)
+                at = insertionIndex(for: node, in: nodes)
             }
             nodes.insert(node, at: at)
         }
-        snapshot = ChatSnapshot(nodes: nodes)
-        return snapshot
     }
 
     /// `node` 在已排序数组里该在的下标。同一 `(anchorSeq, key)` 的旧条目正好落在这里。

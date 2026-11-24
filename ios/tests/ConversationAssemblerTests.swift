@@ -540,6 +540,23 @@ final class ConversationAssemblerTests: XCTestCase {
                       "边界事件会重建位置索引，改到的是任意槽位 —— 变化集说不清")
     }
 
+    func testSettlingWithANamedSettlementSaysItCannotNameTheChangeSet() {
+        var engine = assembler()
+        engine.rebuild([
+            event(1, "turn/start", #"{"turn":1}"#),
+            event(3, "step/start", #"{"turn":1,"step":1}"#),
+        ])
+
+        let change = engine.settleAssistant(
+            attemptId: "a1",
+            settlement: event(6, "assistant/message",
+                              #"{"turn":1,"step":1,"message":{"id":"m1","content":[{"type":"text","text":"答案"}]}}"#)
+        )
+
+        XCTAssertTrue(change.rebuilt,
+                      "带定稿的收笔会重建位置索引，改到的是任意槽位 —— 丢了这个标记，行序会静默排错")
+    }
+
     func testPrependingSaysItCannotNameTheChangeSet() {
         var engine = assembler()
         engine.rebuild([event(9, "turn/start", #"{"turn":1}"#)])
