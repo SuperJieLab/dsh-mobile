@@ -188,6 +188,62 @@ final class SnapshotCostTests: XCTestCase {
         XCTAssertEqual(snapshot.messageCount, 1)
     }
 
+    // MARK: - 并入之后可见集与条数不漂
+
+    /// 同一格从消息换成命令：它还在屏上，但不再算一条消息。
+    func testApplyCountsDownWhenACellStopsBeingAMessage() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([
+            node("a", message("1", 1), anchor: 1),
+            node("b", message("2", 2), anchor: 2),
+        ])
+
+        let snapshot = builder.apply([node("b", command("ls"), anchor: 2)])
+
+        XCTAssertEqual(snapshot.messageCount, 1, "换成命令行之后不再算一条消息")
+        XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["a", "b"], "它还在屏上，只是换了一种行")
+    }
+
+    func testApplyCountsUpWhenANewMessageArrives() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([node("a", message("1", 1), anchor: 1)])
+
+        let snapshot = builder.apply([node("b", message("2", 2), anchor: 2)])
+
+        XCTAssertEqual(snapshot.messageCount, 2)
+        XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["a", "b"])
+    }
+
+    /// 锚点变了：这一格先被摘掉再插回去。两处都碰条数，重复计就会 +2。
+    func testApplyDoesNotDoubleCountWhenTheAnchorMoves() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([
+            node("a", message("1", 1), anchor: 1),
+            node("b", message("2", 2), anchor: 2),
+        ])
+
+        let snapshot = builder.apply([node("b", message("2", 5), anchor: 5)])
+
+        XCTAssertEqual(snapshot.nodes.map(\.key), ["a", "b"], "它只是往后挪了位置")
+        XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["a", "b"])
+        XCTAssertEqual(snapshot.messageCount, 2, "挪位置仍是同一条消息；重复计会变成 3")
+    }
+
+    /// hidden 的格子改了内容：不上屏，也不进条数。
+    func testApplyLeavesBothReadingsAloneWhenAHiddenCellChanges() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([
+            node("a", message("1", 1), anchor: 1),
+            node("h", assistant("hidden", 2), anchor: 2, visible: false),
+        ])
+
+        let snapshot = builder.apply([node("h", assistant("hidden, longer", 2), anchor: 2, visible: false)])
+
+        XCTAssertEqual(snapshot.messageCount, 1, "hidden 的助手行一条都不算")
+        XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["a"])
+        XCTAssertEqual(snapshot.nodes.map(\.key), ["a", "h"], "它仍在全量里")
+    }
+
     func testMergingAFramesWorthOfAppendsMaterializesOnlyOnce() {
         var assembler = engine()
         assembler.rebuild([userMessage(0)])
