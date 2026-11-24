@@ -1,14 +1,14 @@
 /**
- * 场景运行器（R8 期2 链路 B）—— 一条命令跑一个负载点，落一份产物：
+ * 场景运行器 —— 一条命令跑一个负载点，落一份产物：
  *
  *     node tools/bench/run.ts --rate 50 --payload mixed --backlog 0 --seconds 20 --out <dir>
  *
- * 一次 run = 一个进程（决定 5）：记录在**进程内**收集（`setPerfSink`，不解析
+ * 一次 run = 一个进程：记录在**进程内**收集（`setPerfSink`，不解析
  * stdout），产物是一行 JSONL（契约：`{runId, condition, records, verdict}`）；
- * 样本不足或负载点无效时**非零退出**，verdict 里写明原因（决定 6）。
+ * 样本不足或负载点无效时**非零退出**，verdict 里写明原因。
  *
  * 端口与凭证沿用假宿主的做法：随机高位端口 + 临时目录凭证 —— 扫参不污染
- * 真实的 `~/.dsh` 与凭证文件（决定 4）。
+ * 真实的 `~/.dsh` 与凭证文件。
  */
 import { mkdirSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -27,9 +27,9 @@ export interface RunOptions {
   seconds: number
   /** 产物目录；文件名按 `run-<序号>.jsonl` 顺延，同目录可承载一次扫参。 */
   outDir: string
-  /** 有效性判据 ①：会话事件样本下限（决定 6）。 */
+  /** 有效性判据 ①：会话事件样本下限。 */
   minEvents?: number
-  /** 有效性判据 ②：生成器落后量上限，ms（决定 2 / 6）。 */
+  /** 有效性判据 ②：生成器落后量上限，ms。 */
   lagLimitMs?: number
 }
 
@@ -50,7 +50,7 @@ export interface RunArtifact {
    */
   records: PerfLike[]
   verdict: { valid: boolean; reasons: string[] }
-  /** 生成器落后量（决定 2 的旁证）随产物走 —— 曲线点的有效性判定②要用它。 */
+  /** 生成器落后量（旁证）随产物走 —— 曲线点的有效性判定②要用它。 */
   lag: { samples: number; maxMs: number; lastMs: number }
 }
 
@@ -60,7 +60,7 @@ export async function runBenchScenario(options: RunOptions): Promise<RunArtifact
   const lagLimitMs = options.lagLimitMs ?? 500
   const sessionId = options.sessionId ?? 'bench-1'
 
-  // 记录进程内收集（决定 5）：sink 先挂上，门控在起网关前打开。
+  // 记录进程内收集：sink 先挂上，门控在起网关前打开。
   const gatewayRecords: PerfLike[] = []
   const previousDebug = process.env.DSH_LOG_DEBUG
   setPerfSink(line => {
@@ -92,7 +92,7 @@ export async function runBenchScenario(options: RunOptions): Promise<RunArtifact
   const eventCount = devRecords.filter(record => record.kind === 'event').length
   const lag = upstream.lag()
 
-  // 有效性判定（决定 6）：三条全满足才有效；无效点标注而不丢弃。
+  // 有效性判定：三条全满足才有效；无效点标注而不丢弃。
   const reasons: string[] = []
   if (eventCount < minEvents) {
     reasons.push(`event samples ${eventCount} < ${minEvents}`)

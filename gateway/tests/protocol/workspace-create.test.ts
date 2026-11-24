@@ -32,7 +32,7 @@ function workspacePort(
   return {
     asked,
     port: {
-      // 这组用例不读列表；分组链路的判据在 `list-workspaces.test.ts`。
+      // 这组用例不读列表；分组链路的判据在 `tests/remote/workspace-stream.test.ts`。
       delete: async () => { throw new Error('workspace-create must not delete anything') },
       create: async (path) => {
         asked.push(path)

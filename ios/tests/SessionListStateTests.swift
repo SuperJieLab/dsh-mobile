@@ -710,7 +710,7 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertFalse(state.isCreatingWorkspace)
     }
 
-    /// 判据 9：点开「新建工作空间」只发浏览请求，不建任何东西。
+    /// 点开「新建工作空间」只发浏览请求，不建任何东西。
     ///
     /// 视图那一侧只调 `beginWorkspaceCreation()` + `browseDirectory(nil)`；把它们换成
     /// `createWorkspace` 不会有任何测试变红 —— 这一条守的就是这个边界。
@@ -799,7 +799,7 @@ final class SessionListStateTests: XCTestCase {
         XCTAssertEqual(fetch.calls, 2, "一次在途 + 创建之后那一次")
     }
 
-    // MARK: - 标题两源（判据 6）
+    // MARK: - 标题两源
 
     /// 控制流推来标题 → 那一行换名，且**一次列表读都不多**。
     ///
@@ -819,7 +819,7 @@ final class SessionListStateTests: XCTestCase {
         control.updateListeners.fire(("s1", .object(["title": .string("新名")]), 7))
 
         XCTAssertEqual(state.rows.map(\.title), ["新名"], "投影覆盖行自带的标题")
-        XCTAssertEqual(fetch.calls, before, "标题变了不重拉 —— 判据 6 的另一半")
+        XCTAssertEqual(fetch.calls, before, "标题变了不重拉")
     }
 
     /// 非字符串（含 `null`）不覆盖：那是「投影这一格读不出」，不是「标题被清空」。

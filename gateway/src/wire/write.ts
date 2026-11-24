@@ -7,11 +7,11 @@
  *
  * 这里**只有形状与解析**。答应的结局词汇住在 `ports/write.ts`（装配边界），
  * 结论是否有地方翻译：**没有**。`allowed-once` / `rejected` / `{answers:[…]}` 是
- * 上游的词汇，客户端直接发、网关原样转 —— 一张映射表就是第二份词汇（F3 第 3 期删掉了
- * 那张 `allow`→`allowed-once` 的表）。
+ * 上游的词汇，客户端直接发、网关原样转 —— 一张 `allow`→`allowed-once` 的映射表
+ * 就是第二份词汇。
  *
- * `answerId` 已经退场（F3 第 3 期）：幂等由上游 waterfall 的一次性消费承担 ——  // terms-ok: 说明已退场的键
- * 对已结算的事件再答一次是**幂等 no-op**，不是错误。客户端不再需要铸键。
+ * 线上没有幂等键这一格：幂等由上游 waterfall 的一次性消费承担 ——
+ * 对已结算的事件再答一次是**幂等 no-op**，不是错误。客户端不铸键。
  */
 import { isPlainObject, nonEmptyString, requestContainerOf } from './fields.ts'
 
@@ -92,7 +92,7 @@ export function remoteEventResultOf(message: Record<string, unknown>): RemoteEve
   return { clientId, eventId, outcome }
 }
 
-/** prompt 里的一段内容。本期只有文本 —— 附件在 spec 范围外。 */
+/** prompt 里的一段内容。只有文本 —— 附件在范围外。 */
 export interface PromptTextPart {
   readonly type: 'text'
   readonly text: string
@@ -123,7 +123,7 @@ function textPartOf(raw: unknown): PromptTextPart | undefined {
  * 解析并校验一条 `session/prompt` 载荷（**含宿主的 `request` 容器**）。
  *
  * 五个键逐格校验，容器缺席即拒。`content` 至少一段非空白文本 —— 与上游
- * `hasPromptContent` 同一条底线；附件不在本期范围内，所以只收 `type:"text"`。
+ * `hasPromptContent` 同一条底线；附件不在范围内，所以只收 `type:"text"`。
  */
 export function sessionPromptOf(args: Record<string, unknown>): SessionPromptMessage | undefined {
   const request = requestContainerOf(args)

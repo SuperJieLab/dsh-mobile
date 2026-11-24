@@ -83,7 +83,7 @@ final class SourceLevelTests: XCTestCase {
             "Sources/Features/SessionDetail/State/SessionFollowing.swift"))
         XCTAssertTrue(following.contains("func start()"), "读到的不是流开关 —— 先怀疑路径推算")
         XCTAssertEqual(hits, [],
-                       "状态层里又出现了第二条取数路 —— 一屏只有一个来源（判据 12）")
+                       "状态层里又出现了第二条取数路 —— 一屏只有一个来源")
     }
 
     // MARK: - 收帧链路只解一次

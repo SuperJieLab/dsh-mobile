@@ -43,7 +43,7 @@ export interface RemoteEventAnswerLike {
 /**
  * 上游在 `$events` 上挂起的两类调用 —— `#hold` 只收这两类。
  *
- * 应答**不再按类别分派**：`outcome` 由客户端给出，网关原样转发（第 3 期）。
+ * 应答**不按类别分派**：`outcome` 由客户端给出，网关原样转发。
  */
 const APPROVAL_EVENT = 'approval/request'
 const QUESTION_EVENT = 'user-questions/request'
@@ -262,8 +262,8 @@ export async function pumpPrompt(controller: PromptControllerLike, prompt: Sessi
   // 排队后回合即继续。
   const signal = AbortSignal.timeout(30_000)
   try {
-    // 五个字段原样交出去：`content` 不再由网关拼、`mode` 不再固定 `queue`、
-    // 时区缺了就不出现（不补 `null`）。
+    // 五个字段原样交出去：`content` 与 `mode` 都是客户端给的，时区缺了就不出现
+    // （不补 `null`）。
     await controller.prompt({
       requestId: prompt.requestId,
       sessionId: prompt.sessionId,

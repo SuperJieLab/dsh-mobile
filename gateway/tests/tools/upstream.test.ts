@@ -1,10 +1,10 @@
 /**
- * 合成负载与假宿主的判据（R8 期2 Task 1）。
+ * 合成负载与假宿主的判据。
  *
  * H1 —— 假上游按 `eventRate` 产出事件，消费侧收到的条数与目标一致（容差内）：
  *       负载真的可参数化，不是「跑起来了」就算。
  * H2 —— 假宿主缺任一面时高声失败并指出缺哪一面：cordis 对缺面的真实反应是
- *       静默扣住 fiber，断言必须在 `apply` 之前替它喊出来（决定 1）。
+ *       静默扣住 fiber，断言必须在 `apply` 之前替它喊出来。
  *
  * 观测接缝 = `sessionController.follow` —— 网关泵消费的就是这一个接口，
  * 测试直接站在同一个缝上计数，不绕道任何内部。
@@ -98,7 +98,7 @@ test('H1: 事件率减半，产出随之减半（参数真的在起作用）', {
   assert.ok(fast > slow * 1.5, `halving the rate must visibly halve the output: ${fast} vs ${slow}`)
 })
 
-test('H1: 生成器落后量随产出被记录（决定 2 的旁证在场）', async () => {
+test('H1: 生成器落后量随产出被记录（旁证在场）', async () => {
   const upstream = startFakeUpstream({
     sessions: ['s1'],
     eventRate: 50,
@@ -123,7 +123,7 @@ test('H1: 生成器落后量随产出被记录（决定 2 的旁证在场）', a
   assert.ok(lag.maxMs >= 0, 'lag is a non-negative quantity')
 })
 
-// MARK: - backlog 与 seq 连续性（决定 3：积压以 seq 缺口计）
+// MARK: - backlog 与 seq 连续性（积压以 seq 缺口计）
 
 test('backlogSeq=N 时打开帧携带 N 条历史，续发事件 seq 连着走', { timeout: 10_000 }, async () => {
   const upstream = startFakeUpstream({

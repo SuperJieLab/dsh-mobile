@@ -19,6 +19,7 @@ expect-hit;workspace_clause;spec 2.4.3 不允许看起来正常
 expect-hit;workspace_chain;可见形态（链路 C）
 expect-hit;workspace_amendment;这一条（修正 12）说的是悬空审计
 expect-hit;workspace_criterion;七条断言（Q1–Q7）
+expect-hit;workspace_criterion;这一条（判据 3）说的是归属
 expect-hit;workspace_milestone;快照与页面共用（M1）
 expect-hit;workspace_register;代价登记在 ISSUES C26
 expect-hit;workspace_phase_word;期2 用它估两端 offset
@@ -30,6 +31,7 @@ expect-pass;workspace_clause;special 2 次调用
 expect-pass;workspace_chain;网络链路断了
 expect-pass;workspace_amendment;这一轮修改了 3 个字段
 expect-pass;workspace_criterion;CPU 占用率 20%
+expect-pass;workspace_criterion;这条判据是人想的，事件序列是上游给的
 expect-pass;workspace_milestone;10 MiB 的帧
 expect-pass;workspace_register;issue 已关闭
 expect-pass;workspace_phase_word;三个周期之后

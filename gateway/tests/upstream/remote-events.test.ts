@@ -80,7 +80,7 @@ test('a live subscription hears a new generation, and only once', async () => {
   }
 })
 
-test('判据 4：上游 ready 的 host 被保存下来，并与身份一起作废', async () => {
+test('上游 ready 的 host 被保存下来，并与身份一起作废', async () => {
   // 这一半**只能在源这一层测**：泵会把 `feed.host()` 原样搬进 `ready`，所以只测泵的话，
   // 「上游把这个字段丢了」这件事在任何帧上都看不出来 —— 客户端只会看到 host 永远缺席。
   const feed = fakeEventStream({ host: { home: '/Users/someone/proj' } })

@@ -26,7 +26,7 @@ function workspacePort(remove: (id: string) => Promise<void>): {
   return {
     asked,
     port: {
-      // 这组用例不读列表；分组链路的判据在 `list-workspaces.test.ts`。
+      // 这组用例不读列表；分组链路的判据在 `tests/remote/workspace-stream.test.ts`。
       create: async () => { throw new Error('create is not expected in a delete test') },
       delete: async (workspaceId) => {
         asked.push(workspaceId)

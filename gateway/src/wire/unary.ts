@@ -3,15 +3,16 @@
  *
  * 形状逐字照上游 Web UI 的 Connection RPC：请求是 `client-request`，应答是
  * `server-response`，参数在 `payload.args` 这一格容器里，失败的三个键恒定。
- * **没有版本字段** —— 上游没有；旧客户端连新网关靠「端点不存在」发现。
+ * **没有版本字段** —— 上游没有。版本不一致时先在这里被看见：多出来的键（比如残留的
+ * `v`）会让整条请求解析不成形，走不到端点表。
  *
  * 这一层只管「一条消息的壳长什么样、怎么从字节里读出来」。哪个名字由谁处理、
  * 参数合不合法，是 `protocol/` 的事 —— 分开放的理由：名字与处理器住在 `protocol/`，
  * 而 `wire/` 不许认识它们（`structure.test.ts` 的「wire/ does not reach outside itself」）。
  *
- * 端点名分两片：照上游的七个（`session/modelCatalog` 等，加上本期的 `session/page`）
- * 与我们自造的（一律挂 `mobile/`）。分开是为了将来对齐时知道该搬哪些 —— 混用上游
- * 命名空间会让「同名不同义」写进契约，读上游文档的人会读错。
+ * 端点名分两片：照上游的十三个（`session/modelCatalog` 等）与我们自造的（一律挂
+ * `mobile/`）。分开是为了将来对齐时知道该搬哪些 —— 混用上游命名空间会让
+ * 「同名不同义」写进契约，读上游文档的人会读错。
  */
 
 import { nonEmptyString } from './fields.ts'
@@ -19,8 +20,8 @@ import { nonEmptyString } from './fields.ts'
 /**
  * 我们开的一元端点名，两段式。
  *
- * 十二个与上游逐字一致（参数与返回内容见各期方案）；剩下两条是移动端鉴权
- * （`pair` / `refresh`）—— 手机没有浏览器入口，这一层永远是我们自己的。
+ * 十三个与上游逐字一致；剩下两条是移动端鉴权（`pair` / `refresh`）—— 手机没有浏览器
+ * 入口，这一层永远是我们自己的。
  */
 export type UnaryEndpointName =
   | 'session/modelCatalog'

@@ -8,9 +8,8 @@
  * 两种失败分开：`unknown-endpoint`（名字不在表里 —— 两端说不到一处）与
  * `invalid-args`（名字对、内容不对 —— 同一处说错了东西）。排障时它们指向不同的一端。
  *
- * ⚠️ 这里比早先的实现严格：那一版对非法的 `maxMessages` **静默忽略**，
- * 这里判 `invalid-args`。静默忽略会让客户端的错误参数看起来「生效了」，而请求
- * 实际按缺省值发出去 —— 那是假绿的一种。
+ * ⚠️ 非法的 `maxMessages` 判 `invalid-args`，不静默忽略：忽略会让客户端的错误参数
+ * 看起来「生效了」，而请求实际按缺省值发出去 —— 那是假绿的一种。
  */
 
 import { isPlainObject, isPositiveInteger, nonEmptyString, requestContainerOf } from './fields.ts'
@@ -37,8 +36,8 @@ export interface SessionAddress {
 /**
  * `open` 载荷携带的 follow 请求 —— **上游 `SessionFollowRequest` 逐字**。
  *
- * 网关不再按自己的目标重算窗口（那一版把 `maxMessages` 乘二、`minTurns` 改成 1，
- * 于是同一屏在手机与 Web UI 上长度不同）。这里收到的就是宿主方法的实参，原样交出去；
+ * 网关不按自己的目标重算窗口（把 `maxMessages` 乘二、`minTurns` 改成 1 这类做法会让
+ * 同一屏在手机与 Web UI 上长度不同）。这里收到的就是宿主方法的实参，原样交出去；
  * 缺省的键也**不补** —— 补一个宿主没要的默认值，就是第二份窗口规则。
  */
 export interface FollowRequest {

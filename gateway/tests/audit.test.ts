@@ -87,7 +87,7 @@ test('an entry round-trips through format and parse', () => {
 })
 
 test('a target with spaces survives the round trip', () => {
-  // F3 第 4 期起 target 是宿主路径，空格是常态（契约的示例就是「记账 App」）。
+  // target 是宿主路径，空格是常态（契约的示例就是「记账 App」）。
   // 按空格切字段会把目标读成半截，而那种错不会抛异常。
   for (const target of ['/Users/x/记账 App', '带 空格 与 "引号" 的路径']) {
     const entry = {

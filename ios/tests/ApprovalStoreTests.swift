@@ -380,7 +380,7 @@ final class ApprovalStoreTests: XCTestCase {
     }
 }
 
-// MARK: - 归属（判据 9 的后两段）
+// MARK: - 归属
 
 @MainActor
 final class ApprovalOwnershipTests: XCTestCase {

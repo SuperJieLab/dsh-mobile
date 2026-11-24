@@ -154,7 +154,7 @@ final class InboundFrameTests: XCTestCase {
         XCTAssertEqual(clientId, "c-1", "type 是唯一判别字段，别的键不参与分派")
     }
 
-    // MARK: - 每条流只认自己的货物（判据 16）
+    // MARK: - 每条流只认自己的货物
 
     /// 一个 cargo 值在每条流上的归属 —— **同名字段不同形状的那一格不再互相遮挡**。
     ///
@@ -264,7 +264,7 @@ final class InboundFrameTests: XCTestCase {
         XCTAssertNil(frame.value, "error 帧没有货物原文")
     }
 
-    /// 判据 7 的流那一半：`details` 要解出来，缺了给空字典 ——
+    /// 流那一半：`details` 要解出来，缺了给空字典 ——
     /// 与一元那边的 `GatewayFailure` 同一套规则，两条通道对同一格不能一个严一个宽。
     func testErrorFrameCarriesDetails() throws {
         let withDetails = try decode(
@@ -290,7 +290,7 @@ final class InboundFrameTests: XCTestCase {
 
     // MARK: - 旧形状
 
-    /// 判据 4：旧形状 `{payload:…}` 没有 `value` —— 收端据此留痕。
+    /// 旧形状 `{payload:…}` 没有 `value` —— 收端据此留痕。
     ///
     /// 静默丢弃是这条判据要防的那件事：它会让「对端还在说旧协议」表现得和「这一帧坏了」
     /// 一样 —— 什么都不发生。

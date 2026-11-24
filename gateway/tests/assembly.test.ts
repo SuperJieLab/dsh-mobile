@@ -3,7 +3,7 @@
  *
  * 为什么不是又一个假上下文：cordis 对没在 `inject` 里声明的服务属性一读就抛
  * （`cannot get property "x" without inject`），这条规矩属于宿主运行时，手写替身**永远只能
- * 复刻我此刻想到的那一面**。R24 期1 就这样漏过一次：普通对象给 `undefined`，全量测试是绿的，
+ * 复刻我此刻想到的那一面**。普通对象给 `undefined`，全量测试是绿的，
  * 插件在真机上 `apply` 里当场死掉。所以这一层的判据用真的宿主，不用假件。
  *
  * 两个前提都自己验：`apply` 真的跑了（inject 缺一名就会永远 pending，探针会「通过」得毫无意义），
@@ -50,8 +50,7 @@ function hostServices(): Record<string, unknown> {
   return {
     sessionPersistence: {},
     sessionQuery: { listSessions: async () => [] },
-    sessionProjections: { cachedSnapshot: () => undefined, snapshot: () => undefined },
-    sessionProjectionCache: { cachedSnapshot: () => undefined },
+    sessionProjections: { snapshot: () => undefined },
     sessions: { get: () => undefined },
     agents: { get: (id: string) => (id === 's' ? { id } : undefined) },
     // 列表分组用；空注册表就够了 —— 这条用例问的是装配与注入，不是分组结果。

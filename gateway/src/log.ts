@@ -18,12 +18,12 @@ export const LogModule = {
   faces: "faces",
   model: "model",
   command: "command",
-  // 权限预设：目录读取与「切一档」那次命令调用。与 `command` 分开是因为它失败时
-  // 手机上的落点不同（那一格显示旧值），排障时要知道是目录读不出还是切换被拒。
+  // 权限预设：只用于目录读取。与 `command` 分开是因为它失败时手机上的落点不同
+  // （那一格不画），排障时要知道是目录读不出还是命令没跑起来。
   permission: "permission",
   usage: "usage",
-  // 工作空间的写链路：问系统要根、建目录、注册、解注册。与 `faces` 分开是因为
-  // 这条链有一步在进程之外（osascript），排障时要能把它单独拎出来看。
+  // 工作空间的写链路：注册与解注册。与 `faces` 分开是因为这两条是用户看得见的
+  // 结构变化（组出现 / 组消失），排障时要能单独拎出来看。
   workspace: "workspace",
 } as const;
 
@@ -62,9 +62,8 @@ export function formatLogFields(fields?: LogFields): string {
 /**
  * 行去哪。默认 stdout / stderr —— 生产上唯一的去向。
  *
- * 可替换只有测试会做（与 `perf.ts` 的 `setPerfSink` 同一个手法）：有一条判据是
- * 「osascript 超时之后日志里读得到那一句」，而那句话的价值恰恰在于**别的失败说不出它** ——
- * 不能捕获就无从断言。
+ * 可替换只有测试会做（与 `perf.ts` 的 `setPerfSink` 同一个手法）：判据要把某一行收进
+ * 数组才能断言，而那句话的价值恰恰在于**别的失败说不出它** —— 不能捕获就无从断言。
  */
 let sink: (level: LogLevel, module: string, line: string) => void = (level, _module, line) => {
   if (level === "warn" || level === "error") console.error(line);
@@ -128,7 +127,7 @@ export function mintRequestId(): string {
 
 // 时间戳的形状在 `timestamp.ts`（两端各一份实现、同一组样本）；这里只是唯一的出口。
 export { logTimestamp } from './timestamp.ts';
-// 性能记录通道（R8 期1）：调用面统一走本文件导出，物理实现在 perf.ts ——
+// 性能记录通道：调用面统一走本文件导出，物理实现在 perf.ts ——
 // 同标签、同门控、同 stderr 的一支。埋点调用点因此只 import log.ts 一个出口。
 export {
   perfNow,

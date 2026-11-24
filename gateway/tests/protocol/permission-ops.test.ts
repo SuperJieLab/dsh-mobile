@@ -5,7 +5,7 @@
  * `session/control` 到客户端）；把它塞回目录应答，就会出现「目录是新的、当前值是旧的」
  * 而没人分得清——判据把这条按 deepEqual 钉死：多一格 `current` 就红。
  *
- * **切档不在这里**：走 `commands/execute` 的 `/permission <preset>`（判据 10）。
+ * **切档不在这里**：走 `commands/execute` 的 `/permission <preset>`。
  */
 
 import assert from 'node:assert/strict'

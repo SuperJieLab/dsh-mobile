@@ -27,7 +27,7 @@ export function fakeFeed(): ForwardedSource & {
   push(frame: UpstreamWireFrame): void
   /** 换代次；`undefined` = 源失效。 */
   setGeneration(generation: number | undefined): void
-  /** 这一代的宿主工作目录（判据 4 的第一半用它）。 */
+  /** 这一代的宿主工作目录。 */
   setHost(host: { home: string } | undefined): void
   subscribers(): number
 } {
@@ -197,7 +197,7 @@ export function snapshotFrame(
   }
 }
 
-/** A turn boundary — the only place an opening window may be cut on (R9 期1). */
+/** A turn boundary — the only place an opening window may be cut on. */
 export function turn(seq: number): WireEvent {
   return { type: 'turn/start', seq, time: 1_700_000_000_000 + seq, data: {} }
 }

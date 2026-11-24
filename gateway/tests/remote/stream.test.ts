@@ -295,7 +295,7 @@ test('the opening carries no model — the projection is the only source', { tim
 })
 
 test('pump: one perf record per forwarded frame — opening and events alike', { timeout: 10_000 }, async () => {
-  // R8 期1 链路 A：每条过 send 边界的帧都留一条 gw 记录 —— 事件帧带 `seq`
+  // 每条过 send 边界的帧都留一条 gw 记录 —— 事件帧带 `seq`
   // 与上游 `time`（`evTime`），窗口重放带 `kind: 'opening'` 与 `events`
   // 计数；两者都带同机的 `gwRecv` / `gwSend` 与帧字节数。判读按 `kind`，
   // 不按「`seq` 缺席」。
@@ -346,7 +346,7 @@ test('pump: one perf record per forwarded frame — opening and events alike', {
     assert.equal(typeof record.bytes, 'number')
     assert.ok((record.bytes as number) > 0, 'the frame really was serialised')
     assert.ok((record.gwRecv as number) <= (record.gwSend as number), 'same-machine boundaries do not invert')
-    // R8 期2 U2：t2 段（gwRecv → gwSend）是瓶颈指认的依据，1 ms 的整数分辨力
+    // t2 段（gwRecv → gwSend）是瓶颈指认的依据，1 ms 的整数分辨力
     // 让它恒为 0 —— 两端必须是亚毫秒值。
     assert.ok(!Number.isInteger(record.gwRecv as number), 'gwRecv carries sub-ms precision')
     assert.ok(!Number.isInteger(record.gwSend as number), 'gwSend carries sub-ms precision')
@@ -372,7 +372,7 @@ test('pump: one perf record per forwarded frame — opening and events alike', {
 test('opening narrowing: cut on a turn boundary, kept under the byte cap', { timeout: 10_000 }, async () => {
   // Two turns whose messages are large enough to blow a small cap. Narrowing must
   // (a) keep the frame under the cap and (b) leave the start on a turn boundary —
-  // never inside a turn, where the same span would render two ways (R9 期1 / B6).
+  // never inside a turn, where the same span would render two ways.
   const log = [turn(0), filler(1, 300), turn(2), filler(3, 300)]
   const source = fakeSource([snapshotFrame(log, 4)])
   const server = createServer()

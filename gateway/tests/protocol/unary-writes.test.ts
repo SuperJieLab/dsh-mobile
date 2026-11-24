@@ -1,5 +1,5 @@
 /**
- * 七个写端点在新路径上的行为（判据 3 的写半边、判据 8）。
+ * 七个写端点在新路径上的行为。
  *
  * 写端点比读端点多一条要守的：**拒绝不能变成受理**。`ok` 在这些 op 上的含义是
  * 「已投递 / 已受理 / 已装好」，不是「执行成功」—— 把它们混起来，客户端会在一次
@@ -190,7 +190,7 @@ test('每个写端点的拒绝码与旧路径一致 —— 拒了就不能说 ok
   })
 })
 
-test('判据 8：未知键不被拒 —— 容器里多一格照样受理', async () => {
+test('未知键不被拒 —— 容器里多一格照样受理', async () => {
   await withListener(async (post) => {
     // 多余的键被忽略而不是拒答：容器里那些宿主认得的键靠的正是这份宽松，
     // 收紧成「未知键一律拒」会把所有旧客户端一次打死。
@@ -214,7 +214,7 @@ test('判据 8：未知键不被拒 —— 容器里多一格照样受理', asyn
   })
 })
 
-test('判据 8：可应答标记被读 —— canAnswer 为假的身份答不了审批', async () => {
+test('可应答标记被读 —— canAnswer 为假的身份答不了审批', async () => {
   // 身份由**参数**构造：生产里没有第二种身份的来源（配对出来的都是 owner），
   // 所以这一支只能在判定层上造出来。见方案「不解决的边界」第 1 条。
   const delivered: string[] = []
@@ -238,7 +238,7 @@ test('判据 8：可应答标记被读 —— canAnswer 为假的身份答不了
   assert.equal(allowed.ok, true)
   assert.deepEqual(delivered, ['e-1'])
 
-  // 同一条流、另一个身份：流在，但不是你的（真端口上的版本是判据 7）。
+  // 同一条流、另一个身份：流在，但不是你的（真端口上的版本在 `tests/index.test.ts`）。
   const intruder = await remoteEventResultValue(args, write, { id: 'i-other', canAnswer: true }, owners)
   assert.equal(intruder.ok, false)
   assert.equal(intruder.ok ? '' : intruder.error.code, 'not-owner')

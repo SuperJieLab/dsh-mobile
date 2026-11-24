@@ -76,7 +76,7 @@ custom_rules:
     severity: error
   workspace_criterion:
     name: 判据编号
-    regex: '\b[QNG]\d{1,2}\b'
+    regex: '\b[QNG]\d{1,2}\b|判据\s*\d'
     match_kinds: [comment, doccomment, comment.mark]
     message: 判据编号同上
     severity: error

@@ -44,7 +44,7 @@ final class SessionSyncTests: XCTestCase {
                        "顺手钉住换算：148807 / 1000000 四舍五入是 15%")
     }
 
-    /// 判据 10：当前模型由 `modelSelection` **投影**驱动 —— 切了模型它跟着变，
+    /// 当前模型由 `modelSelection` **投影**驱动 —— 切了模型它跟着变，
     /// 而打开帧那一份永远停在打开那一刻（第 2 期起那一份已经没有了）。
     ///
     /// 走的是真解码：控制帧的文本进 `ControlStream.handle`，与生产同一条路。
@@ -124,7 +124,7 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(sync.usage?.usedTokens, 60, "水位没推进的要丢 —— 乱序与重放不该让百分比跳回去")
     }
 
-    /// 判据 7：发出去的那一行先上屏，持久事件按 `source.rpcId` 认领它。
+    /// 发出去的那一行先上屏，持久事件按 `source.rpcId` 认领它。
     ///
     /// 两条路各自都绿、中间那一跳没人守，就会同时出现「两条一样的消息」或
     /// 「屏幕上什么都没有」—— 而这两种都不报错。走真传输（脚本化 URLProtocol），

@@ -50,7 +50,7 @@ final class WorkspaceStreamTests: XCTestCase {
 
     /// `replace` 与 `baseline` 同形，但**不是**开口帧；语义是整份替换 —— 旧组一个都不留。
     ///
-    /// 这条是判据 7 的核心：增量合并的写法会把 w-2 留在屏上，而它在宿主那边已经没了。
+    /// 这条是核心：增量合并的写法会把 w-2 留在屏上，而它在宿主那边已经没了。
     func testReplaceSwapsTheWholeListAndDoesNotEstablish() throws {
         let stream = WorkspaceStream()
         try feed(stream, baseline)
@@ -144,7 +144,7 @@ final class WorkspaceStreamTests: XCTestCase {
                        "提到的按新顺序在前，没提到的保留在末尾")
     }
 
-    /// 判据 7 的另一半：`archived` / `pinned` 只改两个集合，**组清单一动不动**。
+    /// `archived` / `pinned` 只改两个集合，**组清单一动不动**。
     func testArchivedAndPinnedOnlyTouchTheirSets() throws {
         let stream = WorkspaceStream()
         try feed(stream, baseline)
@@ -158,7 +158,7 @@ final class WorkspaceStreamTests: XCTestCase {
         XCTAssertEqual(stream.pinnedSessionIds, ["s-3", "s-1"], "顺序有意义：最近置顶的在前")
     }
 
-    /// 判据 16 的客户端半边：`session/control` 的 `baseline` 喂给组流 → 不认识、丢弃，
+    /// 客户端半边：`session/control` 的 `baseline` 喂给组流 → 不认识、丢弃，
     /// 且**不改任何状态**。
     ///
     /// 两者同名不同形（投影表 vs 组清单）。共用一个解码器时，这里会解成空组清单 ——
@@ -190,7 +190,7 @@ final class WorkspaceStreamTests: XCTestCase {
     /// 终态拒绝之后**已知的组一个都不清**：界面保持断开前的值。
     ///
     /// 清空会让「组流断了」表现成「所有组都没了」—— 用户看到的是数据丢失，而实际上
-    /// 只是这条流停了。判据 5 的另一半就落在这里：列表的显示不依赖这条流活着。
+    /// 只是这条流停了。列表的显示不依赖这条流活着。
     func testATerminalRefusalKeepsTheLastKnownGroups() throws {
         let stream = WorkspaceStream()
         try feed(stream, baseline)

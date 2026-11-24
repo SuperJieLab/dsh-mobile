@@ -4,7 +4,7 @@
  *
  *   wire/      两端共守的形状与编解码 —— 改它，手机端必须同改
  *   ports/     装配边界：端口接口与上游失败的词汇
- *   protocol/  服务端协议判定：op 分派与处理器、窗口算术、用量投影、认证规则
+ *   protocol/  服务端协议判定：op 分派与处理器、用量投影、认证规则
  *   remote/    面向手机的传输（一元调用、流通道、RFC 成帧）
  *   upstream/  面向 DSH 宿主的适配
  *
@@ -47,7 +47,6 @@ export const inject = [
   // 列表**不**在这里 —— 它转发宿主的 `session/list`（`sessionListFace`），
   // 连 `sessionQuery` 都不必注入：转发之后网关不再自己拼行。
   'sessionProjections',
-  'sessionProjectionCache',
   'sessions',
   'agents',
   // 工作空间的写面：把一条**已存在的**目录注册成组。「这一次是不是新建的」只有它回答。
@@ -69,7 +68,7 @@ export interface Config {
   host?: string
   /** 绑定端口。 @default 3081 */
   port?: number
-  /** follow 打开单帧的字节上界，字节（R9 期1）。与上两个同理做成配置：调到
+  /** follow 打开单帧的字节上界，字节。与上两个同理做成配置：调到
    * 极小值就能看见收窄路径真的发生。 @default 4194304 */
   maxOpeningBytes?: number
   /** 凭据文件位置；可覆盖，让装配冒烟测试绝不碰真实 home。
@@ -107,7 +106,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   const host = config.host ?? DEFAULT_HOST
   const port = config.port ?? DEFAULT_PORT
   // 两条读路径都是**转发**：列表给 `session/list`，一页历史给 `session/page`。
-  // 网关不再读日志 —— 那份「哪些记录算一页」的规则归宿主，抄一份在它改规则时不会红。
+  // 网关不读日志 —— 那份「哪些记录算一页」的规则归宿主，抄一份在它改规则时不会红。
   const sessionPort: SessionPort = {
     list: sessionListFace(ctx),
     page: sessionPageFace(ctx),
@@ -116,7 +115,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // 可观测，这正是它们的验证方式。
   const limits = resolveLimits(config)
 
-  // 保险库持有三张票（M4 §4.2）。
+  // 保险库持有三张票。
   // `pair` / `refresh` 绕过闸门 —— 它们自带凭据。
   const vault = new CredentialVault(config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH)
   if (config.deviceTokenSeed !== undefined) {
@@ -127,8 +126,8 @@ export function apply(ctx: HostContext, config: Config = {}): void {
 
   // 写通道：上游 `$events` 流由 `ForwardedEvents` 持有（进程一份身份），中继订阅它
   // 把 `approval-answer` 桥接回去（宿主侧 waterfall 监听器收不到远程应答 —— api-remotes
-  // 会把它们挂起，直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`
-  // （M5 §四）。手机侧的事件流是同一个源的第二类订阅者，不开第二条身份。
+  // 会把它们挂起，直到有远程客户端开口）；泵经控制器自己的门转发 `session-prompt`。
+  // 手机侧的事件流是同一个源的第二类订阅者，不开第二条身份。
   const relayLifetime = new AbortController()
   const gatewayFace = gatewayOver(ctx)
   const forwardedEvents = new ForwardedEvents(gatewayFace)
@@ -142,9 +141,9 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // `inject` 里（它是扩展，缺席不该让整个网关 pending），所以端口在第一次调用时才取
   // 那份服务；取不到就由协议层折成 `internal-error`。
   const commandPort = commandChannelOver(ctx)
-  // 权限通道：读目录与当前值、写一档（写走 `/permission` 命令）。与命令通道同形 ——
-  // 预设服务不在 `inject` 里，所以端口在第一次调用时才取；取不到不是错误，只是
-  // 「这个装配没有权限格」，手机据此不画那一格。
+  // 权限通道：只读目录 —— 当前值在 `permissions` 投影里，切档走 `/permission` 命令。
+  // 与命令通道同形 —— 预设服务不在 `inject` 里，所以端口在第一次调用时才取；取不到
+  // 不是错误，只是「这个装配没有权限格」，手机据此不画那一格。
   const permissionPort = permissionChannelOver(ctx)
   // 工作空间端口：建/删两条写面，读面（组清单与归属）另有一条 `workspace/follow` 流
   // （`workspacePortOver` 里的 `follow`），列表应答里没有归属。
@@ -157,7 +156,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     // 那个要事先开 debug，这个随时能拉。
     const metrics = new Metrics()
     // 登记表**只 new 一次**，交给两条路：WS 升级（占名额）与一元闸门（判归属）。
-    // 两处各 new 一个就永远 409 不到、也永远判不出主人 —— 判据 2 与 7 在真端口上钉住它。
+    // 两处各 new 一个就永远 409 不到、也永远判不出主人 —— 409 与归属两条在真端口上钉住它。
     const registry = new IdentityRegistry()
     const server = createRpcListener({ sessionPort, vault, registry, writePort, modelPort, commandPort, workspacePort, directoryPort: directoryListingOver(), permissionPort, auditLog: new AuditLog(defaultAuditDirectory()), metrics })
 
@@ -165,10 +164,10 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     // 升级与其他请求同一闸门：无有效 access token，就没有 101。
     const streamHandler = attachStreamHandler(server, streamSourceOver(ctx), vault, {
       registry,
-      // 打开帧的字节上界：`limits` 现在只剩这一格（两条一元读端点退场后，
-      // 「一条应答多少事件」不再是网关的事）。
+      // 打开帧的字节上界：`limits` 现在只剩这一格（「一条应答多少事件」
+      // 不是网关的事）。
       openingCapBytes: limits.maxOpeningBytes,
-      // `session-list` 与 `host-events` 两条流订阅这份源：身份是网关进程的，流是这条连接的。
+      // `$events` 流与审批中继订阅这份源：身份是网关进程的，流是这条连接的。
       events: forwardedEvents,
       // 组清单与归属的来源（`workspace/follow` 流）。与一元的建/删共用同一份端口 ——
       // 组流里出现的新组、删掉的组，都是宿主那一侧的事实，网关不另存一份。
@@ -178,7 +177,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
       approvals: relay,
     })
 
-    // 资源采样（R8 期1 链路 B）：5s 一条 res 记录 —— 事件循环是 dsh 全进程
+    // 资源采样：5s 一条 res 记录 —— 事件循环是 dsh 全进程
     // 共享面，读数只做趋势；debug 级默认静默，采集时 DSH_LOG_DEBUG=1。
     const stopSampler = startResourceSampler({
       intervalMs: 5_000,
@@ -190,8 +189,7 @@ export function apply(ctx: HostContext, config: Config = {}): void {
 
     // 用我们的 logger（底层是 console）而非 ctx.logger：非 TTY 运行中
     // `ctx.logger.info` 什么也不输出（dsh 自己的启动行同样如此），绑定
-    // 失败不可见比日志不合惯例更糟；TTY 门控未验证
-    // （M0 §5.1）。
+    // 失败不可见比日志不合惯例更糟；TTY 门控未验证。
     server.on('error', (error) => {
       log.error('listener error', { error: String(error) })
     })

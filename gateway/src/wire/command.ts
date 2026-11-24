@@ -54,7 +54,7 @@ export interface CommandExecuteMessage {
  * **前导斜杠与「非空」在这里就判** —— 上游的 `parseCommand` 也会拒，但拒的理由会变成
  * `unknown-command`（「没有这条命令」），而真正的原因是「这根本不是命令」；两者的补救不同。
  *
- * `submittedAttachments` 只接受**缺席或空数组**：附件还没接（第四期）。非空时拒 ——
+ * `submittedAttachments` 只接受**缺席或空数组**：附件还没接。非空时拒 ——
  * 静默丢掉附件会让「附件没生效」看起来像命令自己的问题。
  */
 export function commandExecuteRequestOf(message: Record<string, unknown>): CommandExecuteMessage | undefined {

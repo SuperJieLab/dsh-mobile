@@ -1,10 +1,10 @@
 /**
- * 路径路由的边界（判据 4）：什么算一条端点，什么不算。
+ * 路径路由的边界：什么算一条端点，什么不算。
  *
  * 不算的一律 404 **纯文本** —— 它还没成为一条消息，没有 `rpcId` 可用，包不出信封。
  * 这条分界与流通道那条同源：归不到一条流/一个端点上的东西，是传输层的事。
  *
- * 还有一条收口判据（T9b）：旧的 `POST /rpc` **必须**已经不在 —— 两条路径并存是过渡态，
+ * 还有一条：旧的 `POST /rpc` **必须**已经不在 —— 两条路径并存是过渡态，
  * 留着它就成了永久的两套形状。
  *
  * Run: node --test tests/remote/http-routing.test.ts
@@ -115,11 +115,11 @@ test('合法的两段路径不是 404 —— 正控，防止「全都 404」蒙�
   await withListener(async (post) => {
     const listed = await post('/api/session/list')
     assert.notEqual(listed.status, 404, '这条路真的在表里，必须走到处理器那一层')
-    // 判据 2 的正控：`session/page` 是**换掉**那两条的那一个 —— 只证明旧的没了、
+    // 正控：`session/page` 是**换掉**那两条的那一个 —— 只证明旧的没了、
     // 没证明新的在，等于把「分页没了」当成「分页换名了」。
     const paged = await post('/api/session/page', { body: '{}' })
     assert.notEqual(paged.status, 404, 'session/page 必须在表里')
-    // 判据 2 的另一半：`$events/result` 是**换掉**那两条的那一个。带 `$` 的名字要能路由 ——
+    // 另一半：`$events/result` 是**换掉**那两条的那一个。带 `$` 的名字要能路由 ——
     // 它在 URL 里合法，但拼接与分段都容易写错，所以这条正控直接打它。
     const answered = await post('/api/$events/result', { body: '{}' })
     assert.notEqual(answered.status, 404, '$events/result 必须在表里')

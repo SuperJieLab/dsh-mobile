@@ -1,6 +1,5 @@
 /**
- * 认证契约：三张票，各回答一个问题，泄漏一张不等于三张全丢
- * (M4 §4.2)。
+ * 认证契约：三张票，各回答一个问题，泄漏一张不等于三张全丢。
  *
  *   pairing code   一次性 · 10 分钟 · 错 5 次即作废 —— 建立关系；
  *                  只会得到 device token 作为回答
@@ -41,7 +40,7 @@ export const DEVICE_ROTATION_GRACE_MS = 24 * 60 * 60 * 1000
 /**
  * 凭据文件的内容。吊销即重置为 `{ version: 2 }`。
  *
- * **v2 加了身份**（F1 第 3 期）：`identityId` 回答「这层关系是谁」。身份与关系同寿，
+ * **v2 加了身份**：`identityId` 回答「这层关系是谁」。身份与关系同寿，
  * 与 access token 的轮换无关 —— 换票只改 `deviceTokenHash`，这一格不动。它是
  * 「一个身份只许一条 socket」那条判定的键（`remote/identity-registry.ts`）。
  */
@@ -186,7 +185,7 @@ export function attemptPairing(
       deviceTokenHash,
       // 身份与关系同一次写入铸出：分两次写会让「关系在、身份没了」成为一个可达状态。
       identityId: identityIdOf(deviceTokenHash),
-      // 配对出来的设备就是 owner —— 我们没有第二种身份的来源（见 F1 第 3 期方案第一节）。
+      // 配对出来的设备就是 owner —— 我们没有第二种身份的来源。
       canAnswer: true,
       // 已消费：一次性属性靠移除来强制。
     },

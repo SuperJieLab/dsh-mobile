@@ -134,8 +134,8 @@ export function startHeartbeat(socket: HeartbeatSocket, options: StreamOptions['
 /**
  * 打开帧的默认字节上界 —— 与 HTTP 路径的上限同处一族，定义在
  * `protocol/rpc.ts` 的 `DEFAULT_LIMITS`（那里有取值来由）。做成可传参而非常量，
- * 理由与 `maxDeltaEvents` 相同：让收窄路径**可被端到端观测**（调到极小值就能
- * 看见它发生），而不是只活在文档里。
+ * 是为了让收窄路径**可被端到端观测**（调到极小值就能看见它发生），而不是只活在
+ * 文档里。
  */
 export const DEFAULT_OPENING_BYTES = DEFAULT_LIMITS.maxOpeningBytes
 
@@ -215,7 +215,7 @@ export async function handleUpgrade(
     return
   }
 
-  // 一个身份只许一条 socket（S5）。**唯一判定处**：名额的占用与释放都在登记表里，
+  // 一个身份只许一条 socket。**唯一判定处**：名额的占用与释放都在登记表里，
   // 这里只看结论 —— 两处各判一半时，只要有一处漏了就会同时存在两条同一身份的 socket。
   if (!registry.claim(identity, socket)) {
     // 留痕带上身份：排障时「哪一台上不去」就靠这一个字段。客户端读不到这个 409

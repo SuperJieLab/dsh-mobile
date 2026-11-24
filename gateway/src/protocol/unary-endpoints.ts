@@ -243,7 +243,7 @@ export function unaryEndpointOf(name: string): UnaryEndpoint | undefined {
  * 断成未处理的 rejection」—— 而后者在 HTTP 上表现为连接被掐，客户端看到的是传输失败。
  *
  * 折法沿用 `readErrorOf` 的两档：不可解读的日志是 `unreadable-session`，其余
- * `internal-error`。与迁移前逐字相同 —— 换的是信封，不是故障词汇。
+ * `internal-error` —— 换的是信封，不是故障词汇。
  */
 export async function invokeEndpoint(
   name: string,

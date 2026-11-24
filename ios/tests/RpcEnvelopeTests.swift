@@ -1,5 +1,5 @@
 /**
- * 一元的信封（判据 6、7）。
+ * 一元的信封。
  *
  * 三条各守一个失败方式：
  * - 请求的**路径末两段与体内的 `method` 相同**。网关会核这一致性，不一致直接
@@ -44,7 +44,7 @@ final class RpcEnvelopeTests: XCTestCase {
         )
     }
 
-    /// 判据 6：路径与 `method` 同值，体里只有信封的四格加 `payload.args`。
+    /// 路径与 `method` 同值，体里只有信封的四格加 `payload.args`。
     func testTheRequestCarriesTheEndpointInPathAndEnvelope() async throws {
         ScriptedURLProtocol.reset(replies: [
             "session/list": .init(
@@ -74,7 +74,7 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertEqual((args["_request"] as? [String: Any])?.isEmpty, true, "本客户端做全量读，不带 cursor")
     }
 
-    /// 判据 7：分页请求的容器名与水位。
+    /// 分页请求的容器名与水位。
     ///
     /// - 容器是 `request`（宿主的形参名），里面四组水位 + 窗口；
     /// - `throughSeq` 是**含端**的切点，`beforeSeq` 是**排他**的下界 —— 两个都发，各管一件事；
@@ -111,7 +111,7 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertEqual(address["sessionId"] as? String, "s-1")
     }
 
-    /// 判据 6：prompt 的参数在 `request` 容器里，五格齐全且 `mode` 不被改回 queue。
+    /// prompt 的参数在 `request` 容器里，五格齐全且 `mode` 不被改回 queue。
     func testThePromptCarriesTheUpstreamContainerAndMode() async throws {
         ScriptedURLProtocol.reset(replies: [
             "session/prompt": .init(
@@ -144,7 +144,7 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertNotNil(request["clientTimeZone"] as? String, "系统时区名必须随行 —— 它是宿主排版时间的依据")
     }
 
-    /// 判据 4：建组只发路径，参数在 `request` 容器里 —— 没有 `name` 这一格。
+    /// 建组只发路径，参数在 `request` 容器里 —— 没有 `name` 这一格。
     func testTheWorkspaceCreateCarriesOnlyAPath() async throws {
         ScriptedURLProtocol.reset(replies: [
             "workspace/create": .init(
@@ -166,7 +166,7 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertEqual(request["path"] as? String, "/Users/x/p")
     }
 
-    /// 判据 5：目录列表的 `path` 缺省时**整个键不出现**（不是 `null`、不是空串）。
+    /// 目录列表的 `path` 缺省时**整个键不出现**（不是 `null`、不是空串）。
     func testTheDirectoryListOmitsAnAbsentPath() async throws {
         let body = #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"path":"/Users/x","home":"/Users/x","crumbs":[],"entries":[],"truncated":false}}}"#
         ScriptedURLProtocol.reset(replies: ["directoryPicker/list": .init(status: 200, body: body)])
@@ -182,7 +182,7 @@ final class RpcEnvelopeTests: XCTestCase {
         XCTAssertEqual(second["path"] as? String, "/Users/x/proj")
     }
 
-    /// 判据 7 的前半：`details` 要原样解出来。
+    /// `details` 要原样解出来。
     func testRefusalCarriesDetails() async throws {
         ScriptedURLProtocol.reset(replies: [
             "session/list": .init(
@@ -201,7 +201,7 @@ final class RpcEnvelopeTests: XCTestCase {
         }
     }
 
-    /// 判据 7 的后半：缺 `details` 时补空字典，而不是把整条拒绝变成「报文畸形」。
+    /// 缺 `details` 时补空字典，而不是把整条拒绝变成「报文畸形」。
     func testRefusalWithoutDetailsStillReads() async throws {
         ScriptedURLProtocol.reset(replies: [
             "session/list": .init(

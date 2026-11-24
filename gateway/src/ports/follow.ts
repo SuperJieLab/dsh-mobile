@@ -5,7 +5,7 @@
  * 接口，若它长在传输层，适配层就得反过来 import 传输层 —— 依赖方向就反了。
  *
  * 两个类型同处一个端口：一个是能力声明（`FollowSource`），一个是**上游给出的
- * 帧形状**（`UpstreamFollowFrame`）。后者这一期起就是线上形状 —— 网关不再组装打开帧，
+ * 帧形状**（`UpstreamFollowFrame`）。后者就是线上形状 —— 网关不组装打开帧，
  * 手机看见的 `snapshot` 与宿主发出的是同一份，所以它复用 `wire/mux.ts` 的
  * `FollowValue`，不另立一套。
  */

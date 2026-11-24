@@ -5,10 +5,10 @@
  * 传输层（`remote/http.ts`）与测试辅助都经 `protocol/unary-endpoints.ts` 的表找到
  * 这里 —— **本文件不认识 URL**，也不认识信封，它只回答「这次调用成没成、值是什么」。
  *
- * **两条读端点已不再在这里**：`session/list`、`session/page` 都是转发（各自的
- * 表项在 `./unary-endpoints.ts`），窗口怎么切、水位怎么算都由宿主回答。本文件只剩
- * 写面的判定与两条目录/当前值的读。`snapshot`/`page` 的水位算术随它们一起退场 ——
- * 抄一份宿主的规则，在宿主改规则时不会红。
+ * **两条读端点不在这里**：`session/list`、`session/page` 都是转发（各自的表项在
+ * `./unary-endpoints.ts`），窗口怎么切、水位怎么算都由宿主回答。本文件只有写面的
+ * 判定与三份目录的读（模型 / 命令 / 权限预设）—— 水位算术若抄一份，宿主改规则时
+ * 它不会红。
  */
 
 import type { SessionPort } from '../ports/session.ts'
@@ -40,14 +40,13 @@ export interface StreamOwners {
 /**
  * 传输层的字节上界。
  *
- * **只剩一格**：两条一元读端点退场之后，「一条应答至多多少事件 / 多少字节」不再
- * 是网关的事 —— 分页的窗口由宿主切（`session/page`），网关能施加的只有 WSS 一帧的
- * 尺寸。`maxDeltaEvents` / `maxDeltaBytes` 随 HTTP 快照端点一起删了：留着就是
- * 两个没有读者的旋钮，而配置文档会继续承诺一个并不存在的截断。
+ * **只剩一格**：「一条应答至多多少事件 / 多少字节」不是网关的事 —— 分页的窗口由
+ * 宿主切（`session/page`），网关能施加的只有 WSS 一帧的尺寸。多一个旋钮就是多一条
+ * 没有读者的截断承诺。
  */
 export interface Limits {
   /**
-   * follow 打开那一帧的字节上界（R9 期1）。**硬上限** —— 装不下就按轮边界收窄，
+   * follow 打开那一帧的字节上界。**硬上限** —— 装不下就按轮边界收窄，
    * 连一轮都装不下则拒绝。它约束的是传输，不是会话内容。
    */
   maxOpeningBytes: number
@@ -219,8 +218,8 @@ export function ownedAnswerOf(
  * 投递一条 `$events/result`。
  *
  * `ok` 意为**上游收下了这次应答**（结算了 waterfall，或对已结算事件做了幂等 no-op）。
- * 网关不判「这条还在不在」—— 上游对不存在的 `eventId` 是 no-op，本地判会把它写成
- * `unknown-approval`，而那与上游的结论相反（F3 第 3 期删掉了那条本地判定）。  // terms-ok: 说明被删的那条判定
+ * 网关不判「这条还在不在」—— 上游对不存在的 `eventId` 是 no-op，本地判会写成一个
+ * 与上游相反的码。
  *
  * `outcome` 原样交给端口：网关不解释结局词汇，也不按交互种类分派。
  */
@@ -250,7 +249,7 @@ export async function remoteEventResultValue(
 /**
  * 收纳一条 prompt。`ok` 意为*已接受进收件箱* —— 回复本体经流到达。
  *
- * 五个字段原样交给宿主：`mode` 不再固定成 `queue`，`content` 不再由网关拼一段文本。
+ * 五个字段原样交给宿主：`mode` 与 `content` 都由客户端给，网关不补不改。
  */
 export async function sessionPromptValue(
   args: Record<string, unknown>,
@@ -294,8 +293,8 @@ export async function modelSelectOf(
  * 返回 `undefined` 并留痕），所以这一支在生产也可达 —— 拒答而不是崩。
  *
  * 值不重建：宿主的目录就是线上形状（四个键，含 `routableProviders`）。逐字段抄一遍
- * （`{default, groups, failures}`）正是上一版剥掉 `routableProviders` 的原因 ——
- * 抄的人只会抄他记得的那几格。
+ * 只会抄到记得的那几格 —— `routableProviders` 这类「客户端用不上但属于形状」的键
+ * 最先丢，而丢一格不会让任何一处编译失败。
  */
 export async function modelCatalogOf(model: ModelPort | undefined): Promise<RemoteResult> {
   if (model === undefined) return refused('internal-error', 'model channel not wired for "model-catalog"')

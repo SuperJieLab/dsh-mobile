@@ -8,8 +8,7 @@
  * 而否定一次有效配对。
  *
  * access 表刻意放内存：15 分钟的票不必活过重启，客户端的刷新流程让
- * 重签一枚票成为不可见的无事
- * （M4 §3.3）。
+ * 重签一枚票成为不可见的无事。
  */
 
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -40,7 +39,7 @@ export const DEFAULT_CREDENTIALS_PATH = join(homedir(), '.dsh', 'dsh-mobile', 'c
  * 凭据文件的载荷版本。**加字段就加一**，并在 {@link CREDENTIAL_MIGRATIONS} 里补一步。
  * 必须与 `StoredCredentials.version` 的字面量一致。
  *
- * v2 加了 `identityId` / `canAnswer`（F1 第 3 期）：老文件走一步迁移，不要求重新配对。
+ * v2 加了 `identityId` / `canAnswer`：老文件走一步迁移，不要求重新配对。
  */
 export const CREDENTIALS_VERSION = 2
 
@@ -223,7 +222,7 @@ export class CredentialVault {
     if (outcome.status === 'paired') {
       // **清票**：access 表里的每一枚都属于**上一段**关系，而关系已经换了人。
       // 不清的话，旧票在它剩下的 15 分钟里还能用，而它现在解析出的是**新**身份 ——
-      // 于是一枚发给了旧设备的票，被判成了新设备的（F1 第 3 期方案修正记录 ⑥）。
+      // 于是一枚发给了旧设备的票，被判成了新设备的。
       this.access.clear()
       return { ok: true, deviceToken: outcome.deviceToken }
     }
@@ -277,7 +276,7 @@ export class CredentialVault {
    * HTTP/WS 闸门：该 `Authorization` 头指向**哪个身份**？没有票、票过期、或票活着
    * 但文件说不出是谁，都回 `undefined`。
    *
-   * 返回身份而不是布尔（F1 第 3 期）：S5 要求「谁在答这条审批」可判定，而布尔答不出
+   * 返回身份而不是布尔：「谁在答这条审批」要可判定，而布尔答不出
    * 「是谁」。这也是全仓唯一一处把票解析成身份的地方 —— 此后任何「按身份决定行为」
    * 的能力都只读这里。
    *

@@ -1,5 +1,5 @@
 /**
- * 性能记录通道（R8 期1）—— 观测出口的一支：与文本日志同一个 `[dsh]` 家族、
+ * 性能记录通道 —— 观测出口的一支：与文本日志同一个 `[dsh]` 家族、
  * 同一个 debug 门控，但承载的是「挂 seq 的四段边界记录」而不是人读的消息。
  * 行格式：`<本机时间带偏移> [dsh][perf][模块] {json}`，时间戳与文本日志共用
  * `timestamp.ts` 的 `logTimestamp` —— 两条出口要能被放在一起按时间对照。
@@ -21,8 +21,8 @@ import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 import { logTimestamp } from './timestamp.ts'
 
 /**
- * 亚毫秒 epoch 时刻（R8 期2 精度加精）：`Date.now()` 只有整数毫秒，而 t2 段
- * （`gwRecv` → `gwSend`）正是瓶颈指认要看的段 —— R8-B001 实测它恒为 0，
+ * 亚毫秒 epoch 时刻：`Date.now()` 只有整数毫秒，而 t2 段
+ * （`gwRecv` → `gwSend`）正是瓶颈指认要看的段 —— 实测它恒为 0，
  * 1 ms 的分辨力看不见它。字段名与语义不变，只换取时刻的钟。
  */
 export function perfNow(): number {
@@ -83,7 +83,7 @@ export function perfRecord(module: string, record: PerfRecord): void {
   sink(perfLine(module, record))
 }
 
-/** 一条资源采样的输入（R8 期1 链路 B）—— 采样器从系统读快照，本形状是它的纯函数入参。 */
+/** 一条资源采样的输入 —— 采样器从系统读快照，本形状是它的纯函数入参。 */
 export interface ResourceSample {
   /** 事件循环延迟直方图的 p50，毫秒。 */
   readonly loopLagP50: number
@@ -103,8 +103,8 @@ export function resourceRecord(sample: ResourceSample, now: Date = new Date()): 
 }
 
 /**
- * 周期性采一条资源记录（R8 期1 链路 B）。事件循环是 dsh 全进程共享面 ——
- * 读数只做趋势，归因到期2 微观基准。返回停止函数。
+ * 周期性采一条资源记录。事件循环是 dsh 全进程共享面 ——
+ * 读数只做趋势，归因到微观基准。返回停止函数。
  *
  * 采样节拍内的清零：直方图读后即 reset，每条记录只覆盖刚过去的这个周期。
  * `module` 由调用方给（标签集中在 log.ts 登记，本文件不引它 —— 引了会成环）。

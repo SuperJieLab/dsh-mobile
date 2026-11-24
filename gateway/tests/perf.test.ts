@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { perfEnabled, perfLine, perfRecord, resourceRecord, setPerfSink, type PerfRecord } from '../src/perf.ts'
 
-/** A gw-side record as the pump will emit it (plan §4 contract fields). */
+/** A gw-side record as the pump will emit it (the contract's four seg fields). */
 const sample: PerfRecord = {
   seg: 'gw',
   t: 1758000000000,

@@ -1,5 +1,5 @@
 /**
- * 场景运行器的判据（R8 期2 Task 4：H4）。
+ * 场景运行器的判据。
  *
  * H4 —— 同参数连跑两次 → 产物结构一致、条件字段一致（样本量可不同）；
  * 样本不足时**非零退出**：「失败可见」不是一句口号，是退出码。
@@ -66,13 +66,13 @@ test('H4: 同参数连跑两次 → 退出 0，产物结构与条件字段一致
     assert.deepEqual(Object.keys(secondArtifact.condition).sort(), Object.keys(firstArtifact.condition).sort())
     assert.deepEqual(Object.keys(secondArtifact.verdict).sort(), Object.keys(firstArtifact.verdict).sort())
 
-    // 条件字段一致：同一命令 → 同一负载条件（client 标签也一致，决定 4）。
+    // 条件字段一致：同一命令 → 同一负载条件（client 标签也一致）。
     assert.deepEqual(secondArtifact.condition, firstArtifact.condition)
     assert.equal(firstArtifact.condition.client, 'script')
     assert.equal(firstArtifact.condition.eventRate, 300)
     assert.equal(firstArtifact.condition.seconds, 3)
 
-    // 记录的两端都在场：gw 与 dev 都有，且 verdict 有效（决定 6 的三条）。
+    // 记录的两端都在场：gw 与 dev 都有，且 verdict 有效。
     const segs = new Set(firstArtifact.records.map(record => record.seg))
     assert.ok(segs.has('gw'), 'gateway-side records are in the artifact')
     assert.ok(segs.has('dev'), 'client-side records are in the artifact')

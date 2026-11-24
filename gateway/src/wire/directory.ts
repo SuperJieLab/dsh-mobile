@@ -1,9 +1,9 @@
 /**
  * `directoryPicker/list` 的入参形状。
  *
- * `path` 可缺省（宿主的 `list(path: string | undefined, signal)`：缺省即 home）。缺省与
- * 「给了空串」是两件事：前者是合法的一种，后者是畸形载荷 —— 写路径从严的同一条纪律
- * 也适用这里，因为空串会被宿主读成相对路径，然后变成一个与用户意图无关的目录。
+ * `path` 可缺省（缺省即宿主用户的 home）。缺省与「给了空串」是两件事：前者是合法的
+ * 一种，后者是畸形载荷 —— 写路径从严的同一条纪律也适用这里，因为空串会被读成相对
+ * 路径，然后变成一个与用户意图无关的目录。
  */
 
 import { nonEmptyString } from './fields.ts'
@@ -23,6 +23,6 @@ export interface DirectoryListArguments {
 export function directoryListArgumentsOf(args: Record<string, unknown>): DirectoryListArguments | undefined {
   if (args.path === undefined) return {}
   const path = nonEmptyString(args.path)
-  // 纯空白同样拒：宿主会把它读成一个相对路径，指向与用户意图无关的目录。
+  // 纯空白同样拒：读的时候它会变成一个相对路径，指向与用户意图无关的目录。
   return path === undefined || path.trim() === '' ? undefined : { path }
 }

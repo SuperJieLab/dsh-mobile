@@ -1,10 +1,10 @@
 /**
- * 登记表：一个身份只许一条 socket（判据 2 的机制半边、判据 3、判据 6）。
+ * 登记表：一个身份只许一条 socket。
  *
  * 这一层是纯记账，所以判据全部离网：造一条假 socket 就能问清「名额怎么还、
- * 归属什么时候丢」。真端口上那一条（判据 2 的 409）在 `tests/index.test.ts`。
+ * 归属什么时候丢」。真端口上那一条在 `tests/index.test.ts`。
  *
- * 判据 6 只能在这里做：凭证文件只存**一段关系**，所以真实端口上造不出第二个身份 ——
+ * 这一条只能在这里做：凭证文件只存**一段关系**，所以真实端口上造不出第二个身份 ——
  * 那条判据在端到端那一层是写着玩不了的。
  *
  * Run: node --test tests/remote/identity.test.ts
@@ -24,7 +24,7 @@ function socket(): Duplex {
 const alice = { id: 'i-alice', canAnswer: true }
 const bob = { id: 'i-bob', canAnswer: true }
 
-test('判据 3：同一身份第二次占名额被拒，释放之后又可以占', () => {
+test('同一身份第二次占名额被拒，释放之后又可以占', () => {
   const registry = new IdentityRegistry()
   const first = socket()
 
@@ -36,7 +36,7 @@ test('判据 3：同一身份第二次占名额被拒，释放之后又可以占
   assert.equal(registry.claim(alice, socket()), true, '关掉之后名额回来了 —— 否则一次断连就再连不上')
 })
 
-test('判据 3：释放一条 socket 连带清掉它名下流的归属', () => {
+test('释放一条 socket 连带清掉它名下流的归属', () => {
   // 只还名额不清归属，会让一条已经不存在的流继续「有主人」：它上面挂着的 clientId
   // 此后每次应答都判成越权，而日志里没有一行说明那条流早就不在了。
   const registry = new IdentityRegistry()
@@ -51,7 +51,7 @@ test('判据 3：释放一条 socket 连带清掉它名下流的归属', () => {
   assert.equal(registry.identityOf(owner), undefined)
 })
 
-test('判据 6：两个不同身份各占一条，互不冲突', () => {
+test('两个不同身份各占一条，互不冲突', () => {
   // 「按身份判」与「按 socket 数判」在这一条上分得开：按 socket 数判的实现会把
   // 第二条拒掉，而它其实是另一个人的。
   const registry = new IdentityRegistry()
@@ -95,7 +95,7 @@ test('未归属的 socket 上开流不会被登记（并留下一条 warn）', (
 })
 
 test('同一 clientId 被两条流复用时留一条 warn，后写覆盖（换代不该走到这里）', () => {
-  // 这条 warn 的反面正是判据 5 的反证：换代（同一 socket 重入）必须**不响**，
+  // 这条 warn 的反面正是：换代（同一 socket 重入）必须**不响**，
   // 而真出现两条流抢同一个 id 时必须响 —— 两个方向都要有判据，否则「把 warn 删掉」
   // 与「把正常路径也灌进来」都看不出来。
   const registry = new IdentityRegistry()

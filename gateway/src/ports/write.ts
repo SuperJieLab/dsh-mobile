@@ -14,7 +14,7 @@ import type { RemoteEventResultMessage, SessionPromptMessage } from '../wire/wri
  * 一次应答交付的两个结局。
  *
  * 没有「不在暂存表里」这一支：上游对已结算的 `eventId` 是幂等 no-op 并返回成功，
- * 网关不替它下结论（F3 第 3 期删掉了本地的 `unknown-approval` 判定）。  // terms-ok: 说明被删的那条判定
+ * 网关不替它下结论。
  */
 export type AnswerDelivery = 'delivered' | 'undelivered'
 
@@ -37,7 +37,7 @@ export interface WritePort {
    *
    * **目录由 `workspaceId` 决定**：指定了就落在那个工作空间的目录里（宿主把它
    * `attachSession` 进那个工作空间），没指定就由宿主用自己的当前目录 —— 后者是
-   * 这条 op 在本功能之前唯一的行为，不能删。
+   * 「不带工作空间建会话」的那条路，不能删。
    *
    * 同目录已有空会话时宿主会复用它。那条规则**不是本端口的承诺**：调用方不得据此
    * 推断「调两次必有两个会话」，也不得推断「必是同一个」。

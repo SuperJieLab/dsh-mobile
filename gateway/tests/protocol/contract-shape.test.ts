@@ -1,5 +1,5 @@
 /**
- * 契约文档与实现的形状对账（判据 10）。
+ * 契约文档与实现的形状对账。
  *
  * 契约是两端唯一的口径。它没跟着改的症状是「读文档的人写出一套两端都不认的帧」，
  * 而这种错在代码里看不出来 —— 代码只看自己那一侧。
@@ -59,7 +59,7 @@ test('失败形状的三格在契约里写明，且与流通道同一个说法',
 })
 
 /**
- * 判据 10：三个形状按**节**对账。
+ * 三个形状按**节**对账。
  *
  * 按整份文档 grep 是不够的：`clientId` 在 §4.4 也有，`host` 在别处也会出现 ——
  * 整份搜一遍，把某一节漏改的情况一起放过去。所以每一格都在它该在的那一节里找。
@@ -73,7 +73,7 @@ function sectionBetween(title: string, next: string): string | undefined {
   return end < 0 ? text.slice(start) : text.slice(start, end)
 }
 
-test('判据 10：§4.6 的应答载荷有 clientId', () => {
+test('§4.6 的应答载荷有 clientId', () => {
   const section = sectionBetween('### 4.6', '### 4.7')
   if (section === undefined) {
     console.log('dev/contract/protocol.md 不存在（干净 clone），跳过')
@@ -84,7 +84,7 @@ test('判据 10：§4.6 的应答载荷有 clientId', () => {
     '光出现这个名字不够：要说明它是必填，否则读文档的人会当成可选')
 })
 
-test('判据 10：§4.4 的 ready 示例带 host', () => {
+test('§4.4 的 ready 示例带 host', () => {
   const section = sectionBetween('### 4.4', '### 4.5')
   if (section === undefined) {
     console.log('dev/contract/protocol.md 不存在（干净 clone），跳过')
@@ -96,7 +96,7 @@ test('判据 10：§4.4 的 ready 示例带 host', () => {
   assert.ok(section.includes('换代不变'), 'clientId 的寿命要写明（换代不变）—— 否则客户端会在重连时换 id')
 })
 
-test('判据 10：§六 有 not-owner 一行', () => {
+test('§六 有 not-owner 一行', () => {
   const section = sectionBetween('## 六、错误码', '## 七、')
   if (section === undefined) {
     console.log('dev/contract/protocol.md 不存在（干净 clone），跳过')

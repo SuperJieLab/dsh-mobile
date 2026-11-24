@@ -17,8 +17,7 @@ import { logTimestamp } from './timestamp.ts';
 
 
 // 写不写审计由端点表的 `write` 标记决定（`protocol/unary-endpoints.ts`）。
-// 这里曾经存过一份 `WRITE_OPS` 清单，与那个标记互为副本；信封统一之后只有一处判定，
-// 副本就成了「忘了同步也不会红」的第二真源 —— 删掉，判据在
+// 另立一份清单就是「忘了同步也不会红」的第二真源，所以清单只有那一处 —— 判据在
 // `tests/remote/http-auth.test.ts`（每个写端点各记一条）。
 
 /** 一条审计记录。 */
@@ -39,7 +38,7 @@ export interface AuditEntry {
  * 一条记录拼成一行。
  *
  * 字段值与日志同一套拼法（按 key 排序、含空格/引号的值用 `JSON.stringify` 加引号）。
- * **`target` 可以带空格**：F3 第 4 期起它是宿主路径（`/Users/x/记账 App`），空格是常态。
+ * **`target` 可以带空格**：它是宿主路径（`/Users/x/记账 App`），空格是常态。
  * 所以 {@link parseAuditEntry} 按引号切字段，而不是按空格 —— 按空格切会把
  * `target` 读成路径的前半截，而那种错不会抛异常。
  */
@@ -228,8 +227,9 @@ export function auditEntryOf(
  * 而它们要查的地方不同。
  */
 function auditTargetOf(op: string, message: Record<string, unknown>): string {
-  // 三条写 op 的宿主签名都收一个 `request` 对象，线上因此多一层容器；
-  // 目标在那层里面。容器缺席时 `{}` —— 于是目标记成 `-`，与「没带目标」同形。
+  // 收 `request` 容器的那几条写 op（会话、模型、工作空间）线上多一层容器；
+  // 目标在那层里面。命令与 `$events/result` 是平铺的，容器缺席时 `{}` ——
+  // 于是目标记成 `-`，与「没带目标」同形。
   const request = requestContainerOf(message) ?? {};
   switch (op) {
     case 'session-prompt':
@@ -243,7 +243,7 @@ function auditTargetOf(op: string, message: Record<string, unknown>): string {
       // `$events/result` 的参数是平铺的三键（上游的形），目标就是那条挂起项。
       return identifierOf(message.eventId);
     case 'workspace-create':
-      // 工作空间由路径标识（F3 第 4 期起没有名字这一格）。
+      // 工作空间由路径标识（没有名字这一格）。
       return identifierOf(request.path);
     case 'workspace-delete':
       return identifierOf(request.workspaceId);

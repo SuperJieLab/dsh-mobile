@@ -1,5 +1,5 @@
 /**
- * `$events/result` 的转发面（判据 3、8、12）。
+ * `$events/result` 的转发面。
  *
  * 三条承诺：**归属**还是那一处判定；**结局**原样转发、网关不判「还在不在」；
  * **畸形**在到达宿主之前就被拒。
@@ -36,7 +36,7 @@ const okArgs = {
   outcome: { kind: 'result', value: 'allowed-once' },
 }
 
-test('判据 3：归属还是那一处 —— 别人的流、没登记的流都答不了', async () => {
+test('归属还是那一处 —— 别人的流、没登记的流都答不了', async () => {
   const { answers, port } = recorder()
 
   const stranger = await invoke(
@@ -67,7 +67,7 @@ test('判据 3：归属还是那一处 —— 别人的流、没登记的流都�
   assert.equal(answers.length, 1)
 })
 
-test('判据 8：同一条答两次都回 ok —— 网关不做「还在不在」的判定', async () => {
+test('同一条答两次都回 ok —— 网关不做「还在不在」的判定', async () => {
   const { answers, port } = recorder()
   assert.deepEqual(valueOf(await invoke('$events/result', okArgs, { session: PORT, write: port })), { ok: true })
   assert.deepEqual(valueOf(await invoke('$events/result', {
@@ -76,7 +76,7 @@ test('判据 8：同一条答两次都回 ok —— 网关不做「还在不在�
   assert.equal(answers.length, 2, '两次都真的交给上游 —— 上游对已结算事件是幂等 no-op')
 })
 
-test('判据 12：三种畸形 outcome 一律 invalid-request，宿主零调用', async () => {
+test('三种畸形 outcome 一律 invalid-request，宿主零调用', async () => {
   const { answers, port } = recorder()
   for (const outcome of [
     { kind: 'oops' },

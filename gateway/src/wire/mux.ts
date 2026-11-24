@@ -1,6 +1,6 @@
 /**
  * 两端共守的 mux 成帧形状与它的编解码。手机端有一份对应定义
- * （`ios/Sources/Core/Gateway/Wire/GatewayProtocol.swift` 与流通道的解码器）——
+ * （`ios/Sources/Core/Gateway/LongConnection/Wire/MuxFrames.swift` 与流通道的解码器）——
  * 改字段那边必须同改。
  *
  * 管辖一切非协议消息之物：帧信封（只有 `streamId`，别无其他）、follow 请求的
@@ -150,7 +150,7 @@ export type ControlValue =
 /**
  * 打开帧 —— 上游 `SessionFollowFrame` 的 `snapshot` 支，一个字段都不多不少。
  *
- * 网关**不再组装**它：窗口由宿主按自己的规则切，我们只转达。唯一的改动是字节收窄
+ * 网关**不组装**它：窗口由宿主按自己的规则切，我们只转达。唯一的改动是字节收窄
  * （`records` 按轮截短、`hasMore` 改真），那是传输层的上界，不是窗口规则。
  *
  * `header` 与 `projections` 在宿主类型里是必填 —— 这里也必填。缺一格就是另一份形状，
@@ -226,8 +226,8 @@ export function encodeServerFrame(frame: MuxServerFrame): string {
  * `error` 帧，连接与别的流不动）。
  *
  * **四种流四个取值**：`events` 是上游的 `$events`，一条流承载四种货物（`ready` /
- * `emit` / `waterfall` / `cancel`）—— 原来按恢复语义拆出的三条流并回这里。
- * `workspace` 是组清单流，没有入参（组是进程级的，不分会话）。
+ * `emit` / `waterfall` / `cancel`）。`workspace` 是组清单流，没有入参（组是进程级的，
+ * 不分会话）。
  */
 export type OpenRequest =
   | { kind: 'follow'; request: FollowRequest }

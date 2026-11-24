@@ -155,9 +155,9 @@ test('rotating does not invalidate tickets already in hand', () => {
   }
 })
 
-// MARK: - 身份（判据 1）
+// MARK: - 身份
 
-test('判据 1：换两次票、重开一次保险库，解析出的身份仍是同一个', () => {
+test('换两次票、重开一次保险库，解析出的身份仍是同一个', () => {
   const { path, done } = sandbox()
   try {
     const vault = new CredentialVault(path)

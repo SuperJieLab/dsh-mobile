@@ -199,7 +199,7 @@ final class SessionListState {
     /// 组清单换了：重算归属表，别的一个字不动。
     ///
     /// **不重拉列表**：组与行是两份事实，组变了不代表行变了。把它接成「组一变就重读」
-    /// 就是判据 5 要排除的那条 —— 组流断了，列表也跟着不动。
+    /// 就是这一条要排除的 —— 组流断了，列表也跟着不动。
     private func absorbWorkspaces() {
         guard let source = workspaceSource else { return }
         workspaces = source.workspaces

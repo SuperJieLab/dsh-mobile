@@ -1,8 +1,8 @@
 /**
  * `session/page` 转发：一页历史由宿主切，网关只递过去再递回来。
  *
- * 这一期起网关**没有窗口算术**了 —— 上一版的 `pageWindow` 把宿主的规则抄了一遍
- * （消息数、轮边界、上限倍数），宿主改规则时它不会红，症状是「同一屏在 Web UI 与
+ * 网关**没有窗口算术** —— 自己按 `maxMessages` 切一遍（消息数、轮边界、上限倍数）
+ * 就是把宿主的规则抄成第二份，宿主改规则时它不会红，症状是「同一屏在 Web UI 与
  * 手机上长度不同」。判据因此只有三类：请求原样到达宿主、应答原样回到客户端、
  * 上游的「没有这个会话」被折成自己的码。
  *
@@ -63,7 +63,7 @@ function fakeSessionPort(
   }
 }
 
-test('判据 6: the page request reaches the host verbatim and its answer comes back untranslated', async () => {
+test('the page request reaches the host verbatim and its answer comes back untranslated', async () => {
   const port = fakeSessionPort(async () => HOST_PAGE)
   const result = await invoke('session/page', { request: REQUEST }, { session: port })
 
@@ -75,7 +75,7 @@ test('判据 6: the page request reaches the host verbatim and its answer comes 
   assert.deepEqual(Object.keys(valueOf(result) as object).sort(), ['cursor', 'hasMore', 'records'])
 })
 
-test('判据 6: a missing request container is refused before the host is disturbed', async () => {
+test('a missing request container is refused before the host is disturbed', async () => {
   const port = fakeSessionPort(async () => HOST_PAGE)
   for (const args of [{}, { address: REQUEST.address }, { request: null }, { request: [] }]) {
     const result = await invoke('session/page', args, { session: port })
@@ -85,7 +85,7 @@ test('判据 6: a missing request container is refused before the host is distur
   assert.equal(port.calls, 0, '被拒的请求不该惊动宿主')
 })
 
-test('判据 6: a not-found from the host becomes unknown-session, anything else becomes internal-error', async () => {
+test('a not-found from the host becomes unknown-session, anything else becomes internal-error', async () => {
   const missing = fakeSessionPort(async () => {
     throw Object.assign(new Error('no session "s-9"'), { isDSHRemoteError: true, code: 'session/not-found' })
   })
@@ -101,7 +101,7 @@ test('判据 6: a not-found from the host becomes unknown-session, anything else
   assert.equal(failed.ok === false && failed.error.code, 'internal-error')
 })
 
-test('判据 14: the table serves session/page and neither mobile reader', () => {
+test('the table serves session/page and neither mobile reader', () => {
   const names = registeredEndpointNames()
   assert.equal(names.includes('session/page'), true, 'session/page 必须在表里')
   // terms-ok:start 判据的断言对象：它要证明这两条名字已从表里消失

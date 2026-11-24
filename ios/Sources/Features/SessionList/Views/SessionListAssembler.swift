@@ -9,7 +9,7 @@ struct SessionListAssembler: View {
     /// 订阅要它：列表「跟着别的设备动」全靠这条流。
     private let stream: any SessionListEventSink
     /// 组清单的来源（`workspace/follow`）。与 `stream` 分开：两条流各管一件事，
-    /// 一条断了另一条照常（判据 5）。
+    /// 一条断了另一条照常。
     private let workspaces: any WorkspaceListSource
     /// 标题投影的来源（`session/control`）。标题两源之一，另一个在行自带的投影里。
     private let titles: ControlStream

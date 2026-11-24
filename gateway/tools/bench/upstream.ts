@@ -1,14 +1,14 @@
 /**
- * 参数化假上游（R8 期2 链路 A）—— 按 `eventRate` / `payloadShape` / `backlogSeq`
+ * 参数化假上游 —— 按 `eventRate` / `payloadShape` / `backlogSeq`
  * 产出会话事件流，经由 `sessionController.follow` 这个**网关泵消费的同一接缝**
  * 交给真插件；网关代码里没有任何「上游是不是假的」的分支。
  *
- * 决定 2（生成器时钟解耦）：事件的 `time`（→ 网关 `evTime`）由目标节拍给出，
+ * 生成器时钟解耦：事件的 `time`（→ 网关 `evTime`）由目标节拍给出，
  * 产出时刻落后于目标时刻的差记作「生成器落后量」并聚合暴露 —— 它是负载点
- * 有效性判定（决定 6）的旁证。积压不靠人为拖延：生成器只在被消费时产出，
+ * 有效性判定的旁证。积压不靠人为拖延：生成器只在被消费时产出，
  * 消费跟不上时落后量自然变大。
  *
- * 决定 3（积压以 seq 计）：`backlogSeq` = 打开帧携带的历史条数，续发事件的
+ * 积压以 seq 计：`backlogSeq` = 打开帧携带的历史条数，续发事件的
  * `seq` 接着走 —— 与协议「只补差量」的语义对齐，产物记缺口条数而非秒数。
  */
 
@@ -23,11 +23,11 @@ export interface UpstreamParams {
   /** 目标事件率：每条 follow 流每秒的事件条数。 */
   eventRate: number
   payloadShape: PayloadShape
-  /** 打开时预置的历史条数（seq 缺口的别名，决定 3）。 */
+  /** 打开时预置的历史条数（seq 缺口的别名）。 */
   backlogSeq: number
 }
 
-/** 生成器落后量的聚合读数（决定 2 的旁证）。 */
+/** 生成器落后量的聚合读数（旁证）。 */
 export interface LagSummary {
   /** 已产出的事件数（不含 backlog 预置）。 */
   samples: number
@@ -105,7 +105,7 @@ export function startFakeUpstream(params: UpstreamParams): UpstreamHandle {
     request: { maxMessages?: number },
     signal: AbortSignal,
   ): AsyncIterable<UpstreamFollowFrame> {
-    // 首次打开：预置 backlog（决定 3）—— 时间均匀铺在过去，seq 从 0 起。
+    // 首次打开：预置 backlog—— 时间均匀铺在过去，seq 从 0 起。
     if (state.log.length === 0 && params.backlogSeq > 0) {
       const intervalMs = 1_000 / params.eventRate
       const now = Date.now()

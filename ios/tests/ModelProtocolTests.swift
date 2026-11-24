@@ -119,7 +119,7 @@ final class ModelProtocolTests: XCTestCase {
         return .object(["lastUsed": block(lastUsed), "next": block(next)])
     }
 
-    /// 判据 10：投影的两格各自落地 —— `next` 优先，缺席时退到 `lastUsed`，两格都空 = 不知道。
+    /// 投影的两格各自落地 —— `next` 优先，缺席时退到 `lastUsed`，两格都空 = 不知道。
     private func projectionSource() {
         // `next` 在：它才是「下一轮将用什么」。
         var state = ModelSelectionState()

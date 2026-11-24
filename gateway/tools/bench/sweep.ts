@@ -1,16 +1,16 @@
 /**
- * 扫参（R8 期2 Task 6）—— 按清单把不同参数的负载点串着跑（决定 5：一次
+ * 扫参 —— 按清单把不同参数的负载点串着跑（一次
  * run 一个进程、扫参串行），产物落一个目录，随后用分析纯函数聚合出两条
  * 曲线的点表并写成 Markdown：
  *
  *     node tools/bench/sweep.ts --out <artifactsDir> --curves <curves.md 路径>
  *
- * 两条曲线（spec 收口判据 1）：
+ * 两条曲线：
  * ① 订阅延迟 vs 事件率 —— backlog 0，事件率逐级上抬；
  * ② 追平延迟 vs 积压量 —— 事件率固定，打开时预置的 backlog 逐级放大。
  *
- * 每点带负载条件、样本数与有效/无效判定（决定 6：无效点标注而不丢弃），
- * 并附该点的瓶颈段指认（决定 7：排停顿后的分段 p95 最大者）。
+ * 每点带负载条件、样本数与有效/无效判定（无效点标注而不丢弃），
+ * 并附该点的瓶颈段指认（排停顿后的分段 p95 最大者）。
  */
 import { runBenchScenario, type RunArtifact } from './run.ts'
 import { analyzeRecords, attributeBottleneck, curvePoint, type CurvePoint } from './analyze.ts'
@@ -28,7 +28,7 @@ const RATE_SWEEP: { rate: number; seconds: number }[] = [
   { rate: 1600, seconds: 10 },
 ]
 
-/** 追平延迟曲线：积压量清单（seq 缺口，决定 3）。 */
+/** 追平延迟曲线：积压量清单（seq 缺口）。 */
 const BACKLOG_SWEEP: { backlog: number; seconds: number }[] = [
   { backlog: 0, seconds: 8 },
   { backlog: 100, seconds: 8 },
@@ -105,12 +105,12 @@ async function main(): Promise<void> {
     const rateRows = rows.filter(row => row.label.startsWith('rate='))
     const backlogRows = rows.filter(row => row.label.startsWith('backlog='))
     const doc = [
-      '# R8 期2 曲线点表（脚本轮，client=script）',
+      '# 曲线点表（脚本轮，client=script）',
       '',
-      '> 由 `tools/bench/sweep.ts` 生成；每点带负载条件、样本数与有效/无效标注（决定 6），'
-        + '瓶颈指认取排停顿后的分段 p95 最大者（决定 7）。'
+      '> 由 `tools/bench/sweep.ts` 生成；每点带负载条件、样本数与有效/无效标注，'
+        + '瓶颈指认取排停顿后的分段 p95 最大者。'
         + '订阅延迟 = 事件端到端（排停顿）；追平延迟 = opening 的 `devApply − gwRecv`。'
-        + '**真机校验轮（client=device）的点另起一节追加，绝不与本表混画同一条曲线**（决定 4）。',
+        + '**真机校验轮（client=device）的点另起一节追加，绝不与本表混画同一条曲线**。',
       '',
       '## 曲线 ① 订阅延迟 vs 事件率（backlog=0）',
       '',

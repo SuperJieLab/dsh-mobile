@@ -1,7 +1,7 @@
 /**
  * 装配边界：协议层要的「读工作空间」能力（组流）与两条写 op。
  *
- * 目录浏览不在这里：那是宿主的另一个控制器（`directoryPickerController`），
+ * 目录浏览不在这里：它读的是机器上的文件系统（`upstream/directory-listing.ts`），
  * 有自己的一条端口（`ports/directory.ts`）—— 合成一个会让「组」与「文件系统」两个
  * 变化原因住进同一个接口。
  *

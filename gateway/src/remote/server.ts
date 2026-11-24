@@ -7,7 +7,7 @@
  *
  * 这一层不产生协议码 —— 握手拒绝用的是 HTTP 状态行（404 / 401 / 400 / 409），那是传输
  * 自己的词汇，不是协议信封。身份类的 `unauthenticated` / `invalid-pairing-code`
- * 在 `http.ts` 的闸门旁，同属 HTTP 401 一族（见 `ISSUES` A13 的分类）。
+ * 在 `http.ts` 的闸门旁，同属 HTTP 401 一族。
  */
 
 import type { Server } from 'node:http'

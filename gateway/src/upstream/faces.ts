@@ -69,9 +69,9 @@ interface SessionListControllerLike {
 /**
  * 一页历史：**直呼宿主的 `sessionController.page(request, signal)`**，入参与应答都不动。
  *
- * 上一版网关自己按 `maxMessages` 切窗口（`protocol/window.ts` 的 `pageWindow`），
- * 等于把宿主的规则抄了一遍 —— 宿主改规则时网关不会红，症状是「同一屏在 Web UI 与
- * 手机上长度不同」。判据见 `tests/protocol/page-forward.test.ts`。
+ * 自己按 `maxMessages` 切窗口等于把宿主的规则抄一遍 —— 宿主改规则时网关不会红，
+ * 症状是「同一屏在 Web UI 与手机上长度不同」。判据见
+ * `tests/protocol/page-forward.test.ts`。
  *
  * 宿主没有这个切面时抛错（装配错误），由协议层折成 `internal-error`。
  */
@@ -93,7 +93,7 @@ interface SessionPageControllerLike {
 /**
  * 工作空间端口：组流 + 两条写面。
  *
- * 组清单与归属只有一处来源 —— `workspace/follow` 的 `items[].sessionIds`。网关不再
+ * 组清单与归属只有一处来源 —— `workspace/follow` 的 `items[].sessionIds`。网关不
  * 自己按目录比一遍（那份判据宿主已经做过），也不在 HTTP 上另开一条读。
  */
 export function workspacePortOver(ctx: HostContext): WorkspacePort {
@@ -177,16 +177,12 @@ interface SessionsLike {
 
 /** 本模块用到的 `ctx.sessionProjections` 部分。 */
 interface ProjectionsLike {
-  /** 列表路径用的零 I/O 读取：只取已物化的格子，水位是*最低*的缓存切点。
-   * 上游 `dsh-session-projection` 的 `cachedSnapshot` 将值文档化为可能落后于
-   * 存活会话的提示。 */
-  cachedSnapshot(session: unknown): ProjectionSnapshotLike | undefined
-  /** 对已注册单元在日志当前水位的一次一致切取 —— 占用量帧用的读取，
+  /** 对已注册单元在日志当前水位的一次一致切取 —— control 流的基线用的读取，
    * 其 `asOfSeq` 必须前进，否则客户端会把它当重放丢掉。 */
   snapshot(session: unknown, keys?: readonly string[]): ProjectionSnapshotLike | undefined
 }
 
-/** 投影值的一次切取，上面两个读取都返回此形状。 */
+/** 投影值的一次切取 —— `snapshot` 返回的形状。 */
 interface ProjectionSnapshotLike {
   asOfSeq: number
   values: Readonly<Record<string, unknown>>
@@ -251,7 +247,7 @@ export function modelChannelOver(ctx: HostContext): ModelPort | undefined {
   }
   const readable = controller as ModelControllerLike
   // 组装期签名检查：两个成员都按位置调用，形参表变了要在启动时出声，
-  // 而不是第一次点模型时（G2 的同族防线）。
+  // 而不是第一次点模型时。
   for (const [member, expected] of [
     ['selectModel', ['request']],
     ['modelCatalog', []],
@@ -390,11 +386,11 @@ interface PermissionPresetsLike {
  * 原始实例的**形参位置**也会变 —— 0.1.7 把 `uplink` / `peer` 插在 `signal`
  * 前，按位置传的取消信号落进 uplink 槽，`AbortSignal.any([undefined, ...])` 当场抛错
  * （真机日志 `signals[0] is not of type AbortSignal.`）。对策：收流优先走**声明面**
- * `wireStream.open`（types.d.ts:87）；缺席才碰私有 `openWireStream`，实参**按形参名**填
+ * `wireStream.open`；缺席才碰私有 `openWireStream`，实参**按形参名**填
  * （`openStreamThrough`），形参表读不出（bind/native 包过）时按 arity 兜底并告警。
  *
  * 本函数还负责它们共同的**身份**：向 `connection` 服务要一个进程内 Peer（{@link peerFor}）——
- * 自 0.2 起开流必须以一个真实 Peer 的名义，而它在该版是必需实参（R11）。
+ * 开流必须以一个真实 Peer 的名义，而它在该版是必需实参。
  */
 export function gatewayOver(ctx: HostContext): RemoteEventStreamLike & RemoteEventAnswerLike {
   const view = ctx.typertGateway as unknown as Record<PropertyKey, unknown> | undefined
@@ -474,7 +470,7 @@ function peerFor(ctx: HostContext): PeerScopeLike {
   const createPeer = connection?.createPeer
   if (typeof createPeer !== 'function') {
     // 这一段是我们与宿主的接线，缺了它中继整块不可用 —— 在装配时说清，而不是把
-    // `undefined` 传进每一代建流（R11 修的正是后者）。
+    // `undefined` 传进每一代建流。
     log.error('approval relay peer source',
       { connection: typeof connection, createPeer: typeof createPeer })
     throw new Error('ctx.connection.createPeer is unavailable — the approval relay cannot open $events without a Peer')

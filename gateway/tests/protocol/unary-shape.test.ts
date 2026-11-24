@@ -1,5 +1,5 @@
 /**
- * 一元调用的新路径（判据 1）：`POST /api/<命名空间>/<方法>` 上的一次读。
+ * 一元调用的新路径：`POST /api/<命名空间>/<方法>` 上的一次读。
  *
  * 最要紧的一条是「值仍然由装配函数产出」—— 只断言 200 与 `result.ok` 的话，把
  * `listSessionsOf` 换成一个就地拼的假对象也照样绿。所以这里把 HTTP 拿到的 `value`
@@ -109,7 +109,7 @@ test('请求里的 method 与路径不一致 → invalid-request，且不落到�
 test('打一条不存在的端点 → 404 纯文本，不是信封', async () => {
   await withListener(async (post) => {
     // 这是「客户端打到一个新网关没有的端点」的全部现场：404，没有 `rpcId` 可归属，
-    // 所以也包不出信封（判据 4）。手机侧把它译成「两边版本不一致」。
+    // 所以也包不出信封。手机侧把它译成「两边版本不一致」。
     const response = await post('/api/session/nope', request('session/nope'))
     assert.equal(response.status, 404)
     assert.match(response.headers.get('content-type') ?? '', /text\/plain/)

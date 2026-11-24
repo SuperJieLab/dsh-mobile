@@ -1,9 +1,8 @@
 /**
- * 判据 9：`api-session/…` 这类事件 → 列表变化。
+ * `api-session/…` 这类事件 → 列表变化。
  *
- * 翻译从网关搬到客户端（`upstream/session-events.ts` → `SessionListEvents`），
- * 搬的是一次**行为迁移** —— 两边的错法不同（一边多一条、一边少一条），
- * 只有逐类对齐才守得住。
+ * 翻译住在客户端的 `SessionListEvents`：网关只转发 `api-session/…` 的名字，不做归类 ——
+ * 「哪一类事件算列表变化」因此只有这一份表，逐类对齐才守得住。
  */
 import XCTest
 @testable import DshMobile

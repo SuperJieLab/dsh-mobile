@@ -283,7 +283,7 @@ test('the pair op answers with a full envelope and issues a device token', async
   }
 })
 
-test('判据 2：同一身份的第二条 WS 回 409，关掉第一条之后能再连', { timeout: 15_000 }, async () => {
+test('同一身份的第二条 WS 回 409，关掉第一条之后能再连', { timeout: 15_000 }, async () => {
   const port = freshPort(38_600)
   const credentialsPath = tempCredentialsPath()
   const { teardown } = install('127.0.0.1', port, credentialsPath)
@@ -451,7 +451,7 @@ test('model-select reaches the controller and answers the normalized selection',
     const body = await call(port, 'session/selectModel', { request: { sessionId: 's1', provider: 'deepseek', model: 'v3.2' } }, access) as UnaryAnswer & { ok: boolean; selected?: unknown }
     assert.equal(body.status, 200)
     assert.equal(body.ok, true)
-    // Upstream's answer is the normalized pair — relayed, not re-derived (决定 3).
+    // Upstream's answer is the normalized pair — relayed, not re-derived.
     assert.deepEqual(body.selected, { provider: 'deepseek', model: 'v3.2' })
     assert.deepEqual(fake.received, [{ sessionId: 's1', provider: 'deepseek', model: 'v3.2' }])
   } finally {
@@ -477,7 +477,7 @@ test('model ops are answered with an envelope even when no controller is behind 
   }
 })
 
-// MARK: - the command channel (R24 期1: a service the plugin never injected)
+// MARK: - the command channel (a service the plugin never injects)
 
 /** 宿主命令服务的窄面 —— 形参名照运行时的 `commands/src/index.ts` 写，漂移会被签名检查点出来。 */
 function fakeCommands(names: string[]): { service: Record<string, unknown>; executed: string[] } {
@@ -800,7 +800,7 @@ async function openEventsStream(
   return { socket, clientId, items }
 }
 
-test('判据 7：别人的 clientId 答不了审批，自己的可以；越权留一条 warn', { timeout: 10_000 }, async () => {
+test('别人的 clientId 答不了审批，自己的可以；越权留一条 warn', { timeout: 10_000 }, async () => {
   const port = freshPort(43_000)
   const credentialsPath = tempCredentialsPath()
   const { teardown, gateway } = install('127.0.0.1', port, credentialsPath)
@@ -1020,7 +1020,6 @@ function fakeFollowHost(opening: {
         list: () => [{ id: 's1' }],
       },
       sessionProjections: {
-        cachedSnapshot: () => undefined,
         snapshot: () => {
           reads += 1
           return projected
@@ -1121,7 +1120,7 @@ test('U6: control 流给 baseline，触发事件后推一条 projection', { time
     socket.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: 's1' }, activate: true, assistantStream: true, maxMessages: 500 } } } }))
     await waitFor(f => f.some(frame => frame.streamId === 's1' && frame.type === 'item'), 'the follow opening')
 
-    // 判据 8：同一 `asOfSeq` 下，两条出口给出同一份视图值。
+    // 同一 `asOfSeq` 下，两条出口给出同一份视图值。
     const opening = frames.find(frame => frame.streamId === 's1' && frame.type === 'item')!.value as Record<string, unknown>
     assert.deepEqual(opening['projections'], { asOfSeq: 3, values: blocks['s1']?.values },
       '快照的 projections 与 control 的 baseline 必须逐字段相等')
@@ -1149,7 +1148,7 @@ test('U6: control 流给 baseline，触发事件后推一条 projection', { time
     await new Promise(resolve => setTimeout(resolve, 150))
     assert.equal(frames.filter(frame => frame.streamId === 'c1').length, before, '没有触发事件就不重发')
 
-    // 判据 8 的后半：断开 control，follow 的事件照常。两条流互不连坐 —— 这正是
+    // 断开 control，follow 的事件照常。两条流互不连坐 —— 这正是
     // 「一条流的事故不拖垮另一条」在 control 与 follow 之间的那一半。
     socket.send(JSON.stringify({ type: 'cancel', streamId: 'c1' }))
     await new Promise(resolve => setTimeout(resolve, 30))

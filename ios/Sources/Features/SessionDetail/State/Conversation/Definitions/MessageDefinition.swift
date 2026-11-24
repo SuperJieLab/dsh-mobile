@@ -51,7 +51,7 @@ struct MessageDefinition: ConversationNodeDefinition {
     }
 
     /// 身份：优先协议里的消息 id。
-    /// 退路（判据 O1 的唯一例外）：老日志与旧 fixture 没有 `id`，只能退回 `seq` ——
+    /// 退路（唯一例外）：老日志与旧 fixture 没有 `id`，只能退回 `seq` ——
     /// 退回之后这条消息的身份随窗口走，但它从不更新，所以不会引起重建。
     static func identity(of event: AssemblyEvent) -> String {
         if let id = event.data["id"]?.string, !id.isEmpty { return id }

@@ -1629,7 +1629,7 @@ final class LayeringTests: XCTestCase {
 
     /// 账号失效的提示真的画在**列表**上，而不只是标志被置位。
     ///
-    /// 判据 12 要的是「停在列表时能看到」，而 `HostNotificationsTests` 只证明标志会置位
+    /// 要求的是「停在列表时能看到」，而 `HostNotificationsTests` 只证明标志会置位
     /// （数据到得了）。从「标志」到「屏上有那一行」这一跳没有任何运行时症状 —— 删掉
     /// 视图里那段 `if`，全部单测照样绿，用户却在列表上什么都看不到，要等到点进某个会话。
     /// 这条守的正是那一跳：装配把标志传进来、视图读它、文案来自 `HostText`。
@@ -1641,7 +1641,7 @@ final class LayeringTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(listView.contains("loginExpired.isShowing"),
-                      "列表视图没读那个标志 —— 账号过期只在详情屏可见，判据 12 的落点没了")
+                      "列表视图没读那个标志 —— 账号过期只在详情屏可见")
         XCTAssertTrue(listView.contains("HostText.loginExpired"),
                       "横幅没用那句共享文案 —— 两屏说两句不同的话，用户会以为是两件事")
         XCTAssertTrue(listView.contains("struct SessionListRow"), "扫错文件了（行视图不在这里）")
@@ -3147,7 +3147,7 @@ final class LayeringTests: XCTestCase {
     ///
     /// 这条判据原先断的是「客户端不认识上游事件名」—— F1 之前分工是网关把事件翻译好再下发，
     /// 客户端只认 `SessionListChange`。F1 之后反过来：契约说 `emit` 原样转发、网关不解释事件名，
-    /// 分派在客户端按 `event` 名做（判据 9 要求的正是这个）。所以判据跟着变，
+    /// 分派在客户端按 `event` 名做。所以判据跟着变，
     /// **但不是取消**：它守的东西从「一处都不认识」变成「只有一处认识」——
     /// 两处认识的话，上游改一次形状就要改两处，而漏掉的那一处不会编译失败。
     func testOnlyTheListAdapterKnowsUpstreamEventNames() throws {

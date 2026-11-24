@@ -4,8 +4,8 @@
  * 两条都是转发：`workspace/create` 收 `{request:{path}}`（宿主按路径注册一个**已存在**的
  * 目录），`workspace/delete` 收 `{request:{workspaceId}}`。
  *
- * **没有名字规则**：F3 第 4 期起工作空间的标题由宿主从路径取，客户端不再输入名字，
- * 网关也不再判「这个名字能不能用」—— 那条规则曾经在两端各有一份，改一处另一处不会红。
+ * **没有名字规则**：工作空间的标题由宿主从路径取，客户端不输入名字，网关也不判
+ * 「这个名字能不能用」—— 那条规则若在两端各有一份，改一处另一处不会红。
  */
 
 import { nonEmptyString, requestContainerOf } from './fields.ts'

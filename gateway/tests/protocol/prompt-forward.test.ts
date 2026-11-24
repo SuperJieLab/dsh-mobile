@@ -1,5 +1,5 @@
 /**
- * `session/prompt` 的转发面（判据 1、11）。
+ * `session/prompt` 的转发面。
  *
  * 这条端点的承诺只有一句：**五个字段原样交给宿主**。网关不拼 `content`、不固定
  * `mode`、不丢时区，畸形载荷在到达宿主之前就被拒。
@@ -26,7 +26,7 @@ function recorder() {
   return { prompts, port }
 }
 
-test('判据 1：五个字段逐字到宿主，steer 不被改回 queue', async () => {
+test('五个字段逐字到宿主，steer 不被改回 queue', async () => {
   const { prompts, port } = recorder()
   const args = {
     request: {
@@ -56,7 +56,7 @@ test('时区缺了就缺席 —— 不补 null、不猜一个', async () => {
   assert.equal('clientTimeZone' in (prompts[0] ?? {}), false)
 })
 
-test('判据 11：五种畸形一律 invalid-request，宿主零调用', async () => {
+test('五种畸形一律 invalid-request，宿主零调用', async () => {
   const { prompts, port } = recorder()
   const ok = { requestId: 'r-1', sessionId: 's-1', mode: 'queue', content: [{ type: 'text', text: 'hi' }] }
   const cases: [string, unknown][] = [

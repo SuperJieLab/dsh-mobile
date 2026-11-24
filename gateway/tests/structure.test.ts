@@ -6,7 +6,7 @@
  * 真正被调用的解析函数都配了**样本自证**：违规样本必须命中、合规样本不得命中、
  * 认不出的写法（重导出 / 动态 import / 认不出的导出形态）必须报错而不是静默跳过。
  *
- * 目录分工（判据来源是需求文档的场景 1、2，那份文档不随仓库发布，所以这里把它说清）：
+ * 目录分工（来源是需求文档里的场景，那份文档不随仓库发布，所以这里把它说清）：
  *
  *   wire/      两端共守的形状与编解码 —— 改它，手机端必须同改
  *   ports/     装配边界：端口接口与上游失败的词汇
@@ -542,7 +542,7 @@ test('the endpoint envelope has exactly one home, and transport does not build i
   // 信封（`type` / `rpcId` / `result` 那三格）只在 `wire/unary.ts` 的
   // `encodeServerResponse` / `parseClientRequest` 里出现。为什么值得一条判据：
   // 「判定值只有一个家」那张表只列导出，第二份构造器若是 `remote/` 里的私有函数，
-  // 表看不见它 —— R15 期3 之前 `remote/http.ts` 就有一份 `refusal()`，与 `failure()`
+  // 表看不见它 —— `remote/http.ts` 里若有一份私有的 `refusal()`，它与 `failure()`
   // 逐字同义，升一次字段就分叉，而手机端只认其中一份。
   const literals = (text: string): number =>
     [...text.matchAll(/type:\s*'(server-response|client-request)'/g)].length
@@ -1019,7 +1019,7 @@ test('wire/ exports shapes, codecs and field guards — each accounted for', () 
 
   // 字段规则的两个方向都要查：位置在表里说的那个文件，且**有人用**。
   // 「有没有第二处」与「有没有人用」是两件事 —— 只查前者，一条没人引用的规则
-  // 照样绿（R15 期3 的教训）。
+  // 照样绿。
   const guardMisplaced = WIRE_FIELD_GUARDS
     .filter(guard => !actual.some(f => f.name === guard.name && f.file === guard.file))
     .map(guard => `${guard.name} 不在 ${guard.file}`)
@@ -1141,6 +1141,66 @@ test('every source file the gateway README names still exists', () => {
   }
   assert.deepEqual(problems, [],
     `the README must point at files that exist, unambiguously (renamed? update the README in the same commit):\n${problems.join('\n')}`)
+})
+
+// ---------------------------------------------------------------------------
+// V6c：注释与测试名不引 plan 的编号（期号 / 决定号 / 判据号 / 任务号）
+// ---------------------------------------------------------------------------
+
+/** 一种 plan 编号的写法。名字进报告，正则认形态。 */
+const PLAN_NUMBER_ANCHORS: readonly { name: string; re: RegExp }[] = [
+  { name: '判据号', re: /判据\s+\d/ },
+  { name: '决定号', re: /决定\s+\d/ },
+  { name: '期号', re: /[FRM]\d+\s*(?:第|§)|R\d+\s+期|R\d+-B\d+|第[一二三四五六]期/ },
+  { name: '任务号', re: /Task\s+\d/ },
+]
+
+/** 这段文本引了哪种 plan 编号；没有则 `undefined`。 */
+function planNumberIn(text: string): string | undefined {
+  for (const anchor of PLAN_NUMBER_ANCHORS) if (anchor.re.test(text)) return anchor.name
+  return undefined
+}
+
+test('no comment or test name cites a plan number', () => {
+  // 编号是**会移动的索引**：各期判据都从 1 重排，同一个编号在两期指两件事；plan 修订
+  // 之后原编号还会指空（本仓真出现过一条带编号的注释，在现存与归档的 plan 里都找不到
+  // 对应）。映射只该出现在结项记录的「期 | 判据 | 落点」表里，测试按判据的**语义**实现、
+  // 名字写行为。
+  //
+  // 三处扫描面：产品代码、测试、压测工具。**测试名一并扫** —— 编号最容易从那里长回来，
+  // 它曾经就是测试名里的前缀（百余处）。
+  //
+  // 放行靠**前缀**而不是豁免名单：`契约 §4.6` 与 `RFC 6455 §5.1` 没有 plan 编号前缀，
+  // 天然不命中；`F3-webui-parity` 这类目录名也不命中 —— 只有 `第` / `§` / `期` 才是标记。
+  const root = join(SRC, '..')
+  const files = [SRC, join(root, 'tests'), join(root, 'tools')].flatMap(filesUnder)
+  const offenders: string[] = []
+  for (const file of files) {
+    const source = readFileSync(file, 'utf8')
+    const texts = [
+      ...commentSpans(source).map(span => span.text),
+      ...[...source.matchAll(/\btest\(\s*'([^']*)'/g)].map(match => match[1] as string),
+    ]
+    for (const text of texts) {
+      const anchor = planNumberIn(text)
+      if (anchor !== undefined) offenders.push(`${relative(root, file)}: ${anchor}: ${text.trim().slice(0, 80)}`)
+    }
+  }
+  assert.deepEqual(offenders, [],
+    `plan numbers are indexes that move — write the behaviour instead:\n${offenders.join('\n')}`)
+})
+
+test('the plan-number matcher catches every shape it bans, and leaves contract sections alone', () => {
+  // 样本放在**字符串字面量**里而不是注释里：本文件也在扫描面内，写进注释会被自己抓到。
+  // 它们不是注释、也不是测试名（`test(` 后面那一个引号串才是），所以不构成示范。
+  const banned = ['判据 3：归属', '决定 5：一次一个进程', 'F3 第 3 期', 'M4 §4.2', 'R8 期2', 'R8-B001', 'Task 6']
+  for (const sample of banned) {
+    assert.notEqual(planNumberIn(sample), undefined, `must catch: ${sample}`)
+  }
+  const allowed = ['契约 §4.6 的应答载荷', 'RFC 6455 §5.1', '判据是人想的，事件序列是上游给的', 'F3-webui-parity']
+  for (const sample of allowed) {
+    assert.equal(planNumberIn(sample), undefined, `must not catch: ${sample}`)
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1658,7 +1718,7 @@ test('log bodies carry no interpolation', () => {
 })
 
 test('retired type names stay gone: the endpoint kind and the command acceptance', () => {
-  // 这两个类型零引用后被删（F2 第 2 期）。删掉的东西长回来是常见回退，而它们的回归
+  // 这两个类型零引用后被删。删掉的东西长回来是常见回退，而它们的回归
   // 不会让任何行为判据变红 —— 只有这一条会。
   const retired = ['EndpointKind', 'CommandAcceptance']
   const hits: string[] = []

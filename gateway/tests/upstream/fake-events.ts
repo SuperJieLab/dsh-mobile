@@ -39,7 +39,7 @@ export function fakeEventStream(options: { failFirstOpen?: boolean; host?: { hom
       let broken = false
       breakers.push(() => { broken = true })
       announce()
-      // 上游的 `host` 是可选的：给了就原样带出去，不给这一格就缺席（判据 4）。
+      // 上游的 `host` 是可选的：给了就原样带出去，不给这一格就缺席。
       yield { type: 'ready', clientId: `client-${opened}`, ...(options.host === undefined ? {} : { host: options.host }) }
       while (!signal.aborted && !broken) {
         while (queue.length > 0) yield queue.shift()!

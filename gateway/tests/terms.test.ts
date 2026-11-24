@@ -1,5 +1,5 @@
 /**
- * 术语回潮检查（R13 期2）—— 扫网关源码、测试、工具与四份活文档，命中 `terms.txt` 里的
+ * 术语回潮检查 —— 扫网关源码、测试、工具与四份活文档，命中 `terms.txt` 里的
  * 反模式即失败。
  *
  * 词表在仓库根（`terms.txt`），iOS 侧读同一份 ⇒ 结构上不可能漂移。表里还有一组
@@ -173,7 +173,7 @@ test('术语回潮检查：网关源码、测试、工具与活文档里不出�
   assert.equal(hits.length, 0, `发现已退役的写法（改成建议列里的说法）：\n${hits.join('\n')}`)
 })
 
-// ── 判据 13：契约与文档里写的端点名，必须是代码里真有的名字 ─────────────────
+// ── 契约与文档里写的端点名，必须是代码里真有的名字 ─────────────────
 //
 // 两端各写一份实现的协议里，「文档写了一个不存在的端点」是最常见也最无声的错：
 // 读文档的人照着打，得到 404，然后怀疑网关坏了。这一组只钉**名字与 args 键**，
@@ -198,7 +198,7 @@ const PHASE_ONE_ENDPOINTS: readonly (readonly [endpoint: string, argsKey: string
   ['workspace/delete', 'request'],
 ]
 
-test('判据 13 前半：契约里本期的每个端点都有一个 POST /api/<名> 段落，且写着它的 args 键', () => {
+test('契约里本期的每个端点都有一个 POST /api/<名> 段落，且写着它的 args 键', () => {
   const contract = join(ROOT, 'dev/contract/protocol.md')
   if (!existsSync(contract)) {
     // 与术语判据同一条纪律：`dev/` 不进仓库，干净 clone 里没有它 —— 跳过并告警，

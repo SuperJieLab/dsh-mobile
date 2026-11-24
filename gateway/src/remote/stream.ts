@@ -8,7 +8,7 @@
  * 一条流失败时**只有这条结束**：泵的 catch 把异常折成 error 帧，`finally` 清掉
  * 自己的 streamId；同一条连接上的其它流继续。
  *
- * **本文件出现五条错误码，归属各不相同**（`ISSUES` A13 的分类结果）：
+ * **本文件出现五条错误码，归属各不相同**（按产生者分类）：
  *
  *   window-too-large   传输自有 —— 说的是「这一帧装不下」，由字节上界
  *                      （`StreamOptions.openingCapBytes`）产生，不是会话状态
@@ -219,7 +219,7 @@ function excerptOf(text: string): string {
  * 这样控制流不需要定时器，也不会在空闲时白读。
  *
  * 生命周期跟着 control 泵的 abort 走（`off()` 里连同空集合一起删），漏删的症状是
- * 「占用量停更」—— 与本期要消灭的那个老症状同形，所以注销写成一条路径。
+ * 「占用量停更」，所以注销写成一条路径。
  */
 const projectionListeners = new Map<string, Set<(sessionId: string, seq: number) => void>>()
 
@@ -477,10 +477,10 @@ function waterfallValue(held: HeldApproval): MuxApprovalWaterfall {
  * 泵一条 follow 流：**转达**打开帧，随后转达事件，直到源结束、客户端取消，
  * 或源破坏自己的契约。
  *
- * 网关在这一条上只剩两件事：把字节上界施加在宿主的窗口上（§B1），以及见证
+ * 网关在这一条上只剩两件事：把字节上界施加在宿主的窗口上，以及见证
  * 「seq 无缺口」这条源自己的承诺。窗口怎么切、哪些字段随行，都是宿主的判定 ——
- * 上一版在这里按 `maxMessages` 重切一遍，等于把宿主的规则抄了一份，宿主改规则时
- * 网关不会红，症状是「同一屏在 Web UI 与手机上长度不同」。
+ * 按 `maxMessages` 重切一遍等于把宿主的规则抄了一份，宿主改规则时网关不会红，
+ * 症状是「同一屏在 Web UI 与手机上长度不同」。
  *
  * **裁剪只动 `records` 与 `hasMore`**：`cursor` 说的是「宿主覆盖到哪」，不是「我发了
  * 多少」；跟着裁的后果是客户端把「上面还有」读成「日志到头」。

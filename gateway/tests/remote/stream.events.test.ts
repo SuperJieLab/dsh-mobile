@@ -205,7 +205,7 @@ test('E5: 四种货物落在同一条流上，编号相同', { timeout: 10_000 }
   }
 })
 
-test('判据 4：ready 带上游的 host —— 给了就在，不给就缺席', { timeout: 10_000 }, async () => {
+test('ready 带上游的 host —— 给了就在，不给就缺席', { timeout: 10_000 }, async () => {
   // 泵只做搬运：feed 说什么它就发什么，所以这一条测的是「线上那一格存在且形状对」。
   // 「上游那个字段有没有被保存」是另一半，在 `upstream/remote-events.test.ts`。
   const withHost = fakeFeed()
@@ -240,7 +240,7 @@ test('判据 4：ready 带上游的 host —— 给了就在，不给就缺席',
   }
 })
 
-test('判据 5：换代不换 clientId，登记仍指着同一个身份', { timeout: 10_000 }, async () => {
+test('换代不换 clientId，登记仍指着同一个身份', { timeout: 10_000 }, async () => {
   // 换代换的是上游那条流，不是客户端这一条 —— 客户端不会因为上游重连就去换 id。
   // 换 id 的代价是：重连那一瞬到达的应答（用户刚点的「允许」）变成越权，白丢一次。
   const feed = fakeFeed()
@@ -270,7 +270,7 @@ test('判据 5：换代不换 clientId，登记仍指着同一个身份', { time
     assert.equal(handler.registry.ownerOf(firstId!), 'i-1',
       '登记也没丢 —— 否则重连之后到达的应答全变成 not-owner')
 
-    // 客户端唯一在意的那件事：换代之后，手里这个 id 还能答。plan 判据 5 写的就是这一句 ——
+    // 客户端唯一在意的那件事：换代之后，手里这个 id 还能答 ——
     // 只断言 `ownerOf` 是它的前半，走一遍判定与投递才是后半。
     const delivered: string[] = []
     const answer = await remoteEventResultValue(

@@ -1,9 +1,9 @@
 /**
- * 分析纯函数（R8 期2 链路 C）—— 产物记录 → 分段分布 / 曲线点 / 瓶颈指认。
+ * 分析纯函数 —— 产物记录 → 分段分布 / 曲线点 / 瓶颈指认。
  * 输入两端记录与负载条件，输出确定性的结论；不读文件、不碰时钟、不改状态，
- * 同一批产物重跑结论不变（H5 的前提），换一批产物结论随数据变（H6）。
+ * 同一批产物重跑结论不变，换一批产物结论随数据变。
  *
- * 决定 7（分布报两套）：「批次停顿」已被 R8-B001 定成与常规延迟不同机制的一类
+ * 分布报两套：「批次停顿」是与常规延迟不同机制的一类
  * —— 把它混进 p95 会让「哪段先劣化」被一次停顿改写。每段同时报含停顿与
  * 排停顿两套，停顿事件本身以 `pauseCount` 单独在册（它是真实用户会遇到的）。
  *
@@ -127,7 +127,7 @@ export function analyzeRecords(records: readonly PerfLike[], options: AnalyzeOpt
 
   // 停顿判定走 devRecv 的到达间隔 —— 批次释放的现场是「整批挤在同一刻到达」。
   // 批内成员彼此间隔 ≈ 0，光看间隔只抓得到批头；后半句补批身：紧跟已停顿
-  // 事件、自身跨机延迟也超阈的，属同一批的释放（R8-B001：批内 devRecv 全挤
+  // 事件、自身跨机延迟也超阈的，属同一批的释放（批内 `devRecv` 全挤
   // 在 19 ms 内）。
   const paused = new Set<number>()
   for (let i = 0; i < devEvents.length; i += 1) {
@@ -170,8 +170,8 @@ export function analyzeRecords(records: readonly PerfLike[], options: AnalyzeOpt
 }
 
 /**
- * 瓶颈段指认：排停顿后分段 p95 的最大者即先劣化段（决定 7）。
- * 合成负载下 t1 不作结论（evTime 是生成器写的，决定 2），指认在 t2 / t3 / t4
+ * 瓶颈段指认：排停顿后分段 p95 的最大者即先劣化段。
+ * 合成负载下 t1 不作结论（evTime 是生成器写的），指认在 t2 / t3 / t4
  * 之间进行；网关段（t2）附带事件循环读数作次级证据，客户端段（t4）即 fold
  * 分位本身。
  */
@@ -203,13 +203,13 @@ export function attributeBottleneck(dist: SegmentDistributions, records?: readon
   return { segment: winner.segment, p95: winner.p95, ...(secondary === undefined ? {} : { secondary }) }
 }
 
-// MARK: - 曲线点（Task 6：两条曲线的原料）
+// MARK: - 曲线点（两条曲线的原料）
 
 /** 曲线点读入的一批产物（`runBenchScenario` 的落盘物，真机轮同形状）。 */
 export interface CurvePointInput {
   condition: Record<string, unknown>
   records: readonly PerfLike[]
-  /** 生成器落后量（决定 2 的旁证，随产物走）—— 判定②用它。 */
+  /** 生成器落后量（旁证）—— 判定②用它。 */
   lagMaxMs?: number
 }
 
@@ -230,14 +230,14 @@ export interface CurvePoint {
 }
 
 export interface CurvePointOptions {
-  /** 有效性判定②的落后量上限，ms（决定 6）。 */
+  /** 有效性判定②的落后量上限，ms。 */
   lagLimitMs?: number
   offsetMs?: number
   minEvents?: number
   pauseThresholdMs?: number
 }
 
-/** 一批产物 → 一个曲线点（有效性就地重判，决定 6：标注而非丢弃）。 */
+/** 一批产物 → 一个曲线点（有效性就地重判：标注而非丢弃）。 */
 export function curvePoint(input: CurvePointInput, options: CurvePointOptions): CurvePoint {
   const minEvents = options.minEvents ?? 20
   const offsetMs = options.offsetMs ?? 0
