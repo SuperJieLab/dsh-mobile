@@ -188,6 +188,28 @@ final class SnapshotCostTests: XCTestCase {
         XCTAssertEqual(snapshot.messageCount, 1)
     }
 
+    /// 一帧里既有翻转、又有别的改动：翻转让这一批退全量，但**剩下的改动不能丢**。
+    /// 这是 `.animationFrame` 的常态形状 —— 一帧内多条写入并成一个 `touched`。
+    func testApplyKeepsTheRestOfTheBatchWhenOneCellFlips() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([
+            node("a", message("1", 1), anchor: 1),
+            node("b", message("2", 2), anchor: 2),
+        ])
+        let before = builder.fullRebuildCount
+
+        let snapshot = builder.apply([
+            node("b", message("", 2), anchor: 2, visible: false),
+            node("c", message("3", 3), anchor: 3),
+        ])
+
+        XCTAssertEqual(builder.fullRebuildCount, before + 1, "翻转退一次全量")
+        XCTAssertEqual(snapshot.nodes.map(\.key), ["a", "b", "c"],
+                       "同一帧里排在翻转之后的那条改动，不能被全量兜底吃掉")
+        XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["a", "c"])
+        XCTAssertEqual(snapshot.messageCount, 2, "a 与 c 各一条；b 转 hidden 后不再算")
+    }
+
     // MARK: - 并入之后可见集与条数不漂
 
     /// 同一格从消息换成命令：它还在屏上，但不再算一条消息。
