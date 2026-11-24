@@ -26,4 +26,43 @@ struct ChatSnapshotBuilder {
         if left.anchorSeq != right.anchorSeq { return left.anchorSeq < right.anchorSeq }
         return left.key < right.key
     }
+
+    /// 按 key 并入：给定节点替换同 key 的旧条目，没有的按位置插入。
+    ///
+    /// **只用在不会改变整体顺序的路径上**（追加一条实时事件、就地更新某一格）。
+    /// 位置索引被整份重建之后（前插、边界事件、带定稿的收笔）必须走 `replace`：
+    /// 那时任意槽位的锚点都可能变，按 key 并会把顺序搞错。
+    ///
+    /// 常见路径是 O(log N) 的：更新已有格子就地替换，新增格子插在末尾。
+    @discardableResult
+    mutating func apply(_ updated: [ChatNode]) -> ChatSnapshot {
+        guard !updated.isEmpty else { return snapshot }
+        var nodes = snapshot.nodes
+        for node in updated {
+            var at = Self.insertionIndex(for: node, in: nodes)
+            if at < nodes.count, nodes[at].key == node.key {
+                nodes[at] = node
+                continue
+            }
+            // 锚点变了的旧条目会落在别处：先摘掉再按新位置插，否则同一 key 会出现两次。
+            if let stale = nodes.firstIndex(where: { $0.key == node.key }) {
+                nodes.remove(at: stale)
+                at = Self.insertionIndex(for: node, in: nodes)
+            }
+            nodes.insert(node, at: at)
+        }
+        snapshot = ChatSnapshot(nodes: nodes)
+        return snapshot
+    }
+
+    /// `node` 在已排序数组里该在的下标。同一 `(anchorSeq, key)` 的旧条目正好落在这里。
+    private static func insertionIndex(for node: ChatNode, in nodes: [ChatNode]) -> Int {
+        var low = 0
+        var high = nodes.count
+        while low < high {
+            let mid = (low + high) / 2
+            if precedes(nodes[mid], node) { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
 }

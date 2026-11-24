@@ -32,3 +32,14 @@ struct Change: Equatable {
         rebuilt = rebuilt || other.rebuilt
     }
 }
+
+/// 重导次数的计数器。引用类型是为了让引擎保持值语义的同时还能被数 ——
+/// `ConversationAssembler` 会被拷贝（判据里常见 `var a = assembler()`），
+/// 用 `mutating` 的属性计数会把这些拷贝各自记一份，数出来的不是总次数。
+final class ViewNodeBuildCounter {
+    private(set) var count = 0
+
+    func increment() {
+        count += 1
+    }
+}

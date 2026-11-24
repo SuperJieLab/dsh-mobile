@@ -74,4 +74,75 @@ final class SnapshotCostTests: XCTestCase {
         XCTAssertEqual(ChatSnapshot.empty.visibleNodes.count, 0)
         XCTAssertEqual(ChatSnapshot.empty.messageCount, 0)
     }
+
+    // MARK: - 合并只碰给定的那些槽位
+
+    func testApplyReplacesByKeyAndKeepsTheOrder() {
+        var builder = ChatSnapshotBuilder()
+        builder.replace([
+            node("a", message("1", 1), anchor: 1),
+            node("b", message("2", 2), anchor: 2),
+            node("c", message("3", 3), anchor: 3),
+        ])
+
+        let snapshot = builder.apply([
+            node("b", message("changed", 2), anchor: 2),
+            node("d", message("4", 4), anchor: 4),
+        ])
+
+        XCTAssertEqual(snapshot.nodes.map(\.key), ["a", "b", "c", "d"],
+                       "既有的位置不动，新的按位置插到它该在的地方")
+        XCTAssertEqual(snapshot.nodes[1].data, message("changed", 2), "同一个 key 被换掉而不是复制一份")
+    }
+
+    func testApplyWithNothingChangedKeepsTheSnapshotAsItWas() {
+        var builder = ChatSnapshotBuilder()
+        let before = builder.replace([node("a", message("1", 1), anchor: 1)])
+
+        XCTAssertEqual(builder.apply([]), before)
+    }
+
+    // MARK: - 重导只发生在命中的槽位上
+
+    private func userMessage(_ seq: Int) -> AssemblyEvent {
+        let json = #"{"id":"u\#(seq)","source":{"kind":"user"},"content":[{"type":"text","text":"m"}]}"#
+        let data = try! JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+        return AssemblyEvent(order: Double(seq), seq: seq, type: "user/message",
+                             time: Double(seq), data: data)
+    }
+
+    private func engine() -> ConversationAssembler {
+        ConversationAssembler(definitions: [
+            AnyNodeDefinition(AssistantStepDefinition()),
+            AnyNodeDefinition(MessageDefinition()),
+            AnyNodeDefinition(ProcessDefinition()),
+            AnyNodeDefinition(CommandDefinition()),
+        ])
+    }
+
+    func testMaterializingTheTouchedSlotsCostsTheSameAtAnyHistoryLength() {
+        func rebuildCount(_ historyLength: Int) -> Int {
+            var assembler = engine()
+            assembler.rebuild((0..<historyLength).map(userMessage))
+            let change = assembler.append(userMessage(historyLength))
+            let before = assembler.buildViewNodeCount
+            _ = assembler.nodes(forKeys: change.touched)
+            return assembler.buildViewNodeCount - before
+        }
+
+        let short = rebuildCount(500)
+        let long = rebuildCount(3000)
+        XCTAssertEqual(short, 1, "一条消息只该重导它自己那一格")
+        XCTAssertEqual(long, short, "重导次数与历史长度无关")
+    }
+
+    func testFullMaterializationIsWhatGrowsWithHistory() {
+        var assembler = engine()
+        assembler.rebuild((0..<3000).map(userMessage))
+
+        let before = assembler.buildViewNodeCount
+        _ = assembler.nodes()
+        XCTAssertEqual(assembler.buildViewNodeCount - before, 3000,
+                       "全量重导的代价就是「每个槽位都算一遍」—— 这正是本期要绕开的那条路")
+    }
 }

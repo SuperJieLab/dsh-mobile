@@ -39,6 +39,7 @@ struct ConversationAssembler {
     private var contexts: [String: Context] = [:]
     private var inputs: [EventOrder: AssemblyEvent] = [:]
     private var locationIndex = LocationIndex()
+    private let buildCounter = ViewNodeBuildCounter()
 
     init(definitions: [AnyNodeDefinition], onAnomaly: ((String, [String: String]) -> Void)? = nil) {
         self.definitions = definitions
@@ -141,20 +142,37 @@ struct ConversationAssembler {
 
     // MARK: - 物化
 
+    /// 重导次数。**为判据而留的可观测点**：一次全量重导就是「每个槽位都算了一遍」，
+    /// 一次增量只该是「命中的那几个」。生产上它只多一次自增。
+    var buildViewNodeCount: Int { buildCounter.count }
+
     /// 当前的节点集合（含 hidden），顺序由排序层给。
     func nodes() -> [ChatNode] {
-        contexts.values.compactMap { context in
-            let snapshot = NodeContext<Any>(
-                key: context.key,
-                kind: context.kind,
-                id: context.id,
-                matches: context.matches,
-                start: context.start,
-                state: context.state,
-                current: context.current
-            )
-            return context.definition.buildViewNode(snapshot)
+        contexts.values.compactMap { viewNode(of: $0) }
+    }
+
+    /// 只为这些槽位重导。与 `nodes()` 走**同一条**路径 —— `nodes()` 不是「收集 `current`」，
+    /// 它按 `matches` 现场重算 state、按位置滤条目；两条路要是一分为二，增量与全量会给出
+    /// 不同的节点。
+    func nodes(forKeys keys: Set<String>) -> [ChatNode] {
+        keys.compactMap { key in
+            guard let context = contexts[key] else { return nil }
+            return viewNode(of: context)
         }
+    }
+
+    private func viewNode(of context: Context) -> ChatNode? {
+        buildCounter.increment()
+        let snapshot = NodeContext<Any>(
+            key: context.key,
+            kind: context.kind,
+            id: context.id,
+            matches: context.matches,
+            start: context.start,
+            state: context.state,
+            current: context.current
+        )
+        return context.definition.buildViewNode(snapshot)
     }
 
     /// 一条事件都没有 —— 驱动方据此判「这是第一次喂」。
