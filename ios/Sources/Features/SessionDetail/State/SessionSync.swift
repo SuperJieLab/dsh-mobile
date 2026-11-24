@@ -63,7 +63,7 @@ final class SessionSync {
 
     /// 上一次刷新之后攒下的变化。写入路径都往这里并，`refreshSnapshot` 取走。
     /// 放在视图状态而不是引擎里：引擎不知道「什么时候该上屏」，那是调度的事。
-    private var pendingChange = Change.none
+    private var pendingChange = AssemblyChange.none
 
     /// 消息条数 —— 持久的那一半由快照算好存着，乐观行按条数加上。
     ///
@@ -518,7 +518,7 @@ final class SessionSync {
         case .consumed(let events):
             // 每条 draft 的更新都物化一次会把「每帧 O(n)」放大成「每个 chunk O(n)」。
             // 节奏由定义给：`animationFrame` 合到一帧，其余立刻。
-            var change = Change.none
+            var change = AssemblyChange.none
             for event in events {
                 change.absorb(conversation.append(event))
             }
@@ -656,7 +656,7 @@ final class SessionSync {
     }
 
     /// 记下一次写入的变化。发布时机由调用方决定 —— 草稿那一路要合并到同一帧。
-    private func record(_ change: Change) {
+    private func record(_ change: AssemblyChange) {
         pendingChange.absorb(change)
     }
 

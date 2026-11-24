@@ -10,7 +10,7 @@
  */
 import Foundation
 
-struct Change: Equatable {
+struct AssemblyChange: Equatable {
 
     var publication: Publication
     /// 本次写入触及的槽位 key。`rebuilt` 为真时不可信。
@@ -18,15 +18,15 @@ struct Change: Equatable {
     /// 变化集说不清 —— 驱动方走全量。
     var rebuilt: Bool
 
-    static let none = Change(publication: .none, touched: [], rebuilt: false)
+    static let none = AssemblyChange(publication: .none, touched: [], rebuilt: false)
 
     /// 说不清变化集的一次发布。
-    static func full(_ publication: Publication) -> Change {
-        Change(publication: publication, touched: [], rebuilt: true)
+    static func full(_ publication: Publication) -> AssemblyChange {
+        AssemblyChange(publication: publication, touched: [], rebuilt: true)
     }
 
     /// 并入一次写入：时机取最大，变化取并集，说不清的一律说不清。
-    mutating func absorb(_ other: Change) {
+    mutating func absorb(_ other: AssemblyChange) {
         publication = Publication.maximum(publication, other.publication)
         touched.formUnion(other.touched)
         rebuilt = rebuilt || other.rebuilt

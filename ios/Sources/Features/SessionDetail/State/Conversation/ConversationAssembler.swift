@@ -55,7 +55,7 @@ struct ConversationAssembler {
 
     /// 重建整段窗口。打开、重连、缺口修复走这条 —— 身份全部重来，这是「重置」的语义。
     @discardableResult
-    mutating func rebuild(_ events: [AssemblyEvent]) -> Change {
+    mutating func rebuild(_ events: [AssemblyEvent]) -> AssemblyChange {
         contexts.removeAll()
         inputs.removeAll()
         let sorted = events.sorted { $0.order < $1.order }
@@ -70,7 +70,7 @@ struct ConversationAssembler {
     /// 非边界事件说得清自己变了哪些槽位（命中的 key 就是全部变化）；边界事件会推动整条
     /// 时间线，`rebuildLocations()` 改到的是任意槽位，所以只能报「说不清」。
     @discardableResult
-    mutating func append(_ event: AssemblyEvent) -> Change {
+    mutating func append(_ event: AssemblyEvent) -> AssemblyChange {
         guard inputs[event.order] == nil else { return .none }
         inputs[event.order] = event
         let boundary = Self.isLocationBoundary(event.type)
@@ -86,7 +86,7 @@ struct ConversationAssembler {
     /// 命中的那几个；位置又是匹配的一部分（过程行按位置滤条目、`isLastStep` 读起点位置），
     /// 所以「命中集」不等于「变化集」。要把它变成增量，得先做位置索引的增量。
     @discardableResult
-    mutating func prepend(_ events: [AssemblyEvent]) -> Change {
+    mutating func prepend(_ events: [AssemblyEvent]) -> AssemblyChange {
         let fresh = events
             .filter { inputs[$0.order] == nil }
             .sorted { $0.order < $1.order }
@@ -112,7 +112,7 @@ struct ConversationAssembler {
     ///
     /// 带定稿时走 `rebuildLocations()`，所以报「说不清」；只撤草稿时变化集就是被波及的槽位。
     @discardableResult
-    mutating func settleAssistant(attemptId: String, settlement: AssemblyEvent? = nil) -> Change {
+    mutating func settleAssistant(attemptId: String, settlement: AssemblyEvent? = nil) -> AssemblyChange {
         var affected: Set<String> = []
         var retiredOrders: Set<EventOrder> = []
         let retired = inputs.filter { Self.attemptId(of: $0.value) == attemptId }.map(\.key)
@@ -137,7 +137,7 @@ struct ConversationAssembler {
         for key in affected { replay(key) }
         return rebuilt
             ? .full(publication)
-            : Change(publication: publication, touched: affected, rebuilt: false)
+            : AssemblyChange(publication: publication, touched: affected, rebuilt: false)
     }
 
     // MARK: - 物化
@@ -224,8 +224,8 @@ struct ConversationAssembler {
     }
 
     @discardableResult
-    private mutating func dispatch(_ event: AssemblyEvent) -> Change {
-        var change = Change.none
+    private mutating func dispatch(_ event: AssemblyEvent) -> AssemblyChange {
+        var change = AssemblyChange.none
         for hit in hits(of: event) {
             change.touched.insert(hit.key)
             change.publication = Publication.maximum(change.publication, accept(hit))

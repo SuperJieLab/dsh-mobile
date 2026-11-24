@@ -49,7 +49,7 @@ final class ConversationAssemblerTests: XCTestCase {
     /// 屏幕上那一列的顺序 —— 排序在 `ChatSnapshotBuilder` 里，直接看 `nodes()` 是字典顺序。
     private func ordered(_ assembler: ConversationAssembler) -> [ChatNode] {
         var builder = ChatSnapshotBuilder()
-        return builder.replace(assembler.nodes()).visible
+        return builder.replace(assembler.nodes()).visibleNodes
     }
 
     // MARK: - O2 坐标

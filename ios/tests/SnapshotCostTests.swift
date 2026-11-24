@@ -51,8 +51,6 @@ final class SnapshotCostTests: XCTestCase {
 
         XCTAssertEqual(snapshot.visibleNodes.map(\.key), ["m1", "a1", "c1"],
                        "hidden 的节点不上屏，但它仍留在 nodes 里")
-        XCTAssertEqual(snapshot.visible.map(\.key), snapshot.visibleNodes.map(\.key),
-                       "旧读口与新读口必须给出同一批节点")
     }
 
     // MARK: - 消息条数是存储值

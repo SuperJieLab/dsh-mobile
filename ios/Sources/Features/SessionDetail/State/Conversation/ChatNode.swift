@@ -60,9 +60,5 @@ struct ChatSnapshot: Equatable {
         }
     }
 
-    var visible: [ChatNode] {
-        visibleNodes
-    }
-
     static let empty = ChatSnapshot(nodes: [])
 }
