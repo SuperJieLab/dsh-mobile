@@ -225,9 +225,39 @@ final class SessionSyncTests: XCTestCase {
                        "当前权限也从它起 —— 只靠 control 会让这一格一直是 --")
     }
 
+    /// 条数是「持久的那一半 + 乐观行」，两个来源各记一份就会不同步。
+    func testMessageCountCountsTheOptimisticRowAndKeepsItAfterTheDurableOneArrives() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/prompt": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accepted":true}}}"#
+            ),
+        ])
+        let sync = makeScriptedSync()
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
+        let durable = sync.messageCount
+
+        let accepted = await sync.deliver(.prompt("你好"), mode: .queue)
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(sync.messageCount, durable + 1, "发出去那一刻就该算上")
+
+        let pending = try XCTUnwrap(sync.pendingPrompts.first)
+        sync.apply(StreamReading(content: .event(SessionEvent(
+            type: "user/message", seq: 5, time: 2,
+            data: .object([
+                "id": .string("m-1"),
+                "source": .object(["kind": .string("user"), "rpcId": .string(pending.requestId)]),
+                "content": .array([.object(["type": .string("text"), "text": .string("你好")])]),
+            ])
+        ))))
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertEqual(sync.pendingPrompts.count, 0, "持久行认领之后乐观行退休")
+        XCTAssertEqual(sync.messageCount, durable + 1, "换的是身份，不是条数")
+    }
+
     /// 走真传输的 `SessionSync`（脚本化 URLProtocol）——「受理」这条分支需要真的回包。
-    private func makeScriptedSync() -> SessionSync {
-        let configuration = URLSessionConfiguration.ephemeral
+    private func makeScriptedSync() -> SessionSync {        let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ScriptedURLProtocol.self]
         let session = URLSession(configuration: configuration)
         let credentials = CredentialStore(

@@ -143,4 +143,34 @@ final class SnapshotCostTests: XCTestCase {
         XCTAssertEqual(assembler.buildViewNodeCount - before, 3000,
                        "全量重导的代价就是「每个槽位都算一遍」—— 这正是本期要绕开的那条路")
     }
+
+    func testMergingAFramesWorthOfAppendsMaterializesOnlyOnce() {
+        var assembler = engine()
+        assembler.rebuild([userMessage(0)])
+
+        var change = AssemblyChange.none
+        for seq in 1...10 {
+            change.absorb(assembler.append(userMessage(seq)))
+        }
+
+        XCTAssertFalse(change.rebuilt, "十条非边界追加都说得清自己变了哪些")
+        XCTAssertEqual(change.touched.count, 10, "并集不能丢")
+
+        let before = assembler.buildViewNodeCount
+        _ = assembler.nodes(forKeys: change.touched)
+        XCTAssertEqual(assembler.buildViewNodeCount - before, 10,
+                       "一帧里十条也只重导十格，不是「每条各刷一次」")
+    }
+
+    func testKeysTheEngineNoLongerKnowsAreInert() {
+        var builder = ChatSnapshotBuilder()
+        let before = builder.replace([node("a", message("1", 1), anchor: 1)])
+
+        var assembler = engine()
+        assembler.rebuild([userMessage(0)])
+        let stale = assembler.nodes(forKeys: ["上一段窗口的键"])
+
+        XCTAssertTrue(stale.isEmpty, "引擎不认识这个键，就导不出节点")
+        XCTAssertEqual(builder.apply(stale), before, "并一个空集不该改变快照")
+    }
 }
