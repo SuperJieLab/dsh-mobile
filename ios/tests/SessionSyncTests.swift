@@ -225,6 +225,34 @@ final class SessionSyncTests: XCTestCase {
                        "当前权限也从它起 —— 只靠 control 会让这一格一直是 --")
     }
 
+    /// 一条实时事件只该碰它自己那一格 —— 走真接线（`feedEngine` → `refreshSnapshot`），
+    /// 而不是在测试里另写一遍累积循环。接线断了（永远走全量）这里会是 201 而不是 1。
+    ///
+    /// 刷新走「一帧合并」，所以要等过一个合并窗口再读数：同一拍里读到的还是上一帧的值。
+    func testOneAppendedEventMaterializesOneSlotNotTheWholeHistory() async throws {
+        func message(_ seq: Int) -> SessionEvent {
+            SessionEvent(type: "user/message", seq: seq, time: Double(seq), data: .object([
+                "id": .string("m-\(seq)"),
+                "source": .object(["kind": .string("user")]),
+                "content": .array([.object(["type": .string("text"), "text": .string("x")])]),
+            ]))
+        }
+
+        let sync = makeSync()
+        let history = (1...200).map { SessionRecord(type: "user/message", event: message($0)) }
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 200, records: history))))
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(sync.nodes.count, 200, "先确认这 200 条真的都进去了")
+
+        let before = sync.buildViewNodeCount
+        sync.apply(StreamReading(content: .event(message(201))))
+        try await Task.sleep(for: .milliseconds(60))
+        let delta = sync.buildViewNodeCount - before
+
+        XCTAssertEqual(sync.nodes.count, 201, "新的一条上了屏")
+        XCTAssertEqual(delta, 1, "一条消息只重导一格；走全量会是 201")
+    }
+
     /// 条数是「持久的那一半 + 乐观行」，两个来源各记一份就会不同步。
     func testMessageCountCountsTheOptimisticRowAndKeepsItAfterTheDurableOneArrives() async throws {
         ScriptedURLProtocol.reset(replies: [

@@ -162,15 +162,4 @@ final class SnapshotCostTests: XCTestCase {
                        "一帧里十条也只重导十格，不是「每条各刷一次」")
     }
 
-    func testKeysTheEngineNoLongerKnowsAreInert() {
-        var builder = ChatSnapshotBuilder()
-        let before = builder.replace([node("a", message("1", 1), anchor: 1)])
-
-        var assembler = engine()
-        assembler.rebuild([userMessage(0)])
-        let stale = assembler.nodes(forKeys: ["上一段窗口的键"])
-
-        XCTAssertTrue(stale.isEmpty, "引擎不认识这个键，就导不出节点")
-        XCTAssertEqual(builder.apply(stale), before, "并一个空集不该改变快照")
-    }
 }

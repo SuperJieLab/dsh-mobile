@@ -145,6 +145,21 @@ final class SourceLevelTests: XCTestCase {
         iosRoot.appendingPathComponent("Sources/Features/SessionDetail")
     }
 
+    /// 快照的可见节点与消息条数必须是存储值。
+    ///
+    /// 做成计算属性就是每读一次全量过滤一遍，而视图 body 每帧读三次 —— 代价看不见，
+    /// 只有长会话里叠出来。这条判据认形态：`ChatSnapshot` 里不许有计算型的可见集。
+    func testSnapshotKeepsItsVisibleHalfStored() throws {
+        let file = iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/Conversation/ChatNode.swift")
+        let code = try read(file)
+        XCTAssertTrue(code.contains("struct ChatSnapshot"), "判据的落点没找对：\(file.path)")
+        for (line, text) in Self.codeLines(in: code) {
+            XCTAssertFalse(text.contains("var visible: [ChatNode] {"),
+                           "\(file.lastPathComponent):\(line) 可见节点又变成计算属性了 —— 每帧全量过滤")
+        }
+    }
+
     func testMenuSourcesBakeInNoLevelNames() throws {
         let files = Self.swiftFiles(under: sessionDetailRoot)
         XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")

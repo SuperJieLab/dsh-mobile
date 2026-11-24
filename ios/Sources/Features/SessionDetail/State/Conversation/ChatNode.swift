@@ -62,15 +62,15 @@ struct ChatSnapshot: Equatable {
     /// 全量路径：一次遍历同时产出可见集与条数。
     init(nodes: [ChatNode]) {
         self.nodes = nodes
-        var visible: [ChatNode] = []
-        visible.reserveCapacity(nodes.count)
+        var kept: [ChatNode] = []
+        kept.reserveCapacity(nodes.count)
         var count = 0
         for node in nodes {
             guard node.visibility == .visible else { continue }
-            visible.append(node)
+            kept.append(node)
             if node.isMessage { count += 1 }
         }
-        self.visibleNodes = visible.count == nodes.count ? nodes : visible
+        self.visibleNodes = kept.count == nodes.count ? nodes : kept
         self.messageCount = count
     }
 
