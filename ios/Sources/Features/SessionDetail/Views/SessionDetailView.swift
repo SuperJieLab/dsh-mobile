@@ -140,6 +140,8 @@ struct SessionDetailView: View {
                     .id(Self.bottomAnchor)
             }
             .listStyle(.plain)
+            // 选择收到整屏一处：逐行挂会给每一行加一层交互层，而容器级挂一次就覆盖全部行。
+            .textSelection(.enabled)
             // 首次布局就锚在底部。列表是**有内容之后才创建**的，所以此刻它算「初始布局」。
             .defaultScrollAnchor(.bottom)
             // 往回翻是往顶部插行，不走隐式动画：一次插几十行的布局动画很贵，
@@ -512,6 +514,18 @@ private struct MessageBubble: View {
     private var isUser: Bool { message.role == .user }
 
     var body: some View {
+        // 对齐靠两侧的 `Spacer` 承担，不用 `.frame(maxWidth:)` —— 后者会让每一行
+        // 去解一次父容器的宽度，行数越多解越多次。
+        HStack(spacing: 0) {
+            if isUser { Spacer(minLength: 0) }
+            bubble
+            if !isUser { Spacer(minLength: 0) }
+        }
+        .padding(.vertical, 2)
+        .listRowSeparator(.hidden)
+    }
+
+    private var bubble: some View {
         VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             Text(isUser ? "你" : "DSH")
                 .font(.caption2)
@@ -526,7 +540,6 @@ private struct MessageBubble: View {
                     MarkdownText(source: message.text)
                 }
             }
-            .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
@@ -534,8 +547,5 @@ private struct MessageBubble: View {
                 in: .rect(cornerRadius: 14)
             )
         }
-        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-        .padding(.vertical, 2)
-        .listRowSeparator(.hidden)
     }
 }

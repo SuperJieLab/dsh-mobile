@@ -213,6 +213,32 @@ final class SourceLevelTests: XCTestCase {
                        "两处作废点（新流开始、放弃的一轮）都要 requeue 且按 seq 排序，实际只有 \(requeues) 处")
     }
 
+    /// 消息行不参与父容器求解，交互层也不逐行挂。
+    ///
+    /// 两件事都是「每行各解一次」的来源：`.frame(maxWidth: .infinity…)` 让每行去解一次父宽，
+    /// `.textSelection` 给每行挂一层交互。改法是把对齐交给 `HStack` + `Spacer`、
+    /// 选择收到 `List` 一处 —— 判据守的是「这两样都不在消息行上」。
+    func testMessageRowCarriesNoPerRowLayoutOrSelection() throws {
+        let file = iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/Views/SessionDetailView.swift")
+        let code = try read(file)
+        guard let start = code.range(of: "private struct MessageBubble: View {") else {
+            return XCTFail("判据的落点没找对：MessageBubble 不见了 —— \(file.lastPathComponent)")
+        }
+        let rest = code[start.lowerBound...]
+        let end = rest.dropFirst().range(of: "\n}\n")?.upperBound ?? rest.endIndex
+        let body = String(rest[..<end])
+        XCTAssertGreaterThan(body.count, 200, "函数体取空了 —— 先怀疑落点")
+
+        XCTAssertFalse(body.contains(".frame(maxWidth: .infinity"),
+                       "消息行又在解一次父宽 —— 宽度交给 List 的行容器")
+        XCTAssertFalse(body.contains(".textSelection("),
+                       "选择交互又挂在每一行上了 —— 它该在 List 一处")
+
+        XCTAssertEqual(Self.codeLineCount(of: ".textSelection(", in: code), 1,
+                       "整屏该恰有一处选择挂载")
+    }
+
     func testMenuSourcesBakeInNoLevelNames() throws {
         let files = Self.swiftFiles(under: sessionDetailRoot)
         XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
