@@ -350,11 +350,13 @@ final class SourceLevelTests: XCTestCase {
         XCTAssertGreaterThan(lines.count, 400, "只扫到 \(lines.count) 行 —— 先怀疑路径")
 
         let hits = lines.filter {
-            $0.1.contains("SessionMirror") || $0.1.contains("TransientChannel")
+            $0.1.contains("SessionMirror")
+                || $0.1.contains("TransientChannel")
+                || $0.1.contains("SessionFollowing")
         }.map(\.0)
         XCTAssertEqual(hits, [], "编排层还点着输入侧的类型名：行 \(hits)")
 
-        // 另一半：那两样真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
+        // 另一半：那三样真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
         let input = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionInput.swift"))
         let inputLines = Self.codeLines(in: input)
@@ -362,6 +364,8 @@ final class SourceLevelTests: XCTestCase {
                       "输入单元自己没有持有镜像 —— 上面那条是空守")
         XCTAssertTrue(inputLines.contains { $0.1.contains("var transient = TransientChannel()") },
                       "输入单元自己没有持有草稿通道 —— 上面那条是空守")
+        XCTAssertTrue(inputLines.contains { $0.1.contains("= SessionFollowing ") },
+                      "输入单元自己没有持有流开关 —— 上面那条是空守")
     }
 
     /// 输入单元只拿输入侧的东西，装配点把三处接线接上。
@@ -385,6 +389,8 @@ final class SourceLevelTests: XCTestCase {
         let syncLines = Self.codeLines(in: sync)
         XCTAssertTrue(syncLines.contains { $0.1.contains("input.makeStream = ") },
                       "`makeStream` 没在装配点接上 —— 开流会静默地什么也不发生")
+        XCTAssertTrue(syncLines.contains { $0.1.contains("input.connectionPhase = ") },
+                      "`connectionPhase` 没在装配点接上 —— 它有个 `.idle` 默认值，漏接是静默的")
         XCTAssertTrue(syncLines.contains { $0.1.contains("input.phase") },
                       "`phase` 不是转发 —— 漏接就恒 `.idle`，功能条永远停在未连接")
     }

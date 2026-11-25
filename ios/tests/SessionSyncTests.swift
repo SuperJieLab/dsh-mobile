@@ -213,21 +213,36 @@ final class SessionSyncTests: XCTestCase {
     /// 这一页接不上本地起点（缺口）：停手，不重试，只在告知里记一笔。
     ///
     /// 缺口时本地内容仍然是真的、只是旧 —— 所以既不重试也不清屏。
+    /// **本地得真有内容**：打开帧给空窗口时，「本地一条不动」是恒真的空断言。
     func testLoadOlderStopsOnAGapAndKeepsTheLocalContent() async throws {
+        func local(_ seq: Int) -> SessionRecord {
+            SessionRecord(type: "user/message", event: SessionEvent(
+                type: "user/message", seq: seq, time: Double(seq), data: .object([
+                    "id": .string("m-\(seq)"),
+                    "source": .object(["kind": .string("user")]),
+                    "content": .array([.object(["type": .string("text"), "text": .string("本地-\(seq)")])]),
+                ])
+            ))
+        }
+        // 本地窗口是 6..<10，这一页的末尾落在 3 —— 与本地起点差两条，判缺口。
         ScriptedURLProtocol.reset(replies: [
             "session/page": .init(
                 status: 200,
-                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"records":[{"type":"user/message","event":{"type":"user/message","seq":5,"time":1,"data":{"id":"m-5","source":{"kind":"user"},"content":[{"type":"text","text":"接不上的"}]}}}],"cursor":10,"hasMore":true}}}"#
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"records":[{"type":"user/message","event":{"type":"user/message","seq":3,"time":1,"data":{"id":"m-3","source":{"kind":"user"},"content":[{"type":"text","text":"接不上的"}]}}}],"cursor":10,"hasMore":true}}}"#
             ),
         ])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 9, records: (6..<10).map(local), hasMore: true)
+        )))
+        XCTAssertEqual(texts(in: sync).count, 4, "先确认本地真的有内容")
 
         await sync.loadOlder()
 
         XCTAssertEqual(pageCalls(), 1, "缺口之后不该继续往前拉")
         XCTAssertNotNil(sync.notice, "缺口要留下告知 —— 否则界面静止却看起来正常")
-        XCTAssertEqual(texts(in: sync), [], "缺口时本地内容一条不动，也不把那一页塞进来")
+        XCTAssertEqual(texts(in: sync), ["本地-6", "本地-7", "本地-8", "本地-9"],
+                       "缺口时本地一条不动，也不把那一页塞进来")
     }
 
     /// 翻页失败落在「分页」这一步，而不是笼统失败。
