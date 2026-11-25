@@ -215,7 +215,10 @@ struct SessionMirror {
   /// 上层「先扣下、之后作废」的定稿要靠它回来：`takeFeed` 取走即清，扣下的那次已经
   /// 消费过那一批 —— 没有这一步，被作废的记录就永久停在 `events` 里没人再看一眼。
   mutating func requeue(_ events: [SessionEvent]) {
-    pendingFeed.append(contentsOf: events)
+    // 已在队列里的不再加一遍：`realign` 会把整份视图排进来，与它叠加时同一 `seq`
+    // 会出现两份，而前插分支只按 `order` 判一次重复。
+    let queued = Set(pendingFeed.map(\.seq))
+    pendingFeed.append(contentsOf: events.filter { !queued.contains($0.seq) })
   }
 
   /// 取走这一批新增。返回空表示「没有新东西」—— 上层据此提前返回，不再自己比对。

@@ -205,10 +205,12 @@ final class SourceLevelTests: XCTestCase {
         let code = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
         let discards = Self.codeLineCount(of: "held.removeAll()", in: code)
-        let requeues = Self.codeLineCount(of: "mirror.requeue(", in: code)
         XCTAssertEqual(discards, 3, "判据的落点变了：`held.removeAll()` 现在有 \(discards) 处")
+        // 只数调用次数不够：入参必须是 `held` 的值，而且必须按 `seq` 升序 ——
+        // 字典遍历序不定，降序喂进追加路径会撞引擎的「非单调匹配」不变量。
+        let requeues = Self.codeLineCount(of: "mirror.requeue(held.values.sorted { $0.seq < $1.seq })", in: code)
         XCTAssertEqual(requeues, 2,
-                       "两处作废点（新流开始、放弃的一轮）都要 requeue，实际只有 \(requeues) 处")
+                       "两处作废点（新流开始、放弃的一轮）都要 requeue 且按 seq 排序，实际只有 \(requeues) 处")
     }
 
     func testMenuSourcesBakeInNoLevelNames() throws {

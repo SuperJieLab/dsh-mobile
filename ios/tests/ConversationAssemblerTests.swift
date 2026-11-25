@@ -693,5 +693,6 @@ final class ConversationAssemblerTests: XCTestCase {
                        "五处变动之后条数对不上：撤草稿那一处漏了就会多一条")
         XCTAssertEqual(orders, orders.sorted(),
                        "事件序没有维护成升序 —— 未来位置扫描会从错的地方开始")
+        XCTAssertEqual(Set(orders).count, orders.count, "同一个 order 进了两次 —— 数组与字典已经不一致")
     }
 }

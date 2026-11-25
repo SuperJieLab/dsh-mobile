@@ -402,14 +402,14 @@ final class SessionSync {
         let wasEmpty = mirror.isEmpty
         let verdict = mirror.realign(with: SessionWindow(opening: snapshot))
 
-        // 一条新流开始：上一代扣着没点名的定稿一律作废 —— 它们要么会作为普通持久事件重来，
-        // 要么属于已经结束的那一轮。留着只会让 feedEngine 永久跳过它们（静默少一行）。
+        // 一条新流开始：上一代扣着没点名的定稿不再等点名 —— 要么会作为普通事件重来，
+        // 要么属于已结束的那一轮。作废只是「不再等认领」，记录本身要排回队列（否则静默少一行）。
         if !held.isEmpty {
             Log.warn(Log.Module.session, "新的一条流开始，上一代未认领的定稿作废",
                      ["count": String(held.count)])
             // 作废只是「不再等点名」，记录本身还得进引擎。它们的那一批已经被 `takeFeed`
             // 取走过（当时被 `held` 滤掉了），所以必须重新排一次队。
-            mirror.requeue(Array(held.values))
+            mirror.requeue(held.values.sorted { $0.seq < $1.seq })
             held.removeAll()
         }
         // 旧草稿先退役：它的 attempt 已经结束或换了人，留着会与新基线拼成两段重复文本。
@@ -564,7 +564,7 @@ final class SessionSync {
                 Log.warn(Log.Module.session, "被放弃的一轮留下了未认领的定稿，已作废",
                          ["attempt": settlement.attemptId, "count": String(held.count)])
                 // 同上一处：作废不等于丢弃，重新排队让它们作为普通事件进去。
-                mirror.requeue(Array(held.values))
+                mirror.requeue(held.values.sorted { $0.seq < $1.seq })
                 held.removeAll()
             }
             Log.info(Log.Module.session, "本轮被放弃：草稿已撤", ["attempt": settlement.attemptId])
@@ -572,7 +572,9 @@ final class SessionSync {
 
         record(conversation.settleAssistant(attemptId: settlement.attemptId,
                                             settlement: named.map(AssemblyEvent.init)))
-        refreshSnapshot()
+        // 作废那一支刚把 `held` 排回队列，这里必须喂一次 —— 否则要等下一条事件到达
+        // 才会轮到它们，而那一刻可能永远不来。`refreshView` 内含喂食与刷新。
+        refreshView()
     }
 
     private static func isReset(_ verdict: Verdict) -> Bool {
