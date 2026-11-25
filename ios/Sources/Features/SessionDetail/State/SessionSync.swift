@@ -146,7 +146,9 @@ final class SessionSync {
         self.projection = projection
 
         // 三处注入与八条接线留到存储属性全部就位之后：它们都要捕获本对象。
-        input.makeStream = { [unowned self] in factory.makeStream(SessionBehavior(owner: projection)) }
+        // 经 `self.projection` 取，不能捕那个局部常量：局部会被闭包强持，而投影强持输入单元，
+        // 两者就成一环（`testTheScreenStateDiesWithTheCoordinator` 守这条）。
+        input.makeStream = { [unowned self] in factory.makeStream(SessionBehavior(owner: self.projection)) }
         input.connectionPhase = { [weak link] in link?.phase ?? .idle }
         input.onControlValues = { [weak self] values in self?.absorbProjection(values) }
 

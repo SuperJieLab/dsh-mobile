@@ -400,6 +400,22 @@ final class SessionSyncTests: XCTestCase {
                        "旧窗口那两条还在屏上 —— 重建把两段不同的窗口拼成了一个")
     }
 
+    /// 这一屏的状态随协调者一起释放。
+    ///
+    /// 两个单元互相引用是这类拆法最容易长出来的东西：输入单元持有造流闭包，闭包若强持投影，
+    /// 而投影又强持输入单元 —— 那一环没人看得见，症状是离开详情页之后整条引擎与快照还在内存里。
+    func testTheScreenStateDiesWithTheCoordinator() {
+        weak var weakInput: SessionInput?
+        weak var weakProjection: SessionProjection?
+        autoreleasepool {
+            let sync = makeSync()
+            weakInput = sync.input
+            weakProjection = sync.projection
+        }
+        XCTAssertNil(weakInput, "输入单元活过了协调者 —— 它与投影之间有一环")
+        XCTAssertNil(weakProjection, "投影活过了协调者 —— 同上")
+    }
+
     /// 打开帧同时带来持久记录与草稿基线：两样都要在。
     ///
     /// 顺序是唯一让它成立的东西：持久窗口先喂进引擎，基线才追加得进去。反过来的话，

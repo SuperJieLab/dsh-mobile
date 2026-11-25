@@ -126,15 +126,13 @@ final class SessionProjection {
             applyTransient(frame)
         case .refused(let failure):
             handleStreamRefusal(failure)
-        case .ended:
-            // 收尾帧本身没有副作用：重开是连接层照着 `next` 做的事。
-            break
-        case .ignored:
+        case .ended, .ignored:
+            // 收尾帧与「这一帧不归我管」都没有副作用：重开是连接层照着 `next` 做的事。
             break
         }
     }
 
-    // MARK: - 刷新（协调者的 `refreshView` 与它自己的四处都走这里）
+    // MARK: - 刷新（协调者的 `refreshView` 与它自己的五处都走这里）
 
     /// 记一帧到达。control 与打开帧的投影基线两条路不经过 `apply`，但同样是「数据到了」。
     func noteFrame() { lastFrameAt = Date() }
@@ -272,7 +270,7 @@ final class SessionProjection {
             for event in events {
                 change.absorb(conversation.append(event))
             }
-            pendingChange.absorb(change)
+            record(change)
             switch change.publication {
             case .none: break
             case .animationFrame: scheduleSnapshot()

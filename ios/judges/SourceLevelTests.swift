@@ -472,14 +472,12 @@ final class SourceLevelTests: XCTestCase {
         let code = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
         XCTAssertTrue(Self.codeLines(in: code).contains {
-            $0.1.contains("var snapshot: ChatSnapshot { projection.snapshot }")
+            $0.1.contains("var snapshot: ChatSnapshot") && $0.1.contains("projection.snapshot")
         }, "快照不是转发 —— 要么编排层又存了一份，要么读口变了形状")
     }
 
     /// 接线各一处、都在 `init` 的体里。
     ///
-    /// `onLiveEventType` 不在此列：它在协调者上本来就是一个对外属性，`SessionDetailState`
-    /// 里另有一处赋值，按名字数会数到两处。
     func testTheProjectionIsWiredAtTheAssemblyPoint() throws {
         let code = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
@@ -490,10 +488,12 @@ final class SourceLevelTests: XCTestCase {
         // 比的是**行号**不是数组下标：`codeLines` 滤掉了注释行，两者不相等。
         let initLine = lines[initAt].0
         let endLine = lines[endAt].0
+        // 八条都在名单里：`onLiveEventType` 也带 `projection.` 前缀，与协调者自己那个对外属性
+        // （`SessionDetailState` 里另有一处赋值）分得开。
         let wires = ["projection.onSnapshotPublished = ", "projection.onRefreshNeeded = ",
                      "projection.onDurableRecords = ", "projection.onClaimedRow = ",
                      "projection.onVerdict = ", "projection.onRebuildNeeded = ",
-                     "projection.onOpeningProjections = "]
+                     "projection.onOpeningProjections = ", "projection.onLiveEventType = "]
         for wire in wires {
             let wired = lines.filter { $0.1.contains(wire) }.map(\.0)
             XCTAssertEqual(wired.count, 1, "`\(wire)` 该恰好一处，实际 \(wired.count) 处")
