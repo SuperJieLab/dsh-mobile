@@ -208,7 +208,7 @@ final class SourceLevelTests: XCTestCase {
         XCTAssertEqual(discards, 3, "判据的落点变了：`held.removeAll()` 现在有 \(discards) 处")
         // 只数调用次数不够：入参必须是 `held` 的值，而且必须按 `seq` 升序 ——
         // 字典遍历序不定，降序喂进追加路径会撞引擎的「非单调匹配」不变量。
-        let requeues = Self.codeLineCount(of: "mirror.requeue(held.values.sorted { $0.seq < $1.seq })", in: code)
+        let requeues = Self.codeLineCount(of: "input.requeue(held.values.sorted { $0.seq < $1.seq })", in: code)
         XCTAssertEqual(requeues, 2,
                        "两处作废点（新流开始、放弃的一轮）都要 requeue 且按 seq 排序，实际只有 \(requeues) 处")
     }
@@ -325,16 +325,38 @@ final class SourceLevelTests: XCTestCase {
     func testTheDurableFilterOnlyServesTheRareRebuildPaths() throws {
         let code = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
-        let hits = Self.codeLines(in: code).filter { $0.1.contains("mirror.events.filter") }
+        let hits = Self.codeLines(in: code).filter { $0.1.contains("input.records.filter") }
         XCTAssertEqual(hits.count, 1,
-                       "`mirror.events.filter` 出现了 \(hits.count) 处 —— 全量反推又回来了")
+                       "`input.records.filter` 出现了 \(hits.count) 处 —— 全量反推又回来了")
 
         guard let start = code.range(of: "private func durableEvents()") else {
             return XCTFail("`durableEvents()` 不见了 —— 判据的落点没找对")
         }
         let body = String(code[start.lowerBound...].prefix(200))
-        XCTAssertTrue(body.contains("mirror.events.filter"),
+        XCTAssertTrue(body.contains("input.records.filter"),
                       "那一处全量过滤不在 `durableEvents()` 里 —— 常态路径会经过它")
+    }
+
+    /// 窗口的镜像只由 `SessionInput` 持有。
+    ///
+    /// 编排层一旦自己还留一份，改镜像的接口就要跟两处，而「哪一份是真的」编译期与运行时
+    /// 都看不出来 —— 两份都在推进时表现为偶发的少行。
+    func testTheMirrorLivesOnlyInTheInputUnit() throws {
+        // 正控：确认扫到的是本体，不是被路径推算带偏的空文件。
+        let sync = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let lines = Self.codeLines(in: sync)
+        XCTAssertGreaterThan(lines.count, 400, "只扫到 \(lines.count) 行 —— 先怀疑路径")
+
+        let hits = lines.filter { $0.1.contains("SessionMirror") }.map(\.0)
+        XCTAssertEqual(hits, [], "编排层还点着镜像的类型名：行 \(hits)")
+
+        // 另一半：镜像真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
+        let input = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionInput.swift"))
+        XCTAssertTrue(Self.codeLines(in: input)
+                        .contains { $0.1.contains("var window = SessionMirror()") },
+                      "输入单元自己没有持有镜像 —— 上面那条是空守")
     }
 
     func testMenuSourcesBakeInNoLevelNames() throws {

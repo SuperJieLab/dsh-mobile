@@ -3,7 +3,8 @@ import Foundation
 /// 一个会话的**读侧**编排：把「取窗口 / 追新增 / 往回翻」接到状态机上。状态机只管判定，
 /// 这里管调用顺序与失败收场：单飞、拉完为止、先窗口后增量。
 ///
-/// 本类只做读：镜像、事件装配、占用、告知、流式未定稿。三样相邻的东西各住一处 ——
+/// 本类只做读：事件装配、占用、告知、流式未定稿；窗口与镜像经 `SessionInput` 读写。
+/// 三样相邻的东西各住一处 ——
 /// 状态行（`SessionStatus`）、当前模型（`SessionModelMirror`）、用户动作（`SessionActions`）、
 /// 流的开关（`SessionFollowing`）。它们由本类装配并向视图转发，所以视图仍然只认识本对象。
 ///
@@ -55,7 +56,7 @@ final class SessionSync {
     ///
     /// 事件到达时先记账、不删：删早了，`nodes` 会退回旧快照，那条刚发的消息消失一帧。
     /// 真正的删除在 `refreshSnapshot()` 之后（新快照里已经有持久行）。
-    /// 只在 `mirror.append` 接受这条事件时记账 —— 跳号时持久行进不了视图，那一行要留着。
+    /// 只在 `input.append` 接受这条事件时记账 —— 跳号时持久行进不了视图，那一行要留着。
     private var settledPending: Set<String> = []
 
     /// 乐观行锚点的序号（只增不减）。用 `count` 会让「先发的那条退休后再发一条」撞回同一个锚点。
@@ -131,8 +132,8 @@ final class SessionSync {
     private let control: ControlStream?
     /// 投影订阅的退订 token。
     private var controlSubscription: (() -> Void)?
-    /// 内存里的镜像；视图重建即重取窗口。
-    private var mirror = SessionMirror()
+    /// 窗口与镜像的读写口 —— 镜像由它持有，这里只经它读窗口事实、发翻页、喂食引擎。
+    let input = SessionInput()
     /// 同一时刻只允许一次读请求（翻页）。从前还要挡住「同步 + 翻页」并发 ——
     /// 同步那条路随 HTTP 兜底一起退场了。
     private var syncInFlight = false
@@ -218,7 +219,7 @@ final class SessionSync {
                 time: Date().timeIntervalSince1970 * 1000,
                 // 落在最后一条持久事件之后、**首块未定稿帧之前**（那一块是末 seq + 0.5）。
                 // 0.001 的步长只用来在连发时保序；同一个 frontier 下 250 条以内不会撞。
-                anchorSeq: Double(max(0, mirror.frontier - 1)) + 0.25
+                anchorSeq: Double(max(0, input.frontier - 1)) + 0.25
                     + Double(pendingOrdinal) * 0.001
             ))
             let accepted = await actions.sendPrompt(text, requestId: requestId, mode: mode)
@@ -266,10 +267,10 @@ final class SessionSync {
 
     /// 往回翻一段更早的历史；一页没有可显示的内容时接着往前（上限 3 页）。
     func loadOlder() async {
-        guard !syncInFlight, mirror.hasMore else { return }
+        guard !syncInFlight, input.hasMore else { return }
         // 翻页低频，打 info：真机上要能对照「我没点它却加载了」。
         Log.info(Log.Module.session, "loadOlder",
-                 ["seq": String(mirror.windowStart), "count": String(mirror.events.count)])
+                 ["seq": String(input.windowStart), "count": String(input.records.count)])
         syncInFlight = true
         isPagingOlder = true
         defer {
@@ -307,24 +308,24 @@ final class SessionSync {
 
             refreshView()
             // 这一页真的多了可显示的东西，或者已经到日志开头 —— 收工。
-            if nodes.count > nodesBefore || !mirror.hasMore { return }
+            if nodes.count > nodesBefore || !input.hasMore { return }
         }
     }
 
     /// 一次往回翻的请求。`nil` = 没拿到发起权（有在途请求）。
     private func fetchOlderPage() async -> Verdict? {
-        guard mirror.beginRequest() else { return nil }
+        guard input.beginRequest() else { return nil }
         do {
             let page = try await readPage(client, sessionId: sessionId,
-                                          throughSeq: mirror.throughSeq,
-                                          beforeSeq: mirror.windowStart)
-            return mirror.prepend(page)
+                                          throughSeq: input.throughSeq,
+                                          beforeSeq: input.windowStart)
+            return input.prepend(page)
         } catch let error as RpcClientError {
-            mirror.abandonRequest()
+            input.abandonRequest()
             if case .refused(let failure) = error { return .refused(code: failure.code) }
             return .failed
         } catch {
-            mirror.abandonRequest()
+            input.abandonRequest()
             return .failed
         }
     }
@@ -369,7 +370,7 @@ final class SessionSync {
     }
 
     /// 一帧的副作用；判读已在 `SessionStreamReader` 做完，「接下来怎么办」随 `reading.next`
-    /// 回给连接层。对外开放只为 `SessionBehavior` 调用 —— 别把 `mirror`/`transient` 交出去。
+    /// 回给连接层。对外开放只为 `SessionBehavior` 调用 —— 别把 `input`/`transient` 交出去。
     func apply(_ reading: StreamReading) {
         switch reading.content {
         case .opening(let opening):
@@ -399,8 +400,8 @@ final class SessionSync {
             }
         }
         // 手空着时等价于「打开」，重连时走「重对齐」：保留更早的部分。
-        let wasEmpty = mirror.isEmpty
-        let verdict = mirror.realign(with: SessionWindow(opening: snapshot))
+        let wasEmpty = input.isEmpty
+        let verdict = input.realign(with: SessionWindow(opening: snapshot))
 
         // 一条新流开始：上一代扣着没点名的定稿不再等点名 —— 要么会作为普通事件重来，
         // 要么属于已结束的那一轮。作废只是「不再等认领」，记录本身要排回队列（否则静默少一行）。
@@ -409,7 +410,7 @@ final class SessionSync {
                      ["count": String(held.count)])
             // 作废只是「不再等点名」，记录本身还得进引擎。它们的那一批已经被 `takeFeed`
             // 取走过（当时被 `held` 滤掉了），所以必须重新排一次队。
-            mirror.requeue(held.values.sorted { $0.seq < $1.seq })
+            input.requeue(held.values.sorted { $0.seq < $1.seq })
             held.removeAll()
         }
         // 旧草稿先退役：它的 attempt 已经结束或换了人，留着会与新基线拼成两段重复文本。
@@ -424,7 +425,7 @@ final class SessionSync {
         // 未定稿基线：opening 带进行中的 attempt 就恢复草稿槽位（基线内容变成事件交给引擎），
         // 没有就清场。基线是服务端此刻的权威，本地那份一律丢掉。
         if let baseline = snapshot.assistantStream {
-            for event in transient.apply(baseline: baseline, cursor: max(0, mirror.frontier - 1)) {
+            for event in transient.apply(baseline: baseline, cursor: max(0, input.frontier - 1)) {
                 record(conversation.append(event))
             }
             refreshSnapshot()
@@ -469,7 +470,7 @@ final class SessionSync {
         let claimed = event.type == "user/message" ? event.data["source"]?["rpcId"]?.string : nil
         lastFrameAt = Date()
         // 上游 gap-free 是契约，重复与跳号各有一种处置（见 `SessionMirror.append`）。
-        let verdict = mirror.append(event)
+        let verdict = input.append(event)
         // 跳号时持久行进不了视图，那一行不能撤 —— 否则屏幕上什么都没有，要等重连才回来。
         if let claimed, !Self.isReset(verdict), pendingPrompts.contains(where: { $0.requestId == claimed }) {
             settledPending.insert(claimed)
@@ -506,7 +507,7 @@ final class SessionSync {
         lastFrameAt = Date()
         let before = transient
         // 小数序号要落在「最后一条持久事件之后」，所以把当前游标交给通道。
-        switch transient.apply(frame: frame, cursor: max(0, mirror.frontier - 1)) {
+        switch transient.apply(frame: frame, cursor: max(0, input.frontier - 1)) {
         case .broken:
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
             Log.warn(Log.Module.session, "TransientChannel broken", [
@@ -564,7 +565,7 @@ final class SessionSync {
                 Log.warn(Log.Module.session, "被放弃的一轮留下了未认领的定稿，已作废",
                          ["attempt": settlement.attemptId, "count": String(held.count)])
                 // 同上一处：作废不等于丢弃，重新排队让它们作为普通事件进去。
-                mirror.requeue(held.values.sorted { $0.seq < $1.seq })
+                input.requeue(held.values.sorted { $0.seq < $1.seq })
                 held.removeAll()
             }
             Log.info(Log.Module.session, "本轮被放弃：草稿已撤", ["attempt": settlement.attemptId])
@@ -630,8 +631,8 @@ final class SessionSync {
     private func refreshView() {
         feedEngine()
         refreshSnapshot()
-        eventCount = mirror.events.count
-        hasMore = mirror.hasMore
+        eventCount = input.records.count
+        hasMore = input.hasMore
     }
 
     /// 镜像清空时引擎必须跟着清 —— 否则它保留的是上一段窗口的身份，
@@ -639,8 +640,8 @@ final class SessionSync {
     private func resetMirror() {
         // 屏幕会「整列重挂」的那个入口。记一条，否则现象只有用户看得见。
         Log.info(Log.Module.session, "镜像重置：引擎随之清空",
-                 ["events": String(mirror.events.count), "hasMore": String(mirror.hasMore)])
-        mirror.reset()
+                 ["events": String(input.records.count), "hasMore": String(input.hasMore)])
+        input.reset()
         settledPending.removeAll()
         conversation = SessionSync.makeAssembler()
         builder = ChatSnapshotBuilder()
@@ -692,7 +693,7 @@ final class SessionSync {
     /// 窗口拼成一个。
     private func feedEngine() {
         // 由写入方交出这一批 —— 不再对整份窗口做两次 `filter` 去反推「哪些是新的」。
-        let batch = mirror.takeFeed()
+        let batch = input.takeFeed()
         guard !batch.isEmpty else { return }
         let fresh = batch.filter {
             held[$0.seq] == nil && !conversation.contains(order: Double($0.seq))
@@ -720,7 +721,7 @@ final class SessionSync {
         } else {
             // 两段窗口接不上：身份全部重来（界面上是「整列重挂」）。这不是错误，但必须留下痕迹。
             Log.info(Log.Module.session, "窗口接不上，整段重建",
-                     ["fresh": String(fresh.count), "events": String(mirror.events.count),
+                     ["fresh": String(fresh.count), "events": String(input.records.count),
                       "knownMin": String(bounds.min), "knownMax": String(bounds.max),
                       "freshMin": String(orders.min() ?? 0), "freshMax": String(orders.max() ?? 0)])
             record(conversation.rebuild(durableEvents().map(AssemblyEvent.init)))
@@ -730,6 +731,6 @@ final class SessionSync {
     /// 整份窗口里没被暂存挂起的那批。**只在整段重建的两条路径上调用** ——
     /// 那是稀有路径，O(N) 在这里可以接受；常态路径不碰它。
     private func durableEvents() -> [SessionEvent] {
-        mirror.events.filter { held[$0.seq] == nil }
+        input.records.filter { held[$0.seq] == nil }
     }
 }
