@@ -1,11 +1,12 @@
 /**
- * 一屏的输入侧：持久窗口的镜像，以及读它所需的最小口径。
+ * 一屏的输入侧：持久窗口的镜像、还没定稿的草稿、以及扣下来等点名的定稿。
  *
- * 消费者是 `SessionSync`（读窗口事实、发起翻页、喂食引擎）与它的用例。`SessionMirror`
- * 本身不外露 —— 交出去等于把它的成员重新散给调用方，而「改它的接口要跟几处」正是这一层要收的东西。
+ * 消费者是 `SessionSync`（读窗口事实、发起翻页、吸收帧、喂食引擎）与它的用例。
+ * `SessionMirror` 与 `TransientChannel` 都不外露 —— 交出去等于把它们的成员散回给调用方，
+ * 而「改它们的接口要跟几处」正是这一层要收的东西。
  *
- * 窗口事实分三组：读数是值，动作要么成功要么不动，翻页的 `beginRequest` / `abandonRequest`
- * 与 `prepend` 必须成对 —— 请求权在途而窗口已变的中间态对外不可见。
+ * 三件事必须同处一处：镜像、草稿与暂存（「这条定稿是不是比草稿先到」要同时读三者）；
+ * 窗口事实与翻页的成对动作（请求权在途而窗口已变的中间态对外不可见）；草稿的消化与它的诊断。
  */
 import Foundation
 
@@ -61,4 +62,79 @@ final class SessionInput {
 
     /// 请求失败：放掉在途标记，视图与位置一律不动。
     func abandonRequest() { window.abandonRequest() }
+
+    // MARK: - 草稿与暂存
+
+    /// `end` 帧的点名：这一轮收笔对应哪条持久事件。形状由草稿通道给出，挂在这里是为了
+    /// 让编排层不必认识通道类型 —— 那个名字全仓只出现在本文件里。
+    typealias Settlement = TransientChannel.Settlement
+
+    private var transient = TransientChannel()
+
+    /// 已到但还没有被点名的定稿 —— 也在里面装「放弃的那一轮的定稿」。
+    /// 两者都不喂给引擎：定稿要等 `end` 帧认领，放弃的那一轮本来就不该出现在屏幕上。
+    private var held: [Int: SessionEvent] = [:]
+
+    /// 当前的草稿属于哪一轮；`nil` 表示没有进行中的 attempt。
+    var liveAttemptId: String? { transient.liveAttemptId }
+
+    var heldCount: Int { held.count }
+
+    func isHeld(_ seq: Int) -> Bool { held[seq] != nil }
+
+    /// 收一条定稿。草稿还开着时先扣着，等 `end` 帧点名（点名认领，不比较文本）。
+    ///
+    /// 扣不扣看三件事：这条要不要求点名、草稿是不是活着、这一次判定有没有否定本地位置。
+    /// 判定本身住 `Verdict`，两侧共用。
+    func hold(_ event: SessionEvent, verdict: Verdict) {
+        guard Self.needsNaming(event), transient.isLive, !verdict.isReset else { return }
+        held[event.seq] = event
+    }
+
+    /// 点名：交出那条记录并停止暂存。认领不到时返回 `nil`，调用方不得拿一条「看起来像」的顶上。
+    func named(_ seq: Int) -> SessionEvent? { held.removeValue(forKey: seq) }
+
+    /// 整批作废：按 `seq` 升序排回下一批再清空。
+    ///
+    /// 排序不是洁癖：字典遍历序不定，降序喂进追加路径会撞引擎的「非单调匹配」不变量。
+    func drainHeld() {
+        guard !held.isEmpty else { return }
+        window.requeue(held.values.sorted { $0.seq < $1.seq })
+        held.removeAll()
+    }
+
+    /// 只清不排回 —— 窗口一起被清空时才用它，那时排回没有可去之处。
+    func clearHeld() { held.removeAll() }
+
+    /// 消化一条未定稿帧。`.broken` 的诊断留在这里：那两个读数是通道内部的，
+    /// 外露一次就多一个口；调用方只按返回值重开流。
+    func apply(frame: JSONValue, cursor: Int) -> TransientChannel.Result {
+        let before = transient
+        let result = transient.apply(frame: frame, cursor: cursor)
+        if case .broken = result {
+            Log.warn(Log.Module.session, "草稿通道 broken", [
+                "expectedRevision": String(describing: before.expectedRevisionDescription),
+                "nextChunk": String(describing: before.nextIndexDescription),
+                "type": frame["type"]?.string ?? "?",
+                "revision": String(describing: frame["revision"]?.int),
+                "index": String(describing: frame["index"]?.int),
+            ])
+        }
+        return result
+    }
+
+    /// 用打开帧的基线恢复草稿槽位，返回基线里已累积内容对应的事件。
+    func apply(baseline: JSONValue, cursor: Int) -> [AssemblyEvent] {
+        transient.apply(baseline: baseline, cursor: cursor)
+    }
+
+    /// 放掉草稿 —— 打开帧不带基线时用它，基线是服务端此刻的权威。
+    func resetTransient() { transient = TransientChannel() }
+
+    /// 这个事件要不要等 `end` 帧点名：只有「这一轮还没收笔」时的定稿事件才需要。
+    /// 替换型（压缩点）不是草稿的定稿，照常直接进。
+    private static func needsNaming(_ event: SessionEvent) -> Bool {
+        guard event.type == "assistant/message" || event.type == "assistant/attempt" else { return false }
+        return event.surfaceOp?["op"]?.string != "replace"
+    }
 }

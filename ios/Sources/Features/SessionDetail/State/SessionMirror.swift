@@ -38,6 +38,17 @@ enum Verdict: Equatable {
   case failed
 }
 
+extension Verdict {
+  /// 这一次判定是否否定了本地位置。
+  ///
+  /// 两个消费者：乐观行的记账（否定了就不认领）与定稿的扣留（否定了不扣）。
+  /// 它属于判定本身，不属于任何一侧 —— 各写一份会漂。
+  var isReset: Bool {
+    if case .resetRequired = self { return true }
+    return false
+  }
+}
+
 /// 一个会话的镜像状态。
 /// **位置只能由这几个合并方法推进**：字段对调用方只读，唯一会改它们的方法都要求一份服务端回应。
 struct SessionMirror {

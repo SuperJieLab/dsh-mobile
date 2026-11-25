@@ -295,6 +295,54 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(control.updateListeners.count, 1, "回屏要补订")
     }
 
+    /// 上一代被扣下的定稿，在下一帧打开之后必须进引擎。
+    ///
+    /// 失效形态：那一条留在暂存里当作废处理（只清不排回），而喂食那一步正是按暂存过滤的 ——
+    /// 于是窗口里有它、引擎里没有它，屏幕永久少一行，且没有任何报错。
+    func testAHeldSettlementReachesTheEngineOnceANewStreamStarts() {
+        func durable(_ seq: Int) -> SessionRecord {
+            SessionRecord(type: "assistant/message", event: SessionEvent(
+                type: "assistant/message", seq: seq, time: Double(seq), data: .object([
+                    "turn": .number(1),
+                    "step": .number(1),
+                    "message": .object([
+                        "id": .string("m-\(seq)"),
+                        "content": .array([.object(["type": .string("text"), "text": .string("正式正文")])]),
+                    ]),
+                ])
+            ))
+        }
+
+        let sync = makeSync()
+        let context = [
+            SessionRecord(type: "turn/start", event: SessionEvent(
+                type: "turn/start", seq: 0, time: 0, data: .object(["turn": .number(1)])
+            )),
+            SessionRecord(type: "step/start", event: SessionEvent(
+                type: "step/start", seq: 1, time: 1, data: .object([
+                    "turn": .number(1), "step": .number(1),
+                ])
+            )),
+        ]
+        // 打开一屏并带一个活草稿 —— 只有草稿开着，定稿才可能被扣下。
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 1, records: context, assistantStream: liveBaseline())
+        )))
+        XCTAssertTrue(assistantTexts(in: sync).contains("半句话"), "先确认草稿真的在")
+
+        sync.apply(StreamReading(content: .event(durable(2).event)))
+        XCTAssertFalse(assistantTexts(in: sync).contains("正式正文"),
+                       "草稿还开着，定稿要先扣着 —— 它可能是比草稿先到的那一份")
+
+        // 新的一条流开始，窗口里带着那条定稿：它必须出现在引擎里。
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 2, records: context + [durable(2)])
+        )))
+
+        XCTAssertTrue(assistantTexts(in: sync).contains("正式正文"),
+                      "扣下的定稿没有回到引擎 —— 这一轮会永久少一行")
+    }
+
     /// 视图那一列里的消息正文。
     private func texts(in sync: SessionSync) -> [String] {
         sync.nodes.compactMap { node -> String? in

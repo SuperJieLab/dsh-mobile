@@ -196,21 +196,22 @@ final class SourceLevelTests: XCTestCase {
         }
     }
 
-    /// 作废 `held` 的两处都必须把记录重新排队。
+    /// 作废 `held` 的两处都必须走「排回队列再清空」，整段重建那一处只清。
     ///
-    /// `takeFeed` 取走即清，扣下的那一批已经消费过 —— 少了 `requeue`，被作废的记录
-    /// 就永久停在镜像里没人再看一眼，症状是「那一轮少了一段」且没有任何报错。
-    /// `resetMirror` 那一处 `held.removeAll()` 不算：整体重置时镜像自己会清空。
+    /// `takeFeed` 取走即清，扣下的那一批已经消费过 —— 少了排回，被作废的记录就永久停在
+    /// 镜像里没人再看一眼，症状是「那一轮少了一段」且没有任何报错。
+    ///
+    /// 数的是**协调者**的调用点（作废与清场的决定在它手里），排序与排回在输入单元内部，
+    /// 由 `SessionInputTests` 的 `drainHeld` 用例守。
     func testDiscardingHeldEventsRequeuesThem() throws {
         let code = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
-        let discards = Self.codeLineCount(of: "held.removeAll()", in: code)
-        XCTAssertEqual(discards, 3, "判据的落点变了：`held.removeAll()` 现在有 \(discards) 处")
-        // 只数调用次数不够：入参必须是 `held` 的值，而且必须按 `seq` 升序 ——
-        // 字典遍历序不定，降序喂进追加路径会撞引擎的「非单调匹配」不变量。
-        let requeues = Self.codeLineCount(of: "input.requeue(held.values.sorted { $0.seq < $1.seq })", in: code)
-        XCTAssertEqual(requeues, 2,
-                       "两处作废点（新流开始、放弃的一轮）都要 requeue 且按 seq 排序，实际只有 \(requeues) 处")
+        let drains = Self.codeLineCount(of: "input.drainHeld()", in: code)
+        XCTAssertEqual(drains, 2,
+                       "两处作废点（新流开始、放弃的一轮）都要排回，实际只有 \(drains) 处")
+        let clears = Self.codeLineCount(of: "input.clearHeld()", in: code)
+        XCTAssertEqual(clears, 1,
+                       "整段重建那一处只清不排回（镜像一起清空，排回无处可去），实际 \(clears) 处")
     }
 
     /// 消息行不参与父容器求解，交互层也不逐行挂。
@@ -337,26 +338,30 @@ final class SourceLevelTests: XCTestCase {
                       "那一处全量过滤不在 `durableEvents()` 里 —— 常态路径会经过它")
     }
 
-    /// 窗口的镜像只由 `SessionInput` 持有。
+    /// 输入侧的三个类型只由 `SessionInput` 持有。
     ///
-    /// 编排层一旦自己还留一份，改镜像的接口就要跟两处，而「哪一份是真的」编译期与运行时
+    /// 编排层一旦自己还留一份，改它们的接口就要跟两处，而「哪一份是真的」编译期与运行时
     /// 都看不出来 —— 两份都在推进时表现为偶发的少行。
-    func testTheMirrorLivesOnlyInTheInputUnit() throws {
+    func testTheInputSideTypesLiveOnlyInTheInputUnit() throws {
         // 正控：确认扫到的是本体，不是被路径推算带偏的空文件。
         let sync = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
         let lines = Self.codeLines(in: sync)
         XCTAssertGreaterThan(lines.count, 400, "只扫到 \(lines.count) 行 —— 先怀疑路径")
 
-        let hits = lines.filter { $0.1.contains("SessionMirror") }.map(\.0)
-        XCTAssertEqual(hits, [], "编排层还点着镜像的类型名：行 \(hits)")
+        let hits = lines.filter {
+            $0.1.contains("SessionMirror") || $0.1.contains("TransientChannel")
+        }.map(\.0)
+        XCTAssertEqual(hits, [], "编排层还点着输入侧的类型名：行 \(hits)")
 
-        // 另一半：镜像真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
+        // 另一半：那两样真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
         let input = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionInput.swift"))
-        XCTAssertTrue(Self.codeLines(in: input)
-                        .contains { $0.1.contains("var window = SessionMirror()") },
+        let inputLines = Self.codeLines(in: input)
+        XCTAssertTrue(inputLines.contains { $0.1.contains("var window = SessionMirror()") },
                       "输入单元自己没有持有镜像 —— 上面那条是空守")
+        XCTAssertTrue(inputLines.contains { $0.1.contains("var transient = TransientChannel()") },
+                      "输入单元自己没有持有草稿通道 —— 上面那条是空守")
     }
 
     func testMenuSourcesBakeInNoLevelNames() throws {
