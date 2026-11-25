@@ -684,14 +684,18 @@ final class SessionSync {
     /// 「接不上」在重置与乱序补齐时出现 —— 那时身份重来才是对的语义，硬接会把两段不同的
     /// 窗口拼成一个。
     private func feedEngine() {
-        let durable = mirror.events.filter { held[$0.seq] == nil }
-        let fresh = durable.filter { !conversation.contains(order: Double($0.seq)) }
+        // 由写入方交出这一批 —— 不再对整份窗口做两次 `filter` 去反推「哪些是新的」。
+        let batch = mirror.takeFeed()
+        guard !batch.isEmpty else { return }
+        let fresh = batch.filter {
+            held[$0.seq] == nil && !conversation.contains(order: Double($0.seq))
+        }
         guard !fresh.isEmpty else { return }
         guard let bounds = conversation.bounds else {
             // 引擎里只有草稿（冷进入先放了基线、持久事件还没到）：追加进去，不要整段重建 ——
             // 重建会把草稿连同它的格子一起清掉，屏幕上从空重新长。
             guard !conversation.isEmpty else {
-                record(conversation.rebuild(durable.map(AssemblyEvent.init)))
+                record(conversation.rebuild(durableEvents().map(AssemblyEvent.init)))
                 return
             }
             for event in fresh { record(conversation.append(AssemblyEvent(event))) }
@@ -709,10 +713,16 @@ final class SessionSync {
         } else {
             // 两段窗口接不上：身份全部重来（界面上是「整列重挂」）。这不是错误，但必须留下痕迹。
             Log.info(Log.Module.session, "窗口接不上，整段重建",
-                     ["fresh": String(fresh.count), "events": String(durable.count),
+                     ["fresh": String(fresh.count), "events": String(mirror.events.count),
                       "knownMin": String(bounds.min), "knownMax": String(bounds.max),
                       "freshMin": String(orders.min() ?? 0), "freshMax": String(orders.max() ?? 0)])
-            record(conversation.rebuild(durable.map(AssemblyEvent.init)))
+            record(conversation.rebuild(durableEvents().map(AssemblyEvent.init)))
         }
+    }
+
+    /// 整份窗口里没被暂存挂起的那批。**只在整段重建的两条路径上调用** ——
+    /// 那是稀有路径，O(N) 在这里可以接受；常态路径不碰它。
+    private func durableEvents() -> [SessionEvent] {
+        mirror.events.filter { held[$0.seq] == nil }
     }
 }

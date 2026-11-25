@@ -39,6 +39,26 @@ final class SessionMirrorTests: XCTestCase {
   /// 守的是「失败路径也要还发起权」：`beginRequest` 拿到的权只由三条落地路径
   /// （`open` / `prepend` / `apply`）还回来，抛异常时那三条都不执行。没有 `abandonRequest`，
   /// 一次网络抖动就会让「加载更早」永久失灵，而且看起来像是点了没反应。
+  /// 镜像只交「这一批真正被它接受的记录」—— 上层不必回头扫整份窗口反推。
+  ///
+  /// 扫整份窗口的代价随历史长度长，而「哪几条是新到的」写入方本来就知道。
+  func testFeedHandsOverOnlyWhatThisBatchAccepted() {
+    // 历史不从 0 起：本地起点之上还有更早的页可翻，否则 `prepend` 会被判缺口。
+    let history = (1000..<4000).map(event)
+    var mirror = SessionMirror()
+    _ = mirror.open(with: window(3999, history))
+
+    XCTAssertEqual(mirror.takeFeed().count, 3000, "首次打开交整屏")
+    XCTAssertEqual(mirror.takeFeed().count, 0, "取走即清 —— 同一批不交两次")
+
+    _ = mirror.append(event(4000))
+    XCTAssertEqual(mirror.takeFeed().map(\.seq), [4000], "只交这一条，与窗口长度无关")
+
+    let page = (900..<1000).map(event)          // 末尾 999 正好接在本地起点 1000 之前
+    _ = mirror.prepend(window(999, page))
+    XCTAssertEqual(mirror.takeFeed().count, 100, "前插只交这一页")
+  }
+
   func testAbandonRequestReleasesTheGate() {
     var mirror = SessionMirror()
     XCTAssertTrue(mirror.beginRequest(), "首次可发起")

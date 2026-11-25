@@ -58,6 +58,12 @@ struct SessionMirror {
   /// 已落地的视图。按 `seq` 连续，且不含重复。
   private(set) var events: [SessionEvent] = []
 
+  /// 自上次被取走以来，真正进入 `events` 的那些记录。
+  ///
+  /// 「哪几条是新到的」写入方本来就知道 —— 上层回头对整份窗口做两次 `filter` 去反推，
+  /// 代价随历史长度长，而这里只是一次追加。取走即清，所以同一批不会交两次。
+  private var pendingFeed: [SessionEvent] = []
+
   /// 是否有在途请求。同一会话同时只允许一个。
   private var inFlight = false
 
@@ -107,6 +113,7 @@ struct SessionMirror {
     throughSeq = window.cursor
     hasMore = window.hasMore
     events = inbound
+    pendingFeed = inbound
     return inbound.isEmpty ? .caughtUp : .merged(added: inbound.count)
   }
 
@@ -141,6 +148,8 @@ struct SessionMirror {
     frontier = inboundFrontier
     // 切点跟着这一次打开走：钉的是「宿主此刻覆盖到哪」，不是本地读了多少。
     throughSeq = window.cursor
+    // 重连换的是整份视图：交给上层去重（引擎按 order 幂等），比在这里猜「差哪几条」稳。
+    pendingFeed = events
 
     return events.isEmpty ? .caughtUp : .merged(added: events.count - before)
   }
@@ -160,6 +169,7 @@ struct SessionMirror {
     }
 
     events.insert(contentsOf: window.events, at: 0)
+    pendingFeed.append(contentsOf: window.events)
     // 起点只由**这一页的首条记录**前移。空页不碰起点 —— 它只可能是「日志到头」那一支。
     if let first = window.records.first { windowStart = first.event.seq }
     hasMore = window.hasMore
@@ -184,6 +194,7 @@ struct SessionMirror {
         if event.seq < frontier { return .caughtUp }
         if event.seq > frontier { return .resetRequired(.gap) }
         events.append(event)
+        pendingFeed.append(event)
         frontier = event.seq + 1
         return .merged(added: 1)
     }
@@ -195,6 +206,13 @@ struct SessionMirror {
     hasMore = false
     throughSeq = -1
     events = []
+    pendingFeed = []
     inFlight = false
+  }
+
+  /// 取走这一批新增。返回空表示「没有新东西」—— 上层据此提前返回，不再自己比对。
+  mutating func takeFeed() -> [SessionEvent] {
+    defer { pendingFeed = [] }
+    return pendingFeed
   }
 }
