@@ -210,6 +210,14 @@ struct SessionMirror {
     inFlight = false
   }
 
+  /// 把一批记录重新排进下一批。
+  ///
+  /// 上层「先扣下、之后作废」的定稿要靠它回来：`takeFeed` 取走即清，扣下的那次已经
+  /// 消费过那一批 —— 没有这一步，被作废的记录就永久停在 `events` 里没人再看一眼。
+  mutating func requeue(_ events: [SessionEvent]) {
+    pendingFeed.append(contentsOf: events)
+  }
+
   /// 取走这一批新增。返回空表示「没有新东西」—— 上层据此提前返回，不再自己比对。
   mutating func takeFeed() -> [SessionEvent] {
     defer { pendingFeed = [] }

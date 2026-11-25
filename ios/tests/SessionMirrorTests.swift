@@ -59,6 +59,19 @@ final class SessionMirrorTests: XCTestCase {
     XCTAssertEqual(mirror.takeFeed().count, 100, "前插只交这一页")
   }
 
+  /// 被上层扣下又作废的记录，靠 `requeue` 回到下一批 —— `takeFeed` 取走即清，
+  /// 扣下的那一次已经消费过那一批，没有这一步就永久少一行。
+  func testRequeuePutsTheRecordsBackIntoTheNextBatch() {
+    var mirror = SessionMirror()
+    _ = mirror.open(with: window(9, (0..<10).map(event)))
+    _ = mirror.takeFeed()
+
+    mirror.requeue([event(5), event(6)])
+
+    XCTAssertEqual(mirror.takeFeed().map(\.seq), [5, 6], "重新排队的记录必须出现在下一批")
+    XCTAssertEqual(mirror.takeFeed().count, 0, "只交一次")
+  }
+
   func testAbandonRequestReleasesTheGate() {
     var mirror = SessionMirror()
     XCTAssertTrue(mirror.beginRequest(), "首次可发起")

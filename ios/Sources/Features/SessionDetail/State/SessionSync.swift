@@ -407,6 +407,9 @@ final class SessionSync {
         if !held.isEmpty {
             Log.warn(Log.Module.session, "新的一条流开始，上一代未认领的定稿作废",
                      ["count": String(held.count)])
+            // 作废只是「不再等点名」，记录本身还得进引擎。它们的那一批已经被 `takeFeed`
+            // 取走过（当时被 `held` 滤掉了），所以必须重新排一次队。
+            mirror.requeue(Array(held.values))
             held.removeAll()
         }
         // 旧草稿先退役：它的 attempt 已经结束或换了人，留着会与新基线拼成两段重复文本。
@@ -560,6 +563,8 @@ final class SessionSync {
             if !held.isEmpty {
                 Log.warn(Log.Module.session, "被放弃的一轮留下了未认领的定稿，已作废",
                          ["attempt": settlement.attemptId, "count": String(held.count)])
+                // 同上一处：作废不等于丢弃，重新排队让它们作为普通事件进去。
+                mirror.requeue(Array(held.values))
                 held.removeAll()
             }
             Log.info(Log.Module.session, "本轮被放弃：草稿已撤", ["attempt": settlement.attemptId])

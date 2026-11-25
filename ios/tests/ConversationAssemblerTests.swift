@@ -601,8 +601,10 @@ final class ConversationAssemblerTests: XCTestCase {
         func rebuilds(windowTurns: ClosedRange<Int>) -> Int {
             var engine = assembler()
             engine.rebuild(windowTurns.flatMap { turnEvents($0) })
-            let change = engine.prepend((100...110).flatMap { turnEvents($0) })
+            // 起点必须在 prepend 之前：要量的是它**内部**重导了几格，
+            // 取在后面就只量到 `nodes(forKeys:)` 那一下。
             let before = engine.buildViewNodeCount
+            let change = engine.prepend((100...110).flatMap { turnEvents($0) })
             _ = engine.nodes(forKeys: change.touched)
             return engine.buildViewNodeCount - before
         }
@@ -610,5 +612,86 @@ final class ConversationAssemblerTests: XCTestCase {
         let short = rebuilds(windowTurns: 200...220)
         let long = rebuilds(windowTurns: 2000...2200)
         XCTAssertEqual(short, long, "前插的重导次数与历史长度无关")
+    }
+
+    /// 区间非空：窗口首条是「带 `turn`、不带 `step`」的普通事件 —— 它的 `step` 继承插入段，
+    /// 所以前插之后它的坐标会变，必须退全量回填。
+    ///
+    /// 这一条同时是 `setsScanState` 的判据：若把「带 turn 的普通事件」也算作区间终点，
+    /// 区间会算空，`rebuilt` 会是 false，这条红。
+    func testPrependingIntoAnInheritingHeadFallsBackToFull() {
+        var engine = assembler()
+        let head = event(105, "user/message",
+                         #"{"id":"u105","turn":10,"source":{"kind":"user"},"content":[{"type":"text","text":"x"}]}"#)
+        engine.rebuild([head] + (11...20).flatMap { turnEvents($0) })
+
+        // 插入段停在 turn 10 / step 1（去掉末尾的 step/end 与 turn/end）
+        let change = engine.prepend(Array(turnEvents(10).prefix(3)))
+
+        XCTAssertTrue(change.rebuilt,
+                      "首条消息的 step 继承了插入段、坐标变了 —— 说不清哪些槽位受影响，应当退全量")
+    }
+
+    /// 前插只扫「插入段 + 污染区间」，且代价与历史长度无关。
+    ///
+    /// 必须经 `prepend` 量：直接调 `advance` 量的是「`scannedCount += events.count`」本身。
+    func testPrependingScansOnlyTheInsertedSegment() {
+        func scanned(windowTurns: ClosedRange<Int>) -> Int {
+            var engine = assembler()
+            engine.rebuild(windowTurns.flatMap { turnEvents($0) })
+            let before = engine.locationScanCount
+            engine.prepend((100...110).flatMap { turnEvents($0) })
+            return engine.locationScanCount - before
+        }
+
+        let short = scanned(windowTurns: 200...220)
+        let long = scanned(windowTurns: 2000...2200)
+        XCTAssertEqual(short, 55, "11 轮 × 5 条，区间为空时只扫插入段")
+        XCTAssertEqual(long, short, "扫描量与历史长度无关")
+    }
+
+    /// 前插之后走增量并入的快照，必须与整份重排出来的快照一致（顺序、可见集、条数）。
+    func testIncrementalSnapshotAfterPrependMatchesAFullRebuild() {
+        var engine = assembler()
+        engine.rebuild((200...220).flatMap { turnEvents($0) })
+
+        var incremental = ChatSnapshotBuilder()
+        incremental.replace(engine.nodes())
+        let change = engine.prepend((100...110).flatMap { turnEvents($0) })
+        incremental.apply(engine.nodes(forKeys: change.touched))
+
+        var full = ChatSnapshotBuilder()
+        full.replace(engine.nodes())
+
+        XCTAssertEqual(incremental.snapshot.nodes.map(\.key), full.snapshot.nodes.map(\.key),
+                       "增量并入之后的顺序与整份重排不同")
+        XCTAssertEqual(incremental.snapshot.visibleNodes.map(\.key),
+                       full.snapshot.visibleNodes.map(\.key))
+        XCTAssertEqual(incremental.snapshot.messageCount, full.snapshot.messageCount)
+    }
+
+    /// `orderedInputs` 与 `inputs` 是同一集合的两种视图，五处变动都要跟着改它。
+    ///
+    /// 漏一处的症状是「位置少算一条」—— 字典里有、数组里没有，没有任何报错。
+    func testEveryWriteKeepsTheOrderedInputsInStep() {
+        var engine = assembler()
+        engine.rebuild([event(60, "turn/start", #"{"turn":2}"#),
+                        event(70, "turn/end", #"{"turn":2}"#)])       // 整段重建：清空 + 填充
+        engine.append(event(80, "turn/start", #"{"turn":3}"#))         // 追加
+        engine.prepend([event(10, "turn/start", #"{"turn":1}"#),
+                        event(20, "turn/end", #"{"turn":1}"#)])        // 前插
+        engine.append(event(85, "step/start", #"{"turn":3,"step":1}"#))
+        engine.append(chunk(85.5, turn: 3, step: 1, index: 0, text: "半"))    // 草稿
+        engine.settleAssistant(                                            // 撤草稿 + 接定稿
+            attemptId: "a1",
+            settlement: event(90, "assistant/message",
+                              #"{"turn":3,"step":1,"message":{"id":"m1","content":[{"type":"text","text":"答"}]}}"#)
+        )
+
+        let orders = engine.inputOrders
+        XCTAssertEqual(orders.count, 7,
+                       "五处变动之后条数对不上：撤草稿那一处漏了就会多一条")
+        XCTAssertEqual(orders, orders.sorted(),
+                       "事件序没有维护成升序 —— 未来位置扫描会从错的地方开始")
     }
 }

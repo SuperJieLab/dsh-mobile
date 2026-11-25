@@ -151,11 +151,12 @@ struct ConversationAssembler {
     }
 
     /// 与 `advance` 的状态推进同一套规则（见 `spoiledRange` 的注释）。
+    /// 只有这两个**无条件**设 `turn` 与 `step`，因而从它们开始坐标不再依赖前序状态。
+    ///
+    /// 带 `turn` 的普通事件不算：`advance` 对它只是「`turn` 变了才清 `step`」——
+    /// 它的 `step` 仍可能继承前一段，所以它本身也在污染区间里。
     private static func setsScanState(_ event: AssemblyEvent) -> Bool {
-        switch event.type {
-        case "turn/start", "step/start": return true
-        default: return !event.isSessionScoped && event.turn != nil
-        }
+        event.type == "turn/start" || event.type == "step/start"
     }
 
     /// 一次未定稿输出收笔：撤掉这个 attempt 的未定稿命中，可选地接下持久定稿事件。
@@ -205,6 +206,10 @@ struct ConversationAssembler {
     /// 事件序（升序）。**为判据而留的读数**：它必须与 `inputs` 是同一集合 ——
     /// 漏维护一处，这条序列就与字典对不上，而生产上的症状只是「位置少算一条」。
     var inputOrders: [EventOrder] { orderedInputs.map(\.order) }
+
+    /// 位置扫描累计条数。**为判据而留的读数**：前插只该扫「插入段 + 污染区间」，
+    /// 而这件事只有经 `prepend` 量才成立 —— 直接调 `advance` 量的是加法本身。
+    var locationScanCount: Int { locationIndex.scannedCount }
 
     /// 当前的节点集合（含 hidden），顺序由排序层给。
     func nodes() -> [ChatNode] {

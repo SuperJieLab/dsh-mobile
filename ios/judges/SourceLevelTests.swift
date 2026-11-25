@@ -196,6 +196,21 @@ final class SourceLevelTests: XCTestCase {
         }
     }
 
+    /// 作废 `held` 的两处都必须把记录重新排队。
+    ///
+    /// `takeFeed` 取走即清，扣下的那一批已经消费过 —— 少了 `requeue`，被作废的记录
+    /// 就永久停在镜像里没人再看一眼，症状是「那一轮少了一段」且没有任何报错。
+    /// `resetMirror` 那一处 `held.removeAll()` 不算：整体重置时镜像自己会清空。
+    func testDiscardingHeldEventsRequeuesThem() throws {
+        let code = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let discards = Self.codeLineCount(of: "held.removeAll()", in: code)
+        let requeues = Self.codeLineCount(of: "mirror.requeue(", in: code)
+        XCTAssertEqual(discards, 3, "判据的落点变了：`held.removeAll()` 现在有 \(discards) 处")
+        XCTAssertEqual(requeues, 2,
+                       "两处作废点（新流开始、放弃的一轮）都要 requeue，实际只有 \(requeues) 处")
+    }
+
     func testMenuSourcesBakeInNoLevelNames() throws {
         let files = Self.swiftFiles(under: sessionDetailRoot)
         XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
