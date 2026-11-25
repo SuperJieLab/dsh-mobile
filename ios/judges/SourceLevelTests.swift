@@ -245,11 +245,13 @@ final class SourceLevelTests: XCTestCase {
         }
     }
 
-    /// 纯行视图的文件里，这两个修饰符一个都不该有。
+    /// 纯行视图的文件里不该有逐行的选择挂载。
     ///
-    /// `TurnProcessRow` 展开后一屏几十条（思考、工具调用、中间文本），逐条解父宽、逐条挂选择的
-    /// 代价比消息行更集中 —— 消息行一轮只有一条。`CommandRow` 本来就没有这两项，一并钉住防回流。
-    func testRowViewFilesCarryNoPerRowLayoutOrSelection() throws {
+    /// `TurnProcessRow` 展开后一屏几十条（思考、工具调用、中间文本），逐条挂一层交互的代价
+    /// 比消息行更集中 —— 消息行一轮只有一条。`CommandRow` 本来就没有，一并钉住防回流。
+    ///
+    /// **只守选择，不守 `.frame`**：见下面那段注释。
+    func testRowViewFilesCarryNoPerRowSelection() throws {
         let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
         // 只守「选择」这一半，`.frame(maxWidth: .infinity)` 不扫。
         //
