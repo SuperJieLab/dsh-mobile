@@ -342,21 +342,36 @@ final class SourceLevelTests: XCTestCase {
     ///
     /// 编排层一旦自己还留一份，改它们的接口就要跟两处，而「哪一份是真的」编译期与运行时
     /// 都看不出来 —— 两份都在推进时表现为偶发的少行。
+    ///
+    /// 扫两遍：编排层一次（这一层最容易被顺手加回来），整个 `Sources` 一次（引回视图或新开
+    /// 一个文件同样会造出第二份，而那两处不会被第一遍看见）。
     func testTheInputSideTypesLiveOnlyInTheInputUnit() throws {
+        let names = ["SessionMirror", "TransientChannel", "SessionFollowing"]
+
         // 正控：确认扫到的是本体，不是被路径推算带偏的空文件。
         let sync = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
         let lines = Self.codeLines(in: sync)
         XCTAssertGreaterThan(lines.count, 400, "只扫到 \(lines.count) 行 —— 先怀疑路径")
 
-        let hits = lines.filter {
-            $0.1.contains("SessionMirror")
-                || $0.1.contains("TransientChannel")
-                || $0.1.contains("SessionFollowing")
-        }.map(\.0)
+        let hits = lines.filter { line in names.contains { line.1.contains($0) } }.map(\.0)
         XCTAssertEqual(hits, [], "编排层还点着输入侧的类型名：行 \(hits)")
 
-        // 另一半：那三样真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
+        // 全仓：这三个名字只许出现在它们自己的定义处与输入单元里。
+        let holders: Set<String> = ["SessionMirror.swift", "TransientChannel.swift",
+                                    "SessionFollowing.swift", "SessionInput.swift"]
+        let files = Self.swiftFiles(under: iosRoot.appendingPathComponent("Sources"))
+        XCTAssertGreaterThan(files.count, 50, "只扫到 \(files.count) 个文件 —— 先怀疑路径")
+        var strays: [String] = []
+        for file in files where !holders.contains(file.lastPathComponent) {
+            for (line, text) in Self.codeLines(in: try read(file))
+            where names.contains(where: text.contains) {
+                strays.append("\(file.lastPathComponent):\(line)")
+            }
+        }
+        XCTAssertEqual(strays, [], "输入侧的类型名出现在不该点名的地方：\(strays)")
+
+        // 另一半：那三样真的有个持有者，否则上面两条可以靠「谁都不持有」变绿。
         let input = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionInput.swift"))
         let inputLines = Self.codeLines(in: input)
@@ -387,10 +402,23 @@ final class SourceLevelTests: XCTestCase {
         let sync = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
         let syncLines = Self.codeLines(in: sync)
-        XCTAssertTrue(syncLines.contains { $0.1.contains("input.makeStream = ") },
-                      "`makeStream` 没在装配点接上 —— 开流会静默地什么也不发生")
-        XCTAssertTrue(syncLines.contains { $0.1.contains("input.connectionPhase = ") },
-                      "`connectionPhase` 没在装配点接上 —— 它有个 `.idle` 默认值，漏接是静默的")
+
+        // 三处接线各只许一处，且必须落在 `init` 的体里 —— 挪进 `startFollowing()` 是
+        // 最像「也没写错」的失效方式：先开流后接工厂，这一屏就永远没有流。
+        guard let initAt = syncLines.firstIndex(where: { $0.1.contains("init(client: RpcClient") }),
+              let endAt = syncLines[initAt...].firstIndex(where: { $0.1.contains("func deliver(") })
+        else { return XCTFail("没找到 `init` 的边界 —— 判据的落点不对") }
+        // 比的是**行号**不是数组下标：`codeLines` 滤掉了注释行，两者不相等。
+        let initLine = syncLines[initAt].0
+        let endLine = syncLines[endAt].0
+        for wire in ["input.makeStream = ", "input.connectionPhase = ", "input.onControlValues = "] {
+            let wired = syncLines.filter { $0.1.contains(wire) }.map(\.0)
+            XCTAssertEqual(wired.count, 1, "`\(wire)` 该只在装配点接一处，实际 \(wired.count) 处")
+            guard let only = wired.first else { continue }
+            XCTAssertTrue(only > initLine && only < endLine,
+                          "`\(wire)` 不在 `init` 里（第 \(only) 行，init 在 \(initLine)…\(endLine)）"
+                            + " —— 开流时它还没接上")
+        }
         XCTAssertTrue(syncLines.contains { $0.1.contains("input.phase") },
                       "`phase` 不是转发 —— 漏接就恒 `.idle`，功能条永远停在未连接")
     }

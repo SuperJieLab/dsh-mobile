@@ -62,35 +62,39 @@ final class SessionInputTests: XCTestCase {
     }
 
     /// 作废不等于丢弃：整批作废时要按 `seq` 排序排回下一批，否则永久少一行。
+    ///
+    /// **八条、乱序扣下**：两条时字典遍历序有一半机会正好是升序，去掉 `.sorted` 断言会随机绿 ——
+    /// 而这一条守的正是排序（降序喂进追加路径会撞引擎的非单调匹配不变量）。
     func testDrainingHeldPutsEveryRecordBackIntoTheNextBatch() {
         let input = SessionInput(sessionId: "s-1", control: nil)
         _ = input.apply(baseline: liveBaseline(), cursor: 0)
 
-        let first = settlementEvent(0)
-        let second = settlementEvent(1)
-        input.hold(first, verdict: input.append(first))
-        input.hold(second, verdict: input.append(second))
-        XCTAssertEqual(input.heldCount, 2)
+        let order = [5, 2, 7, 0, 3, 6, 1, 4]
+        for seq in order {
+            input.hold(settlementEvent(seq), verdict: .merged(added: 1))
+        }
+        XCTAssertEqual(input.heldCount, order.count)
         _ = input.takeFeed()
 
         input.drainHeld()
 
         XCTAssertEqual(input.heldCount, 0, "作废之后不留暂存")
-        XCTAssertEqual(input.takeFeed().map(\.seq), [0, 1],
+        XCTAssertEqual(input.takeFeed().map(\.seq), order.sorted(),
                        "作废不等于丢弃 —— 它们要按 seq 升序回到下一批")
     }
 
-    /// 整段重建时的清场：只清暂存，不排回（窗口自己会清空）。
+    /// 整段重建时的清场：只清暂存，**不排回**（窗口一起被清空，排回会把旧记录喂进新引擎）。
     func testClearingHeldLeavesNothingBehind() {
         let input = SessionInput(sessionId: "s-1", control: nil)
         _ = input.apply(baseline: liveBaseline(), cursor: 0)
-        let event = settlementEvent(0)
-        input.hold(event, verdict: input.append(event))
+        input.hold(settlementEvent(0), verdict: .merged(added: 1))
         XCTAssertEqual(input.heldCount, 1)
 
         input.clearHeld()
 
         XCTAssertEqual(input.heldCount, 0)
+        XCTAssertTrue(input.takeFeed().isEmpty,
+                      "清场不该把它们排回下一批 —— 换成 `drainHeld` 会让旧记录进新引擎")
     }
 
     /// 没有活草稿时不扣：那时不存在「定稿比草稿先到」这件事。
