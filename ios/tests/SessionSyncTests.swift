@@ -400,6 +400,80 @@ final class SessionSyncTests: XCTestCase {
                        "旧窗口那两条还在屏上 —— 重建把两段不同的窗口拼成了一个")
     }
 
+    /// 打开帧同时带来持久记录与草稿基线：两样都要在。
+    ///
+    /// 顺序是唯一让它成立的东西：持久窗口先喂进引擎，基线才追加得进去。反过来的话，
+    /// 紧接着的整段重建会在基线刚放进去之后把引擎清一遍 —— 屏幕上只剩持久的那几条。
+    func testAnOpeningWithBothRecordsAndADraftShowsBoth() {
+        func message(_ seq: Int) -> SessionRecord {
+            SessionRecord(type: "user/message", event: SessionEvent(
+                type: "user/message", seq: seq, time: Double(seq), data: .object([
+                    "id": .string("m-\(seq)"),
+                    "source": .object(["kind": .string("user")]),
+                    "content": .array([.object(["type": .string("text"), "text": .string("持久-\(seq)")])]),
+                ])
+            ))
+        }
+
+        let sync = makeSync()
+        sync.apply(StreamReading(content: .opening(snapshot(
+            cursor: 1, records: [message(0), message(1)], assistantStream: liveBaseline()
+        ))))
+
+        XCTAssertEqual(texts(in: sync), ["持久-0", "持久-1"], "持久那一列没上屏")
+        XCTAssertTrue(assistantTexts(in: sync).contains("半句话"),
+                      "草稿被持久窗口那次重建抹掉了 —— 基线必须放在喂完窗口之后")
+    }
+
+    /// 草稿帧的物化**不带喂食**：它只把草稿物化上屏，不顺手把队列里的持久批喂进去。
+    ///
+    /// 两者混在一处时，界面看不出错，只表现为「草稿先、持久后」这条顺序偶尔反了 ——
+    /// 而它正是「定稿到达时不闪」依赖的那条顺序。
+    func testADraftMaterializationDoesNotFeedThePendingDurableBatch() async throws {
+        func message(_ seq: Int) -> SessionEvent {
+            SessionEvent(type: "user/message", seq: seq, time: Double(seq), data: .object([
+                "id": .string("m-\(seq)"),
+                "source": .object(["kind": .string("user")]),
+                "content": .array([.object(["type": .string("text"), "text": .string("持久-\(seq)")])]),
+            ]))
+        }
+        // 基线之后通道期望 revision 1、下一个 chunk 位置 1。
+        let chunk: JSONValue = .object([
+            "type": .string("chunk"),
+            "attemptId": .string("a-1"),
+            "revision": .number(1),
+            "index": .number(1),
+            "time": .number(2),
+            "chunk": .object([
+                "type": .string("text-delta"),
+                "index": .number(0),
+                "text": .string("又说了一句"),
+            ]),
+        ])
+
+        let sync = makeSync()
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 0, records: [], assistantStream: liveBaseline())
+        )))
+        XCTAssertTrue(assistantTexts(in: sync).contains("半句话"), "先确认草稿真的在")
+
+        // 经输入单元直接进窗口：走 `.event` 会立刻开一次刷新闸，那样就造不出「有批未喂」这个状态。
+        // 空窗口的 `start` 是 `cursor + 1`，所以第一条能进来的是 seq 1。
+        _ = sync.input.append(message(1))
+        XCTAssertEqual(texts(in: sync), [], "先确认它还没上屏")
+
+        sync.apply(StreamReading(content: .transient(chunk)))
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertFalse(texts(in: sync).contains("持久-1"),
+                       "草稿帧的物化把持久批一起喂了 —— 顺序从「草稿先、持久后」变成「一起到」")
+
+        // 一条持久事件到达，刷新闸到点：两条才都在。
+        sync.apply(StreamReading(content: .event(message(2))))
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(texts(in: sync), ["持久-1", "持久-2"], "刷新之后持久那一列该上屏")
+    }
+
     /// 视图那一列里的消息正文。
     private func texts(in sync: SessionSync) -> [String] {
         sync.nodes.compactMap { node -> String? in
