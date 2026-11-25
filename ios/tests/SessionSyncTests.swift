@@ -465,6 +465,8 @@ final class SessionSyncTests: XCTestCase {
         sync.projection.apply(StreamReading(content: .transient(chunk)))
         try await Task.sleep(for: .milliseconds(60))
 
+        XCTAssertTrue(assistantTexts(in: sync).contains { $0.contains("又说了一句") },
+                      "那一帧草稿本身没上屏 —— 下面那条「持久没上来」就成了空守")
         XCTAssertFalse(texts(in: sync).contains("持久-1"),
                        "草稿帧的物化把持久批一起喂了 —— 顺序从「草稿先、持久后」变成「一起到」")
 
