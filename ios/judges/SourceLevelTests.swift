@@ -364,6 +364,31 @@ final class SourceLevelTests: XCTestCase {
                       "输入单元自己没有持有草稿通道 —— 上面那条是空守")
     }
 
+    /// 输入单元只拿输入侧的东西，装配点把三处接线接上。
+    ///
+    /// 两半守的是同一件事的两面：拿多了（顺手把投影的状态也管起来）与接漏了
+    /// （`makeStream` / `phase` 漏接都是**静默**的 —— 前者开流什么也不发生、后者恒 `.idle`，
+    /// 而监听表条数与界面都照常）。
+    func testTheInputUnitHoldsNoProjectionStateAndIsWired() throws {
+        let input = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionInput.swift"))
+        let inputLines = Self.codeLines(in: input)
+        XCTAssertGreaterThan(inputLines.count, 50, "读空了 —— 先怀疑路径")
+        let projectionTypes = ["ChatSnapshot", "ChatSnapshotBuilder", "ConversationAssembler"]
+        let intruders = inputLines.filter { line in
+            projectionTypes.contains { line.1.contains($0) }
+        }.map(\.0)
+        XCTAssertEqual(intruders, [], "输入单元拿了投影的状态：行 \(intruders)")
+
+        let sync = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let syncLines = Self.codeLines(in: sync)
+        XCTAssertTrue(syncLines.contains { $0.1.contains("input.makeStream = ") },
+                      "`makeStream` 没在装配点接上 —— 开流会静默地什么也不发生")
+        XCTAssertTrue(syncLines.contains { $0.1.contains("input.phase") },
+                      "`phase` 不是转发 —— 漏接就恒 `.idle`，功能条永远停在未连接")
+    }
+
     func testMenuSourcesBakeInNoLevelNames() throws {
         let files = Self.swiftFiles(under: sessionDetailRoot)
         XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")

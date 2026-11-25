@@ -46,7 +46,7 @@ final class SessionInputTests: XCTestCase {
     /// `takeFeed` 全交（过滤在喂食那一步），把它改到 `takeFeed` 里会让镜像层的契约用例红 ——
     /// 那是另一条判据，这里只钉「扣下不动本批」。
     func testHeldSettlementStaysInTheBatchUntilItIsNamed() {
-        let input = SessionInput()
+        let input = SessionInput(sessionId: "s-1", control: nil)
         _ = input.apply(baseline: liveBaseline(), cursor: 0)
         XCTAssertEqual(input.liveAttemptId, "a-1", "草稿没活着 —— 下面 hold 会是 no-op")
 
@@ -63,7 +63,7 @@ final class SessionInputTests: XCTestCase {
 
     /// 作废不等于丢弃：整批作废时要按 `seq` 排序排回下一批，否则永久少一行。
     func testDrainingHeldPutsEveryRecordBackIntoTheNextBatch() {
-        let input = SessionInput()
+        let input = SessionInput(sessionId: "s-1", control: nil)
         _ = input.apply(baseline: liveBaseline(), cursor: 0)
 
         let first = settlementEvent(0)
@@ -82,7 +82,7 @@ final class SessionInputTests: XCTestCase {
 
     /// 整段重建时的清场：只清暂存，不排回（窗口自己会清空）。
     func testClearingHeldLeavesNothingBehind() {
-        let input = SessionInput()
+        let input = SessionInput(sessionId: "s-1", control: nil)
         _ = input.apply(baseline: liveBaseline(), cursor: 0)
         let event = settlementEvent(0)
         input.hold(event, verdict: input.append(event))
@@ -95,7 +95,7 @@ final class SessionInputTests: XCTestCase {
 
     /// 没有活草稿时不扣：那时不存在「定稿比草稿先到」这件事。
     func testHoldIsANoOpWithoutALiveDraft() {
-        let input = SessionInput()
+        let input = SessionInput(sessionId: "s-1", control: nil)
 
         input.hold(settlementEvent(0), verdict: .merged(added: 1))
 

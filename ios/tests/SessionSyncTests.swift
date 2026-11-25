@@ -343,6 +343,48 @@ final class SessionSyncTests: XCTestCase {
                       "扣下的定稿没有回到引擎 —— 这一轮会永久少一行")
     }
 
+    /// 整段重建：水位回退之后镜像与引擎一起清，新窗口用的是新身份。
+    ///
+    /// 三步缺一不可。只看第 ② 步证明不了「重建用的是新窗口」，只看第 ③ 步证明不了清空 ——
+    /// 而「清了镜像、没清引擎」的表现是旧身份还在，新窗口的事件被判成前插接到旧内容上。
+    ///
+    /// 另有一处易错：跳号（`.gap`）**不**触发重建（`invalidatesLocalContent` 为假），
+    /// 所以这里摔的是水位回退，不是缺一条。
+    func testARewoundWatermarkRebuildsTheWholeWindow() {
+        func message(_ seq: Int, _ text: String) -> SessionRecord {
+            SessionRecord(type: "user/message", event: SessionEvent(
+                type: "user/message", seq: seq, time: Double(seq), data: .object([
+                    "id": .string("m-\(seq)"),
+                    "source": .object(["kind": .string("user")]),
+                    "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
+                ])
+            ))
+        }
+
+        let sync = makeSync()
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 9, records: (0..<10).map { message($0, "旧-\($0)") })
+        )))
+        XCTAssertEqual(sync.eventCount, 10, "先确认整窗真的进去了")
+
+        // 水位回退：`realign` 提前返回、不采用新窗口，随后 `resetMirror` 把镜像与引擎一起清。
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 7, records: (0..<8).map { message($0, "旧-\($0)") })
+        )))
+        XCTAssertEqual(sync.eventCount, 0, "水位回退之后镜像必须清空")
+        XCTAssertTrue(sync.nodes.isEmpty,
+                      "镜像清了、引擎没清 —— 屏幕还留着上一段窗口的内容")
+
+        // 这条流随后送一份正常的新窗口：必须照新窗口重建，不把旧身份接上。
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 7, records: (0..<8).map { message($0, "新-\($0)") })
+        )))
+        XCTAssertEqual(sync.eventCount, 8)
+        XCTAssertEqual(sync.nodes.count, 8, "节点数不是 8 —— 旧窗口的内容还挂在引擎里")
+        XCTAssertEqual(texts(in: sync).filter { $0.hasPrefix("旧-") }, [],
+                       "旧窗口那两条还在屏上 —— 重建把两段不同的窗口拼成了一个")
+    }
+
     /// 视图那一列里的消息正文。
     private func texts(in sync: SessionSync) -> [String] {
         sync.nodes.compactMap { node -> String? in

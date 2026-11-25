@@ -13,8 +13,69 @@ import Foundation
 @MainActor
 final class SessionInput {
 
+    /// 本屏会话号 —— 投影订阅只收这一条。
+    private let sessionId: String
+    /// 连接级投影流的收端（App 级一个实例）。`nil` = 这一屏不订阅。
+    private let control: ControlStream?
+    /// 投影订阅的退订 token。
+    private var controlSubscription: (() -> Void)?
+
     /// 本地权威副本。位置只由几个合并方法推进，改它的方法都要求一份服务端回应。
     private var window = SessionMirror()
+
+    // MARK: - 接线（由装配点在 `init` 末尾接上）
+
+    /// 造一条流。装配点给：编号由流表发，行为对象要指向本屏的读侧。
+    /// `nil` = 这一次开流放弃（开流文本编不出来）—— 此时屏幕是空的，状态行说「还没连上」。
+    var makeStream: (() -> LogicalStream?)?
+    /// 连接阶段。读穿而不是镜像，观察机制会跟到源头。
+    var connectionPhase: () -> ConnectionPhase = { .idle }
+    /// 每收到本会话的一条投影值就叫一声。
+    var onControlValues: ((JSONValue) -> Void)?
+
+    init(sessionId: String, control: ControlStream?) {
+        self.sessionId = sessionId
+        self.control = control
+        // 投影订阅跟着这一屏存在，不跟着流的开关：订在这里，`stop()` 退订。
+        // 开流只管事件流 —— 这一屏还没开流时也要能显示当前模型与占用。
+        subscribeControl()
+    }
+
+    // MARK: - 开关
+
+    /// 本屏那一条流。**惰性**：它的闭包要读 `makeStream`，而在 `init` 里读等于再捕一次 `self`。
+    /// 只影响造流的时机，订阅不受影响 —— 订阅在 `init` 里已建。
+    private lazy var following = SessionFollowing { [unowned self] in self.makeStream?() }
+
+    /// 连接阶段 —— 读穿注入的那个闭包。
+    var phase: ConnectionPhase { connectionPhase() }
+
+    /// 进屏即开流；已开着时是 no-op。
+    func start() {
+        following.start()
+        subscribeControl()
+    }
+
+    /// 只重开这一条流 —— 流级动作，不动连接与别的流。
+    func retry() { following.retry() }
+
+    /// 离屏：注销这条流并退订投影。连接留在原处（App 级）。
+    func stop() {
+        following.stop()
+        controlSubscription?()
+        controlSubscription = nil
+    }
+
+    /// 订上投影流：只收本会话那一条。离屏不退会让监听表随每次进出增长，
+    /// 而它持有的是弱引用，泄漏不会报错，只会让每次投影都多跑一次空转。
+    private func subscribeControl() {
+        guard controlSubscription == nil, let control else { return }
+        controlSubscription = control.updateListeners.add { [weak self] payload in
+            let (sessionId, values, _) = payload
+            guard let self, sessionId == self.sessionId else { return }
+            self.onControlValues?(values)
+        }
+    }
 
     // MARK: - 读数
 

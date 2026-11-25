@@ -6,7 +6,7 @@ import Foundation
 /// 本类只做读：事件装配、占用、告知、流式未定稿；窗口与镜像经 `SessionInput` 读写。
 /// 三样相邻的东西各住一处 ——
 /// 状态行（`SessionStatus`）、当前模型（`SessionModelMirror`）、用户动作（`SessionActions`）、
-/// 流的开关（`SessionFollowing`）。它们由本类装配并向视图转发，所以视图仍然只认识本对象。
+/// 流的开关（经输入单元）。它们由本类装配并向视图转发，所以视图仍然只认识本对象。
 ///
 /// 拆开的理由是变化触发源不同：读侧随「窗口与快照的协议」变，写侧随「产品动作的语义」变，
 /// 流开关随「流的生命周期」变。合成一个类时，改任一处都要重读另外两处的上下文。
@@ -103,15 +103,6 @@ final class SessionSync {
     let models: SessionModelMirror
     /// 用户动作（发消息 / 命令 / 选模型）。
     let actions: SessionActions
-    /// 本屏那一条流的开关。**惰性**：它的三个闭包都要捕获本对象，而在 `init` 里
-    /// 捕获 `self` 要等全部存储属性就位 —— 惰性让「就位」发生在第一次用到时。
-    @ObservationIgnored
-    private lazy var followingStorage = SessionFollowing(
-        makeStream: { [unowned self] in
-            self.factory.makeStream(SessionBehavior(owner: self))
-        }
-    )
-    var following: SessionFollowing { followingStorage }
 
     // MARK: - 视图读的三个面（转发，不改视图的调用形状）
 
@@ -128,21 +119,16 @@ final class SessionSync {
     let sessionId: String
     /// 造流口 —— 窄接口，连接级动作在此写不出来。
     private let factory: any StreamFactory
-    /// 连接级投影流的收端（App 级一个实例，这一屏只关心本会话那份）。
-    private let control: ControlStream?
-    /// 投影订阅的退订 token。
-    private var controlSubscription: (() -> Void)?
-    /// 窗口与镜像的读写口 —— 镜像由它持有，这里只经它读窗口事实、发翻页、喂食引擎。
-    let input = SessionInput()
+    /// 输入侧（窗口、草稿、暂存、流开关）—— 这里只经它读写，不碰它的内部类型。
+    let input: SessionInput
     /// 同一时刻只允许一次读请求（翻页）。从前还要挡住「同步 + 翻页」并发 ——
     /// 同步那条路随 HTTP 兜底一起退场了。
     private var syncInFlight = false
     /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
     private var noticeState = ResyncNoticeState()
 
-    /// 连接阶段 —— 读穿而不是镜像，观察机制会跟到源头。
-    var phase: ConnectionPhase { connectionPhase() }
-    private let connectionPhase: () -> ConnectionPhase
+    /// 连接阶段 —— 转发输入单元读穿的那个闭包。
+    var phase: ConnectionPhase { input.phase }
 
     /// 事件 → 节点。引擎跨刷新保留：身份表在里面，重建它就等于把所有节点的身份重来一遍。
     private var conversation = SessionSync.makeAssembler()
@@ -181,8 +167,6 @@ final class SessionSync {
         self.client = client
         self.sessionId = sessionId
         self.factory = link
-        self.control = control
-        self.connectionPhase = { [weak link] in link?.phase ?? .idle }
 
         let statusBox = SessionStatus()
         let models = SessionModelMirror()
@@ -191,9 +175,14 @@ final class SessionSync {
         self.actions = SessionActions(client: client, sessionId: sessionId,
                                       status: statusBox, models: models)
 
-        // 投影订阅跟着**这一屏存在**，不跟着流的开关：订在这里，`stopFollowing` 退订。
-        // 开流只管事件流 —— 这一屏还没开流时也要能显示当前模型与占用。
-        subscribeControl()
+        // 输入单元在这里建，**不用惰性属性**：投影订阅随构造建立，而首屏在构造之后
+        // 立刻就可能收到 control —— 推迟到第一次访问会让那一条丢掉。
+        let input = SessionInput(sessionId: sessionId, control: control)
+        self.input = input
+        // 三处接线留到存储属性全部就位之后：它们都要捕获本对象。
+        input.makeStream = { [unowned self] in factory.makeStream(SessionBehavior(owner: self)) }
+        input.connectionPhase = { [weak link] in link?.phase ?? .idle }
+        input.onControlValues = { [weak self] values in self?.absorbProjection(values) }
     }
 
     // MARK: - 用户动作（转给写侧）
@@ -229,34 +218,21 @@ final class SessionSync {
         await actions.selectModel(selection)
     }
 
-    // MARK: - 流的开关（转给流开关）
+    // MARK: - 流的开关（转给输入单元）
 
-    func startFollowing() {
-        following.start()
-        subscribeControl()
-    }
-    func retry() { following.retry() }
-    func stopFollowing() {
-        following.stop()
-        controlSubscription?()
-        controlSubscription = nil
-    }
+    func startFollowing() { input.start() }
+    func retry() { input.retry() }
+    func stopFollowing() { input.stop() }
 
-    /// 订上投影流：只收本会话那一条。退订在 `stopFollowing` —— 离屏不退会让监听表随
-    /// 每次进出增长，而它持有的是弱引用，泄漏不会报错，只会让每次投影都多跑一次空转。
-    private func subscribeControl() {
-        guard controlSubscription == nil, let control else { return }
-        controlSubscription = control.updateListeners.add { [weak self] payload in
-            let (sessionId, values, _) = payload
-            guard let self, sessionId == self.sessionId else { return }
-            // control 是权威：水位（事件 seq）在 `ControlStream` 里已经用来挡过重放，
-            // 这里不再和快照的 `asOfSeq` 比 —— 两者不是同一条轴。
-            self.applyControl(UsageView.payloadOf(values))
-            // 当前模型读**投影**（唯二的一格在同一个回调里顺手取走）：打开帧不再带它，
-            // 切模型走 `session/selectModel`，随后变的正是这一格。
-            self.models.absorb(projection: values["modelSelection"])
-            self.onProjectionValues?(values)
-        }
+    /// control 送来的一条更新：权威，直接覆盖。
+    ///
+    /// 水位（事件 seq）在 `ControlStream` 里已经用来挡过重放，这里不再和快照的 `asOfSeq`
+    /// 比 —— 两者不是同一条轴。当前模型也读**投影**（打开帧不再带它，切模型走
+    /// `session/selectModel`，随后变的正是这一格）。
+    private func absorbProjection(_ values: JSONValue) {
+        applyControl(UsageView.payloadOf(values))
+        models.absorb(projection: values["modelSelection"])
+        onProjectionValues?(values)
     }
 
     // MARK: - 读侧编排
@@ -441,7 +417,7 @@ final class SessionSync {
                 //
                 // 必须留到帧处理返回之后再做：在 `applySnapshot` 里同步重开，外层随后仍拿**旧帧**的
                 // `establishes` 去结算新代次，会把新开流的超时守卫当场关掉。
-                Task { @MainActor [weak self] in self?.following.retry() }
+                Task { @MainActor [weak self] in self?.input.retry() }
             }
             observeNotice(verdict)
         }
@@ -502,7 +478,7 @@ final class SessionSync {
         switch input.apply(frame: frame, cursor: max(0, input.frontier - 1)) {
         case .broken:
             // 基线已丢，后续 chunk 是增量 —— 干等只会残缺，重开流取新基线。
-            following.retry()
+            input.retry()
 
         case .consumed(let events):
             // 每条 draft 的更新都物化一次会把「每帧 O(n)」放大成「每个 chunk O(n)」。
