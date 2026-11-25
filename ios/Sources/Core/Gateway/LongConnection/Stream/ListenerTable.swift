@@ -20,6 +20,10 @@ final class ListenerTable<T> {
 
     private var entries: [Entry] = []
 
+    /// 当前听众条数。**为判据而留的读数**：订阅与退订没有别的可观测面，而漏退的症状
+    /// 只是「每次投影多跑一次空转」—— 不报错，也不至于慢到能看见。
+    var count: Int { entries.count }
+
     /// 挂一个听众。
     ///
     /// @returns 退订 token。**每个入口都给**：多读者必须能退订，否则「先于进程消失的

@@ -179,6 +179,122 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(texts(in: sync), [], "屏幕上也不能留着 —— 那会假装发出去了")
     }
 
+    // MARK: - 翻页、草稿基线、开关（F5 第 1 期 T1：搬状态之前先把现状钉住）
+
+    /// 窗口说没有更早的了：一次请求都不发。
+    func testLoadOlderStopsWhenTheWindowHasNoMore() async throws {
+        ScriptedURLProtocol.reset(replies: [:])
+        let sync = makeScriptedSync()
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
+
+        await sync.loadOlder()
+
+        XCTAssertEqual(pageCalls(), 0, "`hasMore` 为假时不该发请求")
+    }
+
+    /// 这一页接上了本地起点，且带来了可显示的行：只发一次请求就收工。
+    func testLoadOlderStopsOnceAPageBringsSomethingVisible() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/page": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"records":[{"type":"user/message","event":{"type":"user/message","seq":10,"time":1,"data":{"id":"m-10","source":{"kind":"user"},"content":[{"type":"text","text":"更早的一句"}]}}}],"cursor":10,"hasMore":true}}}"#
+            ),
+        ])
+        let sync = makeScriptedSync()
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
+        let before = sync.nodes.count
+
+        await sync.loadOlder()
+
+        XCTAssertEqual(pageCalls(), 1, "已经有新行了，不该再往前拉")
+        XCTAssertEqual(sync.nodes.count, before + 1, "那一页的行要真的上屏")
+    }
+
+    /// 这一页接不上本地起点（缺口）：停手，不重试，只在告知里记一笔。
+    ///
+    /// 缺口时本地内容仍然是真的、只是旧 —— 所以既不重试也不清屏。
+    func testLoadOlderStopsOnAGapAndKeepsTheLocalContent() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/page": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"records":[{"type":"user/message","event":{"type":"user/message","seq":5,"time":1,"data":{"id":"m-5","source":{"kind":"user"},"content":[{"type":"text","text":"接不上的"}]}}}],"cursor":10,"hasMore":true}}}"#
+            ),
+        ])
+        let sync = makeScriptedSync()
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
+
+        await sync.loadOlder()
+
+        XCTAssertEqual(pageCalls(), 1, "缺口之后不该继续往前拉")
+        XCTAssertNotNil(sync.notice, "缺口要留下告知 —— 否则界面静止却看起来正常")
+        XCTAssertEqual(texts(in: sync), [], "缺口时本地内容一条不动，也不把那一页塞进来")
+    }
+
+    /// 翻页失败落在「分页」这一步，而不是笼统失败。
+    func testLoadOlderFailureShowsPagingFailure() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/page": .init(status: 500, body: "boom"),
+        ])
+        let sync = makeScriptedSync()
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
+
+        await sync.loadOlder()
+
+        guard case .failed(let step, _) = sync.status else {
+            return XCTFail("状态不是失败：\(sync.status)")
+        }
+        guard case .paging = step else {
+            return XCTFail("失败没落在分页这一步：\(step)")
+        }
+    }
+
+    /// 打开帧带一个进行中的 attempt：草稿行按基线内容恢复。
+    func testAnOpeningWithALiveAttemptRestoresTheDraft() {
+        let sync = makeSync()
+
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 4, records: [], assistantStream: liveBaseline())
+        )))
+
+        XCTAssertTrue(assistantTexts(in: sync).contains("半句话"),
+                      "基线里的草稿没恢复 —— 重开流那一刻屏幕上会空一段")
+    }
+
+    /// 下一次打开不带 attempt：上一段草稿必须清掉，否则与新基线拼成两段重复文本。
+    func testASecondOpeningWithoutALiveAttemptClearsTheDraft() {
+        let sync = makeSync()
+        sync.apply(StreamReading(content: .opening(
+            snapshot(cursor: 4, records: [], assistantStream: liveBaseline())
+        )))
+        XCTAssertTrue(assistantTexts(in: sync).contains("半句话"), "先确认草稿真的在")
+
+        sync.apply(StreamReading(content: .opening(snapshot(cursor: 6, records: []))))
+
+        let draft = sync.snapshot.nodes.first { node in
+            if case .assistant(let assistant) = node.data { return assistant.text == "半句话" }
+            return false
+        }
+        guard let draft else { return }   // 整条消失也算退役，比留着更好
+        XCTAssertNotEqual(draft.visibility, .visible,
+                          "旧草稿还在屏上 —— 它会和新基线拼成两段")
+    }
+
+    /// 离屏要退订、回屏要补订：监听表不随进出增长。
+    func testStoppingFollowingUnsubscribesTheControlStream() {
+        let control = ControlStream()
+        let sync = makeSync(control: control)
+
+        sync.startFollowing()
+        XCTAssertEqual(control.updateListeners.count, 1, "开屏就该订上")
+
+        sync.stopFollowing()
+        XCTAssertEqual(control.updateListeners.count, 0,
+                       "离屏没退订 —— 监听表持弱引用，泄漏不报错，只让每次投影多跑一次空转")
+
+        sync.startFollowing()
+        XCTAssertEqual(control.updateListeners.count, 1, "回屏要补订")
+    }
+
     /// 视图那一列里的消息正文。
     private func texts(in sync: SessionSync) -> [String] {
         sync.nodes.compactMap { node -> String? in
@@ -189,17 +305,59 @@ final class SessionSyncTests: XCTestCase {
 
     /// 一份最小的打开帧夹具 —— 只给判据要用的四格。
     private func snapshot(cursor: Int, records: [SessionRecord],
-                          projections: JSONValue = .object([:])) -> SnapshotFrame {
+                          projections: JSONValue = .object([:]),
+                          hasMore: Bool = false,
+                          assistantStream: JSONValue? = nil) -> SnapshotFrame {
         SnapshotFrame(
             header: SessionWireHeader(version: 1, id: "session-1", createdAt: 0, cwd: nil,
                                       parentSession: nil, isSeeded: false, origin: nil,
                                       delegationDepth: nil, agentPreset: nil),
             cursor: cursor,
             records: records,
-            hasMore: false,
+            hasMore: hasMore,
             projections: ProjectionBlock(asOfSeq: cursor, values: projections),
-            assistantStream: nil
+            assistantStream: assistantStream
         )
+    }
+
+    /// 未定稿基线：一个进行中的 attempt，已累积一句「半句话」。
+    ///
+    /// 形状照 `TransientChannel.apply(baseline:)`：`revision` 是已见的最后一版，
+    /// `activeAttempt.stream` 是**紧凑记录**（`text-chunks` 会被展开成 `text-delta`），
+    /// `nextIndex` 是已累积的 chunk 数。
+    private func liveBaseline(text: String = "半句话") -> JSONValue {
+        .object([
+            "revision": .number(0),
+            "activeAttempt": .object([
+                "attemptId": .string("a-1"),
+                "turn": .number(1),
+                "step": .number(1),
+                "nextIndex": .number(1),
+                "stream": .array([
+                    .object([
+                        "type": .string("text-chunks"),
+                        "texts": .array([.string(text)]),
+                        "time": .number(1),
+                    ])
+                ]),
+            ]),
+        ])
+    }
+
+    /// 快照里助手节点的正文（含 hidden 的中间步）。
+    ///
+    /// 不扫 `nodes`：那是可见集，而草稿是否可见由「这一步是不是末步」决定 —— 那是另一件事。
+    /// 这组判据守的是「基线里的内容有没有被恢复进引擎」。
+    private func assistantTexts(in sync: SessionSync) -> [String] {
+        sync.snapshot.nodes.compactMap { node -> String? in
+            if case .assistant(let assistant) = node.data { return assistant.text }
+            return nil
+        }
+    }
+
+    /// 这一组请求里，翻页发了几次。
+    private func pageCalls() -> Int {
+        ScriptedURLProtocol.snapshot().filter { $0.op == "session/page" }.count
     }
 
     /// 打开帧带的投影块是这一屏的初值 —— 当前模型与当前权限都从它起。
