@@ -22,7 +22,7 @@ final class SessionSyncTests: XCTestCase {
         let sync = makeSync()
         let payload = UsagePayload(usedTokens: 148_807, contextWindow: 1_000_000)
 
-        sync.apply(StreamReading(content: .opening(SnapshotFrame(
+        sync.projection.apply(StreamReading(content: .opening(SnapshotFrame(
             header: SessionWireHeader(version: 1, id: "session-1", createdAt: 0, cwd: nil,
                                       parentSession: nil, isSeeded: false, origin: nil,
                                       delegationDepth: nil, agentPreset: nil),
@@ -87,7 +87,7 @@ final class SessionSyncTests: XCTestCase {
     func testALaterUsageFrameStillWins() {
         let sync = makeSync()
         let opening = UsagePayload(usedTokens: 10, contextWindow: 100)
-        sync.apply(StreamReading(content: .opening(SnapshotFrame(
+        sync.projection.apply(StreamReading(content: .opening(SnapshotFrame(
             header: SessionWireHeader(version: 1, id: "session-1", createdAt: 0, cwd: nil,
                                       parentSession: nil, isSeeded: false, origin: nil,
                                       delegationDepth: nil, agentPreset: nil),
@@ -137,7 +137,7 @@ final class SessionSyncTests: XCTestCase {
             ),
         ])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
 
         let accepted = await sync.deliver(.prompt("你好"), mode: .queue)
         XCTAssertTrue(accepted, "受理了")
@@ -146,7 +146,7 @@ final class SessionSyncTests: XCTestCase {
                        "发出去的字立刻上屏 —— 不必等宿主落成持久事件")
 
         // 宿主把它落成持久事件，带着同一个 rpcId。
-        sync.apply(StreamReading(content: .event(SessionEvent(
+        sync.projection.apply(StreamReading(content: .event(SessionEvent(
             type: "user/message", seq: 5, time: 2,
             data: .object([
                 "id": .string("m-1"),
@@ -171,7 +171,7 @@ final class SessionSyncTests: XCTestCase {
             ),
         ])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 0, records: []))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 0, records: []))))
 
         let accepted = await sync.deliver(.prompt("发不出去"), mode: .queue)
         XCTAssertFalse(accepted)
@@ -185,7 +185,7 @@ final class SessionSyncTests: XCTestCase {
     func testLoadOlderStopsWhenTheWindowHasNoMore() async throws {
         ScriptedURLProtocol.reset(replies: [:])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
 
         await sync.loadOlder()
 
@@ -201,7 +201,7 @@ final class SessionSyncTests: XCTestCase {
             ),
         ])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
         let before = sync.nodes.count
 
         await sync.loadOlder()
@@ -232,7 +232,7 @@ final class SessionSyncTests: XCTestCase {
             ),
         ])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 9, records: (6..<10).map(local), hasMore: true)
         )))
         XCTAssertEqual(texts(in: sync).count, 4, "先确认本地真的有内容")
@@ -251,7 +251,7 @@ final class SessionSyncTests: XCTestCase {
             "session/page": .init(status: 500, body: "boom"),
         ])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
 
         await sync.loadOlder()
 
@@ -267,7 +267,7 @@ final class SessionSyncTests: XCTestCase {
     func testAnOpeningWithALiveAttemptRestoresTheDraft() {
         let sync = makeSync()
 
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 4, records: [], assistantStream: liveBaseline())
         )))
 
@@ -278,12 +278,12 @@ final class SessionSyncTests: XCTestCase {
     /// 下一次打开不带 attempt：上一段草稿必须清掉，否则与新基线拼成两段重复文本。
     func testASecondOpeningWithoutALiveAttemptClearsTheDraft() {
         let sync = makeSync()
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 4, records: [], assistantStream: liveBaseline())
         )))
         XCTAssertTrue(assistantTexts(in: sync).contains("半句话"), "先确认草稿真的在")
 
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 6, records: []))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 6, records: []))))
 
         let draft = sync.snapshot.nodes.first { node in
             if case .assistant(let assistant) = node.data { return assistant.text == "半句话" }
@@ -340,17 +340,17 @@ final class SessionSyncTests: XCTestCase {
             )),
         ]
         // 打开一屏并带一个活草稿 —— 只有草稿开着，定稿才可能被扣下。
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 1, records: context, assistantStream: liveBaseline())
         )))
         XCTAssertTrue(assistantTexts(in: sync).contains("半句话"), "先确认草稿真的在")
 
-        sync.apply(StreamReading(content: .event(durable(2).event)))
+        sync.projection.apply(StreamReading(content: .event(durable(2).event)))
         XCTAssertFalse(assistantTexts(in: sync).contains("正式正文"),
                        "草稿还开着，定稿要先扣着 —— 它可能是比草稿先到的那一份")
 
         // 新的一条流开始，窗口里带着那条定稿：它必须出现在引擎里。
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 2, records: context + [durable(2)])
         )))
 
@@ -377,13 +377,13 @@ final class SessionSyncTests: XCTestCase {
         }
 
         let sync = makeSync()
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 9, records: (0..<10).map { message($0, "旧-\($0)") })
         )))
         XCTAssertEqual(sync.eventCount, 10, "先确认整窗真的进去了")
 
         // 水位回退：`realign` 提前返回、不采用新窗口，随后 `resetMirror` 把镜像与引擎一起清。
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 7, records: (0..<8).map { message($0, "旧-\($0)") })
         )))
         XCTAssertEqual(sync.eventCount, 0, "水位回退之后镜像必须清空")
@@ -391,7 +391,7 @@ final class SessionSyncTests: XCTestCase {
                       "镜像清了、引擎没清 —— 屏幕还留着上一段窗口的内容")
 
         // 这条流随后送一份正常的新窗口：必须照新窗口重建，不把旧身份接上。
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 7, records: (0..<8).map { message($0, "新-\($0)") })
         )))
         XCTAssertEqual(sync.eventCount, 8)
@@ -416,7 +416,7 @@ final class SessionSyncTests: XCTestCase {
         }
 
         let sync = makeSync()
-        sync.apply(StreamReading(content: .opening(snapshot(
+        sync.projection.apply(StreamReading(content: .opening(snapshot(
             cursor: 1, records: [message(0), message(1)], assistantStream: liveBaseline()
         ))))
 
@@ -452,7 +452,7 @@ final class SessionSyncTests: XCTestCase {
         ])
 
         let sync = makeSync()
-        sync.apply(StreamReading(content: .opening(
+        sync.projection.apply(StreamReading(content: .opening(
             snapshot(cursor: 0, records: [], assistantStream: liveBaseline())
         )))
         XCTAssertTrue(assistantTexts(in: sync).contains("半句话"), "先确认草稿真的在")
@@ -462,14 +462,14 @@ final class SessionSyncTests: XCTestCase {
         _ = sync.input.append(message(1))
         XCTAssertEqual(texts(in: sync), [], "先确认它还没上屏")
 
-        sync.apply(StreamReading(content: .transient(chunk)))
+        sync.projection.apply(StreamReading(content: .transient(chunk)))
         try await Task.sleep(for: .milliseconds(60))
 
         XCTAssertFalse(texts(in: sync).contains("持久-1"),
                        "草稿帧的物化把持久批一起喂了 —— 顺序从「草稿先、持久后」变成「一起到」")
 
         // 一条持久事件到达，刷新闸到点：两条才都在。
-        sync.apply(StreamReading(content: .event(message(2))))
+        sync.projection.apply(StreamReading(content: .event(message(2))))
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertEqual(texts(in: sync), ["持久-1", "持久-2"], "刷新之后持久那一列该上屏")
     }
@@ -549,7 +549,7 @@ final class SessionSyncTests: XCTestCase {
         var seeded: JSONValue?
         sync.onProjectionValues = { seeded = $0 }
 
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 1, records: [], projections: .object([
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 1, records: [], projections: .object([
             "modelSelection": .object([
                 "lastUsed": .object(["provider": .string("deepseek"), "model": .string("chat")]),
                 "next": .object(["provider": .string("deepseek"), "model": .string("reasoner")]),
@@ -577,12 +577,12 @@ final class SessionSyncTests: XCTestCase {
 
         let sync = makeSync()
         let history = (1...200).map { SessionRecord(type: "user/message", event: message($0)) }
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 200, records: history))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 200, records: history))))
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertEqual(sync.nodes.count, 200, "先确认这 200 条真的都进去了")
 
         let before = sync.buildViewNodeCount
-        sync.apply(StreamReading(content: .event(message(201))))
+        sync.projection.apply(StreamReading(content: .event(message(201))))
         try await Task.sleep(for: .milliseconds(60))
         let delta = sync.buildViewNodeCount - before
 
@@ -599,7 +599,7 @@ final class SessionSyncTests: XCTestCase {
             ),
         ])
         let sync = makeScriptedSync()
-        sync.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 4, records: []))))
         let durable = sync.messageCount
 
         let accepted = await sync.deliver(.prompt("你好"), mode: .queue)
@@ -607,7 +607,7 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(sync.messageCount, durable + 1, "发出去那一刻就该算上")
 
         let pending = try XCTUnwrap(sync.pendingPrompts.first)
-        sync.apply(StreamReading(content: .event(SessionEvent(
+        sync.projection.apply(StreamReading(content: .event(SessionEvent(
             type: "user/message", seq: 5, time: 2,
             data: .object([
                 "id": .string("m-1"),

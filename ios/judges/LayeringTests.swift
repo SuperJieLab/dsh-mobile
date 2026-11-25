@@ -1026,11 +1026,11 @@ final class LayeringTests: XCTestCase {
     /// 两者之差正是这一跳的耗时，颠倒了这条时延数据就没有意义。
     func testTheBehaviorGetsExactlyTwoDoors() throws {
         let stateSource = sourcesRoot.appendingPathComponent(
-            "Features/SessionDetail/State/SessionSync.swift")
+            "Features/SessionDetail/State/SessionProjection.swift")
         let lines = codeLines(in: try String(contentsOf: stateSource, encoding: .utf8))
 
-        // 正控：确认读到了本体。
-        XCTAssertTrue(lines.contains { $0.1.contains("class SessionSync") }, "没读到状态源")
+        // 正控：确认读到了本体（那两扇门现在开在投影单元上）。
+        XCTAssertTrue(lines.contains { $0.1.contains("class SessionProjection") }, "没读到投影单元")
 
         // 两个入口的**存在性**不在这里断：`SessionBehavior` 在另一个文件里调
         // `owner.apply(...)` / `owner.recordPerf(...)`，声明缺失或收窄成 `private` 都编译不过

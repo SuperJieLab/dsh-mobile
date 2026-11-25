@@ -1,22 +1,22 @@
 /**
- * 把流层交来的一帧翻译成对状态源的一次调用 —— 它与流层之间唯一的事。
+ * 把流层交来的一帧翻译成对投影单元的一次调用 —— 它与流层之间唯一的事。
  *
- * 不让状态源自己 conform：两个协议的消费者不在同一层（视图 vs 流表），挂在一起就会因为
- * 改流层判读协议而牵动一个视图状态类型。它没有自己的状态。
+ * 不让投影单元自己 conform：两个协议的消费者不在同一层（视图 vs 流表），挂在一起就会因为
+ * 改流层判读协议而牵动一个持有视图状态的类型。它没有自己的状态。
  */
 import Foundation
 
 @MainActor
 final class SessionBehavior: StreamBehavior {
 
-    /// 弱引用：流表持有本对象，若本对象强持状态源，就成「视图 → 状态源 ← 本对象 ← 流表 ←
-    /// 长连接」的环 —— 视图离屏后状态源被流表吊着，它整个镜像与十几个发布值都还在内存里。
-    private weak var owner: SessionSync?
-    /// 日志与服务端对号用的会话标识。**必须在造流时定下**：状态源一旦释放，
+    /// 弱引用：流表持有本对象，若本对象强持投影单元，就成「视图 → 投影 ← 本对象 ← 流表 ←
+    /// 长连接」的环 —— 视图离屏后投影被流表吊着，它整个引擎与快照都还在内存里。
+    private weak var owner: SessionProjection?
+    /// 日志与服务端对号用的会话标识。**必须在造流时定下**：投影一旦释放，
     /// `handler` 里就取不到它了，而这几个入口本来就是为它服务的。
     private let sessionId: String
 
-    init(owner: SessionSync) {
+    init(owner: SessionProjection) {
         self.owner = owner
         self.sessionId = owner.sessionId
     }

@@ -204,12 +204,15 @@ final class SourceLevelTests: XCTestCase {
     /// 数的是**协调者**的调用点（作废与清场的决定在它手里），排序与排回在输入单元内部，
     /// 由 `SessionInputTests` 的 `drainHeld` 用例守。
     func testDiscardingHeldEventsRequeuesThem() throws {
-        let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
-        let drains = Self.codeLineCount(of: "input.drainHeld()", in: code)
+        // 作废点在投影（帧的消化里），清场点在协调者（整段重建那七步里）—— 两处各读各的文件。
+        let projection = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+        let drains = Self.codeLineCount(of: "input.drainHeld()", in: projection)
         XCTAssertEqual(drains, 2,
                        "两处作废点（新流开始、放弃的一轮）都要排回，实际只有 \(drains) 处")
-        let clears = Self.codeLineCount(of: "input.clearHeld()", in: code)
+        let sync = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let clears = Self.codeLineCount(of: "input.clearHeld()", in: sync)
         XCTAssertEqual(clears, 1,
                        "整段重建那一处只清不排回（镜像一起清空，排回无处可去），实际 \(clears) 处")
     }
@@ -325,7 +328,7 @@ final class SourceLevelTests: XCTestCase {
     /// 重点是常态路径不经过它 —— 所以那一处必须落在 `durableEvents()` 的函数体里。
     func testTheDurableFilterOnlyServesTheRareRebuildPaths() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
         let hits = Self.codeLines(in: code).filter { $0.1.contains("input.records.filter") }
         XCTAssertEqual(hits.count, 1,
                        "`input.records.filter` 出现了 \(hits.count) 处 —— 全量反推又回来了")
@@ -352,7 +355,7 @@ final class SourceLevelTests: XCTestCase {
         let sync = try read(iosRoot.appendingPathComponent(
             "Sources/Features/SessionDetail/State/SessionSync.swift"))
         let lines = Self.codeLines(in: sync)
-        XCTAssertGreaterThan(lines.count, 400, "只扫到 \(lines.count) 行 —— 先怀疑路径")
+        XCTAssertGreaterThan(lines.count, 200, "只扫到 \(lines.count) 行 —— 先怀疑路径")
 
         let hits = lines.filter { line in names.contains { line.1.contains($0) } }.map(\.0)
         XCTAssertEqual(hits, [], "编排层还点着输入侧的类型名：行 \(hits)")
@@ -421,6 +424,100 @@ final class SourceLevelTests: XCTestCase {
         }
         XCTAssertTrue(syncLines.contains { $0.1.contains("input.phase") },
                       "`phase` 不是转发 —— 漏接就恒 `.idle`，功能条永远停在未连接")
+    }
+
+    /// 引擎与它的三件附属只由投影持有。
+    ///
+    /// 编排层一旦还留一份，改「帧到达之后怎么更新快照」就要跟两处，而「哪一份是真的」
+    /// 编译期与运行时都看不出来 —— 两份都在推进时表现为偶发的少行。
+    func testTheEngineLivesOnlyInTheProjection() throws {
+        let names = ["ConversationAssembler", "ChatSnapshotBuilder", "AssemblyChange", "RefreshGate"]
+        let sync = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let syncLines = Self.codeLines(in: sync)
+        XCTAssertGreaterThan(syncLines.count, 200, "只扫到 \(syncLines.count) 行 —— 先怀疑路径")
+        let hits = syncLines.filter { line in names.contains { line.1.contains($0) } }.map(\.0)
+        XCTAssertEqual(hits, [], "编排层还点着引擎与它的附属：行 \(hits)")
+
+        let projection = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+        let lines = Self.codeLines(in: projection)
+        for name in names {
+            XCTAssertTrue(lines.contains { $0.1.contains(name) },
+                          "投影里没有 \(name) —— 上面那条是空守")
+        }
+    }
+
+    /// 投影不持连接、不做翻页、不持分页读数。
+    func testTheProjectionHoldsNoConnectionOrPaging() throws {
+        let code = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+        let lines = Self.codeLines(in: code)
+        XCTAssertGreaterThan(lines.count, 150, "只扫到 \(lines.count) 行 —— 先怀疑路径")
+        let forbidden = ["RpcClient", "readPage", "beginRequest", "LongConnection",
+                         "ControlStream", "updateListeners", "hasMore"]
+        var hits: [String] = []
+        for (line, text) in lines {
+            for word in forbidden where text.contains(word) {
+                // `RpcClientError` 是错误模型里的一个值，不是那个客户端 —— 拒帧要用它包一层。
+                if word == "RpcClient", text.contains("RpcClientError") { continue }
+                hits.append("\(line):\(word)")
+            }
+        }
+        XCTAssertEqual(hits, [], "投影拿了不属于它的东西：\(hits)")
+    }
+
+    /// 快照是转发：视图读的那个面还在协调者上，只是从投影取。
+    func testTheSnapshotIsForwardedFromTheProjection() throws {
+        let code = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        XCTAssertTrue(Self.codeLines(in: code).contains {
+            $0.1.contains("var snapshot: ChatSnapshot { projection.snapshot }")
+        }, "快照不是转发 —— 要么编排层又存了一份，要么读口变了形状")
+    }
+
+    /// 接线各一处、都在 `init` 的体里。
+    ///
+    /// `onLiveEventType` 不在此列：它在协调者上本来就是一个对外属性，`SessionDetailState`
+    /// 里另有一处赋值，按名字数会数到两处。
+    func testTheProjectionIsWiredAtTheAssemblyPoint() throws {
+        let code = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let lines = Self.codeLines(in: code)
+        guard let initAt = lines.firstIndex(where: { $0.1.contains("init(client: RpcClient") }),
+              let endAt = lines[initAt...].firstIndex(where: { $0.1.contains("func deliver(") })
+        else { return XCTFail("没找到 `init` 的边界 —— 判据的落点不对") }
+        // 比的是**行号**不是数组下标：`codeLines` 滤掉了注释行，两者不相等。
+        let initLine = lines[initAt].0
+        let endLine = lines[endAt].0
+        let wires = ["projection.onSnapshotPublished = ", "projection.onRefreshNeeded = ",
+                     "projection.onDurableRecords = ", "projection.onClaimedRow = ",
+                     "projection.onVerdict = ", "projection.onRebuildNeeded = ",
+                     "projection.onOpeningProjections = "]
+        for wire in wires {
+            let wired = lines.filter { $0.1.contains(wire) }.map(\.0)
+            XCTAssertEqual(wired.count, 1, "`\(wire)` 该恰好一处，实际 \(wired.count) 处")
+            guard let only = wired.first else { continue }
+            XCTAssertTrue(only > initLine && only < endLine,
+                          "`\(wire)` 不在 `init` 里（第 \(only) 行，init 在 \(initLine)…\(endLine)）")
+        }
+    }
+
+    /// 调度标志的顺序：关批、复位、再刷。
+    ///
+    /// 复位写在 `flushDue()` 的 `guard` 之后 —— early return 一旦走到，标志会永久为真、
+    /// 此后不再合并；那之后每一次事件都各自物化一次。
+    func testTheFlushResetsBeforeRefreshing() throws {
+        let code = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+        let lines = Self.codeLines(in: code)
+        guard let gate = lines.firstIndex(where: { $0.1.contains("refreshGate.flushDue()") })
+        else { return XCTFail("没找到 `flushDue()` —— 判据的落点不对") }
+        let body = Array(lines[gate...].prefix(6))
+        guard let reset = body.firstIndex(where: { $0.1.contains("flushScheduled = false") }),
+              let refresh = body.firstIndex(where: { $0.1.contains("onRefreshNeeded") })
+        else { return XCTFail("`flushDue()` 之后没看到复位或刷新 —— 取错了块") }
+        XCTAssertLessThan(reset, refresh, "复位写在了刷新之后 —— early return 会让标志永久为真")
     }
 
     func testMenuSourcesBakeInNoLevelNames() throws {
