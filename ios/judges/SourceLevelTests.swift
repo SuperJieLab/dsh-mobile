@@ -235,8 +235,61 @@ final class SourceLevelTests: XCTestCase {
         XCTAssertFalse(body.contains(".textSelection("),
                        "选择交互又挂在每一行上了 —— 它该在 List 一处")
 
-        XCTAssertEqual(Self.codeLineCount(of: ".textSelection(", in: code), 1,
-                       "整屏该恰有一处选择挂载")
+        // 不只数次数：位置也要在 `List` 的修饰链里，挪到别的容器上凑数要能红。
+        let lines = code.components(separatedBy: "\n")
+        let marks = lines.enumerated().filter { $0.element.contains(".textSelection(") }.map(\.offset)
+        XCTAssertEqual(marks.count, 1, "整屏该恰有一处选择挂载")
+        if let list = lines.firstIndex(where: { $0.contains(".listStyle(.plain)") }), let only = marks.first {
+            XCTAssertTrue(only > list && only < list + 8,
+                          "选择挂载不在 List 的修饰链上（第 \(only + 1) 行，List 在第 \(list + 1) 行）")
+        }
+    }
+
+    /// 纯行视图的文件里，这两个修饰符一个都不该有。
+    ///
+    /// `TurnProcessRow` 展开后一屏几十条（思考、工具调用、中间文本），逐条解父宽、逐条挂选择的
+    /// 代价比消息行更集中 —— 消息行一轮只有一条。`CommandRow` 本来就没有这两项，一并钉住防回流。
+    func testRowViewFilesCarryNoPerRowLayoutOrSelection() throws {
+        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
+        // 只守「选择」这一半，`.frame(maxWidth: .infinity)` 不扫。
+        //
+        // 理由：那个修饰符在源码里分不出两种用途 —— 为对齐（可用 `Spacer` 替，S8 要消的）
+        // 与为撑满（卡片背景铺满、配合 `contentShape` 扩大点击区，删了就是行为变化）。
+        // `ToolRowView` 的 `DetailBlock` 与 `TurnProcessRow` 的 `ThinkingRow` 都是后者。
+        // 强行扫会让判据要么误报、要么逼着人为了绿而删必需的对齐。
+        for name in ["TurnProcessRow.swift", "ToolRowView.swift", "CommandRow.swift"] {
+            let code = try read(views.appendingPathComponent(name))
+            XCTAssertGreaterThan(code.count, 500, "\(name) 读空了 —— 先怀疑路径")
+            for (line, text) in Self.codeLines(in: code) {
+                XCTAssertFalse(text.contains(".textSelection("),
+                               "\(name):\(line) 逐行挂选择层 —— 它该在 List 一处")
+            }
+        }
+    }
+
+    /// 缓存必须真的被播种 —— 这是「装配那一步」的判据。
+    ///
+    /// 删掉 `SessionDetailView` 里那一行 `.environment(...)`，编译通过（环境键有默认值）、
+    /// 缓存自己的用例全绿、别的源码判据全绿 —— 全仓没有任何信号，而命中率归零。
+    /// `RULES` 把这种形态叫「判据都落在组件边界上，漏了装配那一步」。
+    func testTheMarkdownCacheIsActuallyPlanted() throws {
+        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
+        let view = try read(views.appendingPathComponent("SessionDetailView.swift"))
+        XCTAssertTrue(view.contains(".environment(\\.markdownCache, detail.markdownCache)"),
+                      "播种那一行不见了 —— 视图会落到容量零的默认缓存，命中率归零且没有任何信号")
+
+        let state = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionDetailState.swift"))
+        XCTAssertTrue(state.contains("let markdownCache = SessionMarkdownCache()"),
+                      "状态里没有缓存实例 —— 播种拿不到东西")
+
+        let text = try read(views.appendingPathComponent("MarkdownText.swift"))
+        XCTAssertFalse(text.contains("cache: SessionMarkdownCache? = nil"),
+                       "cache 又变成可选了 —— 新调用点会悄悄不传，落到容量零的默认值")
+        XCTAssertFalse(text.contains("cache: SessionMarkdownCache ="),
+                       "cache 又有默认值了 —— 同上")
+        XCTAssertTrue(text.contains("@Entry var markdownCache = SessionMarkdownCache.unplanted"),
+                      "默认值改回 `SessionMarkdownCache()` 就会每次求值新建一份空缓存")
     }
 
     func testMenuSourcesBakeInNoLevelNames() throws {

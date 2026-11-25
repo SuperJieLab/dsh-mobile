@@ -26,6 +26,14 @@ final class SessionMarkdownCache {
         self.limit = limit
     }
 
+    /// 没有会话可归属时用的那一份：**容量为零**，什么都存不下。
+    ///
+    /// 它给 `@Entry` 的默认值用 —— 那个默认值是逐次求值的，若写成 `SessionMarkdownCache()`
+    /// 就会「每求值一次新建一份空缓存」，而症状只是慢。容量零的共享实例把这件事变成
+    /// 可解释的退化：没注入就没有缓存，不假装有。真要有缓存，得由 `SessionDetailState` 播种
+    /// （`testTheMarkdownCacheIsActuallyPlanted` 守着那一行）。
+    static let unplanted = SessionMarkdownCache(limit: 0)
+
     func result(for source: String) -> MarkdownParseResult {
         lock.lock()
         if let hit = store[source] {
@@ -39,7 +47,6 @@ final class SessionMarkdownCache {
         let parse = MarkdownParser.parse(source)
 
         lock.lock()
-        parseCount += 1
         // 双检：解析期间别的线程可能已经填上了同一段。
         if let hit = store[source] {
             touch(source)
@@ -47,6 +54,7 @@ final class SessionMarkdownCache {
             return hit
         }
         store[source] = parse
+        parseCount += 1
         order.append(source)
         if order.count > limit {
             store.removeValue(forKey: order.removeFirst())

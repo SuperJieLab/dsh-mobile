@@ -5,7 +5,7 @@ extension EnvironmentValues {
     ///
     /// 放在视图侧而不是缓存自己的文件里：`State/` 是判定与编排，它不认识 SwiftUI
     /// （`LayeringTests` 守着这条）。
-    @Entry var markdownCache = SessionMarkdownCache()
+    @Entry var markdownCache = SessionMarkdownCache.unplanted
 }
 
 /// 助手文本的渲染：`[Block]` → 视图。它**只认 `[Block]`，不认 markdown 源文** ——

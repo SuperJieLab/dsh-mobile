@@ -104,7 +104,6 @@ private struct DetailBlock: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(display.text)
                     .font(.caption.monospaced())
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let note = display.note {

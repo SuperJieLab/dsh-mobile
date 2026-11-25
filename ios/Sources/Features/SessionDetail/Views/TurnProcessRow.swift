@@ -55,10 +55,10 @@ struct TurnProcessRow: View {
                 case .text(_, _, _, let text, _):
                     // 一轮中间的助手文本（不是最终答案的那部分）—— 它也是「说过的话」，按正文
                     // 排版、不缩成一行摘要。与最终答案同为 markdown 源文，故走同一套解析与渲染。
+                    // 选择与行宽都不在这里挂：整屏一处选择、宽度交给 List 的行容器 ——
+                    // 展开后一屏几十条，逐条挂就是逐条解一次父宽。
                     MarkdownText(source: text, cache: cache)
                         .font(.callout)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
