@@ -140,6 +140,7 @@ struct SessionDetailView: View {
                     .id(Self.bottomAnchor)
             }
             .listStyle(.plain)
+            .environment(\.markdownCache, detail.markdownCache)
             // 选择收到整屏一处：逐行挂会给每一行加一层交互层，而容器级挂一次就覆盖全部行。
             .textSelection(.enabled)
             // 首次布局就锚在底部。列表是**有内容之后才创建**的，所以此刻它算「初始布局」。
@@ -510,6 +511,7 @@ private struct ComposerSurface: ViewModifier {
 /// 一条消息气泡。
 private struct MessageBubble: View {
     let message: DisplayMessage
+    @Environment(\.markdownCache) private var cache
 
     private var isUser: Bool { message.role == .user }
 
@@ -537,7 +539,7 @@ private struct MessageBubble: View {
                 if isUser {
                     Text(message.text)
                 } else {
-                    MarkdownText(source: message.text)
+                    MarkdownText(source: message.text, cache: cache)
                 }
             }
             .padding(.horizontal, 12)

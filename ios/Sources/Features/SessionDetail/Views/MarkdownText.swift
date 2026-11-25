@@ -1,5 +1,13 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// 当前会话的排版缓存。由 `SessionDetailState` 播种、`SessionDetailView` 注入。
+    ///
+    /// 放在视图侧而不是缓存自己的文件里：`State/` 是判定与编排，它不认识 SwiftUI
+    /// （`LayeringTests` 守着这条）。
+    @Entry var markdownCache = SessionMarkdownCache()
+}
+
 /// 助手文本的渲染：`[Block]` → 视图。它**只认 `[Block]`，不认 markdown 源文** ——
 /// 换成成熟库时换的是 `MarkdownParser` 那一层，这里一行都不用动。
 ///
@@ -8,40 +16,6 @@ import SwiftUI
 /// 求一次值。所以**构造时不能解析**：流式那一路只放一个单位元
 /// `MarkdownParseResult.identity`，首帧解析交给 `onChange(initial: true)` 在视图出现后补；
 /// 已完成的消息才在构造时取缓存（命中是 O(1)，也只发生一次）。
-enum MarkdownParseCache {
-
-    private static let limit = 64
-    private static var store: [String: MarkdownParseResult] = [:]
-    private static var order: [String] = []
-    private static let lock = NSLock()
-
-    static func result(for source: String) -> MarkdownParseResult {
-        lock.lock()
-        if let hit = store[source] {
-            lock.unlock()
-            return hit
-        }
-        lock.unlock()
-
-        // 解析放在锁外：它可能很久，不该挡住别的视图取缓存。
-        let parse = MarkdownParser.parse(source)
-
-        lock.lock()
-        // 双检：解析期间别的线程可能已经填上了同一段。
-        if let hit = store[source] {
-            lock.unlock()
-            return hit
-        }
-        store[source] = parse
-        order.append(source)
-        if order.count > limit {
-            store.removeValue(forKey: order.removeFirst())
-        }
-        lock.unlock()
-        return parse
-    }
-}
-
 struct MarkdownText: View {
     let source: String
 
@@ -50,11 +24,11 @@ struct MarkdownText: View {
     /// - Parameter caching: 已完成的消息传 `true`（同一段源文只解析一次，命中是 O(1)）；
     ///   流式内容传 `false` —— 它每个 chunk 换一份源文，缓存只会写一堆用不上的中间态，
     ///   更要紧的是构造时解析会被丢弃（见类型注释），因此这里只落一个单位元当种子。
-    init(source: String, caching: Bool = true) {
+    /// - Parameter cache: 这个视图所属会话的缓存。**必填** —— 全局缓存已删：
+    ///   它的淘汰与任何会话无关，两个长会话交替看会互相挤占，而且永不释放。
+    init(source: String, cache: SessionMarkdownCache, caching: Bool = true) {
         self.source = source
-        _parse = State(initialValue: caching
-            ? MarkdownParseCache.result(for: source)
-            : .identity)
+        _parse = State(initialValue: caching ? cache.result(for: source) : .identity)
     }
 
     var body: some View {

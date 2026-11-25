@@ -7,6 +7,7 @@ import SwiftUI
 struct TurnProcessRow: View {
 
     let segment: ProcessSegment
+    @Environment(\.markdownCache) private var cache
 
     @State private var expanded = false
 
@@ -54,7 +55,7 @@ struct TurnProcessRow: View {
                 case .text(_, _, _, let text, _):
                     // 一轮中间的助手文本（不是最终答案的那部分）—— 它也是「说过的话」，按正文
                     // 排版、不缩成一行摘要。与最终答案同为 markdown 源文，故走同一套解析与渲染。
-                    MarkdownText(source: text)
+                    MarkdownText(source: text, cache: cache)
                         .font(.callout)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)

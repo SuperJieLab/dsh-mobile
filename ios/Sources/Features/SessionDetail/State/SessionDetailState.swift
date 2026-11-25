@@ -14,6 +14,8 @@ final class SessionDetailState {
     let sessionId: String
     /// 会话标题；没有（新建的空会话）时界面显示「会话」。
     let title: String?
+    /// 这一屏的排版缓存。随状态一起生灭 —— 关掉会话，它缓存过的源文跟着释放。
+    let markdownCache = SessionMarkdownCache()
     let sync: SessionSync
     let catalog: ModelCatalogState
     let commands: CommandDirectory
