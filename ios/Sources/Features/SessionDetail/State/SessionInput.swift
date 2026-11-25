@@ -108,11 +108,6 @@ final class SessionInput {
     /// 并进一条实时事件。重复丢掉、跳号判缺口。
     func append(_ event: SessionEvent) -> Verdict { window.append(event) }
 
-    /// 把一批记录重新排进下一批。
-    ///
-    /// 扣下的定稿被作废之后要靠它回来：那一批已经被取走过，没有这一步它们就永久停在窗口里。
-    func requeue(_ events: [SessionEvent]) { window.requeue(events) }
-
     /// 丢弃位置与视图 —— 调用方在收到「位置不作数」之后才调。
     func reset() { window.reset() }
 
