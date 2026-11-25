@@ -316,6 +316,27 @@ final class SourceLevelTests: XCTestCase {
                       "默认值改回 `SessionMarkdownCache()` 就会每次求值新建一份空缓存")
     }
 
+    /// 常态喂食不读整份镜像 —— 全量过滤只剩 `durableEvents()` 一处。
+    ///
+    /// `feedEngine` 原来对 `mirror.events` 做两次全量 `filter`（去 `held`、去已在引擎里的）
+    /// 来反推「哪些是新的」。改成由写入方交出一批之后，全量只剩两条稀有路径用得上
+    /// （空引擎、窗口接不上）。判据认的是**位置**而不是次数：有几处全量过滤不是重点，
+    /// 重点是常态路径不经过它 —— 所以那一处必须落在 `durableEvents()` 的函数体里。
+    func testTheDurableFilterOnlyServesTheRareRebuildPaths() throws {
+        let code = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let hits = Self.codeLines(in: code).filter { $0.1.contains("mirror.events.filter") }
+        XCTAssertEqual(hits.count, 1,
+                       "`mirror.events.filter` 出现了 \(hits.count) 处 —— 全量反推又回来了")
+
+        guard let start = code.range(of: "private func durableEvents()") else {
+            return XCTFail("`durableEvents()` 不见了 —— 判据的落点没找对")
+        }
+        let body = String(code[start.lowerBound...].prefix(200))
+        XCTAssertTrue(body.contains("mirror.events.filter"),
+                      "那一处全量过滤不在 `durableEvents()` 里 —— 常态路径会经过它")
+    }
+
     func testMenuSourcesBakeInNoLevelNames() throws {
         let files = Self.swiftFiles(under: sessionDetailRoot)
         XCTAssertGreaterThan(files.count, 10, "只扫到 \(files.count) 个文件 —— 先怀疑路径推算")
