@@ -251,6 +251,28 @@ final class SourceLevelTests: XCTestCase {
     /// 比消息行更集中 —— 消息行一轮只有一条。`CommandRow` 本来就没有，一并钉住防回流。
     ///
     /// **只守选择，不守 `.frame`**：见下面那段注释。
+    /// 还在生成的那一条不进排版缓存，定稿之后才进。
+    ///
+    /// 两条断言各挡一种写法。实参写成字面量时：`true` 让流式中间态灌满缓存（一段长回答的
+    /// 帧数就是写入条数，240 个槽位换一遍，回来的全是再不会被读的文本）；`false` 让每条
+    /// 定稿消息每次重建都重解析。不写实参同样落进 `true`（参数的默认值）。
+    /// 第二条挡「为了让第一条绿而一刀切不缓存」—— 判据要求的是跟着节点状态走。
+    func testTheMessageRowCachesMarkdownOnlyWhenSettled() throws {
+        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
+        let code = try read(views.appendingPathComponent("SessionDetailView.swift"))
+        guard let line = Self.codeLines(in: code)
+            .first(where: { $0.1.contains("MarkdownText(source: message.text") }) else {
+            return XCTFail("判据的落点没找对：消息行不再调 MarkdownText")
+        }
+        XCTAssertTrue(line.1.contains("caching:"),
+                      "消息行没有交代 caching —— 默认值就是「一直在跑的消息也进缓存」")
+        XCTAssertFalse(line.1.contains("caching: true"), "字面量 true：流式中间态会灌满缓存")
+        XCTAssertFalse(line.1.contains("caching: false"), "字面量 false：定稿消息每次重建都要重解析")
+
+        XCTAssertTrue(code.contains("isRunning: assistant.status == .running"),
+                      "构造 DisplayMessage 时没带节点状态 —— caching 就无从取「在不在跑」")
+    }
+
     func testRowViewFilesCarryNoPerRowSelection() throws {
         let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
         // 只守「选择」这一半，`.frame(maxWidth: .infinity)` 不扫。

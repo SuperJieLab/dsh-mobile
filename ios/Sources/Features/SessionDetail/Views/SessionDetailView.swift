@@ -108,12 +108,15 @@ struct SessionDetailView: View {
                     switch node.data {
                     case .message(let message):
                         MessageBubble(message: DisplayMessage(
-                            seq: Int(node.anchorSeq), role: .user, text: message.text, time: message.time
+                            seq: Int(node.anchorSeq), role: .user, text: message.text,
+                            time: message.time, isRunning: false
                         ))
                     case .assistant(let assistant):
+                        // 在不在跑这件事只有这里知道 —— 它决定这一条要不要进排版缓存。
                         MessageBubble(message: DisplayMessage(
                             seq: Int(node.anchorSeq), role: .assistant,
-                            text: assistant.text, time: assistant.time
+                            text: assistant.text, time: assistant.time,
+                            isRunning: assistant.status == .running
                         ))
                     case .process(let process):
                         // 一轮的过程：它不是「消息」，所以不套气泡 —— 视觉上要与对话区分开。
@@ -539,7 +542,7 @@ private struct MessageBubble: View {
                 if isUser {
                     Text(message.text)
                 } else {
-                    MarkdownText(source: message.text, cache: cache)
+                    MarkdownText(source: message.text, cache: cache, caching: !message.isRunning)
                 }
             }
             .padding(.horizontal, 12)

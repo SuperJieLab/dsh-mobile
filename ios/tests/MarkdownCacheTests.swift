@@ -23,6 +23,20 @@ final class MarkdownCacheTests: XCTestCase {
         XCTAssertEqual(cache.parseCount, afterFirst, "回翻同一批源文仍在解析")
     }
 
+    /// 流式那一路不碰缓存。
+    ///
+    /// 这是「中间态不会灌满缓存」的半个证明：另一半是视图有没有按节点状态传 `false`
+    /// （源码判据 `testTheMessageRowCachesMarkdownOnlyWhenSettled`）。只测这一半时，
+    /// 把所有调用点写成 `caching: true` 也不会红 —— 两半合起来才等于「在跑的不进缓存」。
+    func testTheStreamingSeedDoesNotTouchTheCache() {
+        let cache = SessionMarkdownCache(limit: 4)
+        _ = MarkdownText(source: "写到一半的回答", cache: cache, caching: false)
+        XCTAssertEqual(cache.parseCount, 0, "caching: false 仍然解析了 —— 中间态会写进缓存")
+
+        _ = MarkdownText(source: "定稿的回答", cache: cache, caching: true)
+        XCTAssertEqual(cache.parseCount, 1, "caching: true 没走缓存 —— 定稿消息每次重建都要重解析")
+    }
+
     /// 两个会话各占一份缓存，互不挤占。
     func testTwoConversationsDoNotEvictEachOther() {
         let mine = SessionMarkdownCache(limit: 8)
