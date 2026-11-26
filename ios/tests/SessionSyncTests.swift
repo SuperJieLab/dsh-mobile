@@ -141,7 +141,7 @@ final class SessionSyncTests: XCTestCase {
 
         let accepted = await sync.deliver(.prompt("你好"), mode: .queue)
         XCTAssertTrue(accepted, "受理了")
-        let pending = try XCTUnwrap(sync.pendingPrompts.first, "受理之后那条乐观行该在")
+        let pending = try XCTUnwrap(sync.optimist.entries.first, "受理之后那条乐观行该在")
         XCTAssertEqual(sync.nodes.last?.data, .message(MessageNodeData(text: "你好", time: pending.time)),
                        "发出去的字立刻上屏 —— 不必等宿主落成持久事件")
 
@@ -158,7 +158,7 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(texts(in: sync), ["你好"], "交接的空窗里那一行不能消失（撤早了会闪一下）")
 
         try await Task.sleep(for: .milliseconds(60))
-        XCTAssertTrue(sync.pendingPrompts.isEmpty, "持久行上屏之后，乐观行才撤")
+        XCTAssertTrue(sync.optimist.entries.isEmpty, "持久行上屏之后，乐观行才撤")
         XCTAssertEqual(texts(in: sync), ["你好"], "同一句话只该有一行")
     }
 
@@ -175,7 +175,7 @@ final class SessionSyncTests: XCTestCase {
 
         let accepted = await sync.deliver(.prompt("发不出去"), mode: .queue)
         XCTAssertFalse(accepted)
-        XCTAssertTrue(sync.pendingPrompts.isEmpty, "没送到就不该留一行")
+        XCTAssertTrue(sync.optimist.entries.isEmpty, "没送到就不该留一行")
         XCTAssertEqual(texts(in: sync), [], "屏幕上也不能留着 —— 那会假装发出去了")
     }
 
@@ -407,13 +407,16 @@ final class SessionSyncTests: XCTestCase {
     func testTheScreenStateDiesWithTheCoordinator() {
         weak var weakInput: SessionInput?
         weak var weakProjection: SessionProjection?
+        weak var weakOptimist: SessionOptimist?
         autoreleasepool {
             let sync = makeSync()
             weakInput = sync.input
             weakProjection = sync.projection
+            weakOptimist = sync.optimist
         }
         XCTAssertNil(weakInput, "输入单元活过了协调者 —— 它与投影之间有一环")
         XCTAssertNil(weakProjection, "投影活过了协调者 —— 同上")
+        XCTAssertNil(weakOptimist, "乐观行单元活过了协调者 —— 它持有的闭包强持了谁")
     }
 
     /// 打开帧同时带来持久记录与草稿基线：两样都要在。
@@ -671,7 +674,7 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertTrue(accepted)
         XCTAssertEqual(sync.messageCount, durable + 1, "发出去那一刻就该算上")
 
-        let pending = try XCTUnwrap(sync.pendingPrompts.first)
+        let pending = try XCTUnwrap(sync.optimist.entries.first)
         sync.projection.apply(StreamReading(content: .event(SessionEvent(
             type: "user/message", seq: 5, time: 2,
             data: .object([
@@ -682,7 +685,7 @@ final class SessionSyncTests: XCTestCase {
         ))))
         try await Task.sleep(for: .milliseconds(60))
 
-        XCTAssertEqual(sync.pendingPrompts.count, 0, "持久行认领之后乐观行退休")
+        XCTAssertEqual(sync.optimist.count, 0, "持久行认领之后乐观行退休")
         XCTAssertEqual(sync.messageCount, durable + 1, "换的是身份，不是条数")
     }
 

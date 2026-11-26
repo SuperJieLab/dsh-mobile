@@ -503,6 +503,53 @@ final class SourceLevelTests: XCTestCase {
         }
     }
 
+    /// 乐观行只由 `SessionOptimist` 持有。
+    ///
+    /// 编排层一旦还留一份，「哪一行该撤」就有第二个真源：两份都在推进时表现为偶发的
+    /// 重复行或消息消失一帧，而编译期与运行时都看不出来。
+    func testTheOptimisticRowsLiveOnlyInTheOptimist() throws {
+        let sync = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let lines = Self.codeLines(in: sync)
+        XCTAssertGreaterThan(lines.count, 150, "只扫到 \(lines.count) 行 —— 先怀疑路径")
+
+        let names = ["PendingPrompt", "pendingPrompts", "settledPending", "pendingOrdinal"]
+        let hits = lines.filter { line in names.contains { line.1.contains($0) } }.map(\.0)
+        XCTAssertEqual(hits, [], "编排层还点着乐观行的类型名或存储：行 \(hits)")
+
+        // 另一半：行与那本账真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
+        // 断的是单元自己的名字（`entries` / `settled` / `ordinal`），不是编排层那四个。
+        let unit = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionOptimist.swift"))
+        let unitLines = Self.codeLines(in: unit)
+        for name in ["var entries", "settled: Set<String>", "var ordinal"] {
+            XCTAssertTrue(unitLines.contains { $0.1.contains(name) },
+                          "乐观行单元里没有 \(name) —— 上面那条是空守")
+        }
+    }
+
+    /// 三件事直连乐观行单元，不经编排层中转。
+    ///
+    /// 「只搬状态、没搬判定」正是这期要排除的形态：那样协调者仍是中间人，八条接线一条没少。
+    func testTheThreeRowEventsGoStraightToTheOptimist() throws {
+        let code = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+        let lines = Self.codeLines(in: code)
+        for wire in ["projection.onSnapshotPublished = ", "projection.onDurableRecords = ",
+                     "projection.onClaimedRow = "] {
+            let wired = lines.filter { $0.1.contains(wire) }
+            XCTAssertEqual(wired.count, 1, "`\(wire)` 该恰好一处，实际 \(wired.count) 处")
+            guard let line = wired.first else { continue }
+            XCTAssertTrue(line.1.contains("optimist"),
+                          "`\(wire)` 没直指乐观行单元 —— 协调者还是中间人：\(line.1)")
+        }
+        // 三个中转方法不该出现在编排层（声明与调用都算）。
+        for gone in ["retireSettledPrompts", "settleDurableRecords", "claimRow"] {
+            let left = lines.filter { $0.1.contains(gone) }.map(\.0)
+            XCTAssertEqual(left, [], "编排层还留着 \(gone)：行 \(left)")
+        }
+    }
+
     /// 调度标志的顺序：关批、复位、再刷。
     ///
     /// 复位写在 `flushDue()` 的 `guard` 之后 —— early return 一旦走到，标志会永久为真、

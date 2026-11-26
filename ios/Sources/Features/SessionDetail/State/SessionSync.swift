@@ -16,53 +16,19 @@ final class SessionSync {
     /// **排序按锚点**，不是「持久的一律在前」：乐观行落在发送那一刻的末尾，
     /// 之后到的持久事件与未定稿帧都排在它后面（它们的锚点更大）。
     var nodes: [ChatNode] {
-        guard !pendingPrompts.isEmpty else { return snapshot.visibleNodes }
-        return (snapshot.visibleNodes + pendingPrompts.map(\.node)).sorted { $0.anchorSeq < $1.anchorSeq }
+        guard !optimist.entries.isEmpty else { return snapshot.visibleNodes }
+        return (snapshot.visibleNodes + optimist.entries.map(\.node)).sorted { $0.anchorSeq < $1.anchorSeq }
     }
 
     /// 屏幕上要画的东西 —— 由投影产出，这里只转发。
     var snapshot: ChatSnapshot { projection.snapshot }
-
-    /// 已经发出去、还没被持久事件认领的用户消息。
-    ///
-    /// **不进 `ConversationAssembler`**：那里的每个输入都要有 `seq`，而这一行还没有 ——
-    /// 造一个伪 `seq` 会破坏单调与去重（跳号会被判成缺口，一条本地行会让整条流不可信）。
-    /// 退休只有一条判据：持久 `user/message` 的 `source.rpcId` 等于这里的 `requestId`。
-    struct PendingPrompt: Equatable {
-        let requestId: String
-        let text: String
-        let time: Double
-        let anchorSeq: EventOrder
-
-        /// 渲染成一个普通的消息节点 —— 与持久的那一行同一种外观。
-        var node: ChatNode {
-            ChatNode(key: "pending:\(requestId)",
-                     kind: "message",
-                     businessId: "pending:\(requestId)",
-                     anchorSeq: anchorSeq,
-                     visibility: .visible,
-                     data: .message(MessageNodeData(text: text, time: time)))
-        }
-    }
-
-    private(set) var pendingPrompts: [PendingPrompt] = []
-
-    /// 「持久行已经上屏」的乐观行 id —— **退休要等这一拍**。
-    ///
-    /// 事件到达时先记账、不删：删早了，`nodes` 会退回旧快照，那条刚发的消息消失一帧。
-    /// 真正的删除在投影物化完成之后（新快照里已经有持久行）。
-    /// 只在投影说「这条持久行被接受了」时记账 —— 跳号时持久行进不了视图，那一行要留着。
-    private var settledPending: Set<String> = []
-
-    /// 乐观行锚点的序号（只增不减）。用 `count` 会让「先发的那条退休后再发一条」撞回同一个锚点。
-    private var pendingOrdinal = 0
 
     /// 消息条数 —— 持久的那一半由快照算好存着，乐观行按条数加上。
     ///
     /// 不把乐观行也塞进快照的计数：它的增删有两条路径（发出、被认领），让计数跟着它们
     /// 手工加减就是第二个真源。乐观行永远是一条消息，加一个数就够了。
     var messageCount: Int {
-        snapshot.messageCount + pendingPrompts.count
+        snapshot.messageCount + optimist.count
     }
     /// 视图里的事件条数（消息只是其中一部分）。
     private(set) var eventCount = 0
@@ -113,6 +79,8 @@ final class SessionSync {
     let input: SessionInput
     /// 投影侧（帧的消化与物化）—— 这里只经它读写，接线在 `init` 末尾接。
     let projection: SessionProjection
+    /// 乐观行（发出去还没落定的那几行，以及「已上屏待退休」的记账）。
+    let optimist: SessionOptimist
     /// 同一时刻只允许一次读请求（翻页）。从前还要挡住「同步 + 翻页」并发 ——
     /// 同步那条路随 HTTP 兜底一起退场了。
     private var syncInFlight = false
@@ -144,6 +112,9 @@ final class SessionSync {
         let projection = SessionProjection(sessionId: sessionId, input: input,
                                            statusBox: statusBox, models: models)
         self.projection = projection
+        // 锚点要现取窗口前沿，所以注入一个读闭包而不是一个值。
+        let optimist = SessionOptimist(frontier: { [weak input] in input?.frontier ?? 0 })
+        self.optimist = optimist
 
         // 三处注入与八条接线留到存储属性全部就位之后：它们都要捕获本对象。
         // 经 `self.projection` 取，不能捕那个局部常量：局部会被闭包强持，而投影强持输入单元，
@@ -152,10 +123,10 @@ final class SessionSync {
         input.connectionPhase = { [weak link] in link?.phase ?? .idle }
         input.onControlValues = { [weak self] values in self?.absorbProjection(values) }
 
-        projection.onSnapshotPublished = { [weak self] in self?.retireSettledPrompts() }
+        projection.onSnapshotPublished = { [weak optimist] in optimist?.retire() }
         projection.onRefreshNeeded = { [weak self] in self?.refreshView() }
-        projection.onDurableRecords = { [weak self] records in self?.settleDurableRecords(records) }
-        projection.onClaimedRow = { [weak self] rpcId in self?.claimRow(rpcId) }
+        projection.onDurableRecords = { [weak optimist] records in optimist?.noteDurable(records) }
+        projection.onClaimedRow = { [weak optimist] rpcId in optimist?.noteClaimed(rpcId) }
         projection.onVerdict = { [weak self] verdict in self?.observeNotice(verdict) }
         projection.onRebuildNeeded = { [weak self] in self?.resetMirror() }
         projection.onOpeningProjections = { [weak self] block in self?.applyOpeningProjections(block) }
@@ -174,18 +145,12 @@ final class SessionSync {
             return await actions.executeCommand(line)
         case .prompt(let text):
             let requestId = UUID().uuidString
-            pendingOrdinal += 1
-            pendingPrompts.append(PendingPrompt(
-                requestId: requestId,
-                text: PromptDraft.normalized(text) ?? text,
-                time: Date().timeIntervalSince1970 * 1000,
-                // 落在最后一条持久事件之后、**首块未定稿帧之前**（那一块是末 seq + 0.5）。
-                // 0.001 的步长只用来在连发时保序；同一个 frontier 下 250 条以内不会撞。
-                anchorSeq: Double(max(0, input.frontier - 1)) + 0.25
-                    + Double(pendingOrdinal) * 0.001
-            ))
+            // 文本归一化与毫秒时刻留在这一侧：它们与「发送」同一处，单元不必认识 `PromptDraft`。
+            optimist.insert(text: PromptDraft.normalized(text) ?? text,
+                            requestId: requestId,
+                            time: Date().timeIntervalSince1970 * 1000)
             let accepted = await actions.sendPrompt(text, requestId: requestId, mode: mode)
-            if !accepted { pendingPrompts.removeAll { $0.requestId == requestId } }
+            if !accepted { optimist.remove(requestId: requestId) }
             return accepted
         }
     }
@@ -279,38 +244,7 @@ final class SessionSync {
         }
     }
 
-    /// 持久行已经在新快照里了：撤掉同 `rpcId` 的乐观行。**只从投影的「物化完成」那一声调用** ——
-    /// 退休与上屏必须同一拍，否则中间那段 `nodes` 退回旧快照，消息消失一帧。
-    private func retireSettledPrompts() {
-        guard !settledPending.isEmpty else { return }
-        let retiring = pendingPrompts.filter { settledPending.contains($0.requestId) }
-        guard !retiring.isEmpty else {
-            settledPending.removeAll()
-            return
-        }
-        let ids = Set(retiring.map(\.requestId))
-        pendingPrompts.removeAll { ids.contains($0.requestId) }
-        settledPending.subtract(ids)
-        Log.info(Log.Module.session, "optimistic prompt retired by its durable message",
-                 ["count": String(retiring.count)])
-    }
-
     // MARK: - 投影那八条接线的落点
-
-    /// 打开帧里已经有的持久行：先记账，等物化之后撤（撤早了会空一帧）。
-    private func settleDurableRecords(_ records: [SessionRecord]) {
-        for record in records {
-            if let rpcId = record.event.data["source"]?["rpcId"]?.string {
-                settledPending.insert(rpcId)
-            }
-        }
-    }
-
-    /// 落定的用户消息要认领的是不是本屏的乐观行 —— 「是哪一条」由投影判，「有没有这条」由这里判。
-    private func claimRow(_ rpcId: String) {
-        guard pendingPrompts.contains(where: { $0.requestId == rpcId }) else { return }
-        settledPending.insert(rpcId)
-    }
 
     /// 收下一条判定 —— 置位规则在 `ResyncNoticeState`。
     private func observeNotice(_ verdict: Verdict) {
@@ -370,7 +304,7 @@ final class SessionSync {
         Log.info(Log.Module.session, "镜像重置：引擎随之清空",
                  ["events": String(input.records.count), "hasMore": String(input.hasMore)])
         input.reset()
-        settledPending.removeAll()
+        optimist.clearSettled()
         projection.rebuild()
         input.clearHeld()
         input.resetTransient()
