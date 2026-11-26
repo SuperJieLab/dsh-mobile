@@ -470,15 +470,18 @@ final class SessionSyncTests: XCTestCase {
         weak var weakInput: SessionInput?
         weak var weakProjection: SessionProjection?
         weak var weakOptimist: SessionOptimist?
+        weak var weakReadings: SessionReadings?
         autoreleasepool {
             let sync = makeSync()
             weakInput = sync.input
             weakProjection = sync.projection
             weakOptimist = sync.optimist
+            weakReadings = sync.readings
         }
         XCTAssertNil(weakInput, "输入单元活过了协调者 —— 它与投影之间有一环")
         XCTAssertNil(weakProjection, "投影活过了协调者 —— 同上")
         XCTAssertNil(weakOptimist, "乐观行单元活过了协调者 —— 它持有的闭包强持了谁")
+        XCTAssertNil(weakReadings, "读数单元活过了协调者 —— 它持有的闭包强持了谁")
     }
 
     /// 打开帧同时带来持久记录与草稿基线：两样都要在。

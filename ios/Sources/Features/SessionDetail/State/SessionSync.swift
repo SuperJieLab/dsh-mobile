@@ -182,7 +182,7 @@ final class SessionSync {
     /// 打开帧的投影基线：**control 到达之前**的初值。
     ///
     /// 两条出口同源，所以这里不需要另算规则 —— 只是把同一份值先放上屏。
-    /// 之后 control 的 `projection` 会按水位覆盖它（`UsageState` 只认严格更高的水位）。
+    /// 之后 control 的 `projection` 会按水位覆盖它（读数的判定器只认严格更高的水位）。
     func applyOpeningProjections(_ block: ProjectionBlock) {
         readings.applyUsage(UsageView.snapshotOf(block.values, asOfSeq: block.asOfSeq))
         // 同一块也是**这一屏的初值**：当前模型与当前权限都从这里起，control 的增量之后覆盖。
