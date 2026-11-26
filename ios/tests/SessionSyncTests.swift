@@ -608,6 +608,53 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(delta, 1, "一条消息只重导一格；走全量会是 201")
     }
 
+    /// 乐观行落在「最后一条持久事件之后、草稿之前」，而 `nodes` 整体按锚点升序。
+    ///
+    /// 三处都可能错而屏幕上看不出：行落在历史顶部（锚点取了 windowStart 而不是 frontier）、
+    /// 行永远在末尾（排序键漏了它）、合并出来的列没排（两条来源直接拼接）。
+    func testAnOptimisticRowSitsBetweenTheLastDurableEventAndTheDraft() async throws {
+        func message(_ seq: Int) -> SessionRecord {
+            SessionRecord(type: "user/message", event: SessionEvent(
+                type: "user/message", seq: seq, time: Double(seq), data: .object([
+                    "id": .string("m-\(seq)"),
+                    "source": .object(["kind": .string("user")]),
+                    "content": .array([.object(["type": .string("text"), "text": .string("持久-\(seq)")])]),
+                ])
+            ))
+        }
+        ScriptedURLProtocol.reset(replies: [
+            "session/prompt": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"accepted":true}}}"#
+            ),
+        ])
+        let sync = makeScriptedSync()
+        // 窗口 0…1、cursor 1 ⇒ frontier 2；草稿基线落在 frontier 之后。
+        sync.projection.apply(StreamReading(content: .opening(snapshot(
+            cursor: 1, records: [message(0), message(1)], assistantStream: liveBaseline()
+        ))))
+        let accepted = await sync.deliver(.prompt("hi"), mode: .queue)
+        XCTAssertTrue(accepted)
+        // 行之后再来一条持久的：它把「行在中间」这件事变成可观测的 —— 没有它，
+        // 行的锚点即使落在最后（错法之一是「排序漏了它、直接拼在末尾」）也看不出来。
+        sync.projection.apply(StreamReading(content: .event(message(2).event)))
+        try await Task.sleep(for: .milliseconds(60))
+
+        let row = try XCTUnwrap(sync.nodes.first { $0.businessId.hasPrefix("pending:") },
+                                "乐观行没进视图那一列")
+        let draft = try XCTUnwrap(sync.snapshot.nodes.first {
+            if case .assistant = $0.data { return true }
+            return false
+        }, "草稿没进快照 —— 先确认夹具")
+
+        XCTAssertGreaterThan(row.anchorSeq, 1, "行落在最后一条持久事件之前 —— 锚点取了窗口起点")
+        XCTAssertLessThan(row.anchorSeq, draft.anchorSeq, "行落在草稿之后 —— 它会盖住正在写的那一段")
+
+        let anchors = sync.nodes.map(\.anchorSeq)
+        XCTAssertEqual(anchors, anchors.sorted(), "合并出来的列没按锚点排")
+        XCTAssertNotEqual(sync.nodes.last?.businessId, row.businessId, "行被拼在了末尾 —— 排序漏了它")
+    }
+
     /// 条数是「持久的那一半 + 乐观行」，两个来源各记一份就会不同步。
     func testMessageCountCountsTheOptimisticRowAndKeepsItAfterTheDurableOneArrives() async throws {
         ScriptedURLProtocol.reset(replies: [
