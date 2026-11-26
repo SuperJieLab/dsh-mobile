@@ -4,7 +4,7 @@ import Foundation
 /// 这里管调用顺序与失败收场：单飞、拉完为止、先窗口后增量。
 ///
 /// 本类只做三件事：装配（把输入、投影、状态行、动作接成一个），转发视图读数，编排请求
-/// （翻页与乐观行）。帧到达之后的事不在这里 —— 它在投影单元里，本类只收它八条接线。
+/// （翻页与乐观行）。帧到达之后的事不在这里 —— 它在投影单元里，本类只收它九条接线与读数单元的两条。
 ///
 /// 用户看得见的句子住 `Display/SyncText.swift`。
 @MainActor
@@ -30,18 +30,14 @@ final class SessionSync {
     var messageCount: Int {
         snapshot.messageCount + optimist.count
     }
-    /// 视图里的事件条数（消息只是其中一部分）。
-    private(set) var eventCount = 0
-    /// 还能往回翻吗。为真时界面给出入口。
-    private(set) var hasMore = false
-    /// 「对不上」的告知 —— 底部固定面的数据源；判定在 `ResyncNoticeState`。
-    private(set) var notice: ResyncNotice?
-    /// 正在往回翻页 —— 与状态行分开：界面要的是「顶部在等」。
-    private(set) var isPagingOlder = false
-    /// 上下文占用；`nil` 时格子显示 `--` 而不消失（消失会让模型格横移）。
-    private(set) var usage: UsagePayload? = nil
-    /// 最后一次收到数据帧的时刻，由投影记 —— 它只有观测价值，不参与观察。
-    var lastFrameAt: Date? { projection.lastFrameAt }
+    /// 下面六格都由读数单元持有，这里只转发 —— 视图的调用形状一个字不动。
+    var eventCount: Int { readings.eventCount }
+    var hasMore: Bool { readings.hasMore }
+    var notice: ResyncNotice? { readings.notice }
+    var isPagingOlder: Bool { readings.isPagingOlder }
+    var usage: UsagePayload? { readings.usage }
+    /// 最后一次收到数据帧的时刻 —— 只有观测价值，不参与观察。
+    var lastFrameAt: Date? { readings.lastFrameAt }
     /// 每收到一条实时事件就叫一声，参数是它的类型。**单读者**：权限那一格靠它判断
     /// 「宿主那边的当前权限可能变了」。判定住在权限域（`PermissionState.affectsCurrent`），
     /// 这里只转发 —— 事件名是权限域的知识，不是编排的。
@@ -71,7 +67,6 @@ final class SessionSync {
     /// 当前显示的模型：状态机的镜像，经既有的刷新路径冒泡。
     var displayedModel: ModelSelection? { models.displayed }
 
-    private let client: RpcClient
     let sessionId: String
     /// 造流口 —— 窄接口，连接级动作在此写不出来。
     private let factory: any StreamFactory
@@ -81,20 +76,12 @@ final class SessionSync {
     let projection: SessionProjection
     /// 乐观行（发出去还没落定的那几行，以及「已上屏待退休」的记账）。
     let optimist: SessionOptimist
-    /// 同一时刻只允许一次读请求（翻页）。从前还要挡住「同步 + 翻页」并发 ——
-    /// 同步那条路随 HTTP 兜底一起退场了。
-    private var syncInFlight = false
-    /// 告知的判定（置位与清除的唯一来源）—— 视图只读 `notice`。
-    private var noticeState = ResyncNoticeState()
-
+    /// 读数与翻页（六个读口、状态行的翻页那几处、占用水位、告知）。
+    let readings: SessionReadings
     /// 连接阶段 —— 转发输入单元读穿的那个闭包。
     var phase: ConnectionPhase { input.phase }
 
-    /// 占用值的吸收，判定在 `UsageState`。
-    private var usageState = UsageState()
-
     init(client: RpcClient, sessionId: String, link: LongConnection, control: ControlStream? = nil) {
-        self.client = client
         self.sessionId = sessionId
         self.factory = link
 
@@ -115,6 +102,9 @@ final class SessionSync {
         // 锚点要现取窗口前沿，所以注入一个读闭包而不是一个值。
         let optimist = SessionOptimist(frontier: { [weak input] in input?.frontier ?? 0 })
         self.optimist = optimist
+        let readings = SessionReadings(client: client, sessionId: sessionId,
+                                       input: input, statusBox: statusBox)
+        self.readings = readings
 
         // 三处注入与八条接线留到存储属性全部就位之后：它们都要捕获本对象。
         // 经 `self.projection` 取，不能捕那个局部常量：局部会被闭包强持，而投影强持输入单元，
@@ -127,10 +117,13 @@ final class SessionSync {
         projection.onRefreshNeeded = { [weak self] in self?.refreshView() }
         projection.onDurableRecords = { [weak optimist] records in optimist?.noteDurable(records) }
         projection.onClaimedRow = { [weak optimist] rpcId in optimist?.noteClaimed(rpcId) }
-        projection.onVerdict = { [weak self] verdict in self?.observeNotice(verdict) }
+        projection.onVerdict = { [weak readings] verdict in readings?.noteVerdict(verdict) }
+        projection.onDataFrame = { [weak readings] in readings?.noteFrame() }
         projection.onRebuildNeeded = { [weak self] in self?.resetMirror() }
         projection.onOpeningProjections = { [weak self] block in self?.applyOpeningProjections(block) }
         projection.onLiveEventType = { [weak self] type in self?.onLiveEventType?(type) }
+        readings.onRefreshNeeded = { [weak self] in self?.refreshView() }
+        readings.onRebuildNeeded = { [weak self] in self?.resetMirror() }
     }
 
     // MARK: - 用户动作（转给写侧）
@@ -172,100 +165,26 @@ final class SessionSync {
     /// 比 —— 两者不是同一条轴。当前模型也读**投影**（打开帧不再带它，切模型走
     /// `session/selectModel`，随后变的正是这一格）。
     private func absorbProjection(_ values: JSONValue) {
-        applyControl(UsageView.payloadOf(values))
+        readings.noteUsage(UsageView.payloadOf(values))
         models.absorb(projection: values["modelSelection"])
         onProjectionValues?(values)
     }
 
     // MARK: - 读侧编排
 
-    /// 往回翻一段更早的历史；一页没有可显示的内容时接着往前（上限 3 页）。
+    /// 往回翻一段更早的历史 —— 判定与循环都在读数单元里，这里只把「视图有几条」交过去。
     func loadOlder() async {
-        guard !syncInFlight, input.hasMore else { return }
-        // 翻页低频，打 info：真机上要能对照「我没点它却加载了」。
-        Log.info(Log.Module.session, "loadOlder",
-                 ["seq": String(input.windowStart), "count": String(input.records.count)])
-        syncInFlight = true
-        isPagingOlder = true
-        defer {
-            syncInFlight = false
-            isPagingOlder = false
-        }
-        statusBox.set(.syncing)
-
-        // 上限 3 页：再多说明服务端在挤牙膏，让用户看见状态行比继续闷拉更有用。
-        for _ in 0..<3 {
-            let nodesBefore = nodes.count
-            guard let verdict = await fetchOlderPage() else { return }
-
-            switch verdict {
-            case .merged(let count):
-                statusBox.set(.done(added: count, recovered: false))
-            case .caughtUp:
-                statusBox.set(.done(added: 0, recovered: false))
-            case .resetRequired(let reason):
-                // 更早的历史接不上不影响当前视图的真实性：`.gap` 保留（清空等于
-                // 用「你多点一下」换掉已读到的全部内容），只有位置被否定才清空重来。
-                if reason.invalidatesLocalContent { resetMirror() }
-                observeNotice(verdict)
-                refreshView()
-                return
-            case .refused(let code):
-                statusBox.set(.failed(step: .paging, cause: .refusal(code: code)))
-                refreshView()
-                return
-            case .failed:
-                statusBox.set(.failed(step: .paging, cause: .transport))
-                refreshView()
-                return
-            }
-
-            refreshView()
-            // 这一页真的多了可显示的东西，或者已经到日志开头 —— 收工。
-            if nodes.count > nodesBefore || !input.hasMore { return }
-        }
+        await readings.loadOlder(visibleNodeCount: { nodes.count })
     }
 
-    /// 一次往回翻的请求。`nil` = 没拿到发起权（有在途请求）。
-    private func fetchOlderPage() async -> Verdict? {
-        guard input.beginRequest() else { return nil }
-        do {
-            let page = try await readPage(client, sessionId: sessionId,
-                                          throughSeq: input.throughSeq,
-                                          beforeSeq: input.windowStart)
-            return input.prepend(page)
-        } catch let error as RpcClientError {
-            input.abandonRequest()
-            if case .refused(let failure) = error { return .refused(code: failure.code) }
-            return .failed
-        } catch {
-            input.abandonRequest()
-            return .failed
-        }
-    }
-
-    // MARK: - 投影那八条接线的落点
-
-    /// 收下一条判定 —— 置位规则在 `ResyncNoticeState`。
-    private func observeNotice(_ verdict: Verdict) {
-        noticeState.observe(verdict)
-        notice = noticeState.notice
-    }
-
-    /// 一份占用读数；被丢弃的帧不动视图，乱序与重放不会让百分比跳动。
-    /// control 送来的一条更新：权威，直接覆盖。
-    private func applyControl(_ payload: UsagePayload?) {
-        projection.noteFrame()
-        usageState.adopt(payload)
-        usage = usageState.usage
-    }
+    // MARK: - 投影那几条接线的落点
 
     /// 打开帧的投影基线：**control 到达之前**的初值。
     ///
     /// 两条出口同源，所以这里不需要另算规则 —— 只是把同一份值先放上屏。
     /// 之后 control 的 `projection` 会按水位覆盖它（`UsageState` 只认严格更高的水位）。
     func applyOpeningProjections(_ block: ProjectionBlock) {
-        applyUsage(UsageView.snapshotOf(block.values, asOfSeq: block.asOfSeq))
+        readings.applyUsage(UsageView.snapshotOf(block.values, asOfSeq: block.asOfSeq))
         // 同一块也是**这一屏的初值**：当前模型与当前权限都从这里起，control 的增量之后覆盖。
         //
         // 只在 control 上取会漏掉一种常见的顺序：control 是 App 级的、开机就订上了，
@@ -275,23 +194,16 @@ final class SessionSync {
         onProjectionValues?(block.values)
     }
 
-    private func applyUsage(_ snapshot: UsageSnapshot) {
-        // 「收到」与「采纳」是两件事：被丢弃的帧也证明链路活着，故置位在判之前。
-        projection.noteFrame()
-        guard usageState.apply(snapshot) == .accepted else { return }
-        usage = usageState.usage
-    }
-
     // MARK: - 一次请求
 
-    /// 刷一屏：投影喂食与物化，这里补上两个窗口读数。
+    /// 刷一屏：投影喂食与物化，随后把两个窗口读数交给读数单元重算。
     ///
-    /// 两个计数留在这一侧（它们是「窗口的计数」，与投影产出的快照不是一回事）；
-    /// 投影内部要刷屏时经 `onRefreshNeeded` 绕回这里 —— 否则计数会停在旧值。
+    /// **一条边同时管两件事**：物化与计数必须同一拍，否则视图会读到「新快照配旧条数」，
+    /// 而这类错只在切屏那一帧可见；投影与读数单元各自要刷屏时都经 `onRefreshNeeded`
+    /// 绕回这里 —— 读数单元不持投影，它请人代劳。
     private func refreshView() {
         projection.refresh()
-        eventCount = input.records.count
-        hasMore = input.hasMore
+        readings.refreshCounts()
     }
 
     /// 位置被否定：镜像、乐观行、引擎、暂存、草稿一起重来。

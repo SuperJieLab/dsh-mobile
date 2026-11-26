@@ -27,10 +27,6 @@ final class SessionProjection {
     /// 视图只取 `visible` —— 那一半才是「不闪」的另一半。
     private(set) var snapshot: ChatSnapshot = .empty
 
-    /// 最后一次收到数据帧的时刻。**不参与观察**：每帧都变，被追踪会让合并刷新失效。
-    @ObservationIgnored
-    private(set) var lastFrameAt: Date? = nil
-
     // MARK: - 接线（由装配点在 `init` 之后接上）
 
     /// 物化完成：新快照已经在 `snapshot` 里，可以让别的单元跟着动了。
@@ -39,6 +35,8 @@ final class SessionProjection {
     var onRefreshNeeded: (() -> Void)?
     /// 打开帧里已经有的持久记录（乐观行要据此记账）。
     var onDurableRecords: (([SessionRecord]) -> Void)?
+    /// 一条数据帧到达（打开帧 / 事件 / 草稿）—— 读数单元据此记时刻。
+    var onDataFrame: (() -> Void)?
     /// 一条落定的用户消息认领了哪条乐观行。只在「认领得到且判定不是重置」时叫。
     var onClaimedRow: ((String) -> Void)?
     /// 一条判定 —— 「对不上」的告知由协调者收。
@@ -136,8 +134,6 @@ final class SessionProjection {
     // MARK: - 刷新（协调者的 `refreshView` 与它自己的五处都走这里）
 
     /// 记一帧到达。control 与打开帧的投影基线两条路不经过 `apply`，但同样是「数据到了」。
-    func noteFrame() { lastFrameAt = Date() }
-
     /// 喂一批、再物化一次。计数不在这里 —— 它们是协调者的读口。
     func refresh() {
         feedEngine()
@@ -159,7 +155,7 @@ final class SessionProjection {
     // MARK: - 帧的消化
 
     private func applySnapshot(_ snapshot: SnapshotFrame) {
-        lastFrameAt = Date()
+        onDataFrame?()
         // 打开帧里已经有了的那几条：持久事件比乐观行权威。记账即可 ——
         // 紧随其后的刷新会把新快照建好，再撤（撤早了会空一帧）。
         onDurableRecords?(snapshot.records)
@@ -223,7 +219,7 @@ final class SessionProjection {
     private func applyLiveEvent(_ event: SessionEvent) {
         // 落定的用户消息按 `source.rpcId` 认领乐观行 —— 认不认领得看判定，所以这里只把号传出去。
         let claimed = event.type == "user/message" ? event.data["source"]?["rpcId"]?.string : nil
-        lastFrameAt = Date()
+        onDataFrame?()
         // 上游 gap-free 是契约，重复与跳号各有一种处置（见 `SessionMirror.append`）。
         let verdict = input.append(event)
         // 跳号时持久行进不了视图，那一行不能撤 —— 否则屏幕上什么都没有，要等重连才回来。
@@ -257,7 +253,7 @@ final class SessionProjection {
 
     private func applyTransient(_ frame: JSONValue) {
         // 未定稿帧也算「数据到了」：长输出期间可能只有它在流。
-        lastFrameAt = Date()
+        onDataFrame?()
         // 小数序号要落在「最后一条持久事件之后」，所以把当前游标交给通道。
         switch input.apply(frame: frame, cursor: max(0, input.frontier - 1)) {
         case .broken:
