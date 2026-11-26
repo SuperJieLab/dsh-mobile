@@ -2,7 +2,7 @@
  * 模型选择面的预构数据 —— 模型列表、等级列表、以及两者的选中态。
  *
  * 判定全部在这里完成：点哪一项该发什么选择由 `selection` 随身携带（视图不拼 `ModelSelection`）。
- * 本文件不出现用户可见文案 —— 说法在 `Display/CatalogText.swift`。
+ * 本文件不出现用户可见文案 —— 说法在 `Controls/Display/CatalogText.swift`。
  */
 import Foundation
 

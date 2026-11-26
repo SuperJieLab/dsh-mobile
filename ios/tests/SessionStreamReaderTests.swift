@@ -1,5 +1,6 @@
 /**
- * 帧判读的判据 —— `SessionStreamReader`（`SessionDetail/State/SessionStreamReader.swift`）。
+ * 帧判读的判据 —— `SessionStreamReader`
+ * （`SessionDetail/Sync/State/SessionStreamReader.swift`）。
  *
  * 这一组测的事只有一件：**给一段帧文本与所属会话，判成什么、这条流接下来怎么办**。
  * 全部不需要连接、不需要网络 —— 判读认的是上游的事件形状，一份会漂移的东西，它的错既不会

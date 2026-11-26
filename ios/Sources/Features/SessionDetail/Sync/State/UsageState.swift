@@ -4,7 +4,7 @@ import Foundation
 ///
 /// 两条来源、两套规则：快照（`apply`）在 control 接管之前按「严格高 `asOfSeq` 才采用」；
 /// control（`adopt`）接管之后**直接覆盖**，快照一律变 `.stale` —— 两者水位不同轴，不可比。
-/// 百分比与紧凑数字的换算不在这里，在 `Display/UsageDisplay.swift`；读数为 `nil` 时界面
+/// 百分比与紧凑数字的换算不在这里，在 `Controls/Display/UsageDisplay.swift`；读数为 `nil` 时界面
 /// 显示 `--`（不是隐藏整行）。
 struct UsageState: Equatable {
 

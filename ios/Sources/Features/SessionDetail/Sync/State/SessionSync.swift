@@ -6,7 +6,7 @@ import Foundation
 /// 本类只做三件事：装配（把输入、投影、状态行、动作接成一个），转发视图读数，编排请求
 /// （翻页与乐观行）。帧到达之后的事不在这里 —— 它在投影单元里，本类只收它九条接线与读数单元的两条。
 ///
-/// 用户看得见的句子住 `Display/SyncText.swift`。
+/// 用户看得见的句子住 `Sync/Display/SyncText.swift`。
 @MainActor
 @Observable
 final class SessionSync {
@@ -58,7 +58,8 @@ final class SessionSync {
 
     // MARK: - 视图读的三个面（转发，不改视图的调用形状）
 
-    /// 状态行。类型别名让 `Display/SyncText.swift` 的句子继续挂在 `SessionSync.Status` 上。
+    /// 状态行。类型别名让 `Sync/Display/SyncText.swift` 的句子
+    /// 继续挂在 `SessionSync.Status` 上。
     typealias Status = SessionStatus.Value
     typealias Step = SessionStatus.Step
     typealias Cause = SessionStatus.Cause

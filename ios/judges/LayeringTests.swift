@@ -105,6 +105,28 @@ final class LayeringTests: XCTestCase {
         return result.sorted { $0.path < $1.path }
     }
 
+    /// 递归找出所有名为 `name` 的子目录（不含起点本身）。
+    /// 界面里可以有功能块，技术段不再固定在域下一层，所以「有没有 `State/`」要按深度找。
+    private func subdirectories(named name: String, under directory: URL) -> [URL] {
+        guard let walker = FileManager.default.enumerator(at: directory,
+                                                          includingPropertiesForKeys: [.isDirectoryKey],
+                                                          options: [.skipsHiddenFiles])
+        else { return [] }
+        var result: [URL] = []
+        for case let url as URL in walker
+        where url.lastPathComponent == name
+            && (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            result.append(url)
+            walker.skipDescendants()   // 同名目录不再往里找，一层就够
+        }
+        return result.sorted { $0.path < $1.path }
+    }
+
+    /// 相对 `Features/` 的路径，用于失败信息 —— 报绝对路径读不出是哪个域哪个块。
+    private func relativeToFeatures(_ url: URL) -> String {
+        url.path.replacingOccurrences(of: featuresRoot.path + "/", with: "")
+    }
+
     /// `Features/` 下全部 `.swift`（递归），用来回答「谁引用了这个名字」。
     private func allFeatureSwiftFiles() -> [URL] {
         swiftFiles(under: featuresRoot)
@@ -112,7 +134,9 @@ final class LayeringTests: XCTestCase {
 
     // MARK: - 断言 1：每个页面域都有 State/；Views/ 若存在必须非空
 
-    /// 目录有 `Views/` ⟺ 它是一个**界面**；没有则它是**域**（只有事实与文案）。
+    /// 目录有 `Views/` ⟺ **界面或功能块**；没有则它是域或块的事实区。两者靠域级装配段区分
+    /// （`XxxAssembler` 与 `<域名>View.swift` 住域自己的技术段：有块的是 `Root/Views/`，
+    /// 没有块的就是 `<域>/Views/`）。
     ///
     /// 渲染件跟着「唯一消费它的屏」走，不跟着值域走 —— 同一条规则在仓库里已有两个先例
     /// （`SessionRow` 渲染线上形状、`MessageBubble` 渲染显示模型，都住在各自那一屏）。
@@ -120,30 +144,33 @@ final class LayeringTests: XCTestCase {
     /// 卡片住会话详情（它只有那一个展示位置）。
     ///
     /// 两半都查，缺一样就假绿：
-    /// - `State/` 必须存在且非空 —— 判定与编排永远有家；
-    /// - `Views/` 若存在必须非空 —— 空目录不是界面（文件还在旧位置上，形状是假的）。
+    /// - 域下至少有一个 `State/`，且不是全都空 —— 判定与编排永远有家；
+    /// - 域下出现的每个 `Views/` 都必须非空 —— 空目录不是界面（文件还在旧位置上，形状是假的）。
+    ///
+    /// 两处都按**任意深度**查：界面里可以有功能块（`SessionDetail/Composer/State`），
+    /// 技术段不再固定在域下一层。只按域下第一层查，块内文件会整体逃出这条判据。
     func testEveryFeatureHasStateAndViewsAreNeverEmpty() throws {
         let interfaces = try interfaceDirectories()
         XCTAssertFalse(interfaces.isEmpty, "一个目录都没扫到：\(featuresRoot.path)")
         var withViews = 0
         for interface in interfaces {
             let name = interface.lastPathComponent
-            var isDirectory: ObjCBool = false
 
-            let stateDir = interface.appendingPathComponent("State")
-            let stateExists = FileManager.default.fileExists(atPath: stateDir.path,
-                                                             isDirectory: &isDirectory)
-            XCTAssertTrue(stateExists && isDirectory.boolValue, "\(name) 缺少 State/")
-            XCTAssertFalse(swiftFiles(under: stateDir).isEmpty,
-                           "\(name)/State/ 是空的 —— 判定与编排不在这里")
+            let states = subdirectories(named: "State", under: interface)
+            if states.isEmpty {
+                XCTFail("\(name) 下没有任何 State/ —— 判定与编排没有家")
+            } else {
+                XCTAssertFalse(states.allSatisfy { swiftFiles(under: $0).isEmpty },
+                               "\(name) 的 State/ 全是空的 —— 判定与编排不在这里")
+            }
 
-            let viewsDir = interface.appendingPathComponent("Views")
-            let viewsExist = FileManager.default.fileExists(atPath: viewsDir.path,
-                                                            isDirectory: &isDirectory)
-            guard viewsExist && isDirectory.boolValue else { continue }
+            let views = subdirectories(named: "Views", under: interface)
+            guard !views.isEmpty else { continue }
             withViews += 1
-            XCTAssertFalse(swiftFiles(under: viewsDir).isEmpty,
-                           "\(name)/Views/ 是空的 —— 空的 Views 不是界面，删掉它")
+            for dir in views {
+                XCTAssertFalse(swiftFiles(under: dir).isEmpty,
+                               "\(relativeToFeatures(dir)) 是空的 —— 空的 Views 不是界面，删掉它")
+            }
         }
         XCTAssertGreaterThan(withViews, 2, "带 Views/ 的目录太少 —— 先怀疑路径推算")
     }
@@ -154,20 +181,21 @@ final class LayeringTests: XCTestCase {
         let banned = ["import SwiftUI", "import UIKit"]
         var checked = 0
         for interface in try interfaceDirectories() {
-            for file in swiftFiles(under: interface.appendingPathComponent("State")) {
+            for file in swiftFiles(under: interface).filter({ $0.path.contains("/State/") }) {
                 checked += 1
+                let relative = file.path.replacingOccurrences(of: interface.path + "/", with: "")
                 let text = try String(contentsOf: file, encoding: .utf8)
                 for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                     // 前缀匹配而不是整行相等：`import SwiftUI // 只为了一个 Color` 也要拦。
                     let trimmed = line.trimmingCharacters(in: .whitespaces)
                     if let hit = banned.first(where: { trimmed.hasPrefix($0) }) {
-                        XCTFail("\(interface.lastPathComponent)/State/\(file.lastPathComponent):\(index + 1) "
+                        XCTFail("\(interface.lastPathComponent)/\(relative):\(index + 1) "
                                 + "出现「\(hit)」—— 判定与编排不得认识 SwiftUI（结构 5）")
                     }
                 }
             }
         }
-        XCTAssertGreaterThan(checked, 0, "一个 State 文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertGreaterThanOrEqual(checked, 64, "只扫到 \(checked) 个 State 文件 —— 路径推算错了？")
     }
 
     // MARK: - 断言 2b：会话视图的纯判定只装值类型
@@ -175,8 +203,8 @@ final class LayeringTests: XCTestCase {
     /// 会话视图的三件纯判定（会话镜像、未定稿帧通道、消息取舍）只装 `struct` 与 `enum` ——
     /// 判定层出现引用型可变状态，就是「持有并发布」混进了纯判定。
     ///
-    /// **按文件名单点名，不按目录扫**：三件的家 `Features/SessionDetail/State/` 里同住
-    /// `SessionSync` 等持有者 —— 整目录扫会误伤。名单就是「这几件是纯判定」这个决定的可判
+    /// **按文件名单点名，不按目录扫**：三件分居两个块的 `State/`，同目录里还住着别的持有者
+    /// —— 整目录扫会误伤。名单就是「这几件是纯判定」这个决定的可判
     /// 形式；名单自带存在性正控：文件改名或删掉时先红，防扫描面静默缩水。
     ///
     /// 认三类标志，覆盖同一种失败的不同写法：
@@ -190,23 +218,35 @@ final class LayeringTests: XCTestCase {
         "SessionMirror.swift", "TransientChannel.swift", "MessageDisplay.swift",
     ]
 
+    /// 三件的家按块分：镜像与未定稿通道在「Sync」，消息形状在「Transcript」。
+    /// 表按文件名给相对域的目录，缺一条就 `XCTFail` —— 与名单一起充当存在性正控。
+    private static let sessionViewJudgmentHomes = [
+        "SessionMirror.swift": "Sync/State",
+        "TransientChannel.swift": "Sync/State",
+        "MessageDisplay.swift": "Transcript/State",
+    ]
+
     func testSessionViewJudgmentsHoldOnlyValueTypes() throws {
-        let home = sourcesRoot.appendingPathComponent("Features/SessionDetail/State")
         let banned = ["class ", "actor ",
                       "import SwiftUI", "import UIKit", "import Combine", "import Observation"]
         var checked = 0
         for name in Self.sessionViewJudgments {
-            let file = home.appendingPathComponent(name)
+            guard let home = Self.sessionViewJudgmentHomes[name] else {
+                XCTFail("名单里的 \(name) 没有登记家 —— 搬家后必须同轮改这张表")
+                continue
+            }
+            let relative = "Features/SessionDetail/\(home)/\(name)"
+            let file = sourcesRoot.appendingPathComponent(relative)
             // 存在性正控：名单里的文件必须在 —— 没了就红。少了它，名单少一行只是少扫一个文件。
             guard let text = try? String(contentsOf: file, encoding: .utf8) else {
-                XCTFail("名单里的 \(name) 不在 Features/SessionDetail/State/ —— 改名或删除后必须同轮改名单")
+                XCTFail("名单里的 \(name) 不在 \(relative) —— 改名或删除后必须同轮改名单")
                 continue
             }
             checked += 1
             for (line, code) in codeLines(in: text) {
                 guard let hit = banned.first(where: { code.contains($0) }) else { continue }
-                XCTFail("Features/SessionDetail/State/\(name):\(line) 出现「\(hit.trimmingCharacters(in: .whitespaces))」"
-                        + " —— 这三件是纯判定（struct / enum），有状态持有者归 Features/*/State/ 的持有者们")
+                XCTFail("\(relative):\(line) 出现「\(hit.trimmingCharacters(in: .whitespaces))」"
+                        + " —— 这三件是纯判定（struct / enum），有状态持有者归各自块 State/ 的持有者们")
             }
         }
         XCTAssertEqual(checked, Self.sessionViewJudgments.count,
@@ -578,22 +618,23 @@ final class LayeringTests: XCTestCase {
 
         for interface in interfaces {
             let interfaceName = interface.lastPathComponent
-            for file in swiftFiles(in: interface.appendingPathComponent("Views")) {
+            for file in swiftFiles(under: interface).filter({ $0.path.contains("/Views/") }) {
                 let text = try String(contentsOf: file, encoding: .utf8)
+                let relative = file.path.replacingOccurrences(of: interface.path + "/", with: "")
                 for type in Self.declaredTypes(in: text) {
                     scanned += 1
                     // 界面根视图可以被别的界面当「子界面」用（列表在未配对时顶上配对屏）。
                     if type == interfaceName + "View" { continue }
                     let user = firstUser(of: type, in: texts, excluding: interface)
                     if let user {
-                        XCTFail("\(interfaceName)/Views/\(file.lastPathComponent) 的 \(type) 被 \(user) 引用"
+                        XCTFail("\(interfaceName)/\(relative) 的 \(type) 被 \(user) 引用"
                                 + " —— 共用零件应住 SharedUI/（结构 4：目录名 = 模块归属）")
                     }
                 }
             }
         }
         // 阳性读数：解析失效（正则写错、路径推算错）时这一条会先红，而不是让上面静默通过。
-        XCTAssertGreaterThan(scanned, 0, "一个 Views 声明都没解析出来 —— 先怀疑正则或路径")
+        XCTAssertGreaterThanOrEqual(scanned, 30, "只解析出 \(scanned) 个 Views 声明 —— 先怀疑正则或路径")
     }
 
     // MARK: - 断言 5–7：Core 与线上形状的方向
@@ -930,7 +971,7 @@ final class LayeringTests: XCTestCase {
     ///（含字符串拼接），而这些结果只用 `.count`。
     func testMessageCountComesFromAssembledNodes() throws {
         let sync = sourcesRoot.appendingPathComponent(
-            "Features/SessionDetail/State/SessionSync.swift")
+            "Features/SessionDetail/Sync/State/SessionSync.swift")
         let lines = codeLines(in: try String(contentsOf: sync, encoding: .utf8))
 
         // 正控：确认读到了本体与刷新点。
@@ -945,7 +986,7 @@ final class LayeringTests: XCTestCase {
 
         // 消息条数要能从组装结果数出来。
         let assembler = sourcesRoot.appendingPathComponent(
-            "Features/SessionDetail/State/Conversation/ChatNode.swift")
+            "Features/SessionDetail/Transcript/State/Conversation/ChatNode.swift")
         let aLines = codeLines(in: try String(contentsOf: assembler, encoding: .utf8))
         XCTAssertTrue(aLines.contains { $0.1.contains("case message(") },
                       "节点形态里没有 message —— 数不出来了")
@@ -1026,7 +1067,7 @@ final class LayeringTests: XCTestCase {
     /// 两者之差正是这一跳的耗时，颠倒了这条时延数据就没有意义。
     func testTheBehaviorGetsExactlyTwoDoors() throws {
         let stateSource = sourcesRoot.appendingPathComponent(
-            "Features/SessionDetail/State/SessionProjection.swift")
+            "Features/SessionDetail/Sync/State/SessionProjection.swift")
         let lines = codeLines(in: try String(contentsOf: stateSource, encoding: .utf8))
 
         // 正控：确认读到了本体（那两扇门现在开在投影单元上）。
@@ -1038,7 +1079,7 @@ final class LayeringTests: XCTestCase {
 
         // 适配器里两个调用的先后。
         let behavior = sourcesRoot.appendingPathComponent(
-            "Features/SessionDetail/State/SessionBehavior.swift")
+            "Features/SessionDetail/Sync/State/SessionBehavior.swift")
         let bLines = codeLines(in: try String(contentsOf: behavior, encoding: .utf8))
         let applyAt = bLines.first { $0.1.contains("owner.apply(") }?.0
         let perfAt = bLines.first { $0.1.contains("owner.recordPerf(") }?.0
@@ -1276,7 +1317,7 @@ final class LayeringTests: XCTestCase {
     /// 豁免要写出坐标，坐标对不上（清单里那个文件不再构造，或别处也构造）就红。
     func testOpenFramesAreBuiltInDeclaredPlaces() throws {
         let declared: [(op: String, file: String)] = [
-            ("following", "Features/SessionDetail/State/SessionBehavior.swift"),
+            ("following", "Features/SessionDetail/Sync/State/SessionBehavior.swift"),
             ("events", "Core/Gateway/LongConnection/Stream/EventsStream.swift"),
             ("control", "Core/Gateway/LongConnection/Stream/ControlStream.swift"),
             ("workspace", "Core/Gateway/LongConnection/Stream/WorkspaceStream.swift"),
@@ -1432,7 +1473,7 @@ final class LayeringTests: XCTestCase {
     /// 自己持有传输层、走另一条入口），它们就不再同构，而用户看不出区别。
     func testEveryBusinessStreamUsesTheSameFactory() throws {
         let session = sourcesRoot
-            .appendingPathComponent("Features/SessionDetail/State/SessionSync.swift")
+            .appendingPathComponent("Features/SessionDetail/Sync/State/SessionSync.swift")
         let events = sourcesRoot
             .appendingPathComponent("Core/Gateway/LongConnection/Stream/EventsStream.swift")
         let control = sourcesRoot
@@ -1662,9 +1703,9 @@ final class LayeringTests: XCTestCase {
     func testThePhaseTypeIsTopLevelAndConsumed() throws {
         // 消费点名单：会话详情的编排与它那两个视图。哪里新增一处读阶段的地方，就加一个名字。
         let consumers = [
-            "Features/SessionDetail/State/SessionSync.swift",
-            "Features/SessionDetail/Views/ComposerStrip.swift",
-            "Features/SessionDetail/Views/NetworkSheet.swift",
+            "Features/SessionDetail/Sync/State/SessionSync.swift",
+            "Features/SessionDetail/Composer/Views/ComposerStrip.swift",
+            "Features/SessionDetail/Sync/Views/NetworkSheet.swift",
         ]
         for path in consumers {
             let file = sourcesRoot.appendingPathComponent(path)
@@ -1706,7 +1747,7 @@ final class LayeringTests: XCTestCase {
     ///
     /// 正控：文件里必须仍有 `func read(`，否则说明扫错了文件（空集读成合规）。
     func testReaderDoesNotDependOnConnection() throws {
-        let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionStreamReader.swift")
+        let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/Sync/State/SessionStreamReader.swift")
         let text = try String(contentsOf: file, encoding: .utf8)
         let lines = codeLines(in: text)
         let forbidden = ["StreamMux", "WebSocketConnection", "URLSession", "MuxOpenFrame", "RpcClient"]
@@ -1823,26 +1864,27 @@ final class LayeringTests: XCTestCase {
         var scanned = 0
         var hits = 0
         for interface in try interfaceDirectories() {
-            for file in swiftFiles(under: interface.appendingPathComponent("Views")) {
+            for file in swiftFiles(under: interface).filter({ $0.path.contains("/Views/") }) {
                 scanned += 1
+                let relative = file.path.replacingOccurrences(of: interface.path + "/", with: "")
                 let text = try String(contentsOf: file, encoding: .utf8)
                 for (line, code) in codeLines(in: text) {
                     let range = NSRange(code.startIndex..., in: code)
                     guard Self.awaitedAssignment.firstMatch(in: code, options: [], range: range) != nil
                     else { continue }
                     hits += 1
-                    XCTFail("\(interface.lastPathComponent)/Views/\(file.lastPathComponent):\(line)"
+                    XCTFail("\(interface.lastPathComponent)/\(relative):\(line)"
                             + " 把 await 的结果赋给了自己 —— 取数归 State/")
                 }
             }
         }
-        XCTAssertGreaterThan(scanned, 0, "一个 Views 文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertGreaterThanOrEqual(scanned, 25, "只扫到 \(scanned) 个 Views 文件 —— 先怀疑路径推算")
         XCTAssertEqual(hits, 0, "视图里还有取数赋值")
     }
 
     // MARK: - 断言 11–12：句子与说法不住在编排里
 
-    /// `Features/*/State/` 下**含中文的行必须是注释行**（或以 `Log.` 开头）——
+    /// 各域**任意深度**的 `State/` 下，含中文的行必须是注释行（或以 `Log.` 开头）——
     /// 用户看得见的句子归各屏的 `Display/`，判定与编排只产出「哪一步 + 哪一类原因」。
     ///
     /// 判据形态照线上形状那几条：不认字符串字面量，改按行判。理由是**三引号多行串**——
@@ -1864,9 +1906,10 @@ final class LayeringTests: XCTestCase {
         var hits = 0
         var scannedFiles = 0
         for interface in interfaces {
-            for file in swiftFiles(under: interface.appendingPathComponent("State")) {
+            for file in swiftFiles(under: interface).filter({ $0.path.contains("/State/") }) {
                 if Self.stateStringExceptions[file.lastPathComponent] != nil { continue }
                 scannedFiles += 1
+                let relative = file.path.replacingOccurrences(of: interface.path + "/", with: "")
                 let text = try String(contentsOf: file, encoding: .utf8)
                 for (line, source) in allLines(in: text) where containsHan(source) {
                     let trimmed = source.trimmingCharacters(in: .whitespaces)
@@ -1876,12 +1919,12 @@ final class LayeringTests: XCTestCase {
                     }
                     if trimmed.hasPrefix("Log.") { continue }
                     hits += 1
-                    XCTFail("\(interface.lastPathComponent)/State/\(file.lastPathComponent):\(line)"
+                    XCTFail("\(interface.lastPathComponent)/\(relative):\(line)"
                             + " 的中文不在注释里：\(trimmed) —— 用户可见的句子归 Display/")
                 }
             }
         }
-        XCTAssertGreaterThan(scannedFiles, 0, "一个 State 文件都没扫到 —— 先怀疑路径推算")
+        XCTAssertGreaterThanOrEqual(scannedFiles, 64, "只扫到 \(scannedFiles) 个 State 文件 —— 路径推算错了？")
         XCTAssertEqual(hits, 0, "State/ 里还有用户可见的句子")
         XCTAssertGreaterThan(commentLines, 0, "State/ 里连中文注释都没有 —— 先怀疑路径或读取")
     }
@@ -1897,7 +1940,7 @@ final class LayeringTests: XCTestCase {
         for (fileName, reason) in Self.stateStringExceptions {
             var found: URL?
             for interface in try interfaceDirectories() {
-                for file in swiftFiles(under: interface.appendingPathComponent("State"))
+                for file in swiftFiles(under: interface).filter({ $0.path.contains("/State/") })
                 where file.lastPathComponent == fileName {
                     found = file
                 }
@@ -1921,7 +1964,7 @@ final class LayeringTests: XCTestCase {
         }
     }
 
-    /// 全部 `Display/` 目录（`Features/*/Display/` 与 `Core/**/Display/`）。
+    /// 全部 `Display/` 目录（`Core/**/Display/` 与各域下任意深度的 `Display/`，含功能块里的）。
     private func displayDirectories() -> [URL] {
         guard let walker = FileManager.default.enumerator(at: sourcesRoot,
                                                           includingPropertiesForKeys: [.isDirectoryKey],
@@ -1948,11 +1991,14 @@ final class LayeringTests: XCTestCase {
 
     func testDisplayDoesNotImportSwiftUI() throws {
         let directories = displayDirectories()
-        // 身份正控：不光数个数，还要这两个目录各在。目录被改名时这一条先红，而不是静默通过。
+        // 身份正控：不只数个数，点名的那几个目录还必须各在 —— 少了一个就先红在这里。
         let names = Set(directories.map { $0.path.replacingOccurrences(of: sourcesRoot.path + "/", with: "") })
         XCTAssertTrue(names.contains("Core/Gateway/Display"), "没扫到 Core/Gateway/Display：\(names)")
-        XCTAssertTrue(names.contains("Features/SessionDetail/Display"),
-                      "没扫到 Features/SessionDetail/Display：\(names)")
+        // 会话详情的四个块各有一个 `Display/`；逐个点名，少了任何一个先红在这里。
+        for block in ["Composer", "Controls", "Sync", "Transcript"] {
+            XCTAssertTrue(names.contains("Features/SessionDetail/\(block)/Display"),
+                          "没扫到 Features/SessionDetail/\(block)/Display：\(names)")
+        }
 
         var checked = 0
         for directory in directories {
@@ -2088,7 +2134,7 @@ final class LayeringTests: XCTestCase {
     /// 若叫 `Snapshot` / `Window`（前身），前半红；若换个名字，它就是一个**新造的同形类型**，
     /// 而那正是评审要看的东西 —— 这类判断写不成文本判据，写进注释比写成假绿好。
     func testMirrorUsesProtocolShapes() throws {
-        let mirror = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionMirror.swift")
+        let mirror = sourcesRoot.appendingPathComponent("Features/SessionDetail/Sync/State/SessionMirror.swift")
         let text = try String(contentsOf: mirror, encoding: .utf8)
         XCTAssertTrue(text.contains("struct SessionMirror"), "读到的不是状态机 —— 先怀疑路径推算")
 
@@ -2308,7 +2354,7 @@ final class LayeringTests: XCTestCase {
     func testRenderViewsHoldNoServices() throws {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
-            "Features/SessionDetail/Views/SessionDetailView.swift",
+            "Features/SessionDetail/Root/Views/SessionDetailView.swift",
             "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
@@ -2340,7 +2386,7 @@ final class LayeringTests: XCTestCase {
     func testRenderViewsTakeOneChannel() throws {
         let files = [
             "Features/SessionList/Views/SessionListView.swift",
-            "Features/SessionDetail/Views/SessionDetailView.swift",
+            "Features/SessionDetail/Root/Views/SessionDetailView.swift",
             "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
@@ -2373,18 +2419,14 @@ final class LayeringTests: XCTestCase {
     /// 盲区：名字本身没有编译器管。有人把一个持服务的屏叫 `View` 而不叫 `Assembler`，
     /// 这三条都抓不到（第 1 条只从 `Assembler` 出发）。那一半只能靠评审。
     ///
-    /// **扫描面限定在 `Features/*/Views/`**：`State/` 下有一个同后缀的旧类型
-    /// （`TranscriptAssembler`，它把事件折成显示节点，与「一屏的装配段」不是一件事）。
-    /// 按文件名全仓扫会把它当成缺 `TranscriptView.swift` 的装配段 —— 实测会假红一次。
+    /// **扫描面是「各域下所有 `Views/` 目录」**：`State/` 下有一个同后缀的类型
+    /// （`ConversationAssembler`，它把事件折成显示节点，与「一屏的装配段」不是一件事）。
+    /// 按文件名全仓扫会把它当成缺 `ConversationView.swift` 的装配段 —— 实测会假红一次；
+    /// 按路径含 `/Views/` 过滤就避开了它，同时也把功能块目录里的 `Views/` 收进来。
     func testAssemblersOwnTheStateAndPairWithAView() throws {
         var assemblers: [(relative: String, base: String)] = []
-        let featuresRoot = sourcesRoot.appendingPathComponent("Features")
-        for dir in (try FileManager.default.contentsOfDirectory(
-            at: featuresRoot, includingPropertiesForKeys: nil
-        )) {
-            let viewsDir = dir.appendingPathComponent("Views")
-            guard FileManager.default.fileExists(atPath: viewsDir.path) else { continue }
-            for file in swiftFiles(under: viewsDir) {
+        for dir in try interfaceDirectories() {
+            for file in swiftFiles(under: dir).filter({ $0.path.contains("/Views/") }) {
                 let base = file.deletingPathExtension().lastPathComponent
                 guard base.hasSuffix("Assembler") else { continue }
                 assemblers.append((
@@ -2508,7 +2550,7 @@ final class LayeringTests: XCTestCase {
         // 消费侧：渲染视图签名里出现过的 State 类型名。
         let views = [
             "Features/SessionList/Views/SessionListView.swift",
-            "Features/SessionDetail/Views/SessionDetailView.swift",
+            "Features/SessionDetail/Root/Views/SessionDetailView.swift",
             "Features/Pairing/Views/PairingView.swift",
             "Features/MeshSettings/Views/MeshSettingsView.swift",
             "Features/Settings/Views/SettingsView.swift",
@@ -3081,7 +3123,7 @@ final class LayeringTests: XCTestCase {
     /// 把它算成容器的越界，判据会先假红一次。容器真要越界，长出来的必是
     /// `Task {` 或一个 `async` 方法。
     func testTheDetailContainerOnlyConstructs() throws {
-        let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/State/SessionDetailState.swift")
+        let file = sourcesRoot.appendingPathComponent("Features/SessionDetail/Root/State/SessionDetailState.swift")
         let lines = codeLines(in: try String(contentsOf: file, encoding: .utf8))
         XCTAssertTrue(lines.contains { $0.1.contains("final class SessionDetailState") },
                       "扫错文件了 —— 先怀疑路径")
@@ -3167,6 +3209,247 @@ final class LayeringTests: XCTestCase {
                        "上游事件名只许出现在列表适配器里；实际出现在：\(sites.sorted())")
         XCTAssertGreaterThan(known, 3,
                              "适配器里一条上游事件名都没扫到 —— 空集会被读成合规")
+    }
+
+    // MARK: - 断言 17–19：功能块的形状
+
+    /// 功能块 = 域下带 `State/`、且名字不是 `Root` / 技术段的子目录。
+    ///
+    /// 两个条件都必要：
+    /// - **带 `State/`** —— 块是「一族类型 + 判定」，没有判定层的子目录只是一组资源或辅助件，
+    ///   把它算成块会让三条断言去查一个不承担依赖的东西；
+    /// - **不是 `Root`** —— 它装装配段与宿主视图，而且被设计成持有功能块的部件
+    ///   （`SessionDetailState` 持有五个部件）。三条断言都以它为界之外。
+    private func featureBlockDirectories(in interface: URL) -> [URL] {
+        let reserved: Set<String> = ["Root", "State", "Views", "Display"]
+        let children = (try? FileManager.default.contentsOfDirectory(
+            at: interface, includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles])) ?? []
+        return children
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .filter { !reserved.contains($0.lastPathComponent) }
+            .filter { !swiftFiles(under: $0.appendingPathComponent("State")).isEmpty }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    /// 功能块的代码文件：整块递归，但不含 `Display/` —— 那几件多是 extension，
+    /// 没有自己的类型名可用，按类型名建边看不见它们（它们的边不设断言）。
+    private func blockCodeFiles(in block: URL) -> [URL] {
+        swiftFiles(under: block).filter { !$0.path.contains("/Display/") }
+    }
+
+    /// 全部功能块。
+    private func allFeatureBlocks() throws -> [URL] {
+        var out: [URL] = []
+        for interface in try interfaceDirectories() {
+            out.append(contentsOf: featureBlockDirectories(in: interface))
+        }
+        return out
+    }
+
+    /// 块的活性锚：会话详情这一屏的直接子目录必须恰好是四个块加 `Root`。
+    ///
+    /// 只数「总数 ≥ 4」挡不住枚举写坏 —— 别的域多出一个块、或 `Root` 漏进保留集合，
+    /// 都能凑到这个数。点名之后，块被改名、多出一个没人管的目录、或某个块的 `State/`
+    /// 搬空，都先红在这里。绑的是这一屏，不是全仓：别的域长出块时它不参与。
+    private func assertBlockIdentity(_ blocks: [URL]) {
+        let sessionDetail = featuresRoot.appendingPathComponent("SessionDetail")
+        let blocksHere = Set(blocks
+            .filter { $0.path.hasPrefix(sessionDetail.path + "/") }
+            .map(\.lastPathComponent))
+        XCTAssertEqual(blocksHere, ["Composer", "Controls", "Sync", "Transcript"],
+                       "功能块认错了 —— 当前扫到：\(blocksHere.sorted())")
+        let children = Set(((try? FileManager.default.contentsOfDirectory(
+            at: sessionDetail, includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles])) ?? []).map(\.lastPathComponent))
+        XCTAssertEqual(children, ["Root", "Composer", "Controls", "Sync", "Transcript"],
+                       "这一屏的直接子目录该是四个块加 Root —— 当前：\(children.sorted())")
+    }
+
+    /// 功能块之间的类型边不许成环。
+    ///
+    /// 边 = A 的代码里出现 B 声明的**顶层**类型名（B ≠ A）。同一个名字在两个块里各有
+    /// 一份顶格声明时无法归属，跳过 —— 宁可漏报也不造假边。嵌套类型不在集合里（`Entry`、
+    /// `Label` 这类缩进声明进不来），所以这条跳过只对「两个块各有一个同名顶格类型」生效。
+    ///
+    /// 已知盲区：`Display/` 的成员边不算。六个文案文件的成员名有通用词（`line` 在三个文件里
+    /// 各有一份），按成员名建边定位不到文件，白名单会误报。那些边靠落位时的一次性约束维持。
+    func testFeatureBlocksFormNoDependencyCycle() throws {
+        let blocks = try allFeatureBlocks()
+        assertBlockIdentity(blocks)
+
+        var declared: [String: URL] = [:]
+        var duplicated: Set<String> = []
+        var code: [URL: Set<String>] = [:]
+        for block in blocks {
+            var words: Set<String> = []
+            for file in blockCodeFiles(in: block) {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for name in Self.topLevelTypes(in: text) {
+                    if let owner = declared[name], owner != block {
+                        duplicated.insert(name)
+                    } else {
+                        declared[name] = block
+                    }
+                }
+                words.formUnion(Self.identifiers(
+                    in: codeLines(in: text).map(\.1).joined(separator: "\n")))
+            }
+            code[block] = words
+        }
+
+        var edges: [URL: Set<URL>] = [:]
+        var samples: [String] = []
+        for block in blocks {
+            for word in code[block] ?? [] {
+                guard let owner = declared[word], owner != block,
+                      !duplicated.contains(word) else { continue }
+                if edges[block, default: []].insert(owner).inserted {
+                    samples.append("\(block.lastPathComponent)→\(owner.lastPathComponent)"
+                                   + "（\(word)）")
+                }
+            }
+        }
+
+        // 拓扑排序：能被全部剥掉的图无环，剩下的就是环里的人。
+        var indegree: [URL: Int] = [:]
+        for block in blocks { indegree[block] = 0 }
+        for targets in edges.values {
+            for target in targets { indegree[target, default: 0] += 1 }
+        }
+        var ready = blocks.filter { indegree[$0] == 0 }
+        var removed = 0
+        while let node = ready.popLast() {
+            removed += 1
+            for target in edges[node] ?? [] {
+                indegree[target, default: 0] -= 1
+                if indegree[target] == 0 { ready.append(target) }
+            }
+        }
+        // 拓扑只告诉你「有人卡住」；从卡住的节点走出一圈，失败信息才指出是哪个环。
+        var path: [URL] = []
+        var onPath: Set<URL> = []
+        var cycle: [URL] = []
+        func walk(_ node: URL) {
+            if !cycle.isEmpty { return }
+            if onPath.contains(node) {
+                if let start = path.firstIndex(of: node) {
+                    cycle = Array(path[start...]) + [node]
+                }
+                return
+            }
+            onPath.insert(node)
+            path.append(node)
+            let next = (edges[node] ?? []).sorted { $0.lastPathComponent < $1.lastPathComponent }
+            for target in next where (indegree[target] ?? 0) > 0 { walk(target) }
+            path.removeLast()
+            onPath.remove(node)
+        }
+        for node in blocks where (indegree[node] ?? 0) > 0 && cycle.isEmpty { walk(node) }
+        let cycleText = cycle.map(\.lastPathComponent).joined(separator: " → ")
+        // 活性锚：声明表与边集都非空。扫描器打坏时 `removed == blocks.count` 会直接成立，
+        // 环检测全绿而什么都没查 —— 两个下限是唯一能让它先红的东西。
+        XCTAssertGreaterThanOrEqual(declared.count, 70, "顶格类型名只解析出 \(declared.count) 个 —— 先怀疑解析")
+        for block in blocks {
+            let own = declared.filter { $0.value == block }.count
+            XCTAssertGreaterThanOrEqual(own, 5,
+                                        "\(block.lastPathComponent) 只解析出 \(own) 个顶格类型名"
+                                        + " —— 这个块可能根本没被读")
+        }
+        XCTAssertGreaterThanOrEqual(edges.count, 1,
+                                    "块间一条边都没扫到 —— 先怀疑分词或路径（边会随重构消失，"
+                                    + "这里只要求非空）")
+        XCTAssertEqual(removed, blocks.count,
+                       "功能块的类型边成环：\(cycleText)；现有边：\(samples.sorted())")
+    }
+
+    /// 功能块不持有另一个功能块的状态源（`@Observable` 类型）。
+    ///
+    /// 判据是**存储属性的完整类型相等**：`PermissionState.Choice` 是传值，不算持有；
+    /// `var peer: SessionSync?` 算。计算属性、`static`、`weak` 不看。
+    /// `Root` 不在此列 —— 它持有功能块的部件是树根的职责。
+    func testFeatureBlocksDoNotHoldAnotherBlocksState() throws {
+        let blocks = try allFeatureBlocks()
+        assertBlockIdentity(blocks)
+
+        var observable: [URL: Set<String>] = [:]
+        for block in blocks {
+            var names: Set<String> = []
+            for file in blockCodeFiles(in: block) {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                names.formUnion(Self.observableTypes(in: codeLines(in: text)))
+            }
+            observable[block] = names
+        }
+
+        // 同名 @Observable 分属两个块时无法归属，跳过（与无环断言同一口径）。
+        var owner: [String: URL] = [:]
+        var duplicated: Set<String> = []
+        for (block, names) in observable {
+            for name in names {
+                if let existing = owner[name], existing != block {
+                    duplicated.insert(name)
+                } else {
+                    owner[name] = block
+                }
+            }
+        }
+
+        var hits: [String] = []
+        var typed = 0
+        var checkedByBlock: [URL: Int] = [:]
+        for block in blocks {
+            for file in blockCodeFiles(in: block) {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                for (line, source) in codeLines(in: text) {
+                    guard let (property, types) = Self.storageProperty(in: source) else { continue }
+                    checkedByBlock[block, default: 0] += 1
+                    if !types.isEmpty { typed += 1 }
+                    let held = types.filter { owner[$0] != nil && !duplicated.contains($0) }
+                    for type in held.sorted() {
+                        guard let holder = owner[type], holder != block else { continue }
+                        hits.append("\(relativeToFeatures(file)):\(line) \(property): \(type)"
+                                    + " —— \(block.lastPathComponent) 持有"
+                                    + " \(holder.lastPathComponent) 的状态源")
+                    }
+                }
+            }
+        }
+        // 活性锚分两层：`checkedByBlock` 守「每个块都被读到」，`typed` 守「类型提取没整体失效」。
+        // 只数总条数的话，类型提取恒回空集时总数照样好几百，`hits` 会一直为空。
+        for block in blocks {
+            let seen = checkedByBlock[block] ?? 0
+            XCTAssertGreaterThanOrEqual(seen, 10, "\(block.lastPathComponent) 只认出 \(seen) 条存储属性"
+                                        + " —— 这个块可能根本没被读")
+        }
+        XCTAssertGreaterThanOrEqual(typed, 200, "带类型标注的属性只认出 \(typed) 条 —— 先怀疑类型提取")
+        XCTAssertEqual(hits, [], "功能块之间不许持有对方的状态源：\(hits)")
+    }
+
+    /// 功能块的 `Views/` 里不许有装配段与宿主视图 —— 那是 `Root/Views/` 的职责。
+    ///
+    /// 只看 `Views/`：`Transcript/State/Conversation/ConversationAssembler.swift` 同后缀，
+    /// 但它在 `State/` 下、是组装引擎而不是一屏的装配段，按整块扫会误红。
+    func testFeatureBlocksCarryNoAssemblersOrHostView() throws {
+        let blocks = try allFeatureBlocks()
+        assertBlockIdentity(blocks)
+        var scanned = 0
+        var hits: [String] = []
+        for block in blocks {
+            let views = block.appendingPathComponent("Views")
+            guard FileManager.default.fileExists(atPath: views.path) else { continue }
+            let domainName = block.deletingLastPathComponent().lastPathComponent
+            for file in swiftFiles(under: views) {
+                scanned += 1
+                let name = file.lastPathComponent
+                if name.hasSuffix("Assembler.swift") || name == domainName + "View.swift" {
+                    hits.append("\(relativeToFeatures(file)) —— "
+                                + "装配段与宿主视图住域自己的技术段，不住功能块")
+                }
+            }
+        }
+        XCTAssertGreaterThanOrEqual(scanned, 10, "扫到的块视图文件只有 \(scanned) 个 —— 先怀疑目录枚举")
+        XCTAssertEqual(hits, [], "功能块不该有装配段或宿主视图：\(hits)")
     }
 
     // MARK: - 扫描工具
@@ -3358,6 +3641,95 @@ final class LayeringTests: XCTestCase {
             index += 1
         }
         return results
+    }
+
+    private static let identifier = try! NSRegularExpression(
+        pattern: "[A-Za-z_][A-Za-z0-9_]*"
+    )
+
+    /// 一行里出现的标识符集合。用来代替「逐个类型名做正则匹配」——
+    /// 30 个文件 × 300 个类型名逐个 `NSRegularExpression` 会慢一个量级。
+    private static func identifiers(in text: String) -> Set<String> {
+        var out: Set<String> = []
+        let range = NSRange(text.startIndex..., in: text)
+        identifier.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
+            guard let match, let word = Range(match.range, in: text) else { return }
+            out.insert(String(text[word]))
+        }
+        return out
+    }
+
+    /// `let/var 名字: 类型` 与 `let/var 名字 = 构造`，允许访问修饰与 `lazy`。
+    /// 类型表达式里「真正被持有的类型名」。
+    ///
+    /// 紧跟 `.` 的标识符是外层名字，不是被持有的那个类型：`PermissionState.Choice`
+    /// 是嵌套枚举的值，收下它会把「传值」判成「持有」。容器不剥 —— `[SessionSync]`
+    /// 与 `Optional<SessionSync>` 的元素确实是状态源。
+    private static func heldTypeNames(in annotation: String) -> Set<String> {
+        var out: Set<String> = []
+        let range = NSRange(annotation.startIndex..., in: annotation)
+        identifier.enumerateMatches(in: annotation, options: [], range: range) { match, _, _ in
+            guard let match, let word = Range(match.range, in: annotation) else { return }
+            let rest = annotation[word.upperBound...].drop { $0 == " " || $0 == "\t" }
+            if rest.first == "." { return }
+            out.insert(String(annotation[word]))
+        }
+        return out
+    }
+
+    /// 行首这些属性不改变「持有」这个事实，剥掉再解析：`@ObservationIgnored` 只关观察，
+    /// `nonisolated` / `@MainActor` 只改隔离域。视图的属性包装器（`@State` 等）不在此列。
+    private static let storagePrefixAttributes = try! NSRegularExpression(
+        pattern: #"^\s*(?:(?:nonisolated|@ObservationIgnored|@MainActor)\s+)+"#
+    )
+
+    private static func strippingOwnershipNeutralAttribute(_ code: String) -> String {
+        let range = NSRange(code.startIndex..., in: code)
+        guard let match = storagePrefixAttributes.firstMatch(in: code, options: [], range: range),
+              let head = Range(match.range, in: code) else { return code }
+        return String(code[head.upperBound...])
+    }
+
+    /// 右值里第一个标识符 —— 推断类型时只认构造的那一个（`= SessionSync()`）。
+    private static func firstIdentifier(in text: String) -> String? {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = identifier.firstMatch(in: text, options: [], range: range),
+              let word = Range(match.range, in: text) else { return nil }
+        return String(text[word])
+    }
+
+    private static let storagePropertyDeclaration = try! NSRegularExpression(
+        pattern: #"^\s*((?:(?:private|fileprivate|internal|public)(?:\(set\))?|lazy)\s+)*"#
+            + #"(let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*([^=]+?))?\s*(?:=\s*(.*))?$"#
+    )
+
+    /// 存储属性的 (名字, 类型里出现的标识符)。
+    ///
+    /// 返回 nil 的四种情形，都不是「持有状态源」：计算属性（每次访问都造新的）、
+    /// `static`（不是实例状态）、`weak` / `unowned`（不持有）、行首是视图的属性包装器
+    /// （`@State var x`，持有的是包装器不是对象）。
+    ///
+    /// 两种写法都认：带类型标注的取类型表达式里的标识符（`[SessionSync]`、
+    /// `Optional<SessionSync>` 都能命中）；用构造式推断类型的取右值**第一个**标识符
+    /// （`= SessionSync()`）。
+    ///
+    /// 误报方向（接受）：函数体里的 `var temp: SessionSync?` 也会被算成存储属性；
+    /// `= SessionSync.maxRetries` 这类以类型名开头的静态引用也会命中。
+    private static func storageProperty(in code: String) -> (String, Set<String>)? {
+        let code = strippingOwnershipNeutralAttribute(code)
+        let trimmed = code.trimmingCharacters(in: .whitespaces)
+        if trimmed.contains("static ") || trimmed.contains("weak ") || trimmed.contains("unowned ")
+        { return nil }
+        let range = NSRange(code.startIndex..., in: code)
+        guard let match = storagePropertyDeclaration.firstMatch(in: code, options: [], range: range),
+              let nameRange = Range(match.range(at: 3), in: code)
+        else { return nil }
+        let annotation = Range(match.range(at: 4), in: code).map { String(code[$0]) } ?? ""
+        let initializer = Range(match.range(at: 5), in: code).map { String(code[$0]) } ?? ""
+        if annotation.contains("{") { return nil }   // 计算属性
+        if !annotation.isEmpty { return (String(code[nameRange]), heldTypeNames(in: annotation)) }
+        guard let first = firstIdentifier(in: initializer) else { return nil }
+        return (String(code[nameRange]), [first])
     }
 
     private func matches(_ chars: [Character], at index: Int, pattern: String) -> Bool {

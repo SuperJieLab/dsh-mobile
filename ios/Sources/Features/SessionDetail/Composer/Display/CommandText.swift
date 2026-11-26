@@ -1,7 +1,7 @@
 /**
  * 命令面板的说法 —— 拿不到列表、没有匹配、空列表各自那一句。
  *
- * 变化原因与 `State/CommandDirectory.swift` 不同：句子随产品决定变，三面的映射随协议变。
+ * 变化原因与 `Composer/State/CommandDirectory.swift` 不同：句子随产品决定变，三面的映射随协议变。
  * 判定不引用这里的句子 —— 编排文件里出现用户可见的中文字面量时
  * `LayeringTests.testStateHasNoUserFacingStrings` 会红。
  */

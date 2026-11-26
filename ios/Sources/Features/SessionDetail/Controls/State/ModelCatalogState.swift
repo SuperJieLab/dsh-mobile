@@ -20,7 +20,7 @@ final class ModelCatalogState {
         case failed(Cause)
     }
 
-    /// 失败的原因。**不带句子**：说给用户听的那两句在 `Display/CatalogText.swift`。
+    /// 失败的原因。**不带句子**：说给用户听的那两句在 `Controls/Display/CatalogText.swift`。
     enum Cause: Equatable {
         /// 服务端按信封拒绝 —— 协议值原样带，原文怎么读由显示层定。
         case refused(GatewayFailure)

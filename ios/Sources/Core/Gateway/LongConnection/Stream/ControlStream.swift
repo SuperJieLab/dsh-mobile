@@ -16,7 +16,7 @@ final class ControlStream {
 
     /// 某个会话的投影更新（整份值 + 水位）。
     /// 投影变化的听众表。**只给表，不给具名口** —— 订阅面在
-    /// `Features/SessionDetail/State/SessionSync.swift` 里自己挂。
+    /// `Features/SessionDetail/Sync/State/SessionSync.swift` 里自己挂。
     let updateListeners = ListenerTable<(String, JSONValue, Int)>()
 
     /// 每个会话的投影表：`sessionId -> {key: value}`。

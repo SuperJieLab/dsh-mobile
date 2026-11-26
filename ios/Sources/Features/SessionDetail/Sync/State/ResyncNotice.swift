@@ -2,7 +2,7 @@
  * 「本地与服务端对不上」这件事的**形状与判定** —— 什么时候置位、什么时候清除。
  *
  * 变化原因与 `SessionSync` 不同：那条回答「先取窗口还是先追新增」，这条回答「告知该不该出现」。
- * 说给用户听的那句话在 `Display/SyncText.swift`。
+ * 说给用户听的那句话在 `Sync/Display/SyncText.swift`。
  */
 import Foundation
 

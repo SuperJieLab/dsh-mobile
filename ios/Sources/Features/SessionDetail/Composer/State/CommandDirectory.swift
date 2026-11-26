@@ -20,7 +20,7 @@ final class CommandDirectory {
         case failed(Cause)
     }
 
-    /// 失败的原因。**不带句子**：说给用户听的那句在 `Display/CommandText.swift`。
+    /// 失败的原因。**不带句子**：说给用户听的那句在 `Composer/Display/CommandText.swift`。
     enum Cause: Equatable {
         /// 服务端按信封拒绝 —— 协议值原样带。
         case refused(GatewayFailure)

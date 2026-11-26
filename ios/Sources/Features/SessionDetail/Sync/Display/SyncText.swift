@@ -1,7 +1,8 @@
 /**
  * 会话详情屏的**说法** —— 状态行那一句、底部告知那一句、重置理由的三种说法。
  *
- * 与 `State/SessionSync.swift` 分家：编排只产出 `Status.failed(step:cause:)`，说话归这里。
+ * 与 `Sync/State/SessionSync.swift` 分家：编排只产出 `Status.failed(step:cause:)`，
+ * 说话归这里。
  * 有些「步 + 原因」组合今天到不了，仍要写全（switch 得穷尽）。
  */
 import Foundation

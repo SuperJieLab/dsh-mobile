@@ -10,7 +10,7 @@
  */
 import Foundation
 
-/// 一个档位的显示标签。**只有形状，没有文字** —— 中文在 `Display/PermissionText.swift`。
+/// 一个档位的显示标签。**只有形状，没有文字** —— 中文在 `Controls/Display/PermissionText.swift`。
 ///
 /// 分出 `.host` 那一支是为了让「宿主给了自定义名」与「我们认得的内置档」在类型上就不同：
 /// 前者原样显示，后者才轮到我们那张表。
@@ -39,7 +39,7 @@ final class PermissionState {
         case failed(Cause)
     }
 
-    /// 失败的原因。**不带句子**：说给用户听的那句在 `Display/PermissionText.swift`。
+    /// 失败的原因。**不带句子**：说给用户听的那句在 `Controls/Display/PermissionText.swift`。
     enum Cause: Equatable {
         /// 服务端按信封拒绝 —— 协议值原样带。
         case refused(GatewayFailure)

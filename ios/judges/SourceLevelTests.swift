@@ -45,10 +45,10 @@ final class SourceLevelTests: XCTestCase {
     ///
     /// `start()` 必须在（正控：切块没切错）。
     func testTheSecondScreenNeverComesOverHTTP() throws {
-        let root = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/State")
-        let files = Self.swiftFiles(under: root)
+        let root = iosRoot.appendingPathComponent("Sources/Features/SessionDetail")
+        let files = Self.swiftFiles(under: root).filter { $0.path.contains("/State/") }
         // 活性锚：目录扫空了下面的差集也会「通过」。
-        XCTAssertGreaterThan(files.count, 5, "只扫到 \(files.count) 个状态文件 —— 路径推算错了？")
+        XCTAssertGreaterThanOrEqual(files.count, 42, "只扫到 \(files.count) 个状态文件 —— 路径推算错了？")
 
         // 禁词分两档，因为「第二条取数路」在两个地方会长：
         //  ① 整个状态目录都不许出现 —— 快照读、那个闭包、`Timer`（它们只服务兜底）；
@@ -80,7 +80,7 @@ final class SourceLevelTests: XCTestCase {
             }
         }
         let following = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionFollowing.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionFollowing.swift"))
         XCTAssertTrue(following.contains("func start()"), "读到的不是流开关 —— 先怀疑路径推算")
         XCTAssertEqual(hits, [],
                        "状态层里又出现了第二条取数路 —— 一屏只有一个来源")
@@ -108,8 +108,8 @@ final class SourceLevelTests: XCTestCase {
                        "收帧链路上应只在形状层解一次，实际：\(hits)")
 
         // 判读层：进到这里的已经是解好的值，再解一次就是把成本原样加回来。
-        for relative in ["Sources/Features/SessionDetail/State/SessionBehavior.swift",
-                         "Sources/Features/SessionDetail/State/SessionStreamReader.swift",
+        for relative in ["Sources/Features/SessionDetail/Sync/State/SessionBehavior.swift",
+                         "Sources/Features/SessionDetail/Sync/State/SessionStreamReader.swift",
                          "Sources/Core/Gateway/LongConnection/Stream/EventsStream.swift",
                          "Sources/Core/Gateway/LongConnection/Stream/ControlStream.swift"] {
             let count = Self.codeLineCount(
@@ -155,7 +155,7 @@ final class SourceLevelTests: XCTestCase {
     /// 反面按现在的名字禁 `var`。
     func testSnapshotKeepsItsVisibleHalfStored() throws {
         let file = iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/Conversation/ChatNode.swift")
+            "Sources/Features/SessionDetail/Transcript/State/Conversation/ChatNode.swift")
         let code = try read(file)
         XCTAssertTrue(code.contains("struct ChatSnapshot"), "判据的落点没找对：\(file.path)")
 
@@ -180,7 +180,7 @@ final class SourceLevelTests: XCTestCase {
     /// 判据只守这一个函数体：`rebuild` 自己的 `events.sorted` 是整段重建时跑一次的，不在守备面内。
     func testLocationRefreshDoesNotSortTheDictionary() throws {
         let file = iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/Conversation/ConversationAssembler.swift")
+            "Sources/Features/SessionDetail/Transcript/State/Conversation/ConversationAssembler.swift")
         let code = try read(file)
         guard let start = code.range(of: "private mutating func rebuildLocations()") else {
             return XCTFail("判据的落点没找对：`rebuildLocations` 不见了 —— \(file.lastPathComponent)")
@@ -206,12 +206,12 @@ final class SourceLevelTests: XCTestCase {
     func testDiscardingHeldEventsRequeuesThem() throws {
         // 作废点在投影（帧的消化里），清场点在协调者（整段重建那七步里）—— 两处各读各的文件。
         let projection = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionProjection.swift"))
         let drains = Self.codeLineCount(of: "input.drainHeld()", in: projection)
         XCTAssertEqual(drains, 2,
                        "两处作废点（新流开始、放弃的一轮）都要排回，实际只有 \(drains) 处")
         let sync = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let clears = Self.codeLineCount(of: "input.clearHeld()", in: sync)
         XCTAssertEqual(clears, 1,
                        "整段重建那一处只清不排回（镜像一起清空，排回无处可去），实际 \(clears) 处")
@@ -224,7 +224,7 @@ final class SourceLevelTests: XCTestCase {
     /// 选择收到 `List` 一处 —— 判据守的是「这两样都不在消息行上」。
     func testMessageRowCarriesNoPerRowLayoutOrSelection() throws {
         let file = iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/Views/SessionDetailView.swift")
+            "Sources/Features/SessionDetail/Root/Views/SessionDetailView.swift")
         let code = try read(file)
         guard let start = code.range(of: "private struct MessageBubble: View {") else {
             return XCTFail("判据的落点没找对：MessageBubble 不见了 —— \(file.lastPathComponent)")
@@ -262,7 +262,7 @@ final class SourceLevelTests: XCTestCase {
     /// 定稿消息每次重建都重解析。不写实参同样落进 `true`（参数的默认值）。
     /// 第二条挡「为了让第一条绿而一刀切不缓存」—— 判据要求的是跟着节点状态走。
     func testTheMessageRowCachesMarkdownOnlyWhenSettled() throws {
-        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
+        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Root/Views")
         let code = try read(views.appendingPathComponent("SessionDetailView.swift"))
         guard let line = Self.codeLines(in: code)
             .first(where: { $0.1.contains("MarkdownText(source: message.text") }) else {
@@ -278,15 +278,21 @@ final class SourceLevelTests: XCTestCase {
     }
 
     func testRowViewFilesCarryNoPerRowSelection() throws {
-        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
         // 只守「选择」这一半，`.frame(maxWidth: .infinity)` 不扫。
         //
         // 理由：那个修饰符在源码里分不出两种用途 —— 为对齐（可用 `Spacer` 替，S8 要消的）
         // 与为撑满（卡片背景铺满、配合 `contentShape` 扩大点击区，删了就是行为变化）。
         // `ToolRowView` 的 `DetailBlock` 与 `TurnProcessRow` 的 `ThinkingRow` 都是后者。
         // 强行扫会让判据要么误报、要么逼着人为了绿而删必需的对齐。
-        for name in ["TurnProcessRow.swift", "ToolRowView.swift", "CommandRow.swift"] {
-            let code = try read(views.appendingPathComponent(name))
+        // 三件分属两个块：行渲染件在「Transcript」，命令行在「Composer」。
+        let rows = [
+            "Sources/Features/SessionDetail/Transcript/Views/TurnProcessRow.swift",
+            "Sources/Features/SessionDetail/Transcript/Views/ToolRowView.swift",
+            "Sources/Features/SessionDetail/Composer/Views/CommandRow.swift",
+        ]
+        for relative in rows {
+            let name = (relative as NSString).lastPathComponent
+            let code = try read(iosRoot.appendingPathComponent(relative))
             XCTAssertGreaterThan(code.count, 500, "\(name) 读空了 —— 先怀疑路径")
             for (line, text) in Self.codeLines(in: code) {
                 XCTAssertFalse(text.contains(".textSelection("),
@@ -301,17 +307,18 @@ final class SourceLevelTests: XCTestCase {
     /// 缓存自己的用例全绿、别的源码判据全绿 —— 全仓没有任何信号，而命中率归零。
     /// `RULES` 把这种形态叫「判据都落在组件边界上，漏了装配那一步」。
     func testTheMarkdownCacheIsActuallyPlanted() throws {
-        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Views")
+        let views = iosRoot.appendingPathComponent("Sources/Features/SessionDetail/Root/Views")
         let view = try read(views.appendingPathComponent("SessionDetailView.swift"))
         XCTAssertTrue(view.contains(".environment(\\.markdownCache, detail.markdownCache)"),
                       "播种那一行不见了 —— 视图会落到容量零的默认缓存，命中率归零且没有任何信号")
 
         let state = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionDetailState.swift"))
+            "Sources/Features/SessionDetail/Root/State/SessionDetailState.swift"))
         XCTAssertTrue(state.contains("let markdownCache = SessionMarkdownCache()"),
                       "状态里没有缓存实例 —— 播种拿不到东西")
 
-        let text = try read(views.appendingPathComponent("MarkdownText.swift"))
+        let text = try read(iosRoot.appendingPathComponent(
+            "Sources/Features/SessionDetail/Transcript/Views/MarkdownText.swift"))
         XCTAssertFalse(text.contains("cache: SessionMarkdownCache? = nil"),
                        "cache 又变成可选了 —— 新调用点会悄悄不传，落到容量零的默认值")
         XCTAssertFalse(text.contains("cache: SessionMarkdownCache ="),
@@ -328,7 +335,7 @@ final class SourceLevelTests: XCTestCase {
     /// 重点是常态路径不经过它 —— 所以那一处必须落在 `durableEvents()` 的函数体里。
     func testTheDurableFilterOnlyServesTheRareRebuildPaths() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionProjection.swift"))
         let hits = Self.codeLines(in: code).filter { $0.1.contains("input.records.filter") }
         XCTAssertEqual(hits.count, 1,
                        "`input.records.filter` 出现了 \(hits.count) 处 —— 全量反推又回来了")
@@ -353,7 +360,7 @@ final class SourceLevelTests: XCTestCase {
 
         // 正控：确认扫到的是本体，不是被路径推算带偏的空文件。
         let sync = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: sync)
         XCTAssertGreaterThan(lines.count, 120, "只扫到 \(lines.count) 行 —— 先怀疑路径")
 
@@ -376,7 +383,7 @@ final class SourceLevelTests: XCTestCase {
 
         // 另一半：那三样真的有个持有者，否则上面两条可以靠「谁都不持有」变绿。
         let input = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionInput.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionInput.swift"))
         let inputLines = Self.codeLines(in: input)
         XCTAssertTrue(inputLines.contains { $0.1.contains("var window = SessionMirror()") },
                       "输入单元自己没有持有镜像 —— 上面那条是空守")
@@ -393,7 +400,7 @@ final class SourceLevelTests: XCTestCase {
     /// 而监听表条数与界面都照常）。
     func testTheInputUnitHoldsNoProjectionStateAndIsWired() throws {
         let input = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionInput.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionInput.swift"))
         let inputLines = Self.codeLines(in: input)
         XCTAssertGreaterThan(inputLines.count, 50, "读空了 —— 先怀疑路径")
         let projectionTypes = ["ChatSnapshot", "ChatSnapshotBuilder", "ConversationAssembler"]
@@ -403,7 +410,7 @@ final class SourceLevelTests: XCTestCase {
         XCTAssertEqual(intruders, [], "输入单元拿了投影的状态：行 \(intruders)")
 
         let sync = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let syncLines = Self.codeLines(in: sync)
 
         // 三处接线各只许一处，且必须落在 `init` 的体里 —— 挪进 `startFollowing()` 是
@@ -433,14 +440,14 @@ final class SourceLevelTests: XCTestCase {
     func testTheEngineLivesOnlyInTheProjection() throws {
         let names = ["ConversationAssembler", "ChatSnapshotBuilder", "AssemblyChange", "RefreshGate"]
         let sync = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let syncLines = Self.codeLines(in: sync)
         XCTAssertGreaterThan(syncLines.count, 120, "只扫到 \(syncLines.count) 行 —— 先怀疑路径")
         let hits = syncLines.filter { line in names.contains { line.1.contains($0) } }.map(\.0)
         XCTAssertEqual(hits, [], "编排层还点着引擎与它的附属：行 \(hits)")
 
         let projection = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionProjection.swift"))
         let lines = Self.codeLines(in: projection)
         for name in names {
             XCTAssertTrue(lines.contains { $0.1.contains(name) },
@@ -451,7 +458,7 @@ final class SourceLevelTests: XCTestCase {
     /// 投影不持连接、不做翻页、不持分页读数。
     func testTheProjectionHoldsNoConnectionOrPaging() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionProjection.swift"))
         let lines = Self.codeLines(in: code)
         XCTAssertGreaterThan(lines.count, 150, "只扫到 \(lines.count) 行 —— 先怀疑路径")
         let forbidden = ["RpcClient", "readPage", "beginRequest", "LongConnection",
@@ -470,7 +477,7 @@ final class SourceLevelTests: XCTestCase {
     /// 快照是转发：视图读的那个面还在协调者上，只是从投影取。
     func testTheSnapshotIsForwardedFromTheProjection() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         XCTAssertTrue(Self.codeLines(in: code).contains {
             $0.1.contains("var snapshot: ChatSnapshot") && $0.1.contains("projection.snapshot")
         }, "快照不是转发 —— 要么编排层又存了一份，要么读口变了形状")
@@ -480,7 +487,7 @@ final class SourceLevelTests: XCTestCase {
     ///
     func testTheProjectionIsWiredAtTheAssemblyPoint() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: code)
         guard let initAt = lines.firstIndex(where: { $0.1.contains("init(client: RpcClient") }),
               let endAt = lines[initAt...].firstIndex(where: { $0.1.contains("func deliver(") })
@@ -510,7 +517,7 @@ final class SourceLevelTests: XCTestCase {
     /// 偶发的按钮不消失、指示灯不熄，而编译期与运行时都看不出来。
     func testTheReadingsLiveOnlyInTheReadingsUnit() throws {
         let sync = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: sync)
         XCTAssertGreaterThan(lines.count, 100, "只扫到 \(lines.count) 行 —— 先怀疑路径")
 
@@ -521,7 +528,7 @@ final class SourceLevelTests: XCTestCase {
 
         // 另一半：那六样真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
         let unit = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionReadings.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionReadings.swift"))
         let unitLines = Self.codeLines(in: unit)
         for name in names {
             XCTAssertTrue(unitLines.contains { $0.1.contains(name) },
@@ -535,7 +542,7 @@ final class SourceLevelTests: XCTestCase {
     /// 永远只能看到偶发。
     func testTheSixReadingsAreForwardedFromTheUnit() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: code)
         for name in ["eventCount", "hasMore", "isPagingOlder", "notice", "usage", "lastFrameAt"] {
             XCTAssertTrue(lines.contains { $0.1.contains("{ readings.\(name) }") },
@@ -546,7 +553,7 @@ final class SourceLevelTests: XCTestCase {
     /// 时间戳只有一份，且不参与观察。
     func testTheFrameTimeLivesInTheUnitAndIsNotObserved() throws {
         let unit = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionReadings.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionReadings.swift"))
         let lines = Self.codeLines(in: unit)
         guard let decl = lines.firstIndex(where: { $0.1.contains("var lastFrameAt") })
         else { return XCTFail("读数单元里没有 `lastFrameAt` —— 网络那一格会恒显示「—」") }
@@ -555,7 +562,7 @@ final class SourceLevelTests: XCTestCase {
         XCTAssertTrue(annotated, "时间戳没带 `@ObservationIgnored` —— 每帧失效观察，合并刷新随之失效")
 
         let projection = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionProjection.swift"))
         let hits = Self.codeLines(in: projection).filter { $0.1.contains("lastFrameAt") }.map(\.0)
         XCTAssertEqual(hits, [], "投影还留着时间戳：行 \(hits) —— 两个时刻")
     }
@@ -563,7 +570,7 @@ final class SourceLevelTests: XCTestCase {
     /// 读数那几条接线各一处、都在 `init` 里；两条直指单元。
     func testTheReadingsAreWiredAtTheAssemblyPoint() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: code)
         guard let initAt = lines.firstIndex(where: { $0.1.contains("init(client: RpcClient") }),
               let endAt = lines[initAt...].firstIndex(where: { $0.1.contains("func deliver(") })
@@ -591,7 +598,7 @@ final class SourceLevelTests: XCTestCase {
     /// 翻页把「视图有几条」交过去，不是常量；单元只构造一次。
     func testLoadOlderHandsTheVisibleCountToTheUnit() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: code)
         XCTAssertTrue(lines.contains {
             $0.1.contains("readings.loadOlder(visibleNodeCount: { nodes.count })")
@@ -603,7 +610,7 @@ final class SourceLevelTests: XCTestCase {
     /// 读数单元不越层：不持投影、不持连接与订阅、不持快照、不持乐观行。
     func testTheReadingsHoldNoProjectionOrConnection() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionReadings.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionReadings.swift"))
         let lines = Self.codeLines(in: code)
         XCTAssertGreaterThan(lines.count, 100, "只扫到 \(lines.count) 行 —— 先怀疑路径")
         let forbidden = ["SessionProjection", "LongConnection", "ControlStream",
@@ -621,7 +628,7 @@ final class SourceLevelTests: XCTestCase {
     /// 重复行或消息消失一帧，而编译期与运行时都看不出来。
     func testTheOptimisticRowsLiveOnlyInTheOptimist() throws {
         let sync = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: sync)
         XCTAssertGreaterThan(lines.count, 120, "只扫到 \(lines.count) 行 —— 先怀疑路径")
 
@@ -632,7 +639,7 @@ final class SourceLevelTests: XCTestCase {
         // 另一半：行与那本账真的有个持有者，否则上面那条可以靠「谁都不持有」变绿。
         // 断的是单元自己的名字（`entries` / `settled` / `ordinal`），不是编排层那四个。
         let unit = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionOptimist.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionOptimist.swift"))
         let unitLines = Self.codeLines(in: unit)
         for name in ["var entries", "settled: Set<String>", "var ordinal"] {
             XCTAssertTrue(unitLines.contains { $0.1.contains(name) },
@@ -645,7 +652,7 @@ final class SourceLevelTests: XCTestCase {
     /// 「只搬状态、没搬判定」正是这期要排除的形态：那样协调者仍是中间人，八条接线一条没少。
     func testTheThreeRowEventsGoStraightToTheOptimist() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionSync.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionSync.swift"))
         let lines = Self.codeLines(in: code)
         for wire in ["projection.onSnapshotPublished = ", "projection.onDurableRecords = ",
                      "projection.onClaimedRow = "] {
@@ -670,7 +677,7 @@ final class SourceLevelTests: XCTestCase {
     /// 此后不再合并；那之后每一次事件都各自物化一次。
     func testTheFlushResetsBeforeRefreshing() throws {
         let code = try read(iosRoot.appendingPathComponent(
-            "Sources/Features/SessionDetail/State/SessionProjection.swift"))
+            "Sources/Features/SessionDetail/Sync/State/SessionProjection.swift"))
         let lines = Self.codeLines(in: code)
         guard let gate = lines.firstIndex(where: { $0.1.contains("refreshGate.flushDue()") })
         else { return XCTFail("没找到 `flushDue()` —— 判据的落点不对") }

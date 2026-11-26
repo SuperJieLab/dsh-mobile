@@ -61,7 +61,8 @@ struct SessionDetailView: View {
                 )
             }
         }
-        // 危险档位的确认。文案来自 `Display/PermissionText.swift`，缺文案的档位不该走到这里
+        // 危险档位的确认。文案来自 `Controls/Display/PermissionText.swift`，
+        // 缺文案的档位不该走到这里
         // （`pick` 只在 `needsConfirmation` 时置位，而那个集合里的每一档都有文案）。
         .alert(confirming?.confirmation?.title ?? "", isPresented: isConfirming, presenting: confirming) { choice in
             Button(choice.confirmation?.confirm ?? "") {
