@@ -42,7 +42,10 @@ final class SessionOptimistTests: XCTestCase {
 
         XCTAssertEqual(optimist.count, 1)
         let anchor = optimist.entries.first?.anchorSeq ?? .nan
-        XCTAssertGreaterThan(anchor, 1.0, "落在最后一条持久事件（seq 1）之前了 —— 消息会出现在历史里")
+        // 1.25 = frontier - 1 + 0.25；首条的序号步长再加 0.001。断到具体值才守得住
+        // 「0.25 这个偏移」—— 只断 `> 1.0` 的话，把它改成 0.1 照样绿。
+        XCTAssertEqual(anchor, 1.251, accuracy: 0.0005,
+                       "锚点不是 frontier-1 加 0.25（含首条的 0.001 步长）")
         XCTAssertLessThan(anchor, 1.5, "落在首块草稿之后了 —— 草稿会排到这条消息前面")
     }
 
@@ -114,5 +117,12 @@ final class SessionOptimistTests: XCTestCase {
         // 账清了：此后再叫退休，那些行一个也不该动（下一次物化会重新记账）。
         optimist.retire()
         XCTAssertEqual(optimist.count, 2, "清账之后退休还撤了行 —— 账没清干净")
+
+        // 序号只增不减：重建之后再发一条，锚点必须比在屏的这一条更大 —— 复位会让新行
+        // 插到已有行前面去（两条都叫 1.251，排序变成不稳定）。
+        let lastAnchor = optimist.entries.last?.anchorSeq ?? .nan
+        optimist.insert(text: "丙", requestId: "r-3", time: 3000)
+        let fresh = optimist.entries.last?.anchorSeq ?? .nan
+        XCTAssertGreaterThan(fresh, lastAnchor, "序号跟着重建回零了 —— 新行会插到已有行前面")
     }
 }

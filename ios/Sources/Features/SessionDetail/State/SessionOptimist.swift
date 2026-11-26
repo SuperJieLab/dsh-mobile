@@ -18,7 +18,7 @@ final class SessionOptimist {
     ///
     /// **不进 `ConversationAssembler`**：那里的每个输入都要有 `seq`，而这一行还没有 ——
     /// 造一个伪 `seq` 会破坏单调与去重（跳号会被判成缺口，一条本地行会让整条流不可信）。
-    struct Entry: Equatable {
+    struct Entry {
         let requestId: String
         let text: String
         let time: Double

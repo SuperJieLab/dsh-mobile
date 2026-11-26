@@ -43,7 +43,8 @@ final class SessionProjection {
     var onClaimedRow: ((String) -> Void)?
     /// 一条判定 —— 「对不上」的告知由协调者收。
     var onVerdict: ((Verdict) -> Void)?
-    /// 位置被否定：镜像、引擎、乐观行要一起重来。七步的顺序由协调者写。
+    /// 位置被否定：镜像与引擎要重来，乐观行只清「已上屏待退休」那本账（行本身留着）。
+    /// 七步的顺序由协调者写。
     var onRebuildNeeded: (() -> Void)?
     /// 打开帧带来的投影值：占用、模型、权限三格的初值。
     var onOpeningProjections: ((ProjectionBlock) -> Void)?

@@ -540,7 +540,9 @@ final class SourceLevelTests: XCTestCase {
             let wired = lines.filter { $0.1.contains(wire) }
             XCTAssertEqual(wired.count, 1, "`\(wire)` 该恰好一处，实际 \(wired.count) 处")
             guard let line = wired.first else { continue }
-            XCTAssertTrue(line.1.contains("optimist"),
+            // 断的是 `[weak optimist]` 而不是 `optimist`：写成 `{ [weak self] in self?.optimist… }`
+            // 同样含那个词，而它正是这条判据要排除的「经协调者中转」。
+            XCTAssertTrue(line.1.contains("[weak optimist]"),
                           "`\(wire)` 没直指乐观行单元 —— 协调者还是中间人：\(line.1)")
         }
         // 三个中转方法不该出现在编排层（声明与调用都算）。
