@@ -2,7 +2,7 @@
  * 一屏的投影：帧到达之后的所有判定，以及「什么时候把它物化上屏」。
  *
  * 消费者是 `SessionBehavior`（经 `apply` / `recordPerf` 两扇门）与 `SessionSync`（装配、转发读数、
- * 收八条接线）。它不持连接、不做翻页、不持分页读数 —— 那三样分别属于连接层与协调者。
+ * 收九条接线）。它不持连接、不做翻页、不持分页读数 —— 那三样分别属于连接层与读数单元。
  *
  * 三件事必须同处：引擎与变化集（物化要按变化集取键）、帧合并与两个调度标志（一帧只物化一次）、
  * 帧的消化与引擎（哪些事件进引擎、进之前怎么过滤）。用户看得见的句子不在这里。
@@ -31,7 +31,7 @@ final class SessionProjection {
 
     /// 物化完成：新快照已经在 `snapshot` 里，可以让别的单元跟着动了。
     var onSnapshotPublished: (() -> Void)?
-    /// 该刷一屏了 —— 投影不自己刷，因为刷屏还要更新协调者那边的两个计数。
+    /// 该刷一屏了 —— 投影不自己刷，因为刷屏要连读数单元那两个计数一起算（一条边管两件事）。
     var onRefreshNeeded: (() -> Void)?
     /// 打开帧里已经有的持久记录（乐观行要据此记账）。
     var onDurableRecords: (([SessionRecord]) -> Void)?
@@ -39,7 +39,7 @@ final class SessionProjection {
     var onDataFrame: (() -> Void)?
     /// 一条落定的用户消息认领了哪条乐观行。只在「认领得到且判定不是重置」时叫。
     var onClaimedRow: ((String) -> Void)?
-    /// 一条判定 —— 「对不上」的告知由协调者收。
+    /// 一条判定 —— 「对不上」的告知由读数单元收。
     var onVerdict: ((Verdict) -> Void)?
     /// 位置被否定：镜像与引擎要重来，乐观行只清「已上屏待退休」那本账（行本身留着）。
     /// 七步的顺序由协调者写。
@@ -133,8 +133,7 @@ final class SessionProjection {
 
     // MARK: - 刷新（协调者的 `refreshView` 与它自己的五处都走这里）
 
-    /// 记一帧到达。control 与打开帧的投影基线两条路不经过 `apply`，但同样是「数据到了」。
-    /// 喂一批、再物化一次。计数不在这里 —— 它们是协调者的读口。
+    /// 喂一批、再物化一次。计数不在这里 —— 它们与窗口同住读数单元，刷屏时由协调者一并重算。
     func refresh() {
         feedEngine()
         refreshSnapshot()

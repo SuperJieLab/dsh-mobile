@@ -560,7 +560,6 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(texts(in: sync), ["持久-1", "持久-2"], "刷新之后持久那一列该上屏")
     }
 
-    /// 视图那一列里的消息正文。
     /// 一条用户消息记录 —— 需要「窗口里有一条」时用。
     private func userRecord(_ seq: Int) -> SessionRecord {
         SessionRecord(type: "user/message", event: SessionEvent(
@@ -572,6 +571,7 @@ final class SessionSyncTests: XCTestCase {
         ))
     }
 
+    /// 视图那一列里的消息正文。
     private func texts(in sync: SessionSync) -> [String] {
         sync.nodes.compactMap { node -> String? in
             if case .message(let message) = node.data { return message.text }
@@ -766,7 +766,8 @@ final class SessionSyncTests: XCTestCase {
     }
 
     /// 走真传输的 `SessionSync`（脚本化 URLProtocol）——「受理」这条分支需要真的回包。
-    private func makeScriptedSync() -> SessionSync {        let configuration = URLSessionConfiguration.ephemeral
+    private func makeScriptedSync() -> SessionSync {
+        let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ScriptedURLProtocol.self]
         let session = URLSession(configuration: configuration)
         let credentials = CredentialStore(

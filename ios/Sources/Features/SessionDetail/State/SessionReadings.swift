@@ -5,7 +5,7 @@
  * （判定、一条数据帧到达）。它不持投影、不持连接与订阅 —— 只吃「窗口事实」与「投影的产出」。
  *
  * 三件事同处一处：翻页的判定（页数上限、缺口不重试、失败两种说法、何时收工）、读数与物化同一拍
- * （`refreshCounts` 由协调者的 `refreshView` 在 `projection.refresh()` 之后调）、指告的置位规则。
+ * （`refreshCounts` 由协调者的 `refreshView` 在 `projection.refresh()` 之后调）、告知的置位规则。
  */
 
 import Foundation
