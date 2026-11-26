@@ -85,9 +85,11 @@ final class SessionOptimist {
         }
     }
 
-    /// 落定的用户消息要认领的是不是本屏的乐观行 —— 「是哪一条」由投影判，「有没有这条」由这里判。
+    /// 落定的用户消息要认领的是哪一行 —— 「是哪一条」由投影判。
+    ///
+    /// **不校验「有没有这条」**：撤行只能撤存在的行，那一步的校验在 `retire` 的过滤里。
+    /// 两处各判一次，等于给同一条规则留两个来源（水位回退那一帧会带一个本地没有的号到达）。
     func noteClaimed(_ rpcId: String) {
-        guard entries.contains(where: { $0.requestId == rpcId }) else { return }
         settled.insert(rpcId)
     }
 
