@@ -222,7 +222,4 @@ final class SessionSync {
         input.clearHeld()
         input.resetTransient()
     }
-
-    /// 重导次数 —— **为判据而留的读数**，与引擎那一个计同源。
-    var buildViewNodeCount: Int { projection.buildViewNodeCount }
 }

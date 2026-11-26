@@ -678,10 +678,10 @@ final class SessionSyncTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertEqual(sync.nodes.count, 200, "先确认这 200 条真的都进去了")
 
-        let before = sync.buildViewNodeCount
+        let before = sync.projection.buildViewNodeCount
         sync.projection.apply(StreamReading(content: .event(message(201))))
         try await Task.sleep(for: .milliseconds(60))
-        let delta = sync.buildViewNodeCount - before
+        let delta = sync.projection.buildViewNodeCount - before
 
         XCTAssertEqual(sync.nodes.count, 201, "新的一条上了屏")
         XCTAssertEqual(delta, 1, "一条消息只重导一格；走全量会是 201")
