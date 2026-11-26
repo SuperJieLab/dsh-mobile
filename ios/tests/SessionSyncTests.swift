@@ -210,6 +210,68 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertEqual(sync.nodes.count, before + 1, "那一页的行要真的上屏")
     }
 
+    /// 服务端挤牙膏（每页都合并 0 条）：最多问三次就停。
+    ///
+    /// 夹具的关键：`SessionWindow.start` 对空窗口取 `cursor + 1`，所以打开帧必须**带一条
+    /// `seq: 0` 的记录**，窗口起点才是 0；而空页只在「起点 - 1 == -1」时被判成接上（`endsAt`
+    /// 对空页的判据）。少了那条记录，第一页就判缺口、直接 return，一次都到不了三。
+    func testLoadOlderStopsAtThreePagesWhenEveryPageIsEmpty() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/page": .init(
+                status: 200,
+                body: #"{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{"records":[],"cursor":0,"hasMore":true}}}"#
+            ),
+        ])
+        let sync = makeScriptedSync()
+        sync.projection.apply(StreamReading(content: .opening(
+            snapshot(cursor: 0, records: [userRecord(0)], hasMore: true)
+        )))
+
+        await sync.loadOlder()
+
+        XCTAssertEqual(pageCalls(), 3, "挤牙膏时该停在第三页 —— 多拉是闷拉，少拉是半途而废")
+        XCTAssertFalse(sync.isPagingOlder, "收场要把指示灯熄掉")
+    }
+
+    /// 翻页失败之后，指示灯也要熄 —— 否则顶部一直转圈，用户以为还在等。
+    func testPagingFailureTurnsTheIndicatorOff() async throws {
+        ScriptedURLProtocol.reset(replies: [
+            "session/page": .init(status: 500, body: "boom"),
+        ])
+        let sync = makeScriptedSync()
+        sync.projection.apply(StreamReading(content: .opening(snapshot(cursor: 10, records: [], hasMore: true))))
+
+        await sync.loadOlder()
+
+        XCTAssertFalse(sync.isPagingOlder, "失败那一支没把指示灯熄掉")
+    }
+
+    /// 三条「数据到了」的路都要推进时间戳：control 的一条投影、打开帧的投影块、一条数据帧。
+    ///
+    /// 各自钉各自的入口 —— 打开帧那条**直接调** `applyOpeningProjections`：经 `projection.apply`
+    /// 的话投影自己也会盖一次章，把「单元漏盖」遮住；control 那条直接触发装配好的闭包，
+    /// 不必造真的 `ControlStream`（它无条件装配）。
+    func testEveryDataPathAdvancesTheLastFrameTime() {
+        let values: JSONValue = .object(["contextPressure": .object([
+            "projectedTokens": .number(10),
+            "contextWindow": .number(100),
+        ])])
+
+        let viaControl = makeSync()
+        XCTAssertNil(viaControl.lastFrameAt, "先确认起点是空的")
+        viaControl.input.onControlValues?(values)
+        XCTAssertNotNil(viaControl.lastFrameAt, "control 的一条投影没推进时间戳")
+        XCTAssertEqual(viaControl.usage?.usedTokens, 10, "顺带确认那条路真的走到了占用判定")
+
+        let viaOpening = makeSync()
+        viaOpening.applyOpeningProjections(ProjectionBlock(asOfSeq: 5, values: values))
+        XCTAssertNotNil(viaOpening.lastFrameAt, "打开帧的投影块没推进时间戳")
+
+        let viaEvent = makeSync()
+        viaEvent.projection.apply(StreamReading(content: .event(userRecord(0).event)))
+        XCTAssertNotNil(viaEvent.lastFrameAt, "数据帧没推进时间戳")
+    }
+
     /// 这一页接不上本地起点（缺口）：停手，不重试，只在告知里记一笔。
     ///
     /// 缺口时本地内容仍然是真的、只是旧 —— 所以既不重试也不清屏。
@@ -496,6 +558,17 @@ final class SessionSyncTests: XCTestCase {
     }
 
     /// 视图那一列里的消息正文。
+    /// 一条用户消息记录 —— 需要「窗口里有一条」时用。
+    private func userRecord(_ seq: Int) -> SessionRecord {
+        SessionRecord(type: "user/message", event: SessionEvent(
+            type: "user/message", seq: seq, time: Double(seq), data: .object([
+                "id": .string("m-\(seq)"),
+                "source": .object(["kind": .string("user")]),
+                "content": .array([.object(["type": .string("text"), "text": .string("第\(seq)条")])]),
+            ])
+        ))
+    }
+
     private func texts(in sync: SessionSync) -> [String] {
         sync.nodes.compactMap { node -> String? in
             if case .message(let message) = node.data { return message.text }
