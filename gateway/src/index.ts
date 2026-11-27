@@ -33,6 +33,7 @@ import { directoryListingOver } from './upstream/directory-listing.ts'
 import { ApprovalRelay } from './upstream/write.ts'
 import { ForwardedEvents } from './upstream/remote-events.ts'
 import { createLogger, LogModule, startResourceSampler } from './log.ts'
+import { bindWithRetry } from './listen.ts'
 
 const log = createLogger(LogModule.main)
 
@@ -190,15 +191,38 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     // 用我们的 logger（底层是 console）而非 ctx.logger：非 TTY 运行中
     // `ctx.logger.info` 什么也不输出（dsh 自己的启动行同样如此），绑定
     // 失败不可见比日志不合惯例更糟；TTY 门控未验证。
-    server.on('error', (error) => {
-      log.error('listener error', { error: String(error) })
-    })
-
-    server.listen(port, host, () => {
-      log.info('listening', { host, port })
+    //
+    // 绑定必须能重来：`host` 是 tailnet 地址，dsh 先起、地址后挂上（休眠唤醒、
+    // 切网络、Tailscale 重连都会让它短暂消失）。一次失败就放弃 = 进程在跑、端口没人听。
+    let lastBindWarnAt = 0
+    const stopBinding = bindWithRetry(server, {
+      port,
+      host,
+      onListening: attempts => {
+        log.info('listening', { host, port, attempts })
+      },
+      onRetry: (error, attempts, delayMs) => {
+        const now = Date.now()
+        const fields = { host, port, attempt: attempts, code: error.code ?? 'unknown', ms: delayMs }
+        // 一分钟最多一条 warn：地址长时间没出现时，日志不该被这件事填满。
+        if (now - lastBindWarnAt < 60_000) {
+          log.debug('listener still unavailable — retrying', fields)
+          return
+        }
+        lastBindWarnAt = now
+        log.warn('listener not available yet — retrying', fields)
+      },
+      onGiveUp: (error, attempts) => {
+        log.error('listener could not bind — the phone cannot connect',
+                  { host, port, code: error.code ?? 'unknown', attempts })
+      },
+      onFailureAfterListening: error => {
+        log.error('listener error', { error: String(error) })
+      },
     })
 
     return () => {
+      stopBinding()
       relayLifetime.abort()
       stopSampler()
       // 自 Node 19 起，仅 close() 会让空闲 keep-alive socket 保持打开，

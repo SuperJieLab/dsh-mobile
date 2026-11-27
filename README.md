@@ -121,6 +121,11 @@ npx @deepseek-ai/dsh@alpha web
 
 日志中出现 `[dsh-mobile-gateway] listening on …` 即表示网关就绪。
 
+网关绑的是 **tailnet 地址**，而 dsh 与 Tailscale 谁先起来不定。地址还没挂上时会看到
+`listener not available yet — retrying`：它会自己退避重试到地址出现为止（休眠唤醒、
+切网络之后也一样），不用重启 dsh。这条一直不变成 `listening` 才是真问题：
+先看 `tailscale ip -4` 有没有给出地址、是不是与 App 里填的那个一致。
+
 ### 2. iPhone
 
 用 Xcode 打开 `ios/DshMobile.xcodeproj`，选择目标设备后运行。
