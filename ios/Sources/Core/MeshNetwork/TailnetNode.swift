@@ -87,7 +87,8 @@ final class TailnetNode {
         Log.info(Log.Module.mesh, "launch",
                  ["state": identity ? "identity present" : "identity absent",
                   "reason": sameControlPlane ? "control plane matched" : "control plane mismatched",
-                  "url": config.controlURL?.absoluteString ?? "<invalid>"])
+                  "url": config.controlURL?.absoluteString ?? "<invalid>",
+                  "gateway": config.gatewayBaseURL?.absoluteString ?? "<unusable>"])
         // 换了控制面：目录里那份身份属于上一家，留着只会让新节点「连上但通不了」。
         // 只在这条路上清 —— 目录读不了（半份本地文件）不清，上游自己会重建。
         if identity, !sameControlPlane {

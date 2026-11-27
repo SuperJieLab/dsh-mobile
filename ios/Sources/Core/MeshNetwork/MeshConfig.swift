@@ -24,19 +24,46 @@ struct MeshConfig: Equatable, Codable {
     /// 它是一个值而不是一次读盘 —— 需要「还没配」这个起点的调用方拿它，不必碰磁盘。
     static let unconfigured = MeshConfig(controlURLString: "", gatewayURLString: "")
 
-    /// 能不能拿去连：控制面（空 = 官方）是 https，且网关地址填了。
+    /// 网关的默认端口。3080 是 dsh web 自己的，网关只在这个端口上听。
+    static let gatewayPortDefault = 3081
+
+    /// 能不能拿去连：控制面（空 = 官方）是 https，且网关地址能用。
     /// **它不回答「配没配过」** —— 那件事由「有没有接入密钥」回答（`TailnetNode.launch`）。
     var isComplete: Bool {
-        controlURL?.scheme == "https" && gatewayBaseURL?.scheme != nil
+        controlURL?.scheme == "https" && gatewayBaseURL != nil
     }
 
     /// 归一后的控制面。**空串在这里变成官方地址**：读它的只有 `isComplete` 与
     /// `TailnetNode`，归一放在取值上，这两处就不会各自解释一遍空串。
     var controlURL: URL? {
-        URL(string: controlURLString.isEmpty ? Self.controlURLDefault : controlURLString)
+        let trimmed = controlURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return URL(string: trimmed.isEmpty ? Self.controlURLDefault : trimmed)
     }
 
-    var gatewayBaseURL: URL? { URL(string: gatewayURLString) }
+    /// 归一后的网关地址；**用不了时返回 nil，不猜**。
+    ///
+    /// 这一格最常见的两种输入不是 URL：`tailscale ip -4` 输出的裸 IP，和手抄时漏掉端口。
+    /// 归一把它们补成能用的形状（缺 scheme 补 `http://`、缺端口按 scheme 补），
+    /// 而不是留给传输层去报一个看不懂的错。
+    ///
+    /// 端口 0 与主机为空必须在这里判掉：`http://100.x.y.z:0` 能被 `URL` 解出主机，
+    /// 却在传输层报 `-1000 bad URL` —— 请求根本没发出去，而每一个症状都长得像「网不通」。
+    var gatewayBaseURL: URL? {
+        let trimmed = gatewayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let parsed = URLComponents(string: trimmed).flatMap { $0.scheme == nil ? nil : $0 }
+            ?? URLComponents(string: "http://" + trimmed)
+        guard var components = parsed,
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host, !host.isEmpty else { return nil }
+        components.scheme = scheme
+        if components.port == nil {
+            components.port = scheme == "https" ? 443 : Self.gatewayPortDefault
+        }
+        guard let port = components.port, (1...65535).contains(port) else { return nil }
+        return components.url
+    }
 
     // MARK: - UserDefaults 持久化（App 沙盒本地，不进仓库）
 

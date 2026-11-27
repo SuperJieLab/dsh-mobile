@@ -46,6 +46,43 @@ final class MeshConfigTests: XCTestCase {
                        "网关地址为空不算完整")
     }
 
+    /// 网关地址那一格最常见的输入不是 URL：`tailscale ip -4` 输出的就是裸 IP，
+    /// 手抄时还常漏端口。归一放在取值上，于是「填了但形状不对」不会走到传输层才发作。
+    func testGatewayAddressIsNormalized() {
+        func gateway(_ raw: String) -> String? {
+            MeshConfig(controlURLString: "", gatewayURLString: raw).gatewayBaseURL?.absoluteString
+        }
+        XCTAssertEqual(gateway("100.64.0.1"), "http://100.64.0.1:3081", "裸 IP 补 scheme 与端口")
+        XCTAssertEqual(gateway("100.64.0.1:3081"), "http://100.64.0.1:3081", "缺 scheme 补 http")
+        XCTAssertEqual(gateway("  http://100.64.0.1:3081\n"), "http://100.64.0.1:3081",
+                       "首尾空白不该进 URL")
+        XCTAssertEqual(gateway("https://gw.local"), "https://gw.local:443",
+                       "https 缺端口补 443，不补成网关的 3081")
+        XCTAssertEqual(gateway("http://100.64.0.1:8080"), "http://100.64.0.1:8080",
+                       "填了端口就用填的")
+    }
+
+    /// 用不了的形状在取值上就返回 nil。端口 0 尤其重要：`http://h:0` 能被 `URL` 解出主机，
+    /// 却在传输层报 `-1000 bad URL`，症状与「网不通」一模一样。
+    func testGatewayAddressRejectsUnusableShapes() {
+        let unusable = ["", "   ", "http://", "http://100.64.0.1:0", "100.64.0.1:0",
+                        "ftp://100.64.0.1:3081", "http:/100.64.0.1", "100.64.0.1:abc"]
+        for raw in unusable {
+            let config = MeshConfig(controlURLString: "", gatewayURLString: raw)
+            XCTAssertNil(config.gatewayBaseURL, "这个形状不该被当成地址：\(raw.debugDescription)")
+            XCTAssertFalse(config.isComplete, "地址用不了时不能算完整：\(raw.debugDescription)")
+        }
+    }
+
+    /// 控制面那一格同样会粘进空白。空串落官方地址这条不能因为空白而失效。
+    func testControlURLIgnoresSurroundingWhitespace() {
+        XCTAssertEqual(MeshConfig(controlURLString: "  ", gatewayURLString: "").controlURL?.absoluteString,
+                       MeshConfig.controlURLDefault, "全是空白等于没填")
+        XCTAssertEqual(MeshConfig(controlURLString: " https://vps:8443 ",
+                                  gatewayURLString: "").controlURL?.absoluteString,
+                       "https://vps:8443")
+    }
+
     /// 控制面留空要真的落到官方地址上 —— 否则「不填就能连」只是输入框里的一句提示。
     /// 断言钉字面量而不是 `controlURLDefault`：守的是「官方地址是这个」这条外部事实，
     /// 换掉常量不该顺带把这条判据一起改绿。

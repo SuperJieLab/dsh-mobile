@@ -101,12 +101,21 @@ extension RpcClientError: LocalizedError {
             """
         case .cannotConnectToHost, .cannotFindHost:
             return """
-            连不上 \(url.host ?? "?"):\(url.port.map(String.init) ?? "?")。
-            三件事按序查：① Mac 上的 dsh 还在跑吗（端口 3081 有没有在听）
-            ② 手机和 Mac 是同一个 Wi-Fi 吗 ③ 路由器有没有开 AP 客户端隔离。
+            连不上 \(url.host ?? "?"):\(url.port.map(String.init) ?? "?")（URLError \(urlError.code.rawValue)）。
+            网关流量走 tailnet 隧道，所以「连不上」通常是隧道那一端没人：
+            ① Mac 上的网关在跑吗（端口 3081 有没有在听）② Mac 的 tailscale 在线吗。
             """
         case .timedOut:
             return "请求超时 —— 地址可能写错了，或者中间有东西在丢包。"
+        case .badURL:
+            // 这条只解释「请求没出手机」。隧道里 SOCKS 代理拒绝建连时，CFNetwork 报的
+            // 也是 -1000：对端端口没开（REP=5）、对端不可达（REP=1/3/4）都是它。
+            return """
+            请求没有离开手机（URLError -1000）：地址拼不出可用的请求，或隧道里的代理
+            拒绝了这次建连。地址那一格已由「组网」校验，所以先查后一种：
+            ① Mac 上的网关在跑吗（端口 3081 有没有在听）② Mac 的 tailscale 在线吗
+            ③ 两台设备在同一个 tailnet。当前地址：\(url.absoluteString)
+            """
         default:
             return "网络错误 \(urlError.code.rawValue)：\(urlError.localizedDescription)"
         }

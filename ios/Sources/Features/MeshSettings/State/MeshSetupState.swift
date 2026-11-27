@@ -51,9 +51,23 @@ final class MeshSetupState {
         if case .ok(let config) = MeshConfig.read(defaults) { adoptStored(config) }
     }
 
-    /// 现在这份输入构成的配置。地址与密钥是两段输入，合成一份才算「要连什么」。
+    /// 现在这份输入构成的配置。**网关地址取归一后的形状**：盘上与连接域拿到的是
+    /// 「实际会用的那个 URL」，而输入框里保留用户敲的原文，直到保存那一刻才回填。
     var config: MeshConfig {
-        MeshConfig(controlURLString: controlURL, gatewayURLString: gatewayURL)
+        MeshConfig(controlURLString: controlURL,
+                   gatewayURLString: gatewayBaseURL?.absoluteString ?? gatewayURL)
+    }
+
+    /// 归一后的网关地址；形状不对时沿用原文（`isComplete` 会因此为假，提交按钮不可点）。
+    private var gatewayBaseURL: URL? {
+        MeshConfig(controlURLString: controlURL, gatewayURLString: gatewayURL).gatewayBaseURL
+    }
+
+    /// 填了但用不了的地址 —— 视图据此给出说明。**判在状态、话在视图**：
+    /// 只灰掉按钮不说明原因，用户会去查网络，而问题在这一格。
+    /// 「还没填」不算用不了，那是另一个状态。
+    var isGatewayAddressUnusable: Bool {
+        !gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && gatewayBaseURL == nil
     }
 
     /// 可提交吗 —— 两个条件都是现成的判定：接入密钥非空，且两份地址构成完整配置。
@@ -71,6 +85,8 @@ final class MeshSetupState {
         let config = self.config
         save(config)
         stored = config
+        // 回填归一后的地址：输入框显示的就是盘上存的那一份，缺 scheme 的原文在这里被展开。
+        gatewayURL = config.gatewayURLString
         let key = tailnetKey
         tailnetKey = ""
         await submit(key, config)

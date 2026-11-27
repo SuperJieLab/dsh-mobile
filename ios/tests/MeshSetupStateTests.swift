@@ -24,6 +24,36 @@ final class MeshSetupStateTests: XCTestCase {
                        retry: { config in retried(config) })
     }
 
+    /// 裸 IP 是 `tailscale ip -4` 的输出，也就是输入框提示里让用户去复制的那一行。
+    /// 过去它会让「保存并接入」灰着而没有任何说明；现在补成可用地址再存。
+    func testBareGatewayAddressIsCompletedBeforeSaving() async {
+        var saved: [MeshConfig] = []
+        let sut = state(saved: { saved.append($0) })
+
+        sut.controlURL = "https://example:8443"
+        sut.gatewayURL = "100.64.0.1"
+        sut.tailnetKey = "hskey-auth-x"
+        XCTAssertTrue(sut.canSubmit, "裸 IP 补上 scheme 与端口之后是可用的")
+        XCTAssertFalse(sut.isGatewayAddressUnusable, "能用的地址不算用不了")
+
+        await sut.saveAndConnect()
+
+        XCTAssertEqual(saved.first?.gatewayURLString, "http://100.64.0.1:3081")
+        XCTAssertEqual(sut.gatewayURL, "http://100.64.0.1:3081",
+                       "保存之后输入框显示实际存下的形状，而不是留在草稿那一串")
+    }
+
+    /// 填错的地址要当场说原因。只把按钮灰掉，用户会去查网络，而问题在这一格。
+    func testUnusableGatewayAddressExplainsItself() {
+        let sut = state()
+        sut.gatewayURL = "http://100.64.0.1:0"
+        XCTAssertTrue(sut.isGatewayAddressUnusable)
+        XCTAssertFalse(sut.canSubmit)
+
+        sut.gatewayURL = ""
+        XCTAssertFalse(sut.isGatewayAddressUnusable, "没填不等于填错")
+    }
+
     /// 落盘的那一份与交给连接域的那一份必须是同一份。
     ///
     /// 写成两次构造（一次 save、一次 load 再交出去）时，两份会在「存成功、读失败」这类

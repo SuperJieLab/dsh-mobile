@@ -65,6 +65,11 @@ struct MeshSettingsView: View {
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                if setup.isGatewayAddressUnusable {
+                    Text("这个地址用不了 —— 写成 http://100.x.y.z:3081（要有端口，端口不能是 0）")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
                 // 明文展示（用户要求）：key 要「看得见才敢确认贴对了」，粘错是排障的主要
                 // 嫌疑；个人设备场景下明文可接受（凭证本就存沙盒明文）。
                 TextField("接入密钥（tskey-auth-… 或 hskey-auth-…）", text: $setup.tailnetKey)

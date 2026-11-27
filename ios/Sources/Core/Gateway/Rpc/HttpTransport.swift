@@ -88,10 +88,17 @@ final class HttpTransport {
             (payload, urlResponse) = try await sessionProvider().data(for: urlRequest)
         } catch {
             // 请求没发出去或没回来：读链路唯一的服务端外故障点，必须留痕。
+            // 打完整 URL 而不只是主机名 —— `-1000 bad URL` 这类病因只在 scheme 与端口上，
+            // 只记主机名会让「地址拼错」与「网络不通」在日志里长得一模一样。
+            // `via` 说明这一发走的是隧道代理还是直连：隧道里的 SOCKS 拒绝建连时，
+            // CFNetwork 报的同样是 -1000，没有这一格就分不清它到底出在哪一段。
             Log.warn(
                 Log.Module.gateway,
                 "transport failed",
-                ["op": endpoint, "error": error.localizedDescription, "url": baseURL.host ?? "?"]
+                ["op": endpoint, "error": error.localizedDescription,
+                 "url": (urlRequest.url ?? baseURL).absoluteString,
+                 "via": sessionProvider().configuration.proxyConfigurations.isEmpty
+                     ? "direct" : "proxy"]
             )
             throw RpcClientError.transport(url: urlRequest.url ?? baseURL, underlying: error)
         }
@@ -119,7 +126,8 @@ final class HttpTransport {
             }
             if http.statusCode != 200 {
                 Log.warn(Log.Module.gateway, "bad status",
-                         ["code": String(http.statusCode), "op": endpoint, "url": baseURL.host ?? "?"])
+                         ["code": String(http.statusCode), "op": endpoint,
+                          "url": (urlRequest.url ?? baseURL).absoluteString])
                 throw RpcClientError.badStatus(http.statusCode)
             }
         }
