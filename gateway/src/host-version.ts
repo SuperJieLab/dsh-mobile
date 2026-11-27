@@ -17,8 +17,14 @@ import { dirname, join } from 'node:path'
  * 不是「运行时最新版」—— 是「我们真的读过它 API 形状的那一版」。两者不同时，
  * 这个差异就该被报出来：它意味着新版本的 API 没人看过。把常量改成运行时的版本
  * 会让警告消失，而那份安心是假的。
+ *
+ * 2026-11-27 从 `0.2.2-alpha.3` 升到 `0.2.3-alpha.2`：`deepseek-harness/` 已切到该
+ * tag（`4b399c3`），并与发布包逐文件比对一致。核过的是**我们实际用到的窄面**：
+ * 会话的 list / page / follow / prompt、窗口切法、control 基线、`$events` 帧、
+ * 工作空间的 create / delete / follow、命令的 list / execute、权限目录。
+ * 其余 API 没有逐条读 —— 那些地方漂了，症状会出现在第一次调用它的时候。
  */
-export const BUILT_AGAINST = '0.2.2-alpha.3'
+export const BUILT_AGAINST = '0.2.3-alpha.2'
 
 /** 宿主包的名字。npx 缓存里是带 scope 的那个，也认不带 scope 的。 */
 const HOST_NAMES: Set<string> = new Set(['@deepseek-ai/dsh', 'dsh'])
