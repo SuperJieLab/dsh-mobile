@@ -15,7 +15,7 @@ enum StartupStep: Equatable {
     case reportDamaged
     /// 要一条连接。组网就绪时要能立刻连上，所以它的 `active` 必须早早置上。
     case activateLink
-    /// 登记两条连接级流（列表与审批）。必须晚于 `activateLink` —— 开流会经
+    /// 登记三条连接级流（事件 / 投影 / 组清单）。必须晚于 `activateLink` —— 开流会经
     /// `ensureConnected` 读 `active`。
     case attachStreams
     /// 挂审批的事件听众。**消费方排在最后**：它要的就是「流开出来之后」这件事，

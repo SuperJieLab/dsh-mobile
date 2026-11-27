@@ -124,7 +124,7 @@ struct AppServices {
         if await store.ensureReachable() {
             link.reconnectNow(reason: "foreground")
         }
-        // 两条流都重挂一次：`attach` 自带闸，活着的那条是空操作；被终态拒绝收起的那条
+        // 三条流都重挂一次：`attach` 自带闸，活着的那条是空操作；被终态收起的那条
         // 靠这一下重建 —— 而「回前台」正是它唯一会发生的时机。
         eventsStream.attach(to: link)
         controlStream.attach(to: link)
